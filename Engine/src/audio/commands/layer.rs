@@ -1,6 +1,7 @@
 //! Layer and Drum Machine slot commands.
 
-use crate::audio::devices::DevicePath;
+use super::with_device;
+use crate::audio::devices::{DevicePath, DrumMachineDevice, LayerDevice};
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
 use tracing::warn;
@@ -13,26 +14,14 @@ pub(super) fn set_layer_slot_volume(
     slot: usize,
     volume: f32,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(layer) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::LayerDevice>()
-            {
-                if !layer.set_slot_volume_normalized(slot, volume) {
-                    warn!(
-                        "Layer slot {} not found at channel {} path {}",
-                        slot, channel_id, device_path
-                    );
-                }
-            } else {
-                warn!(
-                    "Device at channel {} path {} is not a Layer",
-                    channel_id, device_path
-                );
-            }
-        }
-    }
+    with_layer(
+        state,
+        "set layer slot volume",
+        channel_id,
+        &device_path,
+        slot,
+        |layer| layer.set_slot_volume_normalized(slot, volume),
+    )
 }
 
 /// Mute or unmute a Layer slot.
@@ -43,21 +32,14 @@ pub(super) fn set_layer_slot_mute(
     slot: usize,
     mute: bool,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(layer) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::LayerDevice>()
-            {
-                if !layer.set_slot_mute(slot, mute) {
-                    warn!(
-                        "Layer slot {} not found at channel {} path {}",
-                        slot, channel_id, device_path
-                    );
-                }
-            }
-        }
-    }
+    with_layer(
+        state,
+        "set layer slot mute",
+        channel_id,
+        &device_path,
+        slot,
+        |layer| layer.set_slot_mute(slot, mute),
+    )
 }
 
 /// Solo or unsolo a Layer slot.
@@ -68,21 +50,14 @@ pub(super) fn set_layer_slot_solo(
     slot: usize,
     solo: bool,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(layer) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::LayerDevice>()
-            {
-                if !layer.set_slot_solo(slot, solo) {
-                    warn!(
-                        "Layer slot {} not found at channel {} path {}",
-                        slot, channel_id, device_path
-                    );
-                }
-            }
-        }
-    }
+    with_layer(
+        state,
+        "set layer slot solo",
+        channel_id,
+        &device_path,
+        slot,
+        |layer| layer.set_slot_solo(slot, solo),
+    )
 }
 
 /// Set the note a Drum Machine pad responds to.
@@ -93,25 +68,18 @@ pub(super) fn set_drum_slot_note(
     slot: usize,
     note: u8,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(drum) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::DrumMachineDevice>()
-            {
-                if !drum.set_slot_note(slot, note) {
-                    warn!(
-                        "Drum slot {} note {} rejected at channel {} path {}",
-                        slot, note, channel_id, device_path
-                    );
-                }
-            } else {
-                warn!(
-                    "Device at channel {} path {} is not a Drum Machine",
-                    channel_id, device_path
-                );
-            }
-        }
+    let accepted = with_device::<DrumMachineDevice, _>(
+        state,
+        "set drum slot note",
+        channel_id,
+        &device_path,
+        |drum| drum.set_slot_note(slot, note),
+    );
+    if accepted == Some(false) {
+        warn!(
+            "set drum slot note: slot {} note {} rejected at channel {} path {}",
+            slot, note, channel_id, device_path
+        );
     }
 }
 
@@ -123,25 +91,18 @@ pub(super) fn set_drum_slot_choke_targets(
     slot: usize,
     mask: u128,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(drum) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::DrumMachineDevice>()
-            {
-                if !drum.set_slot_choke_targets(slot, mask) {
-                    warn!(
-                        "Drum slot {} choke targets {:#x} rejected at channel {} path {}",
-                        slot, mask, channel_id, device_path
-                    );
-                }
-            } else {
-                warn!(
-                    "Device at channel {} path {} is not a Drum Machine",
-                    channel_id, device_path
-                );
-            }
-        }
+    let accepted = with_device::<DrumMachineDevice, _>(
+        state,
+        "set drum slot choke targets",
+        channel_id,
+        &device_path,
+        |drum| drum.set_slot_choke_targets(slot, mask),
+    );
+    if accepted == Some(false) {
+        warn!(
+            "set drum slot choke targets: slot {} targets {:#x} rejected at channel {} path {}",
+            slot, mask, channel_id, device_path
+        );
     }
 }
 
@@ -153,9 +114,14 @@ pub(super) fn set_layer_slot_note_map(
     slot: usize,
     map: Box<[u8; 128]>,
 ) {
-    with_layer(state, channel_id, &device_path, slot, |layer| {
-        layer.set_slot_note_map(slot, &map)
-    })
+    with_layer(
+        state,
+        "set layer slot note map",
+        channel_id,
+        &device_path,
+        slot,
+        |layer| layer.set_slot_note_map(slot, &map),
+    )
 }
 
 /// Send a Layer slot to its own extra output.
@@ -166,9 +132,14 @@ pub(super) fn set_layer_slot_separate_out(
     slot: usize,
     separate: bool,
 ) {
-    with_layer(state, channel_id, &device_path, slot, |layer| {
-        layer.set_slot_separate_out(slot, separate)
-    })
+    with_layer(
+        state,
+        "set layer slot separate out",
+        channel_id,
+        &device_path,
+        slot,
+        |layer| layer.set_slot_separate_out(slot, separate),
+    )
 }
 
 /// Audition a note on a single Layer slot.
@@ -181,41 +152,30 @@ pub(super) fn audition_layer_slot(
     velocity: u8,
     is_note_on: bool,
 ) {
-    with_layer(state, channel_id, &device_path, slot, |layer| {
-        layer.audition_slot(slot, note, velocity, is_note_on)
-    })
+    with_layer(
+        state,
+        "audition layer slot",
+        channel_id,
+        &device_path,
+        slot,
+        |layer| layer.audition_slot(slot, note, velocity, is_note_on),
+    )
 }
 
-/// Run `apply` on the Layer at `device_path`, warning when the channel, device or slot is missing.
+/// Run `apply` on the Layer at `device_path`; `apply` returns false for a missing slot, which is
+/// logged here together with the command's name.
 fn with_layer(
     state: &mut EngineState,
+    cmd: &str,
     channel_id: ChannelId,
     device_path: &DevicePath,
     slot: usize,
-    apply: impl FnOnce(&mut crate::audio::devices::LayerDevice) -> bool,
+    apply: impl FnOnce(&mut LayerDevice) -> bool,
 ) {
-    let Some(device) = state
-        .channels
-        .get_mut(&channel_id)
-        .and_then(|channel| channel.device_at_path_mut(device_path))
-    else {
-        warn!("No device at channel {} path {}", channel_id, device_path);
-        return;
-    };
-    let Some(layer) = device
-        .as_any_mut()
-        .downcast_mut::<crate::audio::devices::LayerDevice>()
-    else {
+    if with_device::<LayerDevice, _>(state, cmd, channel_id, device_path, apply) == Some(false) {
         warn!(
-            "Device at channel {} path {} is not a Layer",
-            channel_id, device_path
-        );
-        return;
-    };
-    if !apply(layer) {
-        warn!(
-            "Layer slot {} not found at channel {} path {}",
-            slot, channel_id, device_path
+            "{}: slot {} not found at channel {} path {}",
+            cmd, slot, channel_id, device_path
         );
     }
 }

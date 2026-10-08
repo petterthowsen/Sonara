@@ -3,7 +3,8 @@
 
 use super::modulation::resend_modulators;
 use crate::audio::commands::{CommandEffects, EngineStatus};
-use crate::audio::devices::DevicePath;
+use crate::audio::devices::clap_host::SubprocessClapAdapter;
+use crate::audio::devices::{DevicePath, SamplerDevice, SfizzDevice};
 use crate::audio::midi_types::{NoteEvent, AUDITION_NOTE_ID};
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
@@ -46,60 +47,56 @@ pub(super) fn set_device_parameter(
     value: crate::audio::types::ParamSetValue,
     effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        let Some(device) = channel.device_at_path_mut(&device_path) else {
-            warn!(
-                "Invalid device path {} for channel {}",
-                device_path, channel_id
-            );
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("set device parameter: {e}");
             return None;
-        };
-        let params = device.parameters();
-        let mut normalized: f32 = 0.0;
-        if let Some(info) = params.iter().find(|p| p.id == param_id) {
-            match value {
-                crate::audio::types::ParamSetValue::Normalized(v) => {
-                    normalized = v.clamp(0.0, 1.0);
-                }
-                crate::audio::types::ParamSetValue::Index(idx) => match info.param_type {
-                    crate::audio::devices::ParamType::Bool => {
-                        normalized = if idx <= 0 { 0.0 } else { 1.0 };
-                    }
-                    crate::audio::devices::ParamType::Enum => {
-                        let n = info.enum_values.len();
-                        if n > 1 {
-                            let i = idx.max(0) as usize;
-                            let i = i.min(n - 1);
-                            normalized = (i as f32) / ((n - 1) as f32);
-                        } else {
-                            normalized = 0.0;
-                        }
-                    }
-                    crate::audio::devices::ParamType::Float => {
-                        normalized = if idx <= 0 { 0.0 } else { 1.0 };
-                    }
-                },
-            }
-        } else if let crate::audio::types::ParamSetValue::Normalized(v) = value {
-            normalized = v.clamp(0.0, 1.0);
         }
-
-        device.set_parameter(param_id, normalized);
-        info!(
-            "Device parameter set: channel={} device={} param={} value={}",
-            channel_id, device_path, param_id, normalized
-        );
-        effects
-            .statuses
-            .push(EngineStatus::PluginParameterValueChanged {
-                channel_id,
-                device_path,
-                param_id,
-                value: normalized,
-            });
-    } else {
-        warn!("Channel {} not found for set device parameter", channel_id);
+    };
+    let params = device.parameters();
+    let mut normalized: f32 = 0.0;
+    if let Some(info) = params.iter().find(|p| p.id == param_id) {
+        match value {
+            crate::audio::types::ParamSetValue::Normalized(v) => {
+                normalized = v.clamp(0.0, 1.0);
+            }
+            crate::audio::types::ParamSetValue::Index(idx) => match info.param_type {
+                crate::audio::devices::ParamType::Bool => {
+                    normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                }
+                crate::audio::devices::ParamType::Enum => {
+                    let n = info.enum_values.len();
+                    if n > 1 {
+                        let i = idx.max(0) as usize;
+                        let i = i.min(n - 1);
+                        normalized = (i as f32) / ((n - 1) as f32);
+                    } else {
+                        normalized = 0.0;
+                    }
+                }
+                crate::audio::devices::ParamType::Float => {
+                    normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                }
+            },
+        }
+    } else if let crate::audio::types::ParamSetValue::Normalized(v) = value {
+        normalized = v.clamp(0.0, 1.0);
     }
+
+    device.set_parameter(param_id, normalized);
+    info!(
+        "Device parameter set: channel={} device={} param={} value={}",
+        channel_id, device_path, param_id, normalized
+    );
+    effects
+        .statuses
+        .push(EngineStatus::PluginParameterValueChanged {
+            channel_id,
+            device_path,
+            param_id,
+            value: normalized,
+        });
 
     None
 }
@@ -112,57 +109,36 @@ pub(super) fn set_device_active(
     active: bool,
     effects: &mut CommandEffects,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if active && !device.is_active() {
-                match device.activate() {
-                    Ok(_) => {
-                        info!(
-                            "Device activated: channel={} device={}",
-                            channel_id, device_path
-                        );
-                        effects.statuses.push(EngineStatus::DeviceActiveChanged {
-                            channel_id,
-                            device_path,
-                            active: true,
-                        });
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to activate device at channel {} path {}: {}",
-                            channel_id, device_path, e
-                        );
-                    }
-                }
-            } else if !active && device.is_active() {
-                match device.deactivate() {
-                    Ok(_) => {
-                        info!(
-                            "Device deactivated: channel={} device={}",
-                            channel_id, device_path
-                        );
-                        effects.statuses.push(EngineStatus::DeviceActiveChanged {
-                            channel_id,
-                            device_path,
-                            active: false,
-                        });
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to deactivate device at channel {} path {}: {}",
-                            channel_id, device_path, e
-                        );
-                    }
-                }
-            }
-        } else {
-            warn!(
-                "Device not found at channel {} path {}",
-                channel_id, device_path
-            );
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("set device active: {e}");
+            return;
         }
+    };
+    let (result, verb) = if active && !device.is_active() {
+        (device.activate(), "activate")
+    } else if !active && device.is_active() {
+        (device.deactivate(), "deactivate")
     } else {
-        warn!("Channel {} not found for set device active", channel_id);
+        return;
+    };
+    match result {
+        Ok(_) => {
+            info!(
+                "Device {}d: channel={} device={}",
+                verb, channel_id, device_path
+            );
+            effects.statuses.push(EngineStatus::DeviceActiveChanged {
+                channel_id,
+                device_path,
+                active,
+            });
+        }
+        Err(e) => warn!(
+            "Failed to {} device at channel {} path {}: {}",
+            verb, channel_id, device_path, e
+        ),
     }
 }
 
@@ -174,29 +150,25 @@ pub(super) fn set_device_enabled(
     enabled: bool,
     effects: &mut CommandEffects,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            device.set_enabled(enabled);
-            info!(
-                "Device set to {}: channel={} device={}",
-                if enabled { "enabled" } else { "bypassed" },
-                channel_id,
-                device_path
-            );
-            effects.statuses.push(EngineStatus::DeviceEnabledChanged {
-                channel_id,
-                device_path,
-                enabled,
-            });
-        } else {
-            warn!(
-                "Device not found at channel {} path {}",
-                channel_id, device_path
-            );
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("set device enabled: {e}");
+            return;
         }
-    } else {
-        warn!("Channel {} not found for set device enabled", channel_id);
-    }
+    };
+    device.set_enabled(enabled);
+    info!(
+        "Device set to {}: channel={} device={}",
+        if enabled { "enabled" } else { "bypassed" },
+        channel_id,
+        device_path
+    );
+    effects.statuses.push(EngineStatus::DeviceEnabledChanged {
+        channel_id,
+        device_path,
+        enabled,
+    });
 }
 
 /// Start loading an SFZ file into an SFZ device.
@@ -206,31 +178,15 @@ pub(super) fn load_device_file(
     device_path: DevicePath,
     file_path: String,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(sfizz_device) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::SfizzDevice>()
-            {
-                info!(
-                    "Loading SFZ file into device: channel={} device={} path={}",
-                    channel_id, device_path, file_path
-                );
-                sfizz_device.load_sfz_async(std::path::PathBuf::from(file_path));
-            } else {
-                warn!(
-                    "Device at channel {} path {} does not support file loading",
-                    channel_id, device_path
-                );
-            }
-        } else {
-            warn!(
-                "Device not found at channel {} path {}",
-                channel_id, device_path
+    match state.device_as_mut::<SfizzDevice>(channel_id, &device_path) {
+        Ok(sfizz_device) => {
+            info!(
+                "Loading SFZ file into device: channel={} device={} path={}",
+                channel_id, device_path, file_path
             );
+            sfizz_device.load_sfz_async(std::path::PathBuf::from(file_path));
         }
-    } else {
-        warn!("Channel {} not found for load device file", channel_id);
+        Err(e) => warn!("load device file: {e}"),
     }
 }
 
@@ -243,13 +199,12 @@ pub(super) fn audition_device(
     velocity: u8,
     is_note_on: bool,
 ) -> Option<EngineStatus> {
-    let Some(device) = state
-        .channels
-        .get_mut(&channel_id)
-        .and_then(|channel| channel.device_at_path_mut(&device_path))
-    else {
-        warn!("No device at channel {} path {}", channel_id, device_path);
-        return None;
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("audition device: {e}");
+            return None;
+        }
     };
     let event = if is_note_on && velocity > 0 {
         NoteEvent::On {
@@ -277,8 +232,8 @@ pub(super) fn get_plugin_parameters(
     device_path: DevicePath,
     effects: &mut CommandEffects,
 ) {
-    if let Some(channel) = state.channels.get(&channel_id) {
-        if let Some(device) = channel.device_at_path(&device_path) {
+    match state.device_mut(channel_id, &device_path) {
+        Ok(device) => {
             let params = device.parameters();
             info!(
                 "Querying {} parameters for device at channel {} path {}",
@@ -287,14 +242,8 @@ pub(super) fn get_plugin_parameters(
                 device_path
             );
             send_parameter_list(effects, channel_id, device_path, device, params);
-        } else {
-            warn!(
-                "Device not found at channel {} path {}",
-                channel_id, device_path
-            );
         }
-    } else {
-        warn!("Channel {} not found for get plugin parameters", channel_id);
+        Err(e) => warn!("get plugin parameters: {e}"),
     }
 }
 
@@ -306,16 +255,12 @@ pub(super) fn get_device_state(
     effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     // Godot missed a status (UDP drops under load): re-send what it can't recompute.
-    let Some(device) = state
-        .channels
-        .get(&channel_id)
-        .and_then(|channel| channel.device_at_path(&device_path))
-    else {
-        warn!(
-            "Device state requested for missing device at channel {} path {}",
-            channel_id, device_path
-        );
-        return None;
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("get device state: {e}");
+            return None;
+        }
     };
     if let Some(loading_state) = device.loading_state() {
         effects
@@ -330,24 +275,14 @@ pub(super) fn get_device_state(
         let params = device.parameters();
         // Still loading: the list follows the load, as it normally does.
         if !params.is_empty() {
-            send_parameter_list(effects, channel_id, device_path, device, params);
+            send_parameter_list(effects, channel_id, device_path, &*device, params);
         }
     }
-    // Modulators live in the wrapper, not in the parameters: resend them as clear +
-    // adds. The immutable borrow above ends here so we can reach the wrapper.
-    if let Some(device) = state
-        .channels
-        .get_mut(&channel_id)
-        .and_then(|channel| channel.device_at_path_mut(&device_path))
-    {
-        if let Some(sampler) = device
-            .as_any_mut()
-            .downcast_mut::<crate::audio::devices::SamplerDevice>()
-        {
-            effects.statuses.extend(sampler.zone_state_statuses());
-        }
-        resend_modulators(effects, channel_id, &device_path, device);
+    if let Some(sampler) = device.as_any_mut().downcast_mut::<SamplerDevice>() {
+        effects.statuses.extend(sampler.zone_state_statuses());
     }
+    // Modulators live in the wrapper, not in the parameters: resend them as clear + adds.
+    resend_modulators(effects, channel_id, &device_path, device);
 
     None
 }
@@ -364,38 +299,38 @@ pub(super) fn device_ready(
         "Device ready notification for channel {} path {}, re-sending parameters",
         channel_id, device_path
     );
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            if let Some(subprocess_device) = device
-                .as_any_mut()
-                .downcast_mut::<crate::audio::devices::clap_host::SubprocessClapAdapter>(
-            ) {
-                subprocess_device.on_device_ready();
-                for &(param_id, value) in &restored_values {
-                    subprocess_device.cache_parameter_value(param_id, value);
-                }
-            }
-            // A fresh plugin has no modulation offsets; push the current ones again
-            // (spec 018 Phase 5).
-            if let Some(modulated) = device.as_modulated_mut() {
-                modulated.resend_offsets();
-            }
-            let params = device.parameters();
-            if !params.is_empty() {
-                send_parameter_list(effects, channel_id, device_path, device, params);
-            }
-            // After the parameter list, so Godot doesn't reset them to defaults.
-            for (param_id, value) in restored_values {
-                effects
-                    .statuses
-                    .push(EngineStatus::PluginParameterValueChanged {
-                        channel_id,
-                        device_path,
-                        param_id,
-                        value,
-                    });
-            }
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("device ready: {e}");
+            return;
         }
+    };
+    if let Some(subprocess_device) = device.as_any_mut().downcast_mut::<SubprocessClapAdapter>() {
+        subprocess_device.on_device_ready();
+        for &(param_id, value) in &restored_values {
+            subprocess_device.cache_parameter_value(param_id, value);
+        }
+    }
+    // A fresh plugin has no modulation offsets; push the current ones again
+    // (spec 018 Phase 5).
+    if let Some(modulated) = device.as_modulated_mut() {
+        modulated.resend_offsets();
+    }
+    let params = device.parameters();
+    if !params.is_empty() {
+        send_parameter_list(effects, channel_id, device_path, &*device, params);
+    }
+    // After the parameter list, so Godot doesn't reset them to defaults.
+    for (param_id, value) in restored_values {
+        effects
+            .statuses
+            .push(EngineStatus::PluginParameterValueChanged {
+                channel_id,
+                device_path,
+                param_id,
+                value,
+            });
     }
 }
 

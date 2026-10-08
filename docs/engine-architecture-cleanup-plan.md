@@ -16,7 +16,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 3: Split `audio/types.rs`
 - [x] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
 - [x] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
-- [ ] Phase 6: Device lookup helpers
+- [x] Phase 6: Device lookup helpers
 - [ ] Phase 7: Split `audio/command_worker.rs`
 - [ ] Phase 8: Split `osc/server.rs`
 - [ ] Phase 9: OSC argument reader
@@ -613,6 +613,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 3 | 2026-10-09 | lib 807 / 14 (804 + 3 new tests) | release 0; test build 0 | Commits `Engine cleanup phase 3` (a) pure move, (b) improvements. See notes below. |
 | 4 | 2026-10-09 | lib 807 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 4` (a) move, (b) improvements. See notes below. |
 | 5 | 2026-10-09 | lib 810 / 14 (807 + 3 new tests) | release 0; test build 0 | Allowed behavior change, own commit. See notes below. |
+| 6 | 2026-10-09 | lib 814 / 14 (810 + 4 new tests) | release 0; test build 0 | See notes below. |
 
 Phase 1 notes:
 
@@ -731,3 +732,27 @@ Phase 5 notes:
   rest collect first).
 - Flaky: `audio::ipc::process_manager::tests::watcher_records_exit_code_and_stderr` failed once in a full
   `cargo test` run and passed in 3 reruns.
+
+Phase 6 notes:
+
+- `audio/state.rs` has `DeviceLookupError { NoChannel, NoDevice, WrongType { channel_id, device_path, expected, found } }`
+  (`Display` + `Error`; `expected` is `type_name::<T>()`, shown without its module path, `found` is `device_id()`),
+  `EngineState::device_mut` and `device_as_mut::<T>`. Deviation: `device_mut` returns `&mut dyn AudioDevice` (what
+  `Channel::device_at_path_mut` gives), not `&mut Box<dyn AudioDevice>`.
+- `commands/mod.rs` has `with_device::<T, R>(state, cmd, channel_id, path, apply) -> Option<R>`, which logs
+  `"{cmd}: {err}"` on a miss. It replaces `with_sampler` (removed). `with_layer` stays as a thin wrapper that adds
+  the "slot not found" warning; the Drum Machine commands use `with_device` directly.
+- Converted: `layer.rs` (all 8, so a missing or wrong device now warns in every command, not only some), `sampler.rs`,
+  `device.rs` (set parameter, active, enabled, load file, audition, get parameters, get state, device ready),
+  `device_data.rs`, `CommandWorker::configure_device_data`, `with_plugin` and the poll's `cache_parameter_value`.
+  `with_plugin`, the poll and the apply-data-build swap use `.ok()` / `Err(_)`: a miss there is normal (the device was
+  removed meanwhile) and must stay quiet. `plugin_handle` is still `with_plugin`.
+- Not converted on purpose: `modulation.rs` (its messages go to Godot's `/log` and mention what was being modulated),
+  `plugin.rs::save_plugin_state` (an existence check that must always answer), the `visit_devices_mut` walks in
+  `command_worker` / `audio_config` / `render/worker.rs` (they scan every device, not one path), `add_device`'s
+  container lookup, and `modulation/host.rs`. `osc/` has no state lookups.
+- Phase 5 leftover fixed on the way: `load_device_sample` now takes `CommandEffects`, so the PCM of a sample that
+  finds no Sampler is freed after the lock instead of inside the closure.
+- New tests (4, in `state.rs`): missing channel, missing device, wrong type (including message), typed lookup.
+- Flaky: `audio::ipc::process_manager::tests::watcher_records_exit_code_and_stderr` failed again in one full run
+  (passes alone and on rerun).

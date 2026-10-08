@@ -12,30 +12,22 @@ pub(super) fn subscribe_device_data(
     device_path: DevicePath,
     data_type: String,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
-            match device.subscribe_data(&data_type) {
-                Ok(()) => {
-                    info!(
-                        "Subscribed to '{}' data on channel {} device {}",
-                        data_type, channel_id, device_path
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to subscribe to '{}' on channel {} device {}: {}",
-                        data_type, channel_id, device_path, e
-                    );
-                }
-            }
-        } else {
-            warn!(
-                "Device not found at channel {} path {}",
-                channel_id, device_path
-            );
+    let device = match state.device_mut(channel_id, &device_path) {
+        Ok(device) => device,
+        Err(e) => {
+            warn!("subscribe device data: {e}");
+            return;
         }
-    } else {
-        warn!("Channel {} not found for subscribe device data", channel_id);
+    };
+    match device.subscribe_data(&data_type) {
+        Ok(()) => info!(
+            "Subscribed to '{}' data on channel {} device {}",
+            data_type, channel_id, device_path
+        ),
+        Err(e) => warn!(
+            "Failed to subscribe to '{}' on channel {} device {}: {}",
+            data_type, channel_id, device_path, e
+        ),
     }
 }
 
@@ -46,23 +38,14 @@ pub(super) fn unsubscribe_device_data(
     device_path: DevicePath,
     data_type: String,
 ) {
-    if let Some(channel) = state.channels.get_mut(&channel_id) {
-        if let Some(device) = channel.device_at_path_mut(&device_path) {
+    match state.device_mut(channel_id, &device_path) {
+        Ok(device) => {
             device.unsubscribe_data(&data_type);
             info!(
                 "Unsubscribed from '{}' data on channel {} device {}",
                 data_type, channel_id, device_path
             );
-        } else {
-            warn!(
-                "Device not found at channel {} path {}",
-                channel_id, device_path
-            );
         }
-    } else {
-        warn!(
-            "Channel {} not found for unsubscribe device data",
-            channel_id
-        );
+        Err(e) => warn!("unsubscribe device data: {e}"),
     }
 }

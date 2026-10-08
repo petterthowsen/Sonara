@@ -19,6 +19,8 @@ mod transport;
 pub use modulation::modulator_kind_infos;
 pub use status::{AudioConfigReport, BuiltinParamInfo, EngineStatus};
 
+use crate::audio::devices::AudioDevice;
+
 use crate::audio::automation::{
     AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
 };
@@ -614,6 +616,24 @@ pub enum AudioCommand {
     },
 }
 
+/// Run `apply` on the device of type `T` at `device_path`. A missing channel, a missing device or
+/// the wrong device type is logged as `"{cmd}: {reason}"` and returns `None`.
+fn with_device<T: AudioDevice + 'static, R>(
+    state: &mut EngineState,
+    cmd: &str,
+    channel_id: ChannelId,
+    device_path: &DevicePath,
+    apply: impl FnOnce(&mut T) -> R,
+) -> Option<R> {
+    match state.device_as_mut::<T>(channel_id, device_path) {
+        Ok(device) => Some(apply(device)),
+        Err(e) => {
+            warn!("{cmd}: {e}");
+            None
+        }
+    }
+}
+
 /// What applying a command produced, handled by the caller after it releases the state lock.
 ///
 /// Sending a status can block (the channel is bounded) and dropping a channel, clip or device
@@ -1052,6 +1072,7 @@ fn dispatch(
             samples,
             sample_rate,
             channels,
+            effects,
         ),
         AudioCommand::FailDeviceSampleLoad {
             channel_id,

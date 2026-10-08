@@ -338,12 +338,10 @@ impl CommandWorker {
         if !reported.is_empty() {
             let mut state = self.lock_state();
             for (channel_id, device_path, param_id, value) in reported {
-                let plugin = state
-                    .channels
-                    .get_mut(&channel_id)
-                    .and_then(|channel| channel.device_at_path_mut(&device_path))
-                    .and_then(|device| device.as_any_mut().downcast_mut::<SubprocessClapAdapter>());
-                if let Some(plugin) = plugin {
+                // The plugin may have been removed since the poll; that is not worth a log line.
+                if let Ok(plugin) =
+                    state.device_as_mut::<SubprocessClapAdapter>(channel_id, &device_path)
+                {
                     plugin.cache_parameter_value(param_id, value);
                 }
             }
@@ -1132,16 +1130,12 @@ impl CommandWorker {
     ) {
         let build = {
             let mut state = self.lock_state();
-            let Some(device) = state
-                .channels
-                .get_mut(&channel_id)
-                .and_then(|channel| channel.device_at_path_mut(&device_path))
-            else {
-                warn!(
-                    "Device not found at channel {} path {} for configure device data",
-                    channel_id, device_path
-                );
-                return;
+            let device = match state.device_mut(channel_id, &device_path) {
+                Ok(device) => device,
+                Err(e) => {
+                    warn!("configure device data: {e}");
+                    return;
+                }
             };
             match device.configure_data(data_type, key, value) {
                 Ok(build) => build,
@@ -1160,13 +1154,9 @@ impl CommandWorker {
         let built = build();
         let replaced = {
             let mut state = self.lock_state();
-            match state
-                .channels
-                .get_mut(&channel_id)
-                .and_then(|channel| channel.device_at_path_mut(&device_path))
-            {
-                Some(device) => device.apply_data_build(built),
-                None => Some(built),
+            match state.device_mut(channel_id, &device_path) {
+                Ok(device) => device.apply_data_build(built),
+                Err(_) => Some(built),
             }
         };
         drop(replaced);
@@ -1262,13 +1252,10 @@ impl CommandWorker {
         f: impl FnOnce(&mut SubprocessClapAdapter) -> R,
     ) -> Option<R> {
         let mut state = self.lock_state();
-        let device = state
-            .channels
-            .get_mut(&channel_id)?
-            .device_at_path_mut(device_path)?;
-        device
-            .as_any_mut()
-            .downcast_mut::<SubprocessClapAdapter>()
+        // Quiet on a miss: callers use `None` to tell "not a plugin" from "plugin".
+        state
+            .device_as_mut::<SubprocessClapAdapter>(channel_id, device_path)
+            .ok()
             .map(f)
     }
 

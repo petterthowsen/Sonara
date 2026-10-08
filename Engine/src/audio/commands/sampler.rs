@@ -1,10 +1,10 @@
 //! Sampler commands: zones, groups, focus, and sample loading.
 
+use super::{with_device, CommandEffects};
 use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
-use crate::audio::devices::DevicePath;
+use crate::audio::devices::{DevicePath, SamplerDevice};
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
-use tracing::warn;
 
 /// Mark a sampler (or one of its zones) as loading a sample.
 pub(super) fn begin_load_device_sample(
@@ -14,10 +14,16 @@ pub(super) fn begin_load_device_sample(
     zone_id: Option<u32>,
     req_id: String,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| match zone_id {
-        Some(zone_id) => sampler.begin_zone_load(zone_id, req_id),
-        None => sampler.begin_sample_load(req_id),
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "begin load device sample",
+        channel_id,
+        &device_path,
+        |sampler| match zone_id {
+            Some(zone_id) => sampler.begin_zone_load(zone_id, req_id),
+            None => sampler.begin_sample_load(req_id),
+        },
+    );
 }
 
 /// Hand decoded PCM to a sampler or one of its zones.
@@ -30,11 +36,28 @@ pub(super) fn load_device_sample(
     samples: Vec<f32>,
     sample_rate: u32,
     channels: usize,
+    effects: &mut CommandEffects,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| match zone_id {
-        Some(zone_id) => sampler.set_zone_sample(zone_id, &req_id, samples, channels, sample_rate),
-        None => sampler.set_sample(&req_id, samples, channels, sample_rate),
-    })
+    // If the sampler is missing, the PCM comes back unused and is freed after the lock.
+    let mut pending = Some(samples);
+    with_device::<SamplerDevice, _>(
+        state,
+        "load device sample",
+        channel_id,
+        &device_path,
+        |sampler| {
+            let samples = pending.take().expect("applied once");
+            match zone_id {
+                Some(zone_id) => {
+                    sampler.set_zone_sample(zone_id, &req_id, samples, channels, sample_rate)
+                }
+                None => sampler.set_sample(&req_id, samples, channels, sample_rate),
+            }
+        },
+    );
+    if let Some(unused) = pending {
+        effects.discard(unused);
+    }
 }
 
 /// Tell a sampler (or one of its zones) its sample load failed.
@@ -46,10 +69,16 @@ pub(super) fn fail_device_sample_load(
     req_id: String,
     message: String,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| match zone_id {
-        Some(zone_id) => sampler.fail_zone_load(zone_id, &req_id, &message),
-        None => sampler.fail_sample_load(&req_id, &message),
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "fail device sample load",
+        channel_id,
+        &device_path,
+        |sampler| match zone_id {
+            Some(zone_id) => sampler.fail_zone_load(zone_id, &req_id, &message),
+            None => sampler.fail_sample_load(&req_id, &message),
+        },
+    );
 }
 
 /// Switch a sampler between single-sample and multisample mode.
@@ -59,9 +88,13 @@ pub(super) fn set_sampler_mode(
     device_path: DevicePath,
     multisample: bool,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| {
-        sampler.set_multisample(multisample)
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "set sampler mode",
+        channel_id,
+        &device_path,
+        |sampler| sampler.set_multisample(multisample),
+    );
 }
 
 /// Create or update a sampler zone.
@@ -72,9 +105,13 @@ pub(super) fn set_sampler_zone(
     zone_id: u32,
     settings: ZoneSettings,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| {
-        sampler.set_zone(zone_id, &settings)
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "set sampler zone",
+        channel_id,
+        &device_path,
+        |sampler| sampler.set_zone(zone_id, &settings),
+    );
 }
 
 /// Remove a sampler zone.
@@ -84,9 +121,13 @@ pub(super) fn remove_sampler_zone(
     device_path: DevicePath,
     zone_id: u32,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| {
-        sampler.remove_zone(zone_id)
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "remove sampler zone",
+        channel_id,
+        &device_path,
+        |sampler| sampler.remove_zone(zone_id),
+    );
 }
 
 /// Create or update a sampler zone group.
@@ -100,9 +141,13 @@ pub(super) fn set_sampler_zone_group(
     solo: bool,
     play_mode: GroupPlayMode,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| {
-        sampler.set_zone_group(group_id, gain, mute, solo, play_mode)
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "set sampler zone group",
+        channel_id,
+        &device_path,
+        |sampler| sampler.set_zone_group(group_id, gain, mute, solo, play_mode),
+    );
 }
 
 /// Remove a sampler zone group.
@@ -112,9 +157,13 @@ pub(super) fn remove_sampler_zone_group(
     device_path: DevicePath,
     group_id: u32,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| {
-        sampler.remove_zone_group(group_id)
-    })
+    with_device::<SamplerDevice, _>(
+        state,
+        "remove sampler zone group",
+        channel_id,
+        &device_path,
+        |sampler| sampler.remove_zone_group(group_id),
+    );
 }
 
 /// Set the sampler zone that edits and auditions apply to.
@@ -124,37 +173,13 @@ pub(super) fn set_sampler_focus(
     device_path: DevicePath,
     zone_id: u32,
 ) {
-    with_sampler(state, channel_id, &device_path, |sampler| {
-        sampler.set_focus(zone_id)
-    })
-}
-
-/// Run `apply` on the Sampler at `device_path`, warning when the channel or device is missing or
-/// isn't a Sampler.
-fn with_sampler(
-    state: &mut EngineState,
-    channel_id: ChannelId,
-    device_path: &DevicePath,
-    apply: impl FnOnce(&mut crate::audio::devices::SamplerDevice),
-) {
-    let Some(device) = state
-        .channels
-        .get_mut(&channel_id)
-        .and_then(|channel| channel.device_at_path_mut(device_path))
-    else {
-        warn!("No device at channel {} path {}", channel_id, device_path);
-        return;
-    };
-    match device
-        .as_any_mut()
-        .downcast_mut::<crate::audio::devices::SamplerDevice>()
-    {
-        Some(sampler) => apply(sampler),
-        None => warn!(
-            "Device at channel {} path {} is not a Sampler",
-            channel_id, device_path
-        ),
-    }
+    with_device::<SamplerDevice, _>(
+        state,
+        "set sampler focus",
+        channel_id,
+        &device_path,
+        |sampler| sampler.set_focus(zone_id),
+    );
 }
 
 #[cfg(test)]
