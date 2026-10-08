@@ -4,6 +4,7 @@
 //! by both the main engine binary and plugin host subprocesses.
 
 pub mod audio;
+pub mod logging;
 pub mod osc;
 pub mod plugin_host;
 pub mod window_manager;

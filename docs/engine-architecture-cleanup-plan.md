@@ -12,7 +12,7 @@ order. When a phase has to deviate from this plan, update this file first.
 
 - [x] Phase 0: Baseline
 - [x] Phase 1: Unused dependencies and dead code
-- [ ] Phase 2: `main.rs` uses the library crate; logging module
+- [x] Phase 2: `main.rs` uses the library crate; logging module
 - [ ] Phase 3: Split `audio/types.rs`
 - [ ] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
 - [ ] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
@@ -609,6 +609,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 |---|---|---|---|---|
 | 0 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (duplicate run) | release 138; test build 117 | Baseline. No flaky test seen. Port 7000 held by user's engine (live checks pending). |
 | 1 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (unchanged) | lib crate 0; `engine` bin 58 (was 138) | See notes below. |
+| 2 | 2026-10-09 | lib 804 / 14; bin engine 0 / 0 | release 0; test build 0 | New baseline: 804 passed, 14 ignored. Live check pending (see notes). |
 
 Phase 1 notes:
 
@@ -646,3 +647,16 @@ Phase 1 notes:
   `--bin engine` run and passed on rerun.
 - Docs mentioning deleted names remain in older design notes (`docs/specs/008`, `010`, `waveform-plan.md`
   mention `calculate_stretch_factor`); they are historical and were left alone.
+
+Phase 2 notes:
+
+- `main.rs` is 69 lines (was 187) and imports from the `engine` library. `logging/` holds
+  `RotatableWriter`, `LogWriters`, `init(&status_tx)` (takes a reference and clones for the forwarder),
+  `rotate.rs` (`rotate_log_files`, `enforce_retention`, now top-level functions) and `forwarder.rs`
+  (moved with `git mv` from `log_forwarder.rs`). `lib.rs` declares `logging` directly instead of the
+  intermediate `log_forwarder` step.
+- Warnings are 0 in `cargo build --release` and `cargo test --no-run`. The Phase 1 residue (58 bin-view
+  warnings) disappeared with the duplicate module tree, so the pub items and re-exports listed in the
+  Phase 1 notes stayed as library API.
+- Live check (engine on port 7000, `last_*.log` written, `/project/init` rotation) is pending: the
+  user's engine held port 7000 while this was done, so no engine was started.

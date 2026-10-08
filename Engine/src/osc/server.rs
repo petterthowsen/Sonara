@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use crossbeam::channel::{Receiver, Sender};
 use rosc::{OscMessage, OscPacket, OscType};
 use std::collections::HashMap;
-use std::fs::{self, File};
 use std::net::{SocketAddr, UdpSocket};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,6 +16,7 @@ use crate::audio::devices::{parse_osc_device_addr, DevicePath};
 use crate::audio::io::{AfsEvent, AudioFileService};
 use crate::audio::types::ClipLoadState;
 use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
+use crate::logging::{rotate_log_files, LogWriters};
 use crate::window_manager::WindowManager;
 
 /// OSC server that receives messages from Godot UI and sends status updates
@@ -42,13 +42,6 @@ struct PendingDevice {
     /// A Sampler multisample zone, or None for the device's own sample.
     zone_id: Option<u32>,
     source_path: String,
-}
-
-/// Shared file handles for rotating log writers (info, warn, combined)
-pub struct LogWriters {
-    pub info: Arc<Mutex<File>>,
-    pub warn: Arc<Mutex<File>>,
-    pub combined: Arc<Mutex<File>>,
 }
 
 impl OscServer {
@@ -341,96 +334,6 @@ impl OscServer {
                 Ok(())
             }
         }
-    }
-
-    /// Rotate all log files to timestamped session files and enforce retention
-    fn rotate_log_files(log_writers: &LogWriters) -> Result<()> {
-        use chrono::Local;
-        use std::io::Write;
-
-        const MAX_SESSIONS: usize = 5;
-
-        // Generate timestamp for the archived log files
-        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-
-        // Helper to rotate a single writer from last_*.txt → session_*_*.log
-        fn rotate_one(
-            current_path: &str,
-            archived_path: &str,
-            writer: &Arc<Mutex<File>>,
-        ) -> Result<()> {
-            // Announce rotation before swapping handles so message goes to old file
-            info!("Rotating log file to {}", archived_path);
-
-            if let Ok(mut w) = writer.lock() {
-                let _ = w.flush();
-                *w = File::create(format!("{}.tmp", current_path))?;
-            }
-
-            if Path::new(current_path).exists() {
-                fs::rename(current_path, archived_path)?;
-            }
-
-            // Remove temp and recreate the current file
-            let tmp_path = format!("{}.tmp", current_path);
-            if Path::new(&tmp_path).exists() {
-                fs::remove_file(&tmp_path)?;
-            }
-
-            let new_file = File::create(current_path)?;
-            if let Ok(mut w) = writer.lock() {
-                *w = new_file;
-            }
-
-            Ok(())
-        }
-
-        // Compose archived names
-        let info_archived = format!("logs/session_{}_info.log", timestamp);
-        let warn_archived = format!("logs/session_{}_warn.log", timestamp);
-        let combined_archived = format!("logs/session_{}_combined.log", timestamp);
-
-        // Rotate each log
-        rotate_one("logs/last_info.log", &info_archived, &log_writers.info)?;
-        rotate_one("logs/last_warn.log", &warn_archived, &log_writers.warn)?;
-        rotate_one(
-            "logs/last_combined.log",
-            &combined_archived,
-            &log_writers.combined,
-        )?;
-
-        // Enforce retention: keep last N per type
-        fn enforce_retention(prefix: &str, suffix: &str) -> Result<()> {
-            let mut files: Vec<_> = fs::read_dir("logs")?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-                .map(|e| e.path())
-                .filter(|p| {
-                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                        name.starts_with(prefix) && name.ends_with(suffix)
-                    } else {
-                        false
-                    }
-                })
-                .collect();
-
-            files.sort(); // timestamp is in filename, ascending
-            let excess = files.len().saturating_sub(MAX_SESSIONS);
-            if excess > 0 {
-                for p in files.into_iter().take(excess) {
-                    let _ = fs::remove_file(p);
-                }
-            }
-            Ok(())
-        }
-
-        enforce_retention("session_", "_info.log")?;
-        enforce_retention("session_", "_warn.log")?;
-        enforce_retention("session_", "_combined.log")?;
-
-        info!("Log rotation complete - new session started");
-
-        Ok(())
     }
 
     /// Dispatch `/channel/{id}/device/{path}/...` commands (nested `child` segments allowed).
@@ -1061,7 +964,7 @@ impl OscServer {
                     args.get(4),
                 ) {
                     // Rotate log files before initializing new project
-                    if let Err(e) = Self::rotate_log_files(log_writers) {
+                    if let Err(e) = rotate_log_files(log_writers) {
                         warn!("Failed to rotate log file: {}", e);
                     }
 

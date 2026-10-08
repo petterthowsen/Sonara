@@ -50,9 +50,9 @@ Full message catalog: `docs/subsystems/osc-protocol.md`.
 ### File Structure
 ```
 Engine/src/
-  main.rs              # `engine` binary: logging setup, OSC server initialization
-  lib.rs               # Shared modules for `engine` and `plugin_host`
-  log_forwarder.rs     # Forwards WARN/ERROR tracing records to Godot via /log
+  main.rs              # `engine` binary: wires logging, engine, window manager, file service, OSC server
+  lib.rs               # The library crate: every module, used by `engine` and `plugin_host`
+  logging/             # mod.rs (log files, subscriber setup), rotate.rs (session rotation), forwarder.rs (WARN/ERROR to Godot via /log)
   window_manager.rs    # winit thread hosting plugin GUI windows
   bin/plugin_host.rs   # `plugin_host` binary (CLAP subprocess entry point)
   plugin_host/         # Subprocess host implementation (see engine-plugin-architecture)

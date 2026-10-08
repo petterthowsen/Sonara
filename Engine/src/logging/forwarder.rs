@@ -10,6 +10,7 @@ pub struct LogForwarder {
 }
 
 impl LogForwarder {
+    /// Forward to Godot through `status_tx`.
     pub fn new(status_tx: Sender<EngineStatus>) -> Self {
         Self { status_tx }
     }
