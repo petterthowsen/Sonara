@@ -14,8 +14,8 @@ use std::fmt;
 use tracing::warn;
 
 use super::channel::Channel;
-use super::commands::EngineState;
 use super::devices::DevicePath;
+use super::state::EngineState;
 use super::types::{Tick, TrackId};
 
 /// Identifier for a point within a lane. Allocated by Godot, mirroring `NoteId`.

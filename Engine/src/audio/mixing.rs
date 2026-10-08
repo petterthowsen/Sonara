@@ -2,11 +2,12 @@ use crossbeam::channel::Sender;
 use std::collections::{HashMap, VecDeque};
 
 use super::channel::{fader_gain, Channel};
-use super::commands::{EngineState, EngineStatus};
+use super::commands::EngineStatus;
 use super::devices::container::{self, ChainStep};
 use super::dsp::interleave::deinterleave_stereo;
 use super::render_scratch::{RenderScratch, SoloRole};
 use super::rt_debug;
+use super::state::EngineState;
 use super::types::*;
 
 /// Master channel ID. Master never routes to another channel and is never silenced by solo.
@@ -690,10 +691,10 @@ fn write_master_output(
 mod tests {
     use super::*;
     use crate::audio::channel::{Channel, PanMode, Send};
-    use crate::audio::commands::EngineState;
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
     };
+    use crate::audio::state::EngineState;
     use crossbeam::channel::unbounded;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;

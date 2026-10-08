@@ -20,6 +20,7 @@ pub mod project;
 pub mod render;
 pub mod render_scratch;
 pub mod rt_debug;
+pub mod state;
 pub mod stream;
 pub mod tempo_map;
 pub mod time_signature_map;

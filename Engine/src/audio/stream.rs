@@ -18,11 +18,12 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use super::block_clock::BlockClock;
-use super::commands::{EngineState, EngineStatus};
+use super::commands::EngineStatus;
 use super::devices::clap_host::subprocess_adapter::PLUGIN_UNDERRUNS;
 use super::mixing::mix_and_output;
 use super::processing::process_audio;
 use super::rt_debug;
+use super::state::EngineState;
 
 /// Largest block the engine renders. Channel, device and plugin buffers are preallocated at this
 /// size, so a buffer-size change never reallocates them.

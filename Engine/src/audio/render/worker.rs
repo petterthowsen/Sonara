@@ -14,12 +14,13 @@ use super::{AnalysisTaps, RenderJob, RenderTail};
 use crate::audio::analysis::{Analyzer, AnalyzerConfig};
 use crate::audio::block_clock::{BlockClock, OFFLINE_BLOCK_TIMEOUT};
 use crate::audio::clip::{ClipLoadState, ClipType};
-use crate::audio::commands::{EngineState, EngineStatus};
+use crate::audio::commands::EngineStatus;
 use crate::audio::devices::clap_host::subprocess_adapter::PluginIpcHandle;
 use crate::audio::devices::clap_host::SubprocessClapAdapter;
 use crate::audio::devices::container;
 use crate::audio::mixing::mix_and_output;
 use crate::audio::processing::{frames_before_tick, process_audio};
+use crate::audio::state::EngineState;
 use crate::audio::types::{ChannelId, Tick};
 
 /// Master channel ID.

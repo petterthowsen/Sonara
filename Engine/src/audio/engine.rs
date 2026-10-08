@@ -5,8 +5,9 @@ use std::thread;
 use tracing::info;
 
 use super::command_worker::CommandWorker;
-pub use super::commands::{AudioCommand, EngineState, EngineStatus};
+pub use super::commands::{AudioCommand, EngineStatus};
 use super::pipewire;
+pub use super::state::EngineState;
 use super::stream::{
     CallbackContext, CallbackCounters, StreamControl, StreamRequest, MAX_BLOCK_FRAMES,
 };

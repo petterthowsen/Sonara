@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use super::block_clock::BlockClock;
-use super::commands::{process_command, AudioCommand, EngineState, EngineStatus};
+use super::commands::{process_command, AudioCommand, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::{
     PluginBlockStats, PluginIpcHandle, PluginLoad, HUNG_STALL_TIMEOUT,
 };
@@ -25,6 +25,7 @@ use super::devices::{
 use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
 use super::pipewire::GraphInfo;
 use super::render::{RenderHandle, RenderJob};
+use super::state::EngineState;
 use super::stream::{StreamControl, StreamRequest};
 use super::tempo_map::TempoMap;
 use super::time_signature_map::TimeSignatureMap;
