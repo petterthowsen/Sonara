@@ -2940,85 +2940,21 @@ pub fn process_command(
             device_path,
             ..
         } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.device_at_path_mut(&device_path) {
-                    use super::devices::clap_host::ClapDeviceAdapter;
-                    if let Some(clap_device) =
-                        (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>()
-                    {
-                        match clap_device.open_gui() {
-                            Ok(()) => {
-                                info!(
-                                    "Opened GUI for in-process plugin at channel {} device {}",
-                                    channel_id, device_path
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to open in-process plugin GUI at channel {} device {}: {}",
-                                    channel_id, device_path, e
-                                );
-                            }
-                        }
-                    } else {
-                        warn!(
-                            "Device at channel {} path {} is not a CLAP plugin",
-                            channel_id, device_path
-                        );
-                    }
-                } else {
-                    warn!(
-                        "Device not found at channel {} path {}",
-                        channel_id, device_path
-                    );
-                }
-            } else {
-                warn!("Channel {} not found for open plugin GUI", channel_id);
-            }
+            // Subprocess plugins are handled by the command worker before this point.
+            warn!(
+                "open plugin GUI: device at channel {} path {} is not a CLAP plugin",
+                channel_id, device_path
+            );
         }
         AudioCommand::ClosePluginGui {
             channel_id,
             device_path,
         } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.device_at_path_mut(&device_path) {
-                    use super::devices::clap_host::ClapDeviceAdapter;
-                    if let Some(clap_device) =
-                        (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>()
-                    {
-                        match clap_device.close_gui() {
-                            Ok(()) => {
-                                info!(
-                                    "Closed GUI for in-process plugin at channel {} device {}",
-                                    channel_id, device_path
-                                );
-                                let _ = status_tx.send(EngineStatus::PluginGuiClosed {
-                                    channel_id,
-                                    device_path,
-                                });
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to close in-process plugin GUI at channel {} device {}: {}",
-                                    channel_id, device_path, e
-                                );
-                            }
-                        }
-                    } else {
-                        warn!(
-                            "Device at channel {} path {} is not a CLAP plugin",
-                            channel_id, device_path
-                        );
-                    }
-                } else {
-                    warn!(
-                        "Device not found at channel {} path {}",
-                        channel_id, device_path
-                    );
-                }
-            } else {
-                warn!("Channel {} not found for close plugin GUI", channel_id);
-            }
+            // Subprocess plugins are handled by the command worker before this point.
+            warn!(
+                "close plugin GUI: device at channel {} path {} is not a CLAP plugin",
+                channel_id, device_path
+            );
         }
         // The command worker handles these for subprocess plugins, the only ones they apply to
         AudioCommand::SetPluginGuiVisible {

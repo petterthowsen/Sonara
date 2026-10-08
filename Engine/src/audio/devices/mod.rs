@@ -30,7 +30,7 @@ mod utility;
 
 pub use chain::ChainDevice;
 pub use chorus::ChorusDevice;
-pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
+pub use clap_host::{PluginDescriptor, PluginScanner};
 pub use container::{parse_osc_device_addr, DeviceContainer, DevicePath};
 pub use delay::DelayDevice;
 pub use drum_machine::DrumMachineDevice;

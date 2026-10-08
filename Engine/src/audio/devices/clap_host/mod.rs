@@ -3,16 +3,12 @@
 //! This module provides CLAP plugin loading and hosting capabilities using the clack-host library.
 //! Plugins are adapted to work with Sonara's AudioDevice trait for seamless integration.
 
-pub mod adapter;
 pub mod discovery;
-pub mod host_impl;
 pub mod subprocess_adapter;
 
 // Subprocess adapter submodules are private (accessed through SubprocessClapAdapter)
 
-pub use adapter::ClapDeviceAdapter;
 pub use discovery::{PluginDescriptor, PluginScanner};
-pub use host_impl::SonaraHost;
 pub use subprocess_adapter::SubprocessClapAdapter;
 
 // Re-export IPC types for convenience
