@@ -33,11 +33,6 @@ impl ChainDevice {
             buf_b: vec![0.0; interleaved],
         }
     }
-
-    /// Linear gain applied after the child chain (1.0 = unity).
-    pub fn volume(&self) -> f32 {
-        self.volume
-    }
 }
 
 impl DeviceContainer for ChainDevice {

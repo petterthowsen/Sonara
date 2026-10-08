@@ -415,6 +415,7 @@ impl AudioFileService {
     }
 
     /// Test helper: wait for events with timeout
+    #[cfg(test)]
     fn wait_for_events(&self, timeout_ms: u64) -> Vec<AfsEvent> {
         let mut events = Vec::new();
         let start = std::time::Instant::now();

@@ -319,11 +319,6 @@ impl PluginScanner {
         DeviceCategory::Effect
     }
 
-    /// Get a plugin descriptor by ID
-    pub fn get_plugin(&self, id: &str) -> Option<&PluginDescriptor> {
-        self.discovered_plugins.get(id)
-    }
-
     /// Get all discovered plugins
     /// Vendor of plugin `id` in bundle `path`. Reads that one bundle when the plugin wasn't
     /// scanned in this session (Godot caches its plugin list, so a project can load before any
@@ -348,16 +343,6 @@ impl PluginScanner {
 
     pub fn all_plugins(&self) -> impl Iterator<Item = &PluginDescriptor> {
         self.discovered_plugins.values()
-    }
-
-    /// Get number of discovered plugins
-    pub fn plugin_count(&self) -> usize {
-        self.discovered_plugins.len()
-    }
-
-    /// Clear all discovered plugins
-    pub fn clear(&mut self) {
-        self.discovered_plugins.clear();
     }
 }
 

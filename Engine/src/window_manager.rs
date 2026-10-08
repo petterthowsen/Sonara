@@ -308,12 +308,6 @@ impl WindowManager {
     pub fn pump_events(&mut self) {
         // Events are handled automatically by the winit thread
     }
-
-    /// No-op for compatibility (window creation now returns handle directly)
-    pub fn get_window_handle(&self, _process_key: &str) -> Option<u64> {
-        // Window handles are now returned directly from create_window()
-        None
-    }
 }
 
 /// Where an embedded host window lives

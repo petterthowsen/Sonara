@@ -41,27 +41,33 @@ pub const OUTPUT: ParamId = 1;
 pub const BAND_COUNT: usize = MAX_BANDS;
 
 /// `Active` parameter of band position `p` (1..=6).
+#[cfg(test)]
 pub const fn band_active_id(p: usize) -> ParamId {
     (p * 10) as ParamId
 }
 /// `Low Edge` parameter of band position `p` (2..=6).
+#[cfg(test)]
 pub const fn band_edge_id(p: usize) -> ParamId {
     (p * 10 + 1) as ParamId
 }
 /// `Gain` parameter of band position `p`.
+#[cfg(test)]
 pub const fn band_gain_id(p: usize) -> ParamId {
     (p * 10 + 2) as ParamId
 }
 /// `Mute` parameter of band position `p`.
+#[cfg(test)]
 pub const fn band_mute_id(p: usize) -> ParamId {
     (p * 10 + 3) as ParamId
 }
 /// `Solo` parameter of band position `p`.
+#[cfg(test)]
 pub const fn band_solo_id(p: usize) -> ParamId {
     (p * 10 + 4) as ParamId
 }
 
 /// Default low edges of band positions 2..=6 (Hz).
+#[cfg(test)]
 const DEFAULT_EDGES: [f32; 5] = [60.0, 200.0, 700.0, 2500.0, 8000.0];
 
 macro_rules! band_params {

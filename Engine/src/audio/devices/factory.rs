@@ -379,7 +379,6 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::devices::container::DeviceContainer;
     use crate::audio::dsp::test_util::peak;
     use crate::audio::midi_types::{NoteEvent, NoteExpression};
 

@@ -1,0 +1,828 @@
+[
+ {
+  "file": "src/audio/devices/multiband.rs",
+  "line": 44,
+  "text": "pub const fn band_active_id(p: usize) -> ParamId {",
+  "head": "warning: function `band_active_id` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/multiband.rs",
+  "line": 48,
+  "text": "pub const fn band_edge_id(p: usize) -> ParamId {",
+  "head": "warning: function `band_edge_id` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/multiband.rs",
+  "line": 52,
+  "text": "pub const fn band_gain_id(p: usize) -> ParamId {",
+  "head": "warning: function `band_gain_id` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/multiband.rs",
+  "line": 56,
+  "text": "pub const fn band_mute_id(p: usize) -> ParamId {",
+  "head": "warning: function `band_mute_id` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/multiband.rs",
+  "line": 60,
+  "text": "pub const fn band_solo_id(p: usize) -> ParamId {",
+  "head": "warning: function `band_solo_id` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/multiband.rs",
+  "line": 65,
+  "text": "const DEFAULT_EDGES: [f32; 5] = [60.0, 200.0, 700.0, 2500.0, 8000.0];",
+  "head": "warning: constant `DEFAULT_EDGES` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/phaser.rs",
+  "line": 29,
+  "text": "pub const PHASER: ParamId = 0;",
+  "head": "warning: constant `PHASER` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/phaser.rs",
+  "line": 35,
+  "text": "pub const LFO: ParamId = 10;",
+  "head": "warning: constant `LFO` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/phaser.rs",
+  "line": 42,
+  "text": "pub const ENVELOPE: ParamId = 20;",
+  "head": "warning: constant `ENVELOPE` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/phaser.rs",
+  "line": 47,
+  "text": "pub const TONE: ParamId = 30;",
+  "head": "warning: constant `TONE` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/phaser.rs",
+  "line": 51,
+  "text": "pub const OUTPUT: ParamId = 40;",
+  "head": "warning: constant `OUTPUT` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/io/audio_file_service.rs",
+  "line": 418,
+  "text": "fn wait_for_events(&self, timeout_ms: u64) -> Vec<AfsEvent> {",
+  "head": "warning: method `wait_for_events` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/io/peaks.rs",
+  "line": 182,
+  "text": "pub fn frames(&self) -> u64 {",
+  "head": "warning: method `frames` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/io/waveform_cache.rs",
+  "line": 189,
+  "text": "pub fn read_texel(",
+  "head": "warning: associated function `read_texel` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/analysis/mod.rs",
+  "line": 258,
+  "text": "pub fn next_tick(&self) -> f64 {",
+  "head": "warning: method `next_tick` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/analysis/scale.rs",
+  "line": 8,
+  "text": "pub const DIGIT_FLOOR_DB: f32 = -33.0;",
+  "head": "warning: constant `DIGIT_FLOOR_DB` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/analysis/scale.rs",
+  "line": 9,
+  "text": "pub const DIGIT_STEP_DB: f32 = 3.0;",
+  "head": "warning: constant `DIGIT_STEP_DB` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/analysis/scale.rs",
+  "line": 13,
+  "text": "pub const SILENCE_DB: f32 = -70.0;",
+  "head": "warning: constant `SILENCE_DB` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/analysis/scale.rs",
+  "line": 20,
+  "text": "pub fn level_digit(db: f32) -> Option<u8> {",
+  "head": "warning: function `level_digit` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/automation.rs",
+  "line": 54,
+  "text": "pub fn pan_to_normalized(pan: f32) -> f32 {",
+  "head": "warning: function `pan_to_normalized` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/commands.rs",
+  "line": 664,
+  "text": "pub enum CommandResponse {",
+  "head": "warning: enum `CommandResponse` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/mod.rs",
+  "line": 121,
+  "text": "pub fn set_sleep_timeout(&mut self, timeout: Duration) {",
+  "head": "warning: method `set_sleep_timeout` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/mod.rs",
+  "line": 202,
+  "text": "pub enum DeviceVariant {",
+  "head": "warning: enum `DeviceVariant` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/mod.rs",
+  "line": 239,
+  "text": "pub enum PortType {",
+  "head": "warning: enum `PortType` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/mod.rs",
+  "line": 448,
+  "text": "fn device_variant(&self) -> DeviceVariant;",
+  "head": "warning: methods `device_variant` and `latency_frames` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/mod.rs",
+  "line": 559,
+  "text": "fn latency_frames(&self) -> u32 {",
+  "head": "warning: methods `device_variant` and `latency_frames` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/chain.rs",
+  "line": 38,
+  "text": "pub fn volume(&self) -> f32 {",
+  "head": "warning: method `volume` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/clap_host/discovery.rs",
+  "line": 43,
+  "text": "pub fn with_paths(paths: Vec<PathBuf>) -> Self {",
+  "head": "warning: associated items `with_paths`, `get_plugin`, `plugin_count`, and `clear` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/clap_host/discovery.rs",
+  "line": 323,
+  "text": "pub fn get_plugin(&self, id: &str) -> Option<&PluginDescriptor> {",
+  "head": "warning: associated items `with_paths`, `get_plugin`, `plugin_count`, and `clear` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/clap_host/discovery.rs",
+  "line": 354,
+  "text": "pub fn plugin_count(&self) -> usize {",
+  "head": "warning: associated items `with_paths`, `get_plugin`, `plugin_count`, and `clear` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/clap_host/discovery.rs",
+  "line": 359,
+  "text": "pub fn clear(&mut self) {",
+  "head": "warning: associated items `with_paths`, `get_plugin`, `plugin_count`, and `clear` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/clap_host/subprocess_adapter/mod.rs",
+  "line": 1002,
+  "text": "pub fn has_gui(&mut self) -> bool {",
+  "head": "warning: method `has_gui` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/clap_host/subprocess_adapter/gui.rs",
+  "line": 104,
+  "text": "pub fn has_gui(connection: &InstanceConnection) -> bool {",
+  "head": "warning: function `has_gui` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/clap_host/subprocess_adapter/lifecycle.rs",
+  "line": 301,
+  "text": "pub fn is_loading(&self) -> bool {",
+  "head": "warning: method `is_loading` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/clap_host/subprocess_adapter/plugin_ipc.rs",
+  "line": 106,
+  "text": "pub fn has_gui(&self) -> bool {",
+  "head": "warning: method `has_gui` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/compressor.rs",
+  "line": 198,
+  "text": "pub fn static_curve_db(",
+  "head": "warning: function `static_curve_db` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/container.rs",
+  "line": 41,
+  "text": "pub fn from_indices(indices: impl AsRef<[usize]>) -> Self {",
+  "head": "warning: associated items `from_indices` and `is_root` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/container.rs",
+  "line": 67,
+  "text": "pub fn is_root(&self) -> bool {",
+  "head": "warning: associated items `from_indices` and `is_root` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/drum_machine.rs",
+  "line": 58,
+  "text": "pub fn slot(&self, index: usize) -> Option<&DrumSlot> {",
+  "head": "warning: methods `slot` and `slot_choke_targets` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/drum_machine.rs",
+  "line": 81,
+  "text": "pub fn slot_choke_targets(&self, index: usize) -> Option<u128> {",
+  "head": "warning: methods `slot` and `slot_choke_targets` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/drums/params.rs",
+  "line": 49,
+  "text": "pub fn table() -> &'static ParamTable {",
+  "head": "warning: associated function `table` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/eq.rs",
+  "line": 287,
+  "text": "pub fn magnitude_db(&self, freq: f32, sample_rate: f32) -> f32 {",
+  "head": "warning: method `magnitude_db` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/eq.rs",
+  "line": 300,
+  "text": "pub fn band_magnitude_db(",
+  "head": "warning: function `band_magnitude_db` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/eq.rs",
+  "line": 797,
+  "text": "pub fn band_filter(&self, band: usize) -> BandFilter {",
+  "head": "warning: method `band_filter` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/layer.rs",
+  "line": 84,
+  "text": "pub fn slot(&self, index: usize) -> Option<&LayerSlot> {",
+  "head": "warning: methods `slot` and `slot_mut` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/layer.rs",
+  "line": 89,
+  "text": "pub fn slot_mut(&mut self, index: usize) -> Option<&mut LayerSlot> {",
+  "head": "warning: methods `slot` and `slot_mut` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/param_table.rs",
+  "line": 266,
+  "text": "pub const fn is_empty(&self) -> bool {",
+  "head": "warning: methods `is_empty` and `slot_of` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/param_table.rs",
+  "line": 279,
+  "text": "pub const fn slot_of(&self, id: ParamId) -> usize {",
+  "head": "warning: methods `is_empty` and `slot_of` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/param_table.rs",
+  "line": 322,
+  "text": "pub fn table(&self) -> &'static ParamTable {",
+  "head": "warning: methods `table`, `norm_at`, `offset_at`, and `clear_offsets` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/param_table.rs",
+  "line": 327,
+  "text": "pub fn norm_at(&self, slot: usize) -> f32 {",
+  "head": "warning: methods `table`, `norm_at`, `offset_at`, and `clear_offsets` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/devices/param_table.rs",
+  "line": 347,
+  "text": "pub fn offset_at(&self, slot: usize) -> f32 {",
+  "head": "warning: methods `table`, `norm_at`, `offset_at`, and `clear_offsets` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/devices/param_table.rs",
+  "line": 382,
+  "text": "pub fn clear_offsets(&mut self) {",
+  "head": "warning: methods `table`, `norm_at`, `offset_at`, and `clear_offsets` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/crossover.rs",
+  "line": 85,
+  "text": "pub fn crossover_count(&self) -> usize {",
+  "head": "warning: methods `crossover_count` and `frequency` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/crossover.rs",
+  "line": 127,
+  "text": "pub fn frequency(&self, index: usize) -> f32 {",
+  "head": "warning: methods `crossover_count` and `frequency` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/env_follower.rs",
+  "line": 50,
+  "text": "pub fn set_detection(&mut self, detection: Detection) {",
+  "head": "warning: method `set_detection` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/gain.rs",
+  "line": 62,
+  "text": "pub const DEFAULT_HZ: f32 = 5.0;",
+  "head": "warning: associated constant `DEFAULT_HZ` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/ladder.rs",
+  "line": 59,
+  "text": "pub fn new(g: f32, resonance: f32) -> Self {",
+  "head": "warning: associated items `new` and `set_pole` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/ladder.rs",
+  "line": 81,
+  "text": "pub fn set_pole(&mut self, g: f32) {",
+  "head": "warning: associated items `new` and `set_pole` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/ladder.rs",
+  "line": 123,
+  "text": "pub fn reset(&mut self) {",
+  "head": "warning: method `reset` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/linear_svf.rs",
+  "line": 84,
+  "text": "pub fn magnitude_db(&self, freq: f32, sample_rate: f32) -> f32 {",
+  "head": "warning: method `magnitude_db` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/linear_svf.rs",
+  "line": 116,
+  "text": "pub fn reset(&mut self) {",
+  "head": "warning: method `reset` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/noise.rs",
+  "line": 89,
+  "text": "pub fn reset(&mut self, seed: u32) {",
+  "head": "warning: method `reset` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/one_pole.rs",
+  "line": 46,
+  "text": "pub fn allpass(&mut self, x: f32, g: f32) -> f32 {",
+  "head": "warning: method `allpass` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/one_pole.rs",
+  "line": 64,
+  "text": "pub fn one_pole_magnitude_db(g: f32, high: bool, freq: f32, sample_rate: f32) -> f32 {",
+  "head": "warning: function `one_pole_magnitude_db` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/one_shot_env.rs",
+  "line": 183,
+  "text": "pub fn value(&self) -> f32 {",
+  "head": "warning: method `value` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/dsp/oscillator.rs",
+  "line": 23,
+  "text": "pub enum Waveform {",
+  "head": "warning: enum `Waveform` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/simd.rs",
+  "line": 17,
+  "text": "pub fn mix_blocks(output: &mut [f32], input: &[f32]) {",
+  "head": "warning: function `mix_blocks` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/simd.rs",
+  "line": 55,
+  "text": "unsafe fn mix_blocks_avx(output: &mut [f32], input: &[f32], len: usize) {",
+  "head": "warning: function `mix_blocks_avx` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/simd.rs",
+  "line": 77,
+  "text": "unsafe fn mix_blocks_sse(output: &mut [f32], input: &[f32], len: usize) {",
+  "head": "warning: function `mix_blocks_sse` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/dsp/sweep_osc.rs",
+  "line": 63,
+  "text": "pub fn phase(&self) -> f64 {",
+  "head": "warning: method `phase` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/engine.rs",
+  "line": 106,
+  "text": "pub fn new() -> Result<Self> {",
+  "head": "warning: associated items `new`, `send_command`, `status_sender`, `is_playing`, and `current_tick` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/engine.rs",
+  "line": 112,
+  "text": "pub fn send_command(&self, cmd: AudioCommand) -> Result<()> {",
+  "head": "warning: associated items `new`, `send_command`, `status_sender`, `is_playing`, and `current_tick` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/engine.rs",
+  "line": 130,
+  "text": "pub fn status_sender(&self) -> Sender<EngineStatus> {",
+  "head": "warning: associated items `new`, `send_command`, `status_sender`, `is_playing`, and `current_tick` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/engine.rs",
+  "line": 140,
+  "text": "pub fn is_playing(&self) -> bool {",
+  "head": "warning: associated items `new`, `send_command`, `status_sender`, `is_playing`, and `current_tick` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/engine.rs",
+  "line": 145,
+  "text": "pub fn current_tick(&self) -> Tick {",
+  "head": "warning: associated items `new`, `send_command`, `status_sender`, `is_playing`, and `current_tick` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/io/decoder.rs",
+  "line": 386,
+  "text": "pub fn load_audio_file(file_path: &str) -> Result<Vec<f32>> {",
+  "head": "warning: function `load_audio_file` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/platform_shm.rs",
+  "line": 80,
+  "text": "pub fn from_fd(fd: RawFd, size: usize) -> Result<Self, String> {",
+  "head": "warning: associated items `from_fd`, `as_mut_ptr`, `size`, and `as_slice` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/ipc/platform_shm.rs",
+  "line": 130,
+  "text": "pub fn as_mut_ptr(&mut self) -> *mut u8 {",
+  "head": "warning: associated items `from_fd`, `as_mut_ptr`, `size`, and `as_slice` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/platform_shm.rs",
+  "line": 135,
+  "text": "pub fn size(&self) -> usize {",
+  "head": "warning: associated items `from_fd`, `as_mut_ptr`, `size`, and `as_slice` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/platform_shm.rs",
+  "line": 140,
+  "text": "pub fn as_slice(&self) -> &[u8] {",
+  "head": "warning: associated items `from_fd`, `as_mut_ptr`, `size`, and `as_slice` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/ipc/process_manager.rs",
+  "line": 831,
+  "text": "pub fn log_path(&self) -> Option<&Path> {",
+  "head": "warning: method `log_path` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/process_manager.rs",
+  "line": 970,
+  "text": "pub fn log_path(&self) -> Option<&Path> {",
+  "head": "warning: methods `log_path` and `host_key` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/process_manager.rs",
+  "line": 993,
+  "text": "pub fn host_key(&self) -> &str {",
+  "head": "warning: methods `log_path` and `host_key` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/process_manager.rs",
+  "line": 1220,
+  "text": "pub fn shutdown_all(&self) {",
+  "head": "warning: method `shutdown_all` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/shared_memory.rs",
+  "line": 47,
+  "text": "pub fn from_fd(fd: RawFd, layout: SharedMemoryLayout) -> Result<Self, String> {",
+  "head": "warning: associated function `from_fd` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/shared_memory.rs",
+  "line": 143,
+  "text": "pub fn from_fd(fd: RawFd) -> Result<Self, String> {",
+  "head": "warning: associated function `from_fd` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/ipc/shared_memory.rs",
+  "line": 172,
+  "text": "pub fn clamped_count(count: &std::sync::atomic::AtomicU32, len: usize) -> usize {",
+  "head": "warning: function `clamped_count` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/midi_types.rs",
+  "line": 48,
+  "text": "pub fn note_on(midi_channel: u8, note: u8, velocity: u8, received_at: Instant) -> Self {",
+  "head": "warning: associated functions `note_on`, `note_off`, and `control_change` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/midi_types.rs",
+  "line": 60,
+  "text": "pub fn note_off(midi_channel: u8, note: u8, received_at: Instant) -> Self {",
+  "head": "warning: associated functions `note_on`, `note_off`, and `control_change` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/midi_types.rs",
+  "line": 72,
+  "text": "pub fn control_change(",
+  "head": "warning: associated functions `note_on`, `note_off`, and `control_change` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/midi_types.rs",
+  "line": 112,
+  "text": "pub const ID_LIMIT: SoundingNoteId = 1 << 31;",
+  "head": "warning: constant `ID_LIMIT` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/midi_types.rs",
+  "line": 252,
+  "text": "pub fn accepts_device(&self, device_id: i32) -> bool {",
+  "head": "warning: method `accepts_device` is never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/modulation/envelope.rs",
+  "line": 98,
+  "text": "pub fn set_attack(&mut self, seconds: f32) {",
+  "head": "warning: methods `set_attack`, `set_decay`, `set_sustain`, `set_release`, and `process_block` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/modulation/envelope.rs",
+  "line": 104,
+  "text": "pub fn set_decay(&mut self, seconds: f32) {",
+  "head": "warning: methods `set_attack`, `set_decay`, `set_sustain`, `set_release`, and `process_block` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/modulation/envelope.rs",
+  "line": 110,
+  "text": "pub fn set_sustain(&mut self, level: f32) {",
+  "head": "warning: methods `set_attack`, `set_decay`, `set_sustain`, `set_release`, and `process_block` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/modulation/envelope.rs",
+  "line": 115,
+  "text": "pub fn set_release(&mut self, seconds: f32) {",
+  "head": "warning: methods `set_attack`, `set_decay`, `set_sustain`, `set_release`, and `process_block` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/modulation/envelope.rs",
+  "line": 189,
+  "text": "pub fn process_block(&mut self, output: &mut [f32], frames: usize) {",
+  "head": "warning: methods `set_attack`, `set_decay`, `set_sustain`, `set_release`, and `process_block` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/modulation/kinds.rs",
+  "line": 192,
+  "text": "pub fn kind(&self) -> ModulatorKind {",
+  "head": "warning: methods `kind` and `norm_at` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/modulation/kinds.rs",
+  "line": 206,
+  "text": "pub fn norm_at(&self, slot: usize) -> f32 {",
+  "head": "warning: methods `kind` and `norm_at` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/modulation/matrix.rs",
+  "line": 123,
+  "text": "pub fn is_empty(&self) -> bool {",
+  "head": "warning: methods `is_empty` and `is_routed` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/modulation/matrix.rs",
+  "line": 132,
+  "text": "pub fn is_routed(&self, slot: usize) -> bool {",
+  "head": "warning: methods `is_empty` and `is_routed` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/stream.rs",
+  "line": 122,
+  "text": "pub fn buffer_frames(&self) -> u32 {",
+  "head": "warning: method `buffer_frames` is never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 744,
+  "text": "pub fn resize_buffers(&mut self, new_size: usize) {",
+  "head": "warning: methods `resize_buffers`, `mix_into`, `process_device_chain`, `process_device_chain_from`, `set_device_parameter`, and `get_device_parameter` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 821,
+  "text": "pub fn mix_into(&self, target: &mut Channel, gain_multiplier: f32) {",
+  "head": "warning: methods `resize_buffers`, `mix_into`, `process_device_chain`, `process_device_chain_from`, `set_device_parameter`, and `get_device_parameter` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 881,
+  "text": "pub fn process_device_chain(&mut self, sample_count: usize) {",
+  "head": "warning: methods `resize_buffers`, `mix_into`, `process_device_chain`, `process_device_chain_from`, `set_device_parameter`, and `get_device_parameter` are never used",
+  "dead": false
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 961,
+  "text": "pub fn process_device_chain_from(&mut self, start: usize, sample_count: usize) {",
+  "head": "warning: methods `resize_buffers`, `mix_into`, `process_device_chain`, `process_device_chain_from`, `set_device_parameter`, and `get_device_parameter` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1144,
+  "text": "pub fn set_device_parameter(",
+  "head": "warning: methods `resize_buffers`, `mix_into`, `process_device_chain`, `process_device_chain_from`, `set_device_parameter`, and `get_device_parameter` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1160,
+  "text": "pub fn get_device_parameter(",
+  "head": "warning: methods `resize_buffers`, `mix_into`, `process_device_chain`, `process_device_chain_from`, `set_device_parameter`, and `get_device_parameter` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1224,
+  "text": "pub fn new(clip_instance_id: ClipInstanceId) -> Self {",
+  "head": "warning: associated items `new`, `calculate_stretch_factor`, `advance_and_get_sample`, and `lerp` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1236,
+  "text": "pub fn calculate_stretch_factor(project_bpm: f32, recorded_bpm: f32) -> f32 {",
+  "head": "warning: associated items `new`, `calculate_stretch_factor`, `advance_and_get_sample`, and `lerp` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1268,
+  "text": "pub fn advance_and_get_sample(",
+  "head": "warning: associated items `new`, `calculate_stretch_factor`, `advance_and_get_sample`, and `lerp` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1321,
+  "text": "fn lerp(a: f32, b: f32, t: f32) -> f32 {",
+  "head": "warning: associated items `new`, `calculate_stretch_factor`, `advance_and_get_sample`, and `lerp` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1354,
+  "text": "pub fn ticks_per_sample(&self) -> f64 {",
+  "head": "warning: methods `ticks_per_sample`, `ticks_per_second`, `seconds_per_tick`, `samples_to_ticks`, and `ticks_to_samples` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1359,
+  "text": "pub fn ticks_per_second(&self) -> f64 {",
+  "head": "warning: methods `ticks_per_sample`, `ticks_per_second`, `seconds_per_tick`, `samples_to_ticks`, and `ticks_to_samples` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1364,
+  "text": "pub fn seconds_per_tick(&self) -> f64 {",
+  "head": "warning: methods `ticks_per_sample`, `ticks_per_second`, `seconds_per_tick`, `samples_to_ticks`, and `ticks_to_samples` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1369,
+  "text": "pub fn samples_to_ticks(&self, samples: u64, sample_rate: f32) -> i64 {",
+  "head": "warning: methods `ticks_per_sample`, `ticks_per_second`, `seconds_per_tick`, `samples_to_ticks`, and `ticks_to_samples` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/audio/types.rs",
+  "line": 1375,
+  "text": "pub fn ticks_to_samples(&self, ticks: Tick, sample_rate: f32) -> u64 {",
+  "head": "warning: methods `ticks_per_sample`, `ticks_per_second`, `seconds_per_tick`, `samples_to_ticks`, and `ticks_to_samples` are never used",
+  "dead": true
+ },
+ {
+  "file": "src/window_manager.rs",
+  "line": 313,
+  "text": "pub fn get_window_handle(&self, _process_key: &str) -> Option<u64> {",
+  "head": "warning: method `get_window_handle` is never used",
+  "dead": true
+ }
+]

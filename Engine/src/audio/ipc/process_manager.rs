@@ -827,11 +827,6 @@ impl PluginProcess {
         self.debugging
     }
 
-    /// The host's log file, when its name is known.
-    pub fn log_path(&self) -> Option<&Path> {
-        self.log_path.as_deref()
-    }
-
     /// Why this host stopped, or None while it is still running. Waits briefly for the watcher
     /// to record the exit status, so a crash report has the signal or exit code.
     pub fn crash_info(&self) -> Option<HostCrash> {
@@ -966,11 +961,6 @@ impl InstanceConnection {
         self.host.is_debugging()
     }
 
-    /// The host's log file, when its name is known.
-    pub fn log_path(&self) -> Option<&Path> {
-        self.host.log_path()
-    }
-
     /// Kill the host process (hung host handling).
     pub fn kill_host(&self) {
         self.host.kill()
@@ -987,11 +977,6 @@ impl InstanceConnection {
 
     pub fn host_pid(&self) -> u32 {
         self.host.pid
-    }
-
-    /// The key of the host process this instance runs in.
-    pub fn host_key(&self) -> &str {
-        &self.host.host_key
     }
 }
 
@@ -1214,15 +1199,6 @@ impl ProcessManager {
             }
         }
         host.shutdown();
-    }
-
-    /// Shutdown all plugin processes
-    pub fn shutdown_all(&self) {
-        lock(&self.instances).clear();
-        let hosts: Vec<_> = lock(&self.hosts).drain().map(|(_, host)| host).collect();
-        for host in hosts {
-            host.shutdown();
-        }
     }
 }
 

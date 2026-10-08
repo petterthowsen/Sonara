@@ -2510,7 +2510,11 @@ mod tests {
         assert!((inc(&d) - 1.0).abs() < 1e-9, "{}", inc(&d));
         d.set_parameter(PARAM_KEY_TRACK, 1.0);
         render(&mut d, 16);
-        assert!((inc(&d) - 2.0_f64.powf(4.0 / 12.0)).abs() < 1e-9, "{}", inc(&d));
+        assert!(
+            (inc(&d) - 2.0_f64.powf(4.0 / 12.0)).abs() < 1e-9,
+            "{}",
+            inc(&d)
+        );
     }
 
     #[test]

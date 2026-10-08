@@ -59,10 +59,6 @@ impl SweepOsc {
         }
         y
     }
-
-    pub fn phase(&self) -> f64 {
-        self.phase
-    }
 }
 
 /// Frequency of a sweep: `base_hz * 2^(sweep_st * env / 12)`, with a fast `exp2`.

@@ -47,10 +47,6 @@ impl EnvFollower {
         self.release_coef = time_coef(release_ms, sample_rate);
     }
 
-    pub fn set_detection(&mut self, detection: Detection) {
-        self.detection = detection;
-    }
-
     pub fn reset(&mut self) {
         self.state = 0.0;
     }

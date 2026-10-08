@@ -102,20 +102,6 @@ impl AudioEngine {
         })
     }
 
-    /// Create and initialize a new audio engine (convenience method)
-    pub fn new() -> Result<Self> {
-        let (status_tx, status_rx) = crossbeam::channel::bounded(STATUS_CHANNEL_CAPACITY);
-        Self::with_status_channel(status_tx, status_rx)
-    }
-
-    /// Send a command to the audio engine
-    pub fn send_command(&self, cmd: AudioCommand) -> Result<()> {
-        self.command_tx
-            .send(cmd)
-            .context("Failed to send command to audio engine")?;
-        Ok(())
-    }
-
     /// Hardware callback rate the mixer and devices are running at.
     pub fn device_sample_rate(&self) -> u32 {
         self.state.lock().unwrap().device_sample_rate.round() as u32
@@ -126,23 +112,8 @@ impl AudioEngine {
         self.command_tx.clone()
     }
 
-    /// Get a handle to send status updates (for log forwarder)
-    pub fn status_sender(&self) -> Sender<EngineStatus> {
-        self.status_tx.clone()
-    }
-
     /// Get status receiver for external use
     pub fn status_receiver(&self) -> Receiver<EngineStatus> {
         self.status_rx.clone()
-    }
-
-    /// Check if audio is currently playing
-    pub fn is_playing(&self) -> bool {
-        self.state.lock().unwrap().get_is_playing()
-    }
-
-    /// Get current playhead position
-    pub fn current_tick(&self) -> Tick {
-        self.state.lock().unwrap().get_current_tick()
     }
 }

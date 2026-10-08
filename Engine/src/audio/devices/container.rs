@@ -63,11 +63,6 @@ impl DevicePath {
         self.depth() < MAX_DEVICE_DEPTH
     }
 
-    /// True when this path addresses a top-level channel device (one index).
-    pub fn is_root(&self) -> bool {
-        self.len == 1
-    }
-
     /// True when this path is the channel itself (no device).
     pub fn is_empty(&self) -> bool {
         self.len == 0

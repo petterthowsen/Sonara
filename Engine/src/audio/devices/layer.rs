@@ -80,16 +80,6 @@ impl LayerDevice {
         }
     }
 
-    /// Immutable slot at `index`.
-    pub fn slot(&self, index: usize) -> Option<&LayerSlot> {
-        self.slots.get(index)
-    }
-
-    /// Mutable slot at `index`.
-    pub fn slot_mut(&mut self, index: usize) -> Option<&mut LayerSlot> {
-        self.slots.get_mut(index)
-    }
-
     /// Set a slot's linear gain from a normalized 0–1 value (0.5 = unity).
     pub fn set_slot_volume_normalized(&mut self, index: usize, normalized: f32) -> bool {
         if let Some(slot) = self.slots.get_mut(index) {

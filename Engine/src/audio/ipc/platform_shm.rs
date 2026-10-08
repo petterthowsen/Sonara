@@ -126,16 +126,6 @@ impl PlatformSharedMemory {
         self.ptr
     }
 
-    /// Get mutable raw memory pointer
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr
-    }
-
-    /// Get size in bytes
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
     /// Get memory as slice
     pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.size) }

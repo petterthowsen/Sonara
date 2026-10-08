@@ -25,30 +25,24 @@ use crate::audio::dsp::tempo_sync::{beats_to_hz, sync_beats, SYNC_CHOICES};
 use crate::audio::modulation::lfo::{Lfo, LfoShape};
 use crate::audio::transport::Transport;
 
-/// Phaser module IDs (blocks of ten per module).
-pub const PHASER: ParamId = 0;
 pub const STAGES: ParamId = 0;
 pub const SWEEP: ParamId = 1;
 pub const SPREAD: ParamId = 2;
 pub const FEEDBACK: ParamId = 3;
 
-pub const LFO: ParamId = 10;
 pub const LFO_SHAPE: ParamId = 10;
 pub const LFO_RATE: ParamId = 11;
 pub const LFO_SYNC: ParamId = 12;
 pub const LFO_DEPTH: ParamId = 13;
 pub const LFO_STEREO_PHASE: ParamId = 14;
 
-pub const ENVELOPE: ParamId = 20;
 pub const ENV_AMOUNT: ParamId = 20;
 pub const ENV_ATTACK: ParamId = 21;
 pub const ENV_RELEASE: ParamId = 22;
 
-pub const TONE: ParamId = 30;
 pub const LOW_CUT: ParamId = 30;
 pub const HIGH_CUT: ParamId = 31;
 
-pub const OUTPUT: ParamId = 40;
 pub const MIX: ParamId = 40;
 
 /// Stage counts for the Stages enum, in choice order.

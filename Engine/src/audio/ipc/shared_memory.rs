@@ -168,11 +168,6 @@ impl Default for HostSharedMemory {
     }
 }
 
-/// Read a `BlockEvent` count from a `Relaxed` counter, bounded by the array length.
-pub fn clamped_count(count: &std::sync::atomic::AtomicU32, len: usize) -> usize {
-    (count.load(Ordering::Relaxed) as usize).min(len)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

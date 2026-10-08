@@ -998,11 +998,6 @@ impl SubprocessClapAdapter {
         result
     }
 
-    /// Check if GUI is supported
-    pub fn has_gui(&mut self) -> bool {
-        self.ipc_handle().has_gui()
-    }
-
     /// Check if GUI is open
     pub fn is_gui_open(&self) -> bool {
         self.gui_open

@@ -117,11 +117,6 @@ impl StreamInfo {
         }
         self.period_frames as f32 * 1000.0 / self.sample_rate as f32
     }
-
-    /// Frames in the whole ALSA buffer.
-    pub fn buffer_frames(&self) -> u32 {
-        self.period_frames * ALSA_PERIODS
-    }
 }
 
 /// One output device, for the Settings device list.

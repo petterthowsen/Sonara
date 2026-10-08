@@ -659,12 +659,6 @@ pub enum AudioCommand {
     },
 }
 
-/// Response from commands that return data
-#[derive(Debug, Clone)]
-pub enum CommandResponse {
-    NoteAdded(NoteId),
-}
-
 /// Status updates from audio thread
 #[derive(Debug, Clone)]
 pub enum EngineStatus {
