@@ -20,6 +20,18 @@ var layout: LaneLayout = LaneLayout.chromatic():
 		layout.changed.connect(_on_layout_changed)
 		_on_layout_changed()
 
+## Shared scale state (spec 026). Only used to redraw; the folded header is driven by the layout.
+var scale_context: ScaleContext = null:
+	set(c):
+		if scale_context == c:
+			return
+		if scale_context and scale_context.changed.is_connected(queue_redraw):
+			scale_context.changed.disconnect(queue_redraw)
+		scale_context = c
+		if scale_context:
+			scale_context.changed.connect(queue_redraw)
+		queue_redraw()
+
 ## Row height. Kept as an export so the scene and the @tool preview still set it;
 ## it simply forwards to the shared layout.
 @export var key_height := 20.0:
@@ -161,7 +173,15 @@ func note_to_y_bottom(note : int) -> float:
 func note_to_y_center(note : int) -> float:
 	return layout.pitch_to_y_center(note)
 
+## Folded to a pitch list that is not Drum View (Fold to scale, spec 026): one full-row key per
+## visible row instead of the interleaved piano keys.
+func _is_row_keys() -> bool:
+	return layout.is_folded() and not layout.is_drum()
+
+
 func get_note_width(note : int) -> int:
+	if _is_row_keys():
+		return size.x - 1
 	if Midi.is_black_key(note):
 		return size.x * black_white_ratio - 1
 	else:
@@ -171,6 +191,8 @@ func get_note_width(note : int) -> int:
 func get_note_rect(note : int) -> Rect2:
 	var h := layout.row_height
 	var r = Rect2(0, note_to_y(note), get_note_width(note), h)
+	if _is_row_keys():
+		return r
 	
 	var n = Midi.get_note_in_octave(note)
 	
@@ -195,6 +217,8 @@ func note_has_label(note : int) -> bool:
 func get_note_at_position(pos: Vector2) -> int:
 	if pos.x < 0 or pos.x > size.x or layout.row_height <= 0:
 		return -1
+	if _is_row_keys():
+		return layout.y_to_pitch(pos.y)
 	var lane := layout.y_to_pitch(pos.y)
 	for note in [lane, lane + 1, lane - 1]:
 		if note >= 0 and note <= 127 and Midi.is_black_key(note) and get_note_rect(note).has_point(pos):
@@ -266,6 +290,8 @@ func _release_pressed() -> void:
 
 func _draw_key(note : int):
 	var black = Midi.is_black_key(note)
+	# Row keys are full width, so black ones get a border too.
+	var row_key := _is_row_keys()
 	var color = key_color_black if black else key_color_white
 	if invert_colors:
 		color = key_color_black if not black else key_color_white
@@ -309,7 +335,7 @@ func _draw_key(note : int):
 		draw_rect(Rect2(note_rect.position.x, note_rect.position.y, note_rect.size.x, 2.0), shadow, true, -1.0, false)
 	
 	# draw border
-	if not black:
+	if not black or row_key:
 		draw_rect(note_rect, key_color_border, false, 0.5, true)
 	
 	# draw label?
@@ -330,7 +356,14 @@ func _draw_key(note : int):
 
 func _draw():
 	var count = 0
-	
+
+	if _is_row_keys():
+		for note in layout.rows():
+			_draw_key(note)
+		if border_width > 0:
+			draw_line(Vector2(size.x, 0), Vector2(size.x, size.y), border_color, border_width, true)
+		return
+
 	# draw white keys
 	for note in Midi.MIDI_MAX + 1:
 		if Midi.is_white_key(note):

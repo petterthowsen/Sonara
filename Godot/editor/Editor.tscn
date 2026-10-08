@@ -20,6 +20,7 @@
 [ext_resource type="PackedScene" uid="uid://dqpm2sagwx4tb" path="res://components/PopupMessage.tscn" id="14_popup"]
 [ext_resource type="PackedScene" path="res://dawproject/TransferReportDialog.tscn" id="15_report"]
 [ext_resource type="PackedScene" uid="uid://wd107ykpmm32" path="res://export/ExportAudioDialog.tscn" id="20_flnwk"]
+[ext_resource type="Script" uid="uid://bg4ly5f4mmkcy" path="res://editor/ScalePicker.gd" id="21_scalepick"]
 [ext_resource type="Script" uid="uid://n6e4x2uxjs21" path="res://editor/HelpBar.gd" id="helpbar_gd"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
@@ -163,6 +164,10 @@ expand_to_text_length = true
 context_menu_enabled = false
 select_all_on_focus = true
 
+[node name="Scale" type="HBoxContainer" parent="VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options" unique_id=1826040231]
+layout_mode = 2
+script = ExtResource("21_scalepick")
+
 [node name="EnginePanel" type="PanelContainer" parent="VBoxContainer/Header/Top" unique_id=1235519996]
 layout_mode = 2
 script = ExtResource("5_yh6b6")
@@ -196,11 +201,10 @@ value_max = 1.5
 [node name="PerformanceText" type="RichTextLabel" parent="VBoxContainer/Header/Top/EnginePanel/HBox" unique_id=789078649]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_font_sizes/normal_font_size = 16
+theme_override_font_sizes/normal_font_size = 12
 bbcode_enabled = true
-text = "Load: 1.5%"
+text = "Performance statistics"
 fit_content = true
-scroll_active = false
 autowrap_mode = 0
 vertical_alignment = 1
 

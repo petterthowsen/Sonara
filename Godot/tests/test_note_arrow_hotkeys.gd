@@ -25,6 +25,7 @@ func run_tests() -> void:
 	await _test_undo_restores_selection()
 	await _test_move_by_selection_length()
 	await _test_velocity_and_length_steps()
+	await _test_transpose_by_scale_step()
 
 
 ## One clip with notes at 960 (480 long) and 1920 (480 long), both selected.
@@ -162,3 +163,26 @@ func _test_undo_restores_selection() -> void:
 	recorded[0].do()
 	var redone: Array = ed._selected_note_visuals()
 	_assert(redone.size() == 2 and not ctx.a in [redone[0].midi_note_data, redone[1].midi_note_data], "redo selects the duplicates again")
+
+
+func _test_transpose_by_scale_step() -> void:
+	var ctx := await _setup()
+	var ed = ctx.editor
+	ctx.a.note = 59
+	ctx.b.note = 59
+	ed.scale_context.scale = MusicalScale.make(9, "natural_minor")
+	ed.scale_context.snap_enabled = true
+	ed._transpose_selection(1)
+	_assert(ctx.a.note == 60 and ctx.b.note == 60, "A Minor, Up on 59 -> 60 (next scale pitch)")
+	ed._transpose_selection(-1)
+	_assert(ctx.a.note == 59, "Down steps back")
+	ed._move_selection_vertical(func(p: int) -> int: return ed.step_note(p, 12))
+	_assert(ctx.a.note == 71, "the octave key moves 12 semitones (59 -> 71)")
+	ed.scale_context.snap_enabled = false
+	ctx.a.note = 59
+	ctx.b.note = 59
+	ed._transpose_selection(1)
+	_assert(ctx.a.note == 60, "snap off: Up is one semitone (59 -> 60)")
+	ctx.a.note = 60
+	ed._transpose_selection(1)
+	_assert(ctx.a.note == 61, "snap off: 60 -> 61, a semitone")

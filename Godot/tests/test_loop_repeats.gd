@@ -176,7 +176,7 @@ func _test_edits_apply_once() -> void:
 	var sm = editor.selection_manager
 	sm.select_all(editor.get_all_visual_notes())
 	_assert(sm.selected_notes.size() == 8, "Ctrl+A selects every shown visual, got %d" % sm.selected_notes.size())
-	editor._move_selection_vertical(1)
+	editor._transpose_selection(1)
 	_assert(ctx.c3.note == 61 and ctx.e3.note == 65, "Up moves each note one semitone, not once per pass")
 	editor._move_selection_horizontal(480)
 	_assert(ctx.c3.start_tick == 480, "Right moves each note once, got %d" % ctx.c3.start_tick)

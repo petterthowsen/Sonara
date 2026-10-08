@@ -134,6 +134,7 @@ static func sfz_map(sfz: DeviceInstance) -> NoteMap:
 	map.playable_ranges = sfz.playable_ranges.duplicate(true)
 	for info in sfz.key_labels:
 		if info.keyswitch:
+			map.keyswitches.append(info.key)
 			var label: String = info.label
 			map.set_entry(info.key, label if not label.is_empty() else SFZ_KEYSWITCH_FALLBACK_NAME, SFZ_KEYSWITCH_COLOR)
 		else:

@@ -297,19 +297,23 @@ func handle_key_input(event: InputEventKey) -> void:
 		accept_event()
 
 	elif Hotkeys.pressed(event, "notes_octave_up"):
-		_move_selection_vertical(12)
+		_move_selection_vertical(func(p: int) -> int: return step_note(p, 12))
 		accept_event()
 
 	elif Hotkeys.pressed(event, "notes_octave_down"):
-		_move_selection_vertical(-12)
+		_move_selection_vertical(func(p: int) -> int: return step_note(p, -12))
 		accept_event()
 
 	elif Hotkeys.pressed(event, "notes_transpose_up"):
-		_move_selection_vertical(1)
+		_transpose_selection(1)
 		accept_event()
 
 	elif Hotkeys.pressed(event, "notes_transpose_down"):
-		_move_selection_vertical(-1)
+		_transpose_selection(-1)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_conform_to_scale"):
+		conform_selection_to_scale()
 		accept_event()
 
 	elif Hotkeys.pressed(event, "notes_nudge_left"):
@@ -406,6 +410,10 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	if midi_note_num < 0:
 		# Drum View with no rows: there is nowhere to put a note (REQ-023).
 		return null
+	# Scale snap (REQ-014, REQ-019): the half of the row under the cursor breaks ties.
+	if scale_context.snap_active() and not scale_context.is_keyswitch(midi_note_num):
+		var upper_half := fposmod(pos.y, layout.row_height) < layout.row_height * 0.5
+		midi_note_num = scale_context.snap_pitch(midi_note_num, upper_half)
 	var pixel_x = pos.x
 	var tick_position = pixels_to_ticks(pixel_x)
 
@@ -418,7 +426,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	# In Drum View a hit is always one step: a length remembered from a piano-roll
 	# resize would cut every following hit on the row when the overlap is cleared.
 	var new_note_length := get_snap_interval()
-	if not layout.is_folded() and last_note_length > 0:
+	if not layout.is_drum() and last_note_length > 0:
 		new_note_length = last_note_length
 
 	var end_tick = tick_position + new_note_length
@@ -547,7 +555,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 	var ctrl_pressed = Input.is_key_pressed(KEY_CTRL)
 	var alt_pressed = Input.is_key_pressed(KEY_ALT)
-	var drum_view := layout.is_folded()
+	var drum_view := layout.is_drum()
 
 	# Drum View draws hits, not bars, so there is no length to drag out (REQ-022).
 	# Length falls back to plain dragging (Ctrl) or to velocity only (Alt).
@@ -616,6 +624,14 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		# Row-wise in Drum View, semitone-wise in the piano roll (REQ-020). The two
 		# agree exactly in chromatic mode.
 		var delta_steps := layout.row_of_pitch(drag_start_midi_note) - layout.y_to_row(mouse_pos_local.y)
+		# Scale snap (REQ-015, 016, 018): the cursor picks an in-scale target and every note
+		# moves the same number of scale steps. Shift keeps the plain row walk.
+		var scale_steps := 0
+		var scale_drag: bool = scale_context.snap_active() and not Input.is_key_pressed(KEY_SHIFT)
+		if scale_drag:
+			var upper_half := fposmod(mouse_pos_local.y, layout.row_height) < layout.row_height * 0.5
+			var target := scale_context.snap_pitch(layout.y_to_pitch(mouse_pos_local.y), upper_half)
+			scale_steps = scale_context.steps_between(drag_start_midi_note, target)
 
 		for sel_note in edited:
 			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
@@ -624,6 +640,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 			var new_ticks: int = maxi(0, start_pos.start_tick + snapped_delta_ticks)
 			var new_midi_note := step_note(start_pos.note, delta_steps)
+			if scale_drag and not scale_context.is_keyswitch(start_pos.note):
+				new_midi_note = scale_context.step(start_pos.note, scale_steps)
 
 			# Clamp within clip content in track-mode to avoid crossing instance boundaries
 			if multi_clip_mode:
@@ -751,7 +769,7 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 		return
 
 	# Drum View draws hits, not bars: there is no length to drag (REQ-022).
-	if layout.is_folded():
+	if layout.is_drum():
 		return
 
 	if note not in selection_manager.selected_notes:
@@ -1157,8 +1175,20 @@ func _delete_selection() -> void:
 	_history_commit("Delete Notes")
 
 
-func _move_selection_vertical(semitones: int) -> void:
-	"""Move all selected notes up or down by semitones."""
+## Arrow-key transpose: one scale step when scale snap is active (keyswitch notes move one
+## row/semitone), else one row as before.
+func _transpose_selection(direction: int) -> void:
+	if scale_context.snap_active():
+		_move_selection_vertical(func(p: int) -> int:
+			if scale_context.is_keyswitch(p):
+				return step_note(p, direction)
+			return scale_context.step(p, direction))
+	else:
+		_move_selection_vertical(func(p: int) -> int: return step_note(p, direction))
+
+
+## Move all selected notes; `step` maps each note's pitch to its new pitch.
+func _move_selection_vertical(step: Callable) -> void:
 	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
 		return
@@ -1167,7 +1197,7 @@ func _move_selection_vertical(semitones: int) -> void:
 	# MidiNoteData through several visuals, so step each note once.
 	var edited := _selected_note_visuals()
 	for sel_note in edited:
-		sel_note.midi_note_data.note = step_note(sel_note.midi_note_data.note, semitones)
+		sel_note.midi_note_data.note = step.call(sel_note.midi_note_data.note)
 	_refresh_notes(edited)
 
 	# Process overlaps and sync
@@ -1194,7 +1224,7 @@ func _move_selection_vertical(semitones: int) -> void:
 	if total_affected > 0:
 		logger.info("Keyboard move vertical - cut/merged %d overlapping notes" % total_affected)
 
-	logger.info("Moved %d note(s) %+d semitones" % [selection_manager.selected_notes.size(), semitones])
+	logger.info("Moved %d note(s) vertically" % selection_manager.selected_notes.size())
 	update_container_width()
 	_history_commit("Transpose Notes")
 
@@ -1364,7 +1394,7 @@ func quantize_selection(strength: float = -1.0, mode: int = -1) -> void:
 		return
 	var use_strength := quantize_strength() if strength < 0.0 else strength
 	var use_mode := quantize_mode() if mode < 0 else mode as NoteTransforms.QuantizeMode
-	if layout.is_folded():
+	if layout.is_drum():
 		use_mode = NoteTransforms.QuantizeMode.START
 	var loop_owner := _loop_owners()
 	_apply_selection_edit("Quantize Notes", func(notes: Array[MidiNoteData]):
@@ -1392,11 +1422,20 @@ func _fold_into_loops(notes: Array[MidiNoteData], owners: Dictionary) -> void:
 ## Invert the selected notes' pitches around the middle of their pitch range (one undo step).
 ## Does nothing in Drum View, where rows are pads and not a pitch scale.
 func flip_selection_vertical() -> void:
-	if layout.is_folded():
+	if layout.is_drum():
 		return
 	_apply_selection_edit("Flip Notes Vertically", func(notes: Array[MidiNoteData]):
 		var bounds := NoteTransforms.pitch_bounds(notes)
 		NoteTransforms.mirror_pitch(notes, bounds.x, bounds.y))
+
+
+## Snap the selected notes to the project scale (one undo step). Does nothing without a scale
+## or in Drum View. Keyswitch notes stay put.
+func conform_selection_to_scale() -> void:
+	if not scale_context.highlight_active():
+		return
+	_apply_selection_edit("Conform to Scale", func(notes: Array[MidiNoteData]):
+		NoteTransforms.conform_to_scale(notes, scale_context.pitch_classes(), scale_context.keyswitches))
 
 
 ## Reverse the selected notes in time (one undo step). The axis is the selection range when
@@ -1410,7 +1449,7 @@ func flip_selection_horizontal() -> void:
 			var span := NoteTransforms.tick_bounds(notes)
 			range_start = span.x
 			range_end = span.y
-		NoteTransforms.mirror_time(notes, range_start, range_end, not layout.is_folded())
+		NoteTransforms.mirror_time(notes, range_start, range_end, not layout.is_drum())
 		_fold_into_loops(notes, loop_owner))
 
 
@@ -1437,7 +1476,7 @@ static func strum_velocity_ramp() -> float:
 ## ramp (one undo step). Note ends stay where they are. Does nothing in Drum View, where hits
 ## have no length and rows are pads.
 func strum_selection() -> void:
-	if layout.is_folded():
+	if layout.is_drum():
 		return
 	# Note ticks are clip ticks, so chords are only found inside one clip: notes of different
 	# clips that happen to share a clip tick are not a chord.
@@ -1466,7 +1505,7 @@ func _adjust_selection_velocity(delta: float) -> void:
 
 ## Drum View hits have no length (REQ-022), so this does nothing there.
 func _adjust_selection_length(delta_ticks: int) -> void:
-	if layout.is_folded():
+	if layout.is_drum():
 		return
 	var floor_ticks := get_snap_interval()
 	_edit_selection_data("Resize Notes", func(note_data: MidiNoteData):
@@ -1838,7 +1877,7 @@ var _scale_loop_owners: Dictionary = {}
 ## no length). Among the notes that end last it sits on the one nearest the middle of their
 ## pitch range.
 func group_scale_handle_rect() -> Rect2:
-	if layout.is_folded():
+	if layout.is_drum():
 		return Rect2()
 	var visuals := _selected_note_visuals()
 	if visuals.size() < 2:

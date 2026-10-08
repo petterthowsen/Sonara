@@ -144,6 +144,13 @@ const ACTIONS := [
 	{ "id": "notes_strum", "label": "Strum chords", "group": "Clip Editor", "context": "clip_editor",
 		"requires": "note_selection",
 		"defaults": ["Ctrl+Shift+S"], "description": "Spread the chords among the selected notes using the spread, direction and velocity ramp set in the Strum options. Note ends stay put. Not in Drum View." },
+	{ "id": "toggle_scale_snap", "label": "Toggle scale snap", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": [], "description": "Snap placed and moved notes to the project scale. Needs a scale and the piano roll." },
+	{ "id": "toggle_fold_to_scale", "label": "Toggle fold to scale", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": [], "description": "Show only the in-scale rows (plus the pitches in use). Needs a scale and the piano roll." },
+	{ "id": "notes_conform_to_scale", "label": "Conform notes to scale", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": [], "description": "Move out-of-scale selected notes to the nearest in-scale pitch (ties go down). Keyswitches stay." },
 	{ "id": "toggle_note_value_lanes", "label": "Toggle note value lanes", "group": "Clip Editor", "context": "clip_editor",
 		"defaults": [] },
 
@@ -327,7 +334,7 @@ const GESTURES := [
 	{ "context": "clip_editor", "mods": "Ctrl", "input": "drag", "label": "box select / duplicate note" },
 	# --- Pointer over a note: MidiEditor._update_note_hover ---
 	{ "context": "note_hover", "mods": "", "input": "drag", "label": "move (note end: resize)" },
-	{ "context": "note_hover", "mods": "Shift", "input": "drag", "label": "move / resize without snap" },
+	{ "context": "note_hover", "mods": "Shift", "input": "drag", "label": "move / resize without grid or scale snap" },
 	# Which of these shows depends on midi_editor/note_drag_modifiers ("setting" + "equals").
 	{ "context": "note_hover", "mods": "Alt", "input": "drag", "label": "length (sideways) / velocity (up, down)",
 		"setting": "midi_editor/note_drag_modifiers", "equals": "Alt: length and velocity" },
@@ -340,10 +347,10 @@ const GESTURES := [
 	# "note_drag" is the Ctrl-length scheme, "note_drag_alt" the Alt length/velocity one
 	# (setting midi_editor/note_drag_modifiers).
 	{ "context": "note_drag", "mods": "Ctrl", "input": "", "label": "change length" },
-	{ "context": "note_drag", "mods": "Shift", "input": "", "label": "move freely (no snap)" },
+	{ "context": "note_drag", "mods": "Shift", "input": "", "label": "move freely (no grid or scale snap)" },
 	{ "context": "note_drag", "mods": "Alt", "input": "", "label": "change velocity" },
 	{ "context": "note_drag_alt", "mods": "Alt", "input": "", "label": "length (sideways) / velocity (up, down)" },
-	{ "context": "note_drag_alt", "mods": "Shift", "input": "", "label": "move freely (no snap)" },
+	{ "context": "note_drag_alt", "mods": "Shift", "input": "", "label": "move freely (no grid or scale snap)" },
 	# --- Value lanes: ValueLaneStemArea._begin / _on_motion ---
 	{ "context": "value_lanes", "mods": "", "input": "drag", "label": "paint values" },
 	{ "context": "value_lanes", "mods": "Ctrl", "input": "drag", "label": "straight line" },

@@ -212,7 +212,21 @@ var drum_view: bool = false:
 		if drum_view == value:
 			return
 		drum_view = value
+		_syncing_drum_view = true
+		scale_context.drum_view = value
+		_syncing_drum_view = false
 		_apply_view_mode()
+
+## Shared scale state (spec 026): handed to the lanes, piano header and every note editor.
+## ClipEditor fills in the scale and the snap / fold flags; MidiEditor adds Drum View and the
+## keyswitch pitches.
+var scale_context := ScaleContext.new()
+## Set while drum_view is being mirrored into scale_context, so its `changed` doesn't
+## trigger a second view-mode switch.
+var _syncing_drum_view := false
+## Whether the rows currently shown are the scale fold, and which scale they were built for.
+var _fold_applied := false
+var _fold_scale_key := ""
 
 ## Set while a rebuild was deferred because a drag was in progress (REQ-021).
 var _rows_dirty := false
@@ -363,6 +377,9 @@ func _ready():
 	lane_layout.row_height = note_height
 	v_piano.layout = lane_layout
 	note_lanes.layout = lane_layout
+	v_piano.scale_context = scale_context
+	note_lanes.scale_context = scale_context
+	scale_context.changed.connect(_on_scale_context_changed)
 	
 	context_layer.name = "ContextNotes"
 	context_layer.layout = lane_layout
@@ -1531,6 +1548,7 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	editor.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	editor.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	editor.layout = lane_layout
+	editor.scale_context = scale_context
 	if not editor.notes_changed.is_connected(queue_row_rebuild):
 		editor.notes_changed.connect(queue_row_rebuild)
 	if not editor.content_extent_changed.is_connected(queue_content_width_update):
@@ -1606,7 +1624,7 @@ func _emit_key_column_width() -> void:
 func value_stems() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var seen: Dictionary = {}
-	var folded := lane_layout.is_folded()
+	var folded := lane_layout.is_drum()
 	for editor in note_editors:
 		if editor == null:
 			continue
@@ -1727,6 +1745,7 @@ func refresh_note_map() -> void:
 		_note_map_watcher.bind(channel)
 	_bind_live_channel(channel)
 	note_map = NoteMapResolver.effective_map(channel)
+	scale_context.keyswitches = note_map.keyswitches
 	v_piano.note_map = note_map
 	note_lanes.note_map = note_map
 	drum_row_header.note_map = note_map
@@ -1765,20 +1784,44 @@ func _visible_clips() -> Array:
 ## Rows for Drum View: the union across every editor of its map's pitches and the
 ## pitches its clips use (REQ-016, REQ-024).
 func compute_rows() -> PackedInt32Array:
+	if not drum_view and scale_context.fold_active():
+		return ScaleRows.rows_for(scale_context.scale, _visible_clips())
 	return DrumRows.rows_for(note_map, _visible_clips())
+
+
+## The rows are a folded list: Drum View, or the piano roll folded to the project scale.
+func _rows_folded() -> bool:
+	return drum_view or scale_context.fold_active()
+
+
+## Scale, snap, fold or keyswitches changed. Fold flipping switches the layout mode; a new
+## scale while folded rebuilds the rows (deferred during a drag by rebuild_rows).
+func _on_scale_context_changed() -> void:
+	if _syncing_drum_view or not is_node_ready():
+		return
+	var fold := scale_context.fold_active()
+	if fold != _fold_applied:
+		_apply_view_mode()
+	elif fold and _scale_key() != _fold_scale_key:
+		_fold_scale_key = _scale_key()
+		rebuild_rows()
+
+
+func _scale_key() -> String:
+	return "%d:%s" % [scale_context.scale.root, scale_context.scale.type_id]
 
 
 ## Recompute the folded row set. Deferred while a drag is running so rows can't
 ## reshuffle under the cursor (REQ-021); the drag's end calls this again.
 func rebuild_rows() -> void:
-	if not drum_view:
+	if not _rows_folded():
 		return
 	var active := get_active_note_editor()
 	if active and active.interaction_mode != NoteEditor.InteractionMode.NONE:
 		_rows_dirty = true
 		return
 	_rows_dirty = false
-	lane_layout.set_rows(compute_rows())
+	lane_layout.set_rows(compute_rows(), drum_view)
 	_update_empty_hint()
 	view_state_changed.emit()
 
@@ -1794,7 +1837,7 @@ func on_interaction_finished() -> void:
 ## to a new pitch change the row set; while a drag is running rebuild_rows()
 ## defers itself, and on_interaction_finished() picks it up on release.
 func queue_row_rebuild() -> void:
-	if not drum_view or _rebuild_queued:
+	if not _rows_folded() or _rebuild_queued:
 		return
 	_rows_dirty = true
 	_rebuild_queued = true
@@ -1817,8 +1860,10 @@ func _apply_view_mode() -> void:
 
 	v_piano.visible = not drum_view
 	drum_row_header.visible = drum_view
-	if drum_view:
-		lane_layout.set_rows(compute_rows())
+	_fold_applied = scale_context.fold_active()
+	_fold_scale_key = _scale_key()
+	if _rows_folded():
+		lane_layout.set_rows(compute_rows(), drum_view)
 	else:
 		lane_layout.set_chromatic()
 	_rows_dirty = false

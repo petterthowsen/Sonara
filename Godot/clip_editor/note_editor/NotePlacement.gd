@@ -16,7 +16,7 @@ static func note_rect(nd: MidiNoteData, offset_ticks: int, layout: LaneLayout, g
 	if layout.row_of_pitch(nd.note) < 0:
 		return Rect2()
 	var x := gh.ticks_to_pixels(nd.start_tick + offset_ticks)
-	if layout.is_folded():
+	if layout.is_drum():
 		return Rect2(Vector2(x, visual_y(layout, nd.note)), drum_marker_size(layout, gh, nd.duration_ticks))
 	var width := gh.ticks_to_pixels(nd.duration_ticks)
 	return Rect2(x, layout.pitch_to_y(nd.note), maxf(1.0, width), layout.row_height)
@@ -45,7 +45,7 @@ static func repeat_rect(nd: MidiNoteData, ci: ClipInstance, seg: Vector3i, layou
 	if not rect.has_area():
 		return rect
 	rect.position.x = gh.ticks_to_pixels(ci.start_ticks + span.x)
-	if not layout.is_folded():
+	if not layout.is_drum():
 		rect.size.x = maxf(gh.ticks_to_pixels(ci.start_ticks + span.y) - rect.position.x, 1.0)
 	return rect
 
@@ -75,6 +75,6 @@ static func drum_marker_size(layout: LaneLayout, gh: GridHelper, duration_ticks:
 ## whole row.
 static func visual_y(layout: LaneLayout, pitch: int) -> float:
 	var y := layout.pitch_to_y(pitch)
-	if layout.is_folded():
+	if layout.is_drum():
 		y += (layout.row_height - VisualNote.drum_marker_height(layout.row_height)) * 0.5
 	return y

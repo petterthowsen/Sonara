@@ -156,3 +156,92 @@ static func scale(notes: Array[MidiNoteData], anchor: int, factor: float,
 		var new_end := anchor + roundi((start + duration - anchor) * factor)
 		n.start_tick = new_start
 		n.duration_ticks = maxi(1, new_end - new_start)
+
+
+# --- Scale math (spec 026). `pcs` is the sorted pitch-class set of the project scale
+# (MusicalScale.pitch_classes()). An empty `pcs` means "no scale": every function returns its input.
+
+## All in-scale pitches 0..127 in ascending order.
+static func _scale_pitches(pcs: PackedInt32Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for p in range(0, 128):
+		if pcs.has(p % 12):
+			out.append(p)
+	return out
+
+
+## Nearest in-scale pitch to `pitch`. When both neighbours are equally far, `prefer_up` picks the
+## one above. An in-scale pitch returns itself. Stays within 0..127.
+static func snap_pitch(pitch: int, pcs: PackedInt32Array, prefer_up: bool) -> int:
+	if pcs.is_empty():
+		return pitch
+	var p := clampi(pitch, 0, 127)
+	if pcs.has(p % 12):
+		return p
+	for d in range(1, 13):
+		var up := p + d
+		var down := p - d
+		var up_ok := up <= 127 and pcs.has(up % 12)
+		var down_ok := down >= 0 and pcs.has(down % 12)
+		if up_ok and down_ok:
+			return up if prefer_up else down
+		if up_ok:
+			return up
+		if down_ok:
+			return down
+	return p
+
+
+## The in-scale pitch at or below `pitch`. Below the lowest in-scale pitch it returns that lowest
+## in-scale pitch instead (so the offset from it is negative).
+static func scale_base(pitch: int, pcs: PackedInt32Array) -> int:
+	if pcs.is_empty():
+		return pitch
+	var p := clampi(pitch, 0, 127)
+	for q in range(p, -1, -1):
+		if pcs.has(q % 12):
+			return q
+	for q in range(p, 128):
+		if pcs.has(q % 12):
+			return q
+	return p
+
+
+## Move `pitch` by `steps` scale steps: walk `steps` in-scale pitches from scale_base(pitch) and
+## keep the semitone offset above that base. Saturates at the lowest/highest in-scale pitch, and
+## the result is clamped to 0..127.
+static func step_in_scale(pitch: int, steps: int, pcs: PackedInt32Array) -> int:
+	if pcs.is_empty():
+		return pitch
+	var list := _scale_pitches(pcs)
+	var base := scale_base(pitch, pcs)
+	var idx := list.find(base)
+	if idx < 0:
+		return pitch
+	var target := clampi(idx + steps, 0, list.size() - 1)
+	return clampi(list[target] + (pitch - base), 0, 127)
+
+
+## Scale steps from scale_base(`from`) to scale_base(`to`). Positive when `to` is higher.
+static func scale_steps_between(from: int, to: int, pcs: PackedInt32Array) -> int:
+	if pcs.is_empty():
+		return 0
+	var list := _scale_pitches(pcs)
+	return list.find(scale_base(to, pcs)) - list.find(scale_base(from, pcs))
+
+
+## Move each out-of-scale note to its nearest in-scale pitch, ties going down. Notes whose pitch
+## is in `keyswitches` are skipped. Returns how many notes changed.
+static func conform_to_scale(notes: Array[MidiNoteData], pcs: PackedInt32Array,
+		keyswitches: PackedInt32Array = PackedInt32Array()) -> int:
+	if pcs.is_empty():
+		return 0
+	var changed := 0
+	for n in notes:
+		if keyswitches.has(n.note):
+			continue
+		var snapped := snap_pitch(n.note, pcs, false)
+		if snapped != n.note:
+			n.note = snapped
+			changed += 1
+	return changed

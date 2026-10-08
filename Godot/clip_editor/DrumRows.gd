@@ -14,7 +14,7 @@ static func rows_for(map: NoteMap, clips: Array) -> PackedInt32Array:
 		for pitch in map.pitches():
 			used[int(pitch)] = true
 	for clip_like in clips:
-		_collect_clip_pitches(clip_like, used)
+		collect_clip_pitches(clip_like, used)
 	return _sorted(used)
 
 
@@ -28,7 +28,7 @@ static func rows_for_many(pairs: Array) -> PackedInt32Array:
 			for pitch in map.pitches():
 				used[int(pitch)] = true
 		for clip_like in pair.get("clips", []):
-			_collect_clip_pitches(clip_like, used)
+			collect_clip_pitches(clip_like, used)
 	return _sorted(used)
 
 
@@ -36,7 +36,7 @@ static func rows_for_many(pairs: Array) -> PackedInt32Array:
 ## Both are reached duck-typed rather than by class: naming Clip here would pull
 ## Clip.gd (which references autoloads by bare name) into the compile graph of
 ## every script that touches DrumRows, headless tests included.
-static func _collect_clip_pitches(clip_like: Variant, used: Dictionary) -> void:
+static func collect_clip_pitches(clip_like: Variant, used: Dictionary) -> void:
 	if not (clip_like is Object):
 		return
 	var clip: Object = clip_like

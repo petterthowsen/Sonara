@@ -40,6 +40,12 @@ var layout: LaneLayout = LaneLayout.chromatic():
 		layout.changed.connect(_on_layout_changed)
 		_on_layout_changed()
 
+## Project scale state for snapping (spec 026), handed down by MidiEditor like `layout`.
+## Defaults to an inactive context, so a standalone NoteEditor never snaps.
+var scale_context: ScaleContext = ScaleContext.new():
+	set(c):
+		scale_context = c if c else ScaleContext.new()
+
 @export var note_height := 20.0:
 	set(nh):
 		if note_height != nh:
@@ -564,7 +570,7 @@ func _update_single_note_position(note: VisualNote) -> void:
 	note.visible = true
 
 	var rect := NotePlacement.note_rect(note_data, offset_ticks, layout, grid_helper)
-	note.set_drum_mode(layout.is_folded())
+	note.set_drum_mode(layout.is_drum())
 	note.position = rect.position
 	note.size = rect.size
 	note.update_label_visibility(layout.row_height)
@@ -582,7 +588,7 @@ func _update_repeat_position(note: VisualNote) -> void:
 		note.visible = false
 		return
 	note.visible = true
-	note.set_drum_mode(layout.is_folded())
+	note.set_drum_mode(layout.is_drum())
 	note.position = rect.position
 	note.size = rect.size
 	note.update_label_visibility(layout.row_height)

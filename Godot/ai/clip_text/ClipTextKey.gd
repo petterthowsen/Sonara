@@ -5,11 +5,6 @@ class_name ClipTextKey extends RefCounted
 
 const TIER_VEL: Array[int] = [0, 17, 30, 43, 56, 69, 82, 95, 108, 121]
 
-const _MAJOR: Array[int] = [0, 2, 4, 5, 7, 9, 11]
-const _MINOR: Array[int] = [0, 2, 3, 5, 7, 8, 10]
-const _DORIAN: Array[int] = [0, 2, 3, 5, 7, 9, 10]
-const _MIXO: Array[int] = [0, 2, 4, 5, 7, 9, 10]
-
 const _DRUM_PITCH: Dictionary = {
 	"KICK": 36, "BD": 36, "BASS": 36, "KICK1": 36, "KICK2": 35,
 	"SNARE": 38, "SD": 38, "SN": 38, "SNARE2": 40,
@@ -68,22 +63,22 @@ static func parse_key(text: String) -> Dictionary:
 	if semi < 0:
 		return {}
 	var qual := rest.strip_edges().to_lower()
-	var intervals: Array[int] = _MAJOR
+	var intervals: Array[int] = MusicalScale.intervals_for("major")
 	var quality := "maj"
 	if qual.begins_with("min") or qual.begins_with("aeol") or qual == "m":
-		intervals = _MINOR
+		intervals = MusicalScale.intervals_for("natural_minor")
 		quality = "min"
 	elif qual.begins_with("dor"):
-		intervals = _DORIAN
+		intervals = MusicalScale.intervals_for("dorian")
 		quality = "dorian"
 	elif qual.begins_with("mix"):
-		intervals = _MIXO
+		intervals = MusicalScale.intervals_for("mixolydian")
 		quality = "mixolydian"
 	elif qual.is_empty() or qual.begins_with("maj") or qual.begins_with("ion"):
-		intervals = _MAJOR
+		intervals = MusicalScale.intervals_for("major")
 		quality = "maj"
 	else:
-		intervals = _MINOR if qual.begins_with("m") else _MAJOR
+		intervals = MusicalScale.intervals_for("natural_minor" if qual.begins_with("m") else "major")
 		quality = "min" if qual.begins_with("m") else "maj"
 	return {"root": semi, "quality": quality, "intervals": intervals, "label": root + quality}
 

@@ -69,6 +69,7 @@ signal view_changed(view: int)  # Editor.View
 
 @onready var tempo_spinbox: SpinBox = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/Tempo
 @onready var time_signature_edit: LineEdit = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/TimeSignature
+@onready var scale_picker: ScalePicker = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/Scale
 
 @onready var settings_dialog: SettingsDialog = $SettingsDialog
 
@@ -237,6 +238,7 @@ func _connect_ui_signals():
 	# Tempo/time signature
 	tempo_spinbox.value_changed.connect(_on_tempo_changed)
 	time_signature_edit.text_submitted.connect(_on_time_signature_changed)
+	scale_picker.scale_picked.connect(set_project_scale)
 	
 	# Arranger selection changes
 	arranger.clips_selected.connect(_on_arranger_clips_selected)
@@ -849,6 +851,31 @@ func _apply_time_signature_silent(value: Array) -> void:
 	time_signature_changed.emit(numerator, denominator)
 
 
+## Set the project scale (undoable). UI state only: nothing goes to the engine.
+func set_project_scale(root: int, type_id: String) -> void:
+	if project == null:
+		return
+	var old_value := [project.scale_root, project.scale_type]
+	var new_value := [root, type_id]
+	if old_value == new_value:
+		return
+
+	_apply_scale_silent(new_value)
+
+	var cmd := PropertyCommand.new("Set Scale", self, "", old_value, new_value)
+	cmd.set_callable(func(v): _apply_scale_silent(v))
+	record_command(cmd)
+
+
+## Apply the scale without pushing history (used by undo/redo PropertyCommand).
+func _apply_scale_silent(value: Array) -> void:
+	if project == null:
+		return
+	project.set_scale(value[0], value[1])
+	_mark_modified()
+	_update_transport_ui()
+
+
 # ============================================================================
 # VIEW MANAGEMENT
 # ============================================================================
@@ -1205,6 +1232,8 @@ func _update_transport_ui() -> void:
 	# Update time signature
 	if time_signature_edit:
 		time_signature_edit.text = "%d/%d" % [project.time_numerator, project.time_denominator]
+	if scale_picker:
+		scale_picker.set_scale_display(project.scale_root, project.scale_type)
 	
 	# Update position display
 	if transport_position_label and project:

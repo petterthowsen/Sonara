@@ -34,6 +34,10 @@ signal connection_state_changed(state: ConnectionState)
 signal tracks_layout_changed
 ## An arranger_view flag changed (see set_arranger_view).
 signal arranger_view_changed(key: String, value: bool)
+## The project scale changed (see set_scale).
+signal scale_changed(root: int, type_id: String)
+## A clip_editor_view flag changed (see set_clip_editor_view).
+signal clip_editor_view_changed(key: String, value: bool)
 
 # ============================================================================
 # PROPERTIES
@@ -88,6 +92,15 @@ var tempo_map: TempoMap = TempoMap.new():
 ## "automation" shows automation lanes and the header automation buttons, "routing" the header
 ## IO button, "automation_follows_clips" makes a clip move drag the lane points under it (REQ-025).
 var arranger_view: Dictionary = {"automation": true, "routing": true, "automation_follows_clips": false}
+
+## Project scale (spec 026): root pitch class 0..11 (0 = C) and a MusicalScale type id.
+## UI state only, never sent to the engine. "none" means no scale.
+var scale_root: int = 0
+var scale_type: String = "none"
+
+## Clip editor toggles saved with the project (view state, not undoable): "fold_to_scale" hides
+## out-of-scale rows, "scale_snap" keeps edited notes on in-scale pitches. Both off by default.
+var clip_editor_view: Dictionary = {"fold_to_scale": false, "scale_snap": false}
 
 var next_marker_id: int = 1
 
@@ -1349,6 +1362,35 @@ func get_arranger_view(key: String) -> bool:
 	return bool(arranger_view.get(key, true))
 
 
+## Set the project scale. An unknown type id becomes "none" and the root wraps into 0..11.
+## Never records history (Editor.set_scale does) and never touches notes.
+func set_scale(root: int, type_id: String) -> void:
+	var s := MusicalScale.make(root, type_id)
+	if s.root == scale_root and s.type_id == scale_type:
+		return
+	scale_root = s.root
+	scale_type = s.type_id
+	scale_changed.emit(scale_root, scale_type)
+
+
+## The project scale as a MusicalScale value.
+func get_scale() -> MusicalScale:
+	return MusicalScale.make(scale_root, scale_type)
+
+
+## Set a clip_editor_view flag.
+func set_clip_editor_view(key: String, value: bool) -> void:
+	if clip_editor_view.get(key, false) == value:
+		return
+	clip_editor_view[key] = value
+	clip_editor_view_changed.emit(key, value)
+
+
+## Current clip_editor_view flag; unknown keys read as off.
+func get_clip_editor_view(key: String) -> bool:
+	return bool(clip_editor_view.get(key, false))
+
+
 ## True when `track` may live under `new_parent_id` (-1 = root): not inside its own subtree, the
 ## parent holds tracks, and an aux return stays under its source.
 func can_place_track(track: Track, new_parent_id: int) -> bool:
@@ -1758,6 +1800,8 @@ func to_json() -> Dictionary:
 		"tempo_map": tempo_map.to_json(),
 		"time_signature_map": time_signature_map.to_json(),
 		"arranger_view": arranger_view.duplicate(),
+		"scale": {"root": scale_root, "type": scale_type},
+		"clip_editor_view": clip_editor_view.duplicate(),
 		"clips": clips_array,
 		"channels": channels.map(func(c): return c.to_json()),
 		"tracks": tracks.map(func(t): return t.to_json())
@@ -1794,6 +1838,13 @@ static func from_json(data: Dictionary) -> Project:
 		# Fall back to this build's default per key, so a project saved before a flag existed
 		# (e.g. "automation_follows_clips") loads with that flag's default, not `true`.
 		project.arranger_view[key] = bool(saved_view.get(key, project.arranger_view[key]))
+	var saved_scale: Dictionary = data.get("scale", {})
+	var loaded_scale := MusicalScale.make(int(saved_scale.get("root", 0)), str(saved_scale.get("type", "none")))
+	project.scale_root = loaded_scale.root
+	project.scale_type = loaded_scale.type_id
+	var saved_editor_view: Dictionary = data.get("clip_editor_view", {})
+	for key in project.clip_editor_view:
+		project.clip_editor_view[key] = bool(saved_editor_view.get(key, project.clip_editor_view[key]))
 
 	var saved_loop: Dictionary = data.get("loop", {})
 	project.loop_enabled = bool(saved_loop.get("enabled", false))

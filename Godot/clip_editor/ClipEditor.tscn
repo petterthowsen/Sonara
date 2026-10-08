@@ -249,6 +249,7 @@ key_height = 0.0
 note_lane_color_white = Color(0.13671875, 0.13671875, 0.13671875, 1)
 note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
+root_accent_color = Color(0.3, 0.55, 1, 0.18)
 
 [node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=1240778112]
 layout_mode = 1
@@ -346,6 +347,20 @@ tooltip_text = "Audition notes: clicking a note plays it on the track's instrume
 toggle_mode = true
 icon = ExtResource("10_audit")
 
+[node name="FoldToScaleToggle" type="Button" parent="BottomPanel/Toolbar/ToggleGroup" unique_id=1100000040]
+layout_mode = 2
+tooltip_text = "Fold to scale: show only the rows in the project scale, plus rows that hold notes. Not in Drum View."
+disabled = true
+toggle_mode = true
+text = "Fold"
+
+[node name="ScaleSnapToggle" type="Button" parent="BottomPanel/Toolbar/ToggleGroup" unique_id=1100000041]
+layout_mode = 2
+tooltip_text = "Scale snap: keep edited notes on pitches in the project scale. Hold Shift while dragging to go off-scale. Not in Drum View."
+disabled = true
+toggle_mode = true
+text = "Scale Snap"
+
 [node name="Separator2" type="VSeparator" parent="BottomPanel/Toolbar" unique_id=1100000003]
 layout_mode = 2
 theme_override_constants/separation = 4
@@ -408,6 +423,12 @@ layout_mode = 2
 tooltip_text = "Flip the selected notes horizontally: reverse them in time within the selection range (Ctrl+Shift+H)."
 disabled = true
 text = "Flip H"
+
+[node name="ConformToScale" type="Button" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000042]
+layout_mode = 2
+tooltip_text = "Conform selected notes to the project scale"
+disabled = true
+text = "Conform"
 
 [node name="StrumPanel" type="PanelContainer" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000012]
 layout_mode = 2

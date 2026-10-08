@@ -24,6 +24,9 @@ var entries := {}
 ## Only an Auto map from an SFZ sampler fills this (spec 014). Not serialized and not
 ## editable: it describes the instrument, not a user's naming of keys.
 var playable_ranges: Array = []
+## Pitches that are SFZ keyswitches (spec 026). Scale snapping leaves them alone.
+## Only an Auto map from an SFZ sampler fills this. Not serialized and not editable.
+var keyswitches := PackedInt32Array()
 
 
 func _init(name_value := "", category_value := "", author_value := "") -> void:
@@ -57,6 +60,11 @@ func is_playable(pitch: int) -> bool:
 		if pitch >= range_pair[0] and pitch <= range_pair[1]:
 			return true
 	return false
+
+
+## Whether `pitch` is an SFZ keyswitch key.
+func is_keyswitch(pitch: int) -> bool:
+	return keyswitches.has(pitch)
 
 
 func has_entry(pitch: int) -> bool:
@@ -95,6 +103,7 @@ func duplicate_map() -> NoteMap:
 		var entry: Dictionary = entries[pitch]
 		copy.entries[int(pitch)] = {"name": entry.get("name", ""), "color": entry.get("color", Color.WHITE)}
 	copy.playable_ranges = playable_ranges.duplicate(true)
+	copy.keyswitches = PackedInt32Array(keyswitches)
 	return copy
 
 

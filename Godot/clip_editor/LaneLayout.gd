@@ -2,8 +2,11 @@
 #
 # Chromatic mode is the piano roll: 128 rows, row 0 at the top holding pitch 127,
 # which reproduces the old `(127 - note) * key_height` formula exactly.
-# Folded mode is Drum View: rows are an arbitrary ascending pitch list, lowest at
-# the bottom, and every other pitch is hidden.
+# Folded mode: rows are an arbitrary ascending pitch list, lowest at the bottom, and
+# every other pitch is hidden. Folded is geometry; "drum" is a separate flag saying the
+# rows are pads (Drum View: hit markers, no lengths, no pitch maths). A fold of scale
+# degrees (spec 026) is folded but not drum. Use is_folded() for row walking and
+# is_drum() for anything that means Drum View.
 #
 # Held by MidiEditor and handed to VPiano, NoteLanes and each NoteEditor, the same
 # way GridHelper is shared between the clip editor views.
@@ -26,6 +29,8 @@ var _rows := PackedInt32Array()
 ## Folded (Drum View) rather than chromatic. Tracked separately from `_rows` so a
 ## Drum View with no rows stays folded instead of springing back to 128 lanes.
 var _folded := false
+## The folded rows are drum pads (Drum View). Only meaningful while folded.
+var _drum := false
 
 
 ## A chromatic (piano roll) layout. Used as the default by the @tool controls.
@@ -40,14 +45,16 @@ func set_chromatic() -> void:
 	if not _folded and _rows.is_empty():
 		return
 	_folded = false
+	_drum = false
 	_rows = PackedInt32Array()
 	changed.emit()
 
 
 ## Switch to folded mode. `pitches` is sorted ascending and de-duplicated here, so
 ## callers can pass rows in any order. An empty array folds to no rows at all
-## (Drum View with nothing to show), not back to chromatic.
-func set_rows(pitches: PackedInt32Array) -> void:
+## (Drum View with nothing to show), not back to chromatic. `drum` says whether the rows
+## are drum pads (Drum View) or just a fold of pitches.
+func set_rows(pitches: PackedInt32Array, drum := true) -> void:
 	var sorted := PackedInt32Array()
 	var seen := {}
 	var copy := PackedInt32Array(pitches)
@@ -57,15 +64,21 @@ func set_rows(pitches: PackedInt32Array) -> void:
 			continue
 		seen[p] = true
 		sorted.append(p)
-	if _folded and sorted == _rows:
+	if _folded and _drum == drum and sorted == _rows:
 		return
 	_folded = true
+	_drum = drum
 	_rows = sorted
 	changed.emit()
 
 
 func is_folded() -> bool:
 	return _folded
+
+
+## Folded as Drum View (rows are pads). False for chromatic and for a plain pitch fold.
+func is_drum() -> bool:
+	return _folded and _drum
 
 
 ## The folded row pitches, ascending. Empty in chromatic mode.

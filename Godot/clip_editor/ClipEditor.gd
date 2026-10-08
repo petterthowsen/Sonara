@@ -35,6 +35,8 @@ signal track_mode_track_selected(track: Track)
 @onready var tools_group: HBoxContainer = $BottomPanel/Toolbar/ToolsGroup
 
 @onready var audition_toggle: Button = $BottomPanel/Toolbar/ToggleGroup/AuditionToggle
+@onready var fold_to_scale_toggle: Button = $BottomPanel/Toolbar/ToggleGroup/FoldToScaleToggle
+@onready var scale_snap_toggle: Button = $BottomPanel/Toolbar/ToggleGroup/ScaleSnapToggle
 const AUDITION_CONFIG_KEY := "clip_editor/audition"
 
 # Note map / Drum View toolbar (docs/specs/002-note-maps)
@@ -146,14 +148,20 @@ func _ready():
 	_setup_selection_tools()
 	_setup_value_lanes()
 
+	fold_to_scale_toggle.toggled.connect(_on_scale_view_toggled.bind("fold_to_scale"))
+	scale_snap_toggle.toggled.connect(_on_scale_view_toggled.bind("scale_snap"))
+	midi_editor.view_state_changed.connect(_sync_scale_toggles)
+
 	_editor = Sonara.editor
 	if _editor:
+		_editor.project_opened.connect(func(p: Project): _bind_project_scale(p))
 		_editor.playback_started.connect(func(): midi_editor.transport_playing = true)
 		_editor.playback_stopped.connect(func(): midi_editor.transport_playing = false)
 	if Sonara.editor:
 		Sonara.editor.clips_selected.connect(_on_editor_clips_selected)
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
 		Sonara.editor.playhead_moved.connect(_on_editor_playhead_moved)
+	_bind_project_scale()
 
 
 func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
@@ -227,9 +235,71 @@ func _on_next_value_edited(v: float) -> void:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
+	if is_visible_in_tree():
+		for entry in [["toggle_scale_snap", scale_snap_toggle], ["toggle_fold_to_scale", fold_to_scale_toggle]]:
+			if Hotkeys.pressed(event, entry[0]):
+				var toggle: Button = entry[1]
+				if not toggle.disabled:
+					toggle.button_pressed = not toggle.button_pressed
+				get_viewport().set_input_as_handled()
+				return
 	if is_visible_in_tree() and Hotkeys.pressed(event, "toggle_note_value_lanes"):
 		value_lanes_toggle.button_pressed = not value_lanes_toggle.button_pressed
 		get_viewport().set_input_as_handled()
+
+
+## The project whose scale and clip_editor_view the toolbar is bound to.
+var _scale_project: Project = null
+
+
+## Follow `p`'s scale and view flags (default: the current project). Called on _ready and when
+## the Editor opens a project; disconnects from the previous one.
+func _bind_project_scale(p: Project = null) -> void:
+	if p == null:
+		p = _project()
+	if _scale_project != null and is_instance_valid(_scale_project):
+		if _scale_project.scale_changed.is_connected(_on_project_scale_changed):
+			_scale_project.scale_changed.disconnect(_on_project_scale_changed)
+		if _scale_project.clip_editor_view_changed.is_connected(_on_project_view_changed):
+			_scale_project.clip_editor_view_changed.disconnect(_on_project_view_changed)
+	_scale_project = p
+	if _scale_project != null:
+		_scale_project.scale_changed.connect(_on_project_scale_changed)
+		_scale_project.clip_editor_view_changed.connect(_on_project_view_changed)
+	_refresh_scale_context()
+
+
+func _on_project_scale_changed(_root: int, _type_id: String) -> void:
+	_refresh_scale_context()
+
+
+func _on_project_view_changed(_key: String, _value: bool) -> void:
+	_refresh_scale_context()
+
+
+## Push the project scale and flags into the MIDI editor and sync the toolbar widgets.
+func _refresh_scale_context() -> void:
+	var ctx := midi_editor.scale_context
+	var p := _scale_project
+	ctx.scale = p.get_scale() if p != null else MusicalScale.new()
+	ctx.snap_enabled = p != null and p.get_clip_editor_view("scale_snap")
+	ctx.fold_enabled = p != null and p.get_clip_editor_view("fold_to_scale")
+	fold_to_scale_toggle.set_pressed_no_signal(ctx.fold_enabled)
+	scale_snap_toggle.set_pressed_no_signal(ctx.snap_enabled)
+	_sync_scale_toggles()
+	_sync_selection_tools()
+
+
+## The scale toggles need a scale and the piano roll (not Drum View).
+func _sync_scale_toggles() -> void:
+	var usable: bool = not midi_editor.scale_context.scale.is_none() and not midi_editor.drum_view
+	fold_to_scale_toggle.disabled = not usable
+	scale_snap_toggle.disabled = not usable
+
+
+func _on_scale_view_toggled(on: bool, key: String) -> void:
+	if _scale_project != null:
+		_scale_project.set_clip_editor_view(key, on)
 
 
 func _on_audition_toggled(on: bool) -> void:
@@ -737,13 +807,15 @@ func _setup_selection_tools() -> void:
 			func(editor: NoteEditor): editor.flip_selection_horizontal(), true)
 	_register_selection_tool(tools_group.find_child("Strum", true, false) as Button,
 			func(editor: NoteEditor): editor.strum_selection(), false)
+	_register_selection_tool(tools_group.find_child("ConformToScale", true, false) as Button,
+			func(editor: NoteEditor): editor.conform_selection_to_scale(), false, true)
 	tools_group.find_child("QuantizeOptions", true, false).pressed.connect(_on_quantize_options_pressed)
 	tools_group.find_child("StrumOptions", true, false).pressed.connect(_on_strum_options_pressed)
 	_sync_selection_tools()
 
 
-func _register_selection_tool(button: Button, run: Callable, works_in_drum_view: bool) -> void:
-	_selection_tools[button] = {"run": run, "drum": works_in_drum_view}
+func _register_selection_tool(button: Button, run: Callable, works_in_drum_view: bool, needs_scale := false) -> void:
+	_selection_tools[button] = {"run": run, "drum": works_in_drum_view, "scale": needs_scale}
 	button.pressed.connect(func():
 		var editor := midi_editor.get_active_note_editor()
 		if editor == null:
@@ -880,7 +952,8 @@ func _sync_selection_tools() -> void:
 			continue  # always usable: it only sets the remembered options
 		var entry: Dictionary = _selection_tools.get(button, {})
 		button.disabled = entry.is_empty() or not can_run \
-				or (midi_editor.drum_view and not entry["drum"])
+				or (midi_editor.drum_view and not entry["drum"]) \
+				or (entry["scale"] and midi_editor.scale_context.scale.is_none())
 
 
 func _on_grid_helper_changed():
