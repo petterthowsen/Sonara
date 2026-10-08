@@ -3,7 +3,6 @@ use std::collections::{HashMap, VecDeque};
 
 use super::commands::{EngineState, EngineStatus};
 use super::devices::container::{self, ChainStep};
-use super::devices::AudioDevice;
 use super::render_scratch::{RenderScratch, SoloRole};
 use super::rt_debug;
 use super::types::*;
@@ -428,7 +427,6 @@ fn process_aux_sources(
     status_tx: &Sender<EngineStatus>,
 ) {
     for &id in channel_ids {
-        let mut did_process = false;
         {
             let Some(channel) = channel_map.get_mut(&id) else {
                 continue;
@@ -438,9 +436,6 @@ fn process_aux_sources(
             }
             channel.process_aux_source(frames);
             forward_device_events(channel, status_tx);
-            did_process = true;
-        }
-        if did_process {
             copy_extra_outs_to_targets(channel_map, id, frames);
         }
     }

@@ -19,8 +19,6 @@ pub struct DecodedInfo {
     pub duration_s: f32,
     /// The file's own sample rate, before resampling.
     pub source_sample_rate: u32,
-    /// Native frames actually decoded.
-    pub source_frames: u64,
 }
 
 /// Stream facts known before the first chunk arrives.
@@ -121,7 +119,6 @@ impl AudioDecoder for SymphoniaDecoder {
         let mut decoder = registry.make(&track.codec_params, &DecoderOptions::default())?;
 
         let mut total_frames = 0u64;
-        let mut source_frames = 0u64;
         let mut resampler: Option<FftFixedIn<f32>> = None;
         let mut input_buffer: Vec<Vec<f32>> = Vec::new(); // Buffer for accumulating chunks
         let resampler_chunk_size = 4096usize;
@@ -191,7 +188,6 @@ impl AudioDecoder for SymphoniaDecoder {
             if planar_data.is_empty() || planar_data[0].is_empty() {
                 continue;
             }
-            source_frames += planar_data[0].len() as u64;
             on_native_chunk(&planar_data)?;
 
             // Resample if needed
@@ -350,7 +346,6 @@ impl AudioDecoder for SymphoniaDecoder {
             sample_rate: target_sr,
             duration_s,
             source_sample_rate: sample_rate,
-            source_frames,
         })
     }
 }

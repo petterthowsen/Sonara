@@ -10,7 +10,6 @@ use super::pipewire;
 use super::stream::{
     CallbackContext, CallbackCounters, StreamControl, StreamRequest, MAX_BLOCK_FRAMES,
 };
-use super::types::*;
 
 /// Capacity of the engine → OSC status channel (~1.6 MB preallocated at 200 bytes per status):
 /// several seconds of meters for 100 channels at 20 Hz. Bounded so sends never allocate. The
@@ -21,7 +20,6 @@ pub const STATUS_CHANNEL_CAPACITY: usize = 8_192;
 pub struct AudioEngine {
     _command_thread: thread::JoinHandle<()>,
     command_tx: Sender<AudioCommand>,
-    status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
     status_rx: Receiver<EngineStatus>,
 }
@@ -96,7 +94,6 @@ impl AudioEngine {
         Ok(Self {
             _command_thread: command_thread,
             command_tx,
-            status_tx,
             state,
             status_rx,
         })

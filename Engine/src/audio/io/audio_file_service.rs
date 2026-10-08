@@ -73,7 +73,6 @@ pub struct AudioFileService {
     job_tx: Sender<AfsJob>,
     samples_tx: Sender<SamplesJob>,
     event_rx: Receiver<AfsEvent>,
-    active_jobs: Arc<Mutex<HashMap<String, thread::JoinHandle<()>>>>,
     /// Rate files are decoded to: the device rate. Read per job, so a rate change (Phase 7)
     /// applies to the next load.
     project_sample_rate: Arc<AtomicU32>,
@@ -86,7 +85,6 @@ impl AudioFileService {
         let (job_tx, job_rx) = channel::unbounded();
         let (event_tx, event_rx) = channel::unbounded();
 
-        let active_jobs = Arc::new(Mutex::new(HashMap::new()));
         // cache_key -> source path, filled by decode jobs so sample requests can name a file
         // by the key Godot already has.
         let known_files: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -99,26 +97,12 @@ impl AudioFileService {
         for i in 0..num_workers {
             let job_rx = job_rx.clone();
             let event_tx = event_tx.clone();
-            let active_jobs_clone = active_jobs.clone();
             let project_sample_rate = Arc::clone(&project_sample_rate);
             let known_files = Arc::clone(&known_files);
 
-            let handle = thread::spawn(move || {
-                Self::worker_loop(
-                    i,
-                    job_rx,
-                    event_tx,
-                    active_jobs_clone,
-                    project_sample_rate,
-                    known_files,
-                );
+            thread::spawn(move || {
+                Self::worker_loop(i, job_rx, event_tx, project_sample_rate, known_files);
             });
-
-            // Store worker handles (though we don't use them directly)
-            active_jobs
-                .lock()
-                .unwrap()
-                .insert(format!("worker_{}", i), handle);
         }
 
         let (samples_tx, samples_rx) = channel::unbounded();
@@ -132,7 +116,6 @@ impl AudioFileService {
             job_tx,
             samples_tx,
             event_rx,
-            active_jobs,
             project_sample_rate,
         })
     }
@@ -192,7 +175,6 @@ impl AudioFileService {
         worker_id: usize,
         job_rx: Receiver<AfsJob>,
         event_tx: Sender<AfsEvent>,
-        _active_jobs: Arc<Mutex<HashMap<String, thread::JoinHandle<()>>>>,
         project_sample_rate: Arc<AtomicU32>,
         known_files: Arc<Mutex<HashMap<String, String>>>,
     ) {

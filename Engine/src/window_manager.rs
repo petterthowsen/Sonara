@@ -18,7 +18,7 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use tracing::{error, info, warn};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoopBuilder, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::Window;
 
@@ -798,7 +798,7 @@ fn run_window_thread(
     info!("🧵 Window thread starting");
 
     // Allow event loop on non-main thread (X11 specific)
-    let event_loop = match EventLoopBuilder::new().with_any_thread(true).build() {
+    let event_loop = match EventLoop::builder().with_any_thread(true).build() {
         Ok(el) => el,
         Err(e) => {
             error!("Failed to create EventLoop in window thread: {}", e);

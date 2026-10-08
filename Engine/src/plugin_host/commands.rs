@@ -679,15 +679,6 @@ pub fn process_command(
 
             None // No response needed (fire-and-forget)
         }
-
-        _ => {
-            // TODO: Implement remaining commands
-            warn!("Command not yet implemented: {:?}", cmd);
-            Some(PluginResponse::Error {
-                command: format!("{:?}", cmd),
-                error: "Not implemented".to_string(),
-            })
-        }
     }
 }
 

@@ -32,12 +32,16 @@ pub struct LevelEntry {
     pub rows: u32,
 }
 
+/// Header of a waveform cache file. Some fields are format metadata that only tests read back.
 #[derive(Debug, Clone)]
 pub struct PeakHeader {
     pub version: u16,
     pub channels: u16,
+    #[allow(dead_code)] // On-disk format field, checked by the round-trip tests.
     pub source_sample_rate: u32,
+    #[allow(dead_code)] // On-disk format field, checked by the round-trip tests.
     pub frames: u64,
+    #[allow(dead_code)] // On-disk format field, checked by the round-trip tests.
     pub base_block: u32,
     pub tex_width: u16,
     pub src_size: u64,
@@ -186,6 +190,7 @@ impl PeakFile {
     }
 
     /// Read one texel as f32 RGBA. `plane` is 0 (min/max/rms) or 1 (low/mid/high).
+    #[cfg(test)]
     pub fn read_texel(
         path: &Path,
         header: &PeakHeader,
