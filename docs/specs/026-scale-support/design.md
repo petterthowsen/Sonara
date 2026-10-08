@@ -112,6 +112,11 @@ All of this lives on the Godot main thread. There is no engine, OSC or audio-thr
 
 No OSC messages. No `sync_to_engine()` changes, because the scale is never sent.
 
+> **Amended by spec 027 (note effects).** The project scale now does reach the engine, as a
+> 12-bit pitch-class mask on `/project/scale` (`MusicalScale.mask()`), so the Transpose note effect
+> can follow it. `Project.set_scale` sends it after updating state and project sync sends it after
+> `/project/init`. Everything else here stays UI-only: the engine never sees the root or type id.
+
 **Project model** (`Godot/data/Project.gd`):
 
 - `var scale_root: int = 0` (pitch class 0 to 11, 0 = C) and `var scale_type: String = "none"`

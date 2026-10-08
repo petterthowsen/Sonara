@@ -4,6 +4,7 @@ use super::container::{
     apply_gain, copy_interleaved, gain_to_normalized, insert_into_vec, move_in_vec,
     normalized_to_gain, process_serial_chain, remove_from_vec, DeviceContainer,
 };
+use super::note_fx::routing::{route_note, run_note_phase};
 use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
     ParamValue, PortFlow,
@@ -63,10 +64,17 @@ impl DeviceContainer for ChainDevice {
     fn move_child(&mut self, from: usize, to: usize) {
         move_in_vec(&mut self.children, from, to);
     }
+
+    fn chain_children_mut(&mut self) -> Option<&mut Vec<Box<dyn AudioDevice>>> {
+        Some(&mut self.children)
+    }
 }
 
 impl AudioDevice for ChainDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        // The note phase runs even while bypassed, so note effects inside keep their queues
+        // drained and their schedules moving.
+        run_note_phase(&mut self.children, sample_count, None);
         if !self.enabled {
             copy_interleaved(inputs, outputs, sample_count);
             return;
@@ -100,10 +108,7 @@ impl AudioDevice for ChainDevice {
     }
 
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
-        for child in &mut self.children {
-            child.mark_activity();
-            child.send_note_event(event, frame_offset);
-        }
+        route_note(&mut self.children, event, frame_offset);
     }
 
     fn choke(&mut self, frame_offset: usize) {
@@ -340,5 +345,23 @@ mod tests {
             })
             .collect();
         assert_eq!(hits, vec![1, 1]);
+    }
+
+    #[test]
+    fn note_effect_feeds_only_downstream() {
+        use crate::audio::devices::note_fx::routing::test_devices::{on_keys, Recorder, Shift};
+        let (a, log_a) = Recorder::new();
+        let (b, log_b) = Recorder::new();
+        let mut chain = ChainDevice::new(8);
+        chain.insert_child(0, Box::new(a));
+        chain.insert_child(1, Box::new(Shift::new(12)));
+        chain.insert_child(2, Box::new(b));
+
+        chain.send_note_event(&NoteEvent::test_on(60, 100), 3);
+        let mut out = vec![0.0f32; 8];
+        chain.process_block(&[0.0; 8], &mut out, 4);
+        assert_eq!(on_keys(&log_a), vec![60]);
+        assert_eq!(on_keys(&log_b), vec![72]);
+        assert_eq!(log_b.lock().unwrap()[0].0, 3);
     }
 }

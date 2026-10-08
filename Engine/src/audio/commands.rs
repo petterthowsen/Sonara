@@ -106,6 +106,8 @@ pub enum AudioCommand {
     /// `(bar, numerator, denominator)` changes, 1-based bars. Replaces the whole map.
     SetTimeSignatureMap(Vec<(u32, u16, u16)>),
     SetTimeSignature(i32, i32),
+    /// Project scale as a 12-bit pitch-class mask (bit 0 = C), 0 = none (spec 027).
+    SetProjectScale(u16),
 
     // Channel management
     CreateChannel {
@@ -1296,7 +1298,7 @@ pub fn process_command(
                 .format_tick_position(state.get_current_tick());
             // Release clip notes; devices keep running so releases and effect tails ring out
             for channel in state.channels.values_mut() {
-                channel.release_clip_notes();
+                channel.stop_clip_notes();
             }
             info!("Playback paused at {}", position);
             return Some(EngineStatus::PlayingStateChanged(false));
@@ -1311,7 +1313,7 @@ pub fn process_command(
             state.dispatch_playhead_tick.store(false, Ordering::Release);
             // Release clip notes; devices keep running so releases and effect tails ring out
             for channel in state.channels.values_mut() {
-                channel.release_clip_notes();
+                channel.stop_clip_notes();
             }
             for track in state.tracks.values_mut() {
                 for instance in &mut track.clip_instances {
@@ -1331,7 +1333,7 @@ pub fn process_command(
             state.request_playhead_midi_dispatch();
             // Release clip notes from the old position; tails keep ringing
             for channel in state.channels.values_mut() {
-                channel.release_clip_notes();
+                channel.stop_clip_notes();
             }
             for track in state.tracks.values_mut() {
                 for instance in &mut track.clip_instances {
@@ -1360,6 +1362,13 @@ pub fn process_command(
             state.settings.time_numerator = num;
             state.settings.time_denominator = den;
             info!("Time signature set to {}/{}", num, den);
+        }
+        AudioCommand::SetProjectScale(mask) => {
+            state.settings.scale_mask = mask & 0x0FFF;
+            info!(
+                "Project scale mask set to {:#05x}",
+                state.settings.scale_mask
+            );
         }
         AudioCommand::CreateChannel { id, name } => {
             let channel = Channel::new(id, name.clone(), buffer_size, state.device_sample_rate);
@@ -2286,6 +2295,8 @@ pub fn process_command(
             to_position,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
+                // Moving changes which devices sit after each note effect.
+                channel.release_note_effects_in(&parent_path);
                 match super::devices::container::move_device(
                     &mut channel.devices,
                     &parent_path,
@@ -3374,6 +3385,45 @@ fn log_engine_error(status_tx: &Sender<EngineStatus>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moving_instrument_across_note_effect_releases() {
+        use crate::audio::devices::note_fx::host::tests::test_host;
+        use crate::audio::devices::note_fx::routing::test_devices::Recorder;
+        let mut state = EngineState::default();
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        process_command(
+            &mut state,
+            AudioCommand::CreateChannel {
+                id: 2,
+                name: "T".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        let (recorder, log) = Recorder::new();
+        {
+            let channel = state.channels.get_mut(&2).unwrap();
+            channel.devices.push(Box::new(test_host(12.0, 0.0, 0.0)));
+            channel.devices.push(Box::new(recorder));
+            channel.send_note_event_to_devices(&NoteEvent::test_on(60, 100), 0);
+            channel.dispatch_notes(64);
+        }
+        process_command(
+            &mut state,
+            AudioCommand::MoveDevice {
+                channel_id: 2,
+                parent_path: DevicePath::default(),
+                from_position: 1,
+                to_position: 0,
+            },
+            128,
+            &status_tx,
+        );
+        let events: Vec<NoteEvent> = log.lock().unwrap().iter().map(|(_, e)| *e).collect();
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert!(matches!(events[1], NoteEvent::Off { key: 72, .. }));
+    }
 
     #[test]
     fn pan_width_command_clamps() {

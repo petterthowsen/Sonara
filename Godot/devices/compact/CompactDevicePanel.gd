@@ -33,6 +33,8 @@ const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
 var device_instance: DeviceInstance = null
 var _param_list: ParameterList = null
 var _hovered := false
+## Stripe above the header, shown only for note effects.
+var note_fx_stripe: ColorRect = null
 
 ## True while the ChannelDeviceList selected this panel's device. Selection swaps the theme
 ## variation (`DeviceCard` / `DeviceCardSelected`), the same border as DevicePanel.
@@ -58,6 +60,7 @@ signal select_released(panel: CompactDevicePanel)
 # ============================================================================
 
 func _ready() -> void:
+	_create_note_fx_stripe()
 	collapse_button.toggled.connect(_on_collapse_button_toggled)
 	collapse_button.set_state(not collapsed)
 	collapse_button.gui_input.connect(_on_collapse_button_gui_input)
@@ -154,11 +157,30 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 		device_instance.name_changed.connect(_on_device_name_changed)
 	
 	device_light.bind_to_device_instance(device_instance)
+	_update_note_fx_stripe()
 	
 	tooltip_text = device_instance.device.name
 	
 	_ensure_param_list()
 	_param_list.bind_to_device(device_instance, "param")
+
+
+## The note-effect marker: a thin bar in the secondary accent colour above the header (spec 027 REQ-036).
+func _create_note_fx_stripe() -> void:
+	note_fx_stripe = ColorRect.new()
+	note_fx_stripe.name = "NoteFxStripe"
+	note_fx_stripe.custom_minimum_size.y = 3
+	note_fx_stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	note_fx_stripe.visible = false
+	$Body.add_child(note_fx_stripe)
+	$Body.move_child(note_fx_stripe, 0)
+
+
+func _update_note_fx_stripe() -> void:
+	var is_note_fx := device_instance != null and device_instance.device != null and device_instance.device.is_note_effect()
+	note_fx_stripe.visible = is_note_fx
+	if is_note_fx:
+		note_fx_stripe.color = UiColors.role(&"accent_secondary")
 
 
 ## Show the instance name in the compact header.

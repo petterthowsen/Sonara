@@ -19,6 +19,8 @@ pub struct Transport {
     pub bar_number: i32,
     pub time_sig_num: u16,
     pub time_sig_den: u16,
+    /// Project scale as a 12-bit pitch-class mask (bit 0 = C), 0 = none.
+    pub scale_mask: u16,
 }
 
 impl Transport {
@@ -57,6 +59,7 @@ impl Transport {
             bar_number: seg.bar_index as i32,
             time_sig_num: seg.numerator,
             time_sig_den: seg.denominator,
+            scale_mask: settings.scale_mask,
         }
     }
 

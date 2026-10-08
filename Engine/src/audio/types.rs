@@ -573,18 +573,14 @@ pub struct Channel {
     pub mix: MixBuffers,
 }
 
-/// Send a note event to every device in `devices`, waking those that take note input.
+/// Send a note event through `devices` in chain order, waking those that take note input. It
+/// stops at the first note effect, which hands it on in the note phase (spec 027).
 fn send_note_event_to(
     devices: &mut [Box<dyn AudioDevice>],
     event: &NoteEvent,
     frame_offset: usize,
 ) {
-    for device in devices.iter_mut() {
-        if device.accepts_note_input() {
-            device.mark_activity();
-        }
-        device.send_note_event(event, frame_offset);
-    }
+    super::devices::note_fx::routing::route_note(devices, event, frame_offset);
 }
 
 /// Gain smoothing coefficient for a 5 ms one-pole filter: alpha = 1 - exp(-1 / (tau * rate)).
@@ -889,10 +885,30 @@ impl Channel {
         }
     }
 
-    /// Process the first device into this channel plus extra-out buses (no remaining FX).
-    pub fn process_aux_source(&mut self, sample_count: usize) {
+    /// Dispatch this buffer's live MIDI, then run the note phase: each note effect in the
+    /// chain hands its output to the devices after it, before any device renders.
+    pub fn dispatch_notes(&mut self, sample_count: usize) {
         self.dispatch_scheduled_midi();
-        if self.devices.is_empty() {
+        super::devices::note_fx::routing::run_note_phase(&mut self.devices, sample_count, None);
+    }
+
+    /// Index of the device that feeds the extra-out buses: the first one that isn't a note
+    /// effect (note effects pass audio through, so they can't be the source; amends spec 006
+    /// REQ-007). Equals the device count when there is none.
+    pub fn aux_source_index(&self) -> usize {
+        self.devices
+            .iter()
+            .position(|d| !d.is_note_effect())
+            .unwrap_or(self.devices.len())
+    }
+
+    /// Process the aux-source device into this channel plus extra-out buses (no remaining FX).
+    /// Leading note effects only get their note phase: their audio is a pass-through of the
+    /// silent input.
+    pub fn process_aux_source(&mut self, sample_count: usize) {
+        self.dispatch_notes(sample_count);
+        let src = self.aux_source_index();
+        if src >= self.devices.len() {
             return;
         }
 
@@ -911,11 +927,11 @@ impl Channel {
         );
 
         let mut extras = std::mem::take(&mut self.extra_out_buffers);
-        let extra_count = self.devices[0].extra_output_bus_count().min(extras.len());
+        let extra_count = self.devices[src].extra_output_bus_count().min(extras.len());
         let section =
-            super::rt_debug::device_name("process_block_with_extra", self.devices[0].device_id());
+            super::rt_debug::device_name("process_block_with_extra", self.devices[src].device_id());
         super::rt_debug::device_section(section, || {
-            self.devices[0].process_block_with_extra(
+            self.devices[src].process_block_with_extra(
                 &self.device_input_buffer,
                 &mut self.device_output_buffer,
                 &mut extras[..extra_count],
@@ -933,10 +949,10 @@ impl Channel {
         let has_output_activity = super::devices::has_audio_signal(
             &self.device_output_buffer[..interleaved_count.min(self.device_output_buffer.len())],
         );
-        if self.devices[0].update_sleep_state(has_input_activity || has_output_activity) {
+        if self.devices[src].update_sleep_state(has_input_activity || has_output_activity) {
             self.sleep_changes.push((
-                super::devices::DevicePath::root(0),
-                self.devices[0].is_sleeping(),
+                super::devices::DevicePath::root(src),
+                self.devices[src].is_sleeping(),
             ));
         }
     }
@@ -951,10 +967,10 @@ impl Channel {
 
     /// Start the device chain from `start`, running devices until one begins a block
     /// asynchronously (`Parked`; finish with `resume_device_chain`) or the chain ends. Scheduled
-    /// MIDI is dispatched when `start` is 0. The channel buffers hold the result once `Done`.
+    /// MIDI is dispatched and the note phase runs when `start` is 0. The channel buffers hold the result once `Done`.
     pub fn begin_device_chain(&mut self, start: usize, sample_count: usize) -> ChainStep {
         if start == 0 {
-            super::rt_debug::section("device MIDI dispatch", || self.dispatch_scheduled_midi());
+            super::rt_debug::section("device MIDI dispatch", || self.dispatch_notes(sample_count));
         }
         self.begin_chain_from(start, sample_count)
     }
@@ -1060,6 +1076,52 @@ impl Channel {
     /// Live MIDI isn't touched, so keys held on a controller keep playing.
     pub fn release_clip_notes(&mut self) {
         self.release_clip_notes_at(0);
+    }
+
+    /// Transport stop, pause or seek: release the clip notes, then tell every note effect,
+    /// which releases what it generated from clip notes at its next note phase (spec 027
+    /// REQ-007). Loop wraps use `release_clip_notes_at` instead, so echoes and latched notes
+    /// ring across the loop point.
+    pub fn stop_clip_notes(&mut self) {
+        self.release_clip_notes();
+        super::devices::container::visit_devices_mut(&mut self.devices, &mut |_, device| {
+            if device.is_note_effect() {
+                device.note_discontinuity();
+            }
+        });
+    }
+
+    /// The device list `parent_path` names, when it is a plain chain (the channel root, a
+    /// Chain, a slot chain). Note effects only ever sit in these.
+    pub fn chain_list_mut(
+        &mut self,
+        parent_path: &super::devices::DevicePath,
+    ) -> Option<&mut Vec<Box<dyn AudioDevice>>> {
+        if parent_path.is_empty() {
+            return Some(&mut self.devices);
+        }
+        super::devices::container::device_at_path_mut(&mut self.devices, parent_path)?
+            .as_container_mut()?
+            .chain_children_mut()
+    }
+
+    /// Command thread, before a device at `path` is removed: if it is a note effect, its
+    /// sounding notes are released to the devices after it, so none is left hanging (REQ-006).
+    pub fn release_note_effect_at(&mut self, path: &super::devices::DevicePath) {
+        let Some(index) = path.leaf_index() else {
+            return;
+        };
+        if let Some(list) = self.chain_list_mut(&path.parent()) {
+            super::devices::note_fx::routing::release_note_effect_at(list, index);
+        }
+    }
+
+    /// Command thread, before devices in the list at `parent_path` move: every note effect in
+    /// it releases its sounding notes, since its downstream devices are about to change.
+    pub fn release_note_effects_in(&mut self, parent_path: &super::devices::DevicePath) {
+        if let Some(list) = self.chain_list_mut(parent_path) {
+            super::devices::note_fx::routing::release_note_effects(list);
+        }
     }
 
     /// Like `release_clip_notes`, with the note-offs placed `frame_offset` frames into the buffer.
@@ -1269,6 +1331,9 @@ pub struct ProjectSettings {
     pub time_denominator: i32,
     pub ppq: i32,
     pub sample_rate: i32,
+    /// Project scale as a 12-bit pitch-class mask (bit 0 = C), 0 = none. Only note effects
+    /// read it (Transpose following the project scale, spec 027 amending spec 026).
+    pub scale_mask: u16,
 }
 
 impl Default for ProjectSettings {
@@ -1279,6 +1344,7 @@ impl Default for ProjectSettings {
             time_denominator: 4,
             ppq: 960,
             sample_rate: 48000,
+            scale_mask: 0,
         }
     }
 }
@@ -1481,6 +1547,59 @@ mod tests {
         channel.dispatch_scheduled_midi();
         let received = events.lock().unwrap().clone();
         received
+    }
+
+    #[test]
+    fn stop_releases_generated_clip_notes_only() {
+        use crate::audio::devices::note_fx::host::tests::test_host;
+        use crate::audio::devices::note_fx::routing::test_devices::Recorder;
+        use crate::audio::render_scratch::ClipNoteEvent;
+        let mut channel = Channel::new(2, "test".to_string(), 128, 48_000.0);
+        // Each note plus one generated copy an octave up, 32 frames later.
+        channel.devices.push(Box::new(test_host(0.0, 32.0, 1.0)));
+        let (recorder, log) = Recorder::new();
+        channel.devices.push(Box::new(recorder));
+
+        channel.send_clip_note(
+            &ClipNoteEvent {
+                track_id: 1,
+                clip_note_id: 7,
+                key: 60,
+                velocity: 0.8,
+                release: DEFAULT_RELEASE,
+                is_on: true,
+            },
+            0,
+        );
+        channel
+            .scheduled_midi_events
+            .push(MidiEvent::note_on(0, 48, 100, Instant::now()));
+        channel.dispatch_notes(64);
+        channel.scheduled_midi_events.clear();
+        log.lock().unwrap().clear();
+
+        channel.stop_clip_notes();
+        channel.dispatch_notes(64);
+        let offs: Vec<u8> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| matches!(e, NoteEvent::Off { .. }))
+            .map(|(_, e)| e.key())
+            .collect();
+        // The clip note and its copy end; the live 48 and its copy (60) keep sounding.
+        let mut sorted = offs.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![60, 72], "{offs:?}");
+        let ids: Vec<u32> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, e)| e.note_id())
+            .collect();
+        assert!(ids
+            .iter()
+            .all(|&id| crate::audio::midi_types::is_clip_note(id)));
     }
 
     #[test]

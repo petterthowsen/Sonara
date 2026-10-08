@@ -74,6 +74,15 @@ func pitch_classes() -> PackedInt32Array:
 	return pcs
 
 
+## The scale's pitch classes as a 12-bit mask (bit 0 = C, bit 1 = C#, ...). 0 for none. The
+## engine receives this as the project scale (`/project/scale`, spec 027).
+func mask() -> int:
+	var bits := 0
+	for pc in pitch_classes():
+		bits |= 1 << pc
+	return bits
+
+
 ## True when `pitch`'s pitch class belongs to the scale. Always false for none.
 func contains(pitch: int) -> bool:
 	return pitch_classes().has(posmod(pitch, 12))

@@ -16,6 +16,8 @@ const VALUE_FONT_SIZE := 13
 ## Alpha of a control whose value isn't in effect (a Time knob while its Sync is on): greyed,
 ## not hidden, so the ms value stays visible and editable.
 const SYNCED_ALPHA := 0.5
+## Alpha of a control that doesn't apply in the device's current state (`ParamRules`).
+const DISABLED_ALPHA := 0.4
 ## Height of the caption-and-knob row under an envelope display (about one Simple View cell body).
 const ENVELOPE_KNOB_ROW_HEIGHT := 56.0
 const ENVELOPE_STAGE_NAMES := {"a": "Attack", "d": "Decay", "s": "Sustain", "r": "Release"}
@@ -38,6 +40,10 @@ var _env_knobs: Array[RotaryKnob] = []
 var _mod_targets: Array[Dictionary] = []
 ## Full title on hover when it's trimmed; created on the first bind.
 var _title_overlay: LabelOverlay = null
+## True while the control doesn't apply in the device's current state (see `ParamRules`).
+var _disabled := false
+## Transparent cover over the inner control while disabled; it swallows the mouse.
+var _blocker: Control = null
 ## True while pushing device values into the inner control(s), so their signals don't loop back.
 var _updating := false
 
@@ -63,6 +69,30 @@ func bind(p_instance: DeviceInstance, data: Dictionary) -> void:
 	_title.visible = not _title.text.is_empty()
 	_build_inner()
 	refresh()
+
+
+## Parameter ids this control is bound to.
+func get_param_ids() -> Array[int]:
+	return _param_ids
+
+
+## Grey the control and make it inert (a `ParamRules` rule says it doesn't apply now). Its value
+## stays visible; modulation and automation are unaffected.
+func set_disabled(disabled: bool) -> void:
+	_disabled = disabled
+	_apply_disabled()
+
+
+func is_disabled() -> bool:
+	return _disabled
+
+
+func _apply_disabled() -> void:
+	modulate.a = DISABLED_ALPHA if _disabled else 1.0
+	if _inner is BaseButton:
+		(_inner as BaseButton).disabled = _disabled
+	if _blocker != null:
+		_blocker.visible = _disabled
 
 
 ## True when this control shows `param_id` — or follows it: a Time knob also refreshes when its
@@ -168,6 +198,13 @@ func _build_inner() -> void:
 		# Single-parameter controls reveal their full title while hovered, like the title itself.
 		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SPINBOX, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER]:
 			_title_overlay.add_hover_source(_inner)
+		_blocker = Control.new()
+		_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+		_body.add_child(_blocker)
+		_blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	else:
+		_blocker = null
+	_apply_disabled()
 	_collect_mod_targets()
 
 

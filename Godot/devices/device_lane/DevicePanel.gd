@@ -117,8 +117,12 @@ signal request_child_context_menu(child: DeviceInstance)
 signal select_requested(panel: DevicePanel, additive: bool, range_select: bool)
 signal select_released(panel: DevicePanel)
 
+## Stripe above the header, shown only for note effects (spec 027 REQ-036).
+var note_fx_stripe: ColorRect = null
+
 func _ready() -> void:
 	custom_minimum_size.y = HEIGHT
+	_create_note_fx_stripe()
 	DeviceWindowManager.state_changed.connect(_on_window_state_changed)
 	_create_cc_tab()
 	_create_modulators_tab()
@@ -518,6 +522,24 @@ func _on_modulators_changed(_arg = null) -> void:
 
 
 
+## The note-effect marker: a thin bar in the secondary accent colour at the top of the panel.
+func _create_note_fx_stripe() -> void:
+	note_fx_stripe = ColorRect.new()
+	note_fx_stripe.name = "NoteFxStripe"
+	note_fx_stripe.custom_minimum_size.y = 3
+	note_fx_stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	note_fx_stripe.visible = false
+	$VBox.add_child(note_fx_stripe)
+	$VBox.move_child(note_fx_stripe, 0)
+
+
+func _update_note_fx_stripe() -> void:
+	var is_note_fx := device != null and device.device != null and device.device.is_note_effect()
+	note_fx_stripe.visible = is_note_fx
+	if is_note_fx:
+		note_fx_stripe.color = UiColors.role(&"accent_secondary")
+
+
 func bind_to_device(dev : DeviceInstance):
 	_unbind()
 	device = dev
@@ -527,6 +549,7 @@ func bind_to_device(dev : DeviceInstance):
 		if device != dev:
 			return
 	device_light.bind_to_device_instance(dev)
+	_update_note_fx_stripe()
 	name_label.text = dev.get_display_name()
 	vertical_name_label.text = dev.get_display_name()
 	if not dev.name_changed.is_connected(_on_device_name_changed):

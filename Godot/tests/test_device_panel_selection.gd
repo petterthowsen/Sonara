@@ -39,6 +39,7 @@ func run_tests() -> void:
 	await _test_modulators_toggle_and_scroll()
 	await _test_chevron_scroll()
 	await _test_panes_slide_and_fade()
+	await _test_note_fx_stripe()
 
 
 ## Registered fake effect `n`.
@@ -333,3 +334,23 @@ func _test_chevron_scroll() -> void:
 	_assert(scroll.scroll_horizontal > 0.0, "paging with items to snap to scrolls: %f" % scroll.scroll_horizontal)
 	_assert(items[0].modulate.a > 0.99, "an item too wide for the view stays visible")
 	scroll.free()
+
+
+## Spec 027 REQ-036: only a note-effect device shows the accent_secondary stripe.
+func _test_note_fx_stripe() -> void:
+	var ch: Object = _fresh_project()
+	var fx := _fx(ch, "stripe_audio")
+	var registry: Object = root.get_node("AssetService").device_registry
+	var note_device: Object = _device_script.new("test.note.stripe", "Stripe", _device_script.DeviceCategory.NoteEffect, _device_script.DeviceType.BuiltIn)
+	registry._devices[note_device.device_id] = note_device
+	var note_fx: Object = _device_instance_script.new(note_device, ch.id, -1)
+	ch.add_device(note_fx)
+	var lane := await _lane(ch)
+	var audio_panel: Control = lane.find_device_panel(fx)
+	var note_panel: Control = lane.find_device_panel(note_fx)
+	_assert(audio_panel != null and note_panel != null, "the lane shows both panels")
+	if audio_panel == null or note_panel == null:
+		return
+	_assert(not audio_panel.note_fx_stripe.visible, "an audio device has no note-effect stripe")
+	_assert(note_panel.note_fx_stripe.visible, "a note effect shows the stripe")
+	_assert(note_panel.note_fx_stripe.color == UiColors.role(&"accent_secondary"), "the stripe uses accent_secondary")

@@ -213,6 +213,13 @@ pub trait DeviceContainer {
 
     /// Move a child from `from` to `to` within this container.
     fn move_child(&mut self, from: usize, to: usize);
+
+    /// The children as a plain chain, for a container whose children run in series (Chain,
+    /// slot chains). Note effects only sit in such lists, so the note-effect release helper
+    /// reaches them through this. None for parallel containers (Layer, Drum Machine, Multiband).
+    fn chain_children_mut(&mut self) -> Option<&mut Vec<Box<dyn AudioDevice>>> {
+        None
+    }
 }
 
 /// Look up a device by path in a top-level list.

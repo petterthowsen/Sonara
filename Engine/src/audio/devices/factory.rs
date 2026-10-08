@@ -7,9 +7,9 @@ use tracing::{info, warn};
 
 use super::clap_host::SubprocessClapAdapter;
 use super::{
-    AudioDevice, ChainDevice, ChorusDevice, DelayDevice, DeviceCategory, DevicePath,
-    DrumMachineDevice, FilterDevice, LayerDevice, MultibandDevice, PolySynthDevice, PortFlow,
-    ReverbDevice, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice, UtilityDevice,
+    AudioDevice, ChainDevice, ChorusDevice, DelayDevice, DevicePath, DrumMachineDevice,
+    FilterDevice, LayerDevice, MultibandDevice, PolySynthDevice, PortFlow, ReverbDevice,
+    SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice, UtilityDevice,
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
@@ -90,6 +90,11 @@ impl DeviceFactory {
         }
         if let Some(device) = create_drum(device_id, self.sample_rate, self.max_buffer_size) {
             info!("Created built-in drum {}", device_id);
+            return Some(device);
+        }
+        if let Some(device) = create_note_effect(device_id, self.sample_rate, self.max_buffer_size)
+        {
+            info!("Created built-in note effect {}", device_id);
             return Some(device);
         }
         let device: Box<dyn AudioDevice> = match device_id {
@@ -187,10 +192,14 @@ impl DeviceFactory {
         let effects = EFFECT_IDS
             .iter()
             .filter_map(|id| create_effect(id, self.sample_rate, self.max_buffer_size));
+        let note_effects = NOTE_EFFECT_IDS
+            .iter()
+            .filter_map(|id| create_note_effect(id, self.sample_rate, self.max_buffer_size));
         others
             .into_iter()
             .chain(drums)
             .chain(effects)
+            .chain(note_effects)
             .map(|device| builtin_device_info(device.as_ref()))
             .collect()
     }
@@ -217,6 +226,35 @@ pub const DRUM_IDS: &[&str] = &[
     "sonara.builtin.hat",
     "sonara.builtin.clap",
 ];
+
+/// Built-in note effects (spec 027). Each is made from the sample rate alone. The note-effect
+/// conformance test (`note_fx/conformance.rs`) runs over this list, so a new note effect is
+/// covered by adding it here.
+pub const NOTE_EFFECT_IDS: &[&str] = &[
+    "sonara.builtin.transpose",
+    "sonara.builtin.note_filter",
+    "sonara.builtin.velocity",
+];
+
+/// Create a built-in note effect from [`NOTE_EFFECT_IDS`], prepared for `sample_rate`. Command
+/// thread only (allocates). None for any other ID.
+pub fn create_note_effect(
+    device_id: &str,
+    sample_rate: f32,
+    max_frames: usize,
+) -> Option<Box<dyn AudioDevice>> {
+    use super::note_fx::{
+        note_filter::NoteFilter, transpose::Transpose, velocity::Velocity, NoteFxHost,
+    };
+    let mut device: Box<dyn AudioDevice> = match device_id {
+        "sonara.builtin.transpose" => Box::new(NoteFxHost::<Transpose>::new(sample_rate)),
+        "sonara.builtin.note_filter" => Box::new(NoteFxHost::<NoteFilter>::new(sample_rate)),
+        "sonara.builtin.velocity" => Box::new(NoteFxHost::<Velocity>::new(sample_rate)),
+        _ => return None,
+    };
+    device.prepare(sample_rate, max_frames);
+    Some(device)
+}
 
 /// Create a built-in drum from [`DRUM_IDS`], prepared for `sample_rate` and blocks of up to
 /// `max_frames`. Command thread only (allocates). None for any other ID.
@@ -265,12 +303,7 @@ pub fn create_effect(
 
 /// Build the `BuiltinDeviceInfo` status for one device instance.
 fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
-    let category = match device.device_category() {
-        DeviceCategory::Instrument => "instrument",
-        DeviceCategory::Effect => "effect",
-        DeviceCategory::Utility => "utility",
-    }
-    .to_string();
+    let category = device.device_category().as_str().to_string();
 
     let parameters: Vec<BuiltinParamInfo> = device
         .parameters()

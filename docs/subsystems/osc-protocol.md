@@ -71,6 +71,7 @@ plugin and host (`Plugin Dragonfly Room Reverb (instance 3, host instance-3 (pid
 |---------|------|-------------|
 | `/project/init` | `f:tempo, i:numerator, i:denominator, i:ppq, i:sample_rate` | Initialize project settings |
 | `/project/clear` | - | Clear all channels and tracks |
+| `/project/scale` | `i:mask` | Godot → engine. Project scale as a 12-bit pitch-class mask (bit 0 = C, C major = 2741), 0 = no scale. Sent after `/project/init` and whenever the scale changes. Only note effects read it (Transpose in Follow Project mode, spec 027) |
 
 ### Channel Management (Godot -> Rust)
 
@@ -359,7 +360,7 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
   removed (see ADR-0015, which supersedes ADR-0012).
 
 ##### Built-in Parameter Advertisement (Rust → Godot)
-`/builtin/info` sends device metadata and typed parameter descriptors:
+`/builtin/info` sends device metadata and typed parameter descriptors. `category` is `instrument`, `effect`, `utility` or `note_effect` (spec 027: note effects, listed under Note Effects in the browser):
 ```
 /builtin/info [
   s:id, s:name, s:category, s:description,

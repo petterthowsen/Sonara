@@ -1075,6 +1075,8 @@ impl OscServer {
                         time_denominator: *den,
                         ppq: *ppq,
                         sample_rate: *sr,
+                        // The scale follows in its own `/project/scale` message.
+                        scale_mask: 0,
                     };
                     command_tx.send(AudioCommand::InitProject(settings))?;
 
@@ -1088,6 +1090,15 @@ impl OscServer {
                         "/project/init ignored (expected f,i,i,i,i); args={:?}",
                         args
                     );
+                }
+            }
+            ["project", "scale"] => {
+                if let Some(OscType::Int(mask)) = args.first() {
+                    command_tx.send(AudioCommand::SetProjectScale(
+                        (*mask as u32 & 0x0FFF) as u16,
+                    ))?;
+                } else {
+                    warn!("/project/scale ignored (expected i); args={:?}", args);
                 }
             }
             ["project", "clear"] => {

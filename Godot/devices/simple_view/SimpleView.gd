@@ -75,6 +75,7 @@ func _on_device_parameter_changed(param_id: int, _value: float) -> void:
 	for control in _controls:
 		if control.handles_param(param_id):
 			control.refresh()
+	_apply_param_rules()
 
 
 func _on_parameters_updated() -> void:
@@ -143,6 +144,7 @@ func _build_page(index: int) -> void:
 		_add_group_box(group)
 	for control_data in page.get("controls", []):
 		_add_control(control_data)
+	_apply_param_rules()
 
 
 func _clear_page() -> void:
@@ -162,6 +164,17 @@ func _add_control(data: Dictionary) -> void:
 	control.size = pixel_rect.size - Vector2(cell_margin, cell_margin)
 	control.bind(device, _decorated(data))
 	_controls.append(control)
+
+
+## Disable the controls whose parameters `ParamRules` says don't apply in the device's current
+## state (REQ-037). Runs after a page is built and on every parameter change.
+func _apply_param_rules() -> void:
+	if device == null or device.device == null:
+		return
+	var disabled := ParamRules.disabled_ids(device.device.device_id, device.get_parameter_normalized)
+	for control in _controls:
+		var ids := control.get_param_ids()
+		control.set_disabled(not ids.is_empty() and ids.all(func(id): return id in disabled))
 
 
 ## The layout control with the strategy's annotations (e.g. a Time knob's Sync sibling), resolved

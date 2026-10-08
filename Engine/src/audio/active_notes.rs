@@ -4,13 +4,10 @@
 //! Audio thread: a fixed inline array, no allocation. Entries stay in note-on order, so the
 //! first entry is always the oldest.
 
-use super::midi_types::{NoteEvent, SoundingNoteId};
+use super::midi_types::{NoteEvent, SoundingNoteId, CLIP_ID_START, ID_RANGE_LEN, LIVE_ID_START};
 
 /// Most notes a channel tracks at once. When the table is full, the oldest note is released.
 pub const MAX_ACTIVE_NOTES: usize = 256;
-
-/// Ids wrap before this so they fit a CLAP `note_id` (an `i32` that must not be negative).
-const ID_LIMIT: SoundingNoteId = 1 << 31;
 
 /// Where a sounding note came from, which decides how its note-off finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +38,11 @@ const EMPTY: ActiveNote = ActiveNote {
 pub struct ActiveNotes {
     entries: [ActiveNote; MAX_ACTIVE_NOTES],
     len: usize,
-    next_id: SoundingNoteId,
+    /// Next live id, in `[1, 2^29)`.
+    next_live: SoundingNoteId,
+    /// Next clip id, in `[2^29, 2^30)`. Separate ranges let note effects tell a clip note
+    /// from a live one by its id (`midi_types::is_clip_note`).
+    next_clip: SoundingNoteId,
 }
 
 impl Default for ActiveNotes {
@@ -55,7 +56,8 @@ impl ActiveNotes {
         Self {
             entries: [EMPTY; MAX_ACTIVE_NOTES],
             len: 0,
-            next_id: 1,
+            next_live: LIVE_ID_START,
+            next_clip: CLIP_ID_START,
         }
     }
 
@@ -69,11 +71,19 @@ impl ActiveNotes {
         self.len == 0
     }
 
-    fn issue_id(&mut self) -> SoundingNoteId {
-        let id = self.next_id;
-        self.next_id += 1;
-        if self.next_id >= ID_LIMIT {
-            self.next_id = 1;
+    fn issue_id(&mut self, source: NoteSource) -> SoundingNoteId {
+        let (next, start, end) = match source {
+            NoteSource::Live { .. } => (&mut self.next_live, LIVE_ID_START, ID_RANGE_LEN),
+            NoteSource::Clip { .. } => (
+                &mut self.next_clip,
+                CLIP_ID_START,
+                CLIP_ID_START + ID_RANGE_LEN,
+            ),
+        };
+        let id = *next;
+        *next += 1;
+        if *next >= end {
+            *next = start;
         }
         id
     }
@@ -105,7 +115,7 @@ impl ActiveNotes {
             None
         };
 
-        let note_id = self.issue_id();
+        let note_id = self.issue_id(source);
         self.entries[self.len] = ActiveNote {
             source,
             key,
@@ -261,13 +271,35 @@ mod tests {
     }
 
     #[test]
-    fn active_notes_ids_wrap_below_2_pow_31_and_skip_0() {
+    fn active_notes_ids_wrap_in_their_ranges_and_skip_0() {
         let mut notes = ActiveNotes::new();
-        notes.next_id = ID_LIMIT - 1;
+        notes.next_live = CLIP_ID_START - 1;
         let (_, last) = notes.note_on(live(0), 1, 1.0, 0.5);
         let (_, wrapped) = notes.note_on(live(0), 2, 1.0, 0.5);
-        assert_eq!(last.note_id(), ID_LIMIT - 1);
+        assert_eq!(last.note_id(), CLIP_ID_START - 1);
         assert_eq!(wrapped.note_id(), 1);
+
+        notes.next_clip = 2 * CLIP_ID_START - 1;
+        let (_, last) = notes.note_on(clip(1), 1, 1.0, 0.5);
+        let (_, wrapped) = notes.note_on(clip(2), 2, 1.0, 0.5);
+        assert_eq!(last.note_id(), 2 * CLIP_ID_START - 1);
+        assert_eq!(wrapped.note_id(), CLIP_ID_START);
+    }
+
+    #[test]
+    fn live_and_clip_ids_in_their_ranges() {
+        use crate::audio::midi_types::{is_clip_note, is_generated};
+        let mut notes = ActiveNotes::new();
+        for i in 0..100u64 {
+            let (_, l) = notes.note_on(live(0), (i % 128) as u8, 1.0, 0.5);
+            let (_, c) = notes.note_on(clip(i), 60, 1.0, 0.5);
+            assert!((1..CLIP_ID_START).contains(&l.note_id()));
+            assert!((CLIP_ID_START..2 * CLIP_ID_START).contains(&c.note_id()));
+            assert!(!is_clip_note(l.note_id()) && is_clip_note(c.note_id()));
+            assert!(!is_generated(l.note_id()) && !is_generated(c.note_id()));
+            notes.note_off(live(0), (i % 128) as u8, None);
+            notes.note_off(clip(i), 60, None);
+        }
     }
 
     #[test]

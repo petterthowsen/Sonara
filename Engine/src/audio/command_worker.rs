@@ -20,8 +20,7 @@ use super::devices::clap_host::subprocess_adapter::{
 use super::devices::clap_host::{PluginScanner, SubprocessClapAdapter};
 use super::devices::sfizz_keys::KeyKind;
 use super::devices::{
-    container, AudioDevice, DeviceCategory, DeviceFactory, DevicePath, ParamId, ParamValue,
-    SfizzDevice,
+    container, AudioDevice, DeviceFactory, DevicePath, ParamId, ParamValue, SfizzDevice,
 };
 use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
 use super::pipewire::GraphInfo;
@@ -956,12 +955,7 @@ impl CommandWorker {
             if i > 0 && i % BATCH == 0 {
                 std::thread::sleep(BATCH_PAUSE);
             }
-            let category = match plugin.category {
-                DeviceCategory::Instrument => "instrument",
-                DeviceCategory::Effect => "effect",
-                DeviceCategory::Utility => "utility",
-            }
-            .to_string();
+            let category = plugin.category.as_str().to_string();
 
             self.send_status(EngineStatus::PluginInfo {
                 id: plugin.id.clone(),
@@ -1106,6 +1100,7 @@ impl CommandWorker {
                 warn!("Channel {} not found for remove device", channel_id);
                 return;
             };
+            channel.release_note_effect_at(&path);
             super::devices::container::remove_device(&mut channel.devices, &path)
         };
         if removed.is_none() {

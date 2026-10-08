@@ -16,6 +16,7 @@ mod factory;
 mod filter;
 mod layer;
 mod multiband;
+pub mod note_fx;
 pub mod param_table;
 mod phaser;
 mod polysynth;
@@ -35,7 +36,10 @@ pub use delay::DelayDevice;
 pub use drum_machine::DrumMachineDevice;
 pub use drums::{DrumHost, DrumParams, DrumVoice, GlobalParams, GLOBAL_SPECS};
 pub use eq::EqDevice;
-pub use factory::{create_drum, create_effect, DeviceFactory, DRUM_IDS, EFFECT_IDS};
+pub use factory::{
+    create_drum, create_effect, create_note_effect, DeviceFactory, DRUM_IDS, EFFECT_IDS,
+    NOTE_EFFECT_IDS,
+};
 pub use filter::FilterDevice;
 pub use layer::LayerDevice;
 pub use multiband::MultibandDevice;
@@ -207,6 +211,20 @@ pub enum DeviceCategory {
     Instrument,
     Effect,
     Utility,
+    /// Takes notes in and sends notes on; audio passes through untouched (spec 027).
+    NoteEffect,
+}
+
+impl DeviceCategory {
+    /// The category string sent to Godot (`/builtin/info`, `/plugin/info`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeviceCategory::Instrument => "instrument",
+            DeviceCategory::Effect => "effect",
+            DeviceCategory::Utility => "utility",
+            DeviceCategory::NoteEffect => "note_effect",
+        }
+    }
 }
 
 /// Port flow direction (for future plugin support)
@@ -357,6 +375,30 @@ pub trait AudioDevice: Send {
     /// `note_id` (only `key` may change). Devices that don't handle expressions drop them, and
     /// effects ignore notes altogether (the default).
     fn send_note_event(&mut self, _event: &NoteEvent, _frame_offset: usize) {}
+
+    // === Note effects (spec 027) ===
+
+    /// True for a note effect: notes routed through a chain stop here, and the chain's note
+    /// phase hands what [`process_notes`](Self::process_notes) returns to the devices after it.
+    fn is_note_effect(&self) -> bool {
+        false
+    }
+
+    /// Audio thread, once per block before the chain renders: consume the queued input notes
+    /// and return this block's output notes, sorted by frame offset.
+    fn process_notes(&mut self, _sample_count: usize) -> &[note_fx::TimedNote] {
+        &[]
+    }
+
+    /// Command thread, before a structural edit (remove, move): note-offs at frame 0 for
+    /// everything this effect has sounding downstream. The schedule is dropped.
+    fn release_notes_now(&mut self) -> &[note_fx::TimedNote] {
+        &[]
+    }
+
+    /// Transport stopped, paused or seeked: drop the clip-origin schedule and release
+    /// clip-origin outputs at the next `process_notes`. Live notes keep playing.
+    fn note_discontinuity(&mut self) {}
 
     /// Fade out any sounding voice over ~3 ms starting `frame_offset` samples into the coming
     /// block (Drum Machine choke groups). Default: no-op.

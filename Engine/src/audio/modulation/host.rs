@@ -902,6 +902,12 @@ impl AudioDevice for ModulatedDevice {
                 NoteEvent::Expression { .. } => {}
             }
         }
+        if self.dev().is_note_effect() {
+            // A note effect queues notes itself and consumes them in the note phase, before
+            // `process_block` would deliver them.
+            self.dev_mut().send_note_event(event, frame_offset);
+            return;
+        }
         if self.midi_len < MIDI_QUEUE {
             self.midi[self.midi_len] = QueuedMidi {
                 event: *event,
@@ -918,6 +924,25 @@ impl AudioDevice for ModulatedDevice {
                 );
             }
         }
+    }
+
+    fn is_note_effect(&self) -> bool {
+        self.dev().is_note_effect()
+    }
+
+    fn process_notes(
+        &mut self,
+        sample_count: usize,
+    ) -> &[crate::audio::devices::note_fx::TimedNote] {
+        self.dev_mut().process_notes(sample_count)
+    }
+
+    fn release_notes_now(&mut self) -> &[crate::audio::devices::note_fx::TimedNote] {
+        self.dev_mut().release_notes_now()
+    }
+
+    fn note_discontinuity(&mut self) {
+        self.dev_mut().note_discontinuity();
     }
 
     fn choke(&mut self, frame_offset: usize) {
@@ -1762,6 +1787,50 @@ mod tests {
             .downcast_mut::<Sleepy>()
             .expect("inner");
         assert_eq!(inner.last_mod, Some(0.0), "the offset was not reset");
+    }
+
+    #[test]
+    fn velocity_modulator_sees_note_effect_output() {
+        use crate::audio::devices::note_fx::routing::test_devices::Shift;
+        let mut fixed = Shift::new(0);
+        fixed.velocity = Some(0.25);
+        let mut channel = Channel::new(2, "test".to_string(), 512, SR);
+        channel.devices.push(Box::new(fixed));
+        channel.devices.push(Box::new(Sleepy::new(true)));
+        wrap_at_path(&mut channel.devices, &DevicePath::root(1), SR).expect("wrap");
+        {
+            let modulated = channel.devices[1].as_modulated_mut().unwrap();
+            modulated.add_modulator(0, ModulatorKind::Velocity).unwrap();
+            modulated
+                .set_modulator_route(0, "param/0", 1.0)
+                .expect("route");
+        }
+
+        channel.send_note_event_to_devices(&NoteEvent::test_on(60, 127), 0);
+        channel.dispatch_notes(64);
+        let input = vec![0.0f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+        channel.devices[1].process_block(&input, &mut output, 64);
+        let inner = channel.devices[1]
+            .as_any_mut()
+            .downcast_mut::<Sleepy>()
+            .expect("inner");
+        let offset = inner
+            .last_mod
+            .expect("the velocity route applied no offset");
+        assert!((offset - 0.25).abs() < 1e-4, "modulator read {offset}");
+    }
+
+    #[test]
+    fn a_wrapped_note_effect_takes_notes_at_once() {
+        use crate::audio::devices::note_fx::routing::test_devices::Shift;
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(Shift::new(12))];
+        wrap(&mut devices);
+        assert!(devices[0].is_note_effect());
+        devices[0].send_note_event(&NoteEvent::test_on(60, 100), 5);
+        let out = devices[0].process_notes(64).to_vec();
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].frame, out[0].event.key()), (5, 72));
     }
 
     /// Decode a `modulation` payload into `(kind, child path, param id, values)` records.

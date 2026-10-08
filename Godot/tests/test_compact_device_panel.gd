@@ -33,6 +33,7 @@ func run_tests() -> void:
 	await _test_value_hides_when_narrow()
 	await _test_enum_does_not_widen()
 	await _test_bool_is_one_row()
+	await _test_note_fx_stripe()
 
 
 ## A device instance for a built-in fake device, registered so nothing else trips over it.
@@ -207,3 +208,26 @@ func _test_bool_is_one_row() -> void:
 	_assert(not control.slider_node.visible and not control.value_label_node.visible,
 		"bools show no slider and no value text")
 	panel.queue_free()
+
+
+## Spec 027 REQ-036: only a note-effect device shows the accent_secondary stripe.
+func _test_note_fx_stripe() -> void:
+	_new_channel("Stripe")
+	var audio: Object = _device("sonara.builtin.stripe_audio", "Audio")
+	var registry: Object = root.get_node("AssetService").device_registry
+	var note_device: Object = _device_script.new("sonara.builtin.stripe_note", "Note", _device_script.DeviceCategory.NoteEffect, _device_script.DeviceType.BuiltIn)
+	registry._devices[note_device.device_id] = note_device
+	var note_instance: Object = _device_instance_script.new(note_device, _channel.id, 0)
+	var panels: Array = []
+	for instance in [audio, note_instance]:
+		var panel = load(PANEL_SCENE).instantiate()
+		root.add_child(panel)
+		panel.setup(instance, 0)
+		panels.append(panel)
+	for _i in 3:
+		await process_frame
+	_assert(not panels[0].note_fx_stripe.visible, "an audio device has no note-effect stripe")
+	_assert(panels[1].note_fx_stripe.visible, "a note effect shows the stripe")
+	_assert(panels[1].note_fx_stripe.color == UiColors.role(&"accent_secondary"), "the stripe uses accent_secondary")
+	for panel in panels:
+		panel.queue_free()

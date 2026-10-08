@@ -10,7 +10,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
 
 ## Phase 1: note flow through chains (wave 1 engine foundation)
 
-- [ ] **T-001** [REQ-005] Split the note-id ranges.
+- [x?] **T-001** [REQ-005] Split the note-id ranges.
   - _Files_: `Engine/src/audio/midi_types.rs`, `Engine/src/audio/active_notes.rs`
   - _Output_: range constants and `is_clip_note` / `is_generated`. `ActiveNotes::issue_id` takes
     the source, with live ids in `[1, 2^29)` and clip ids in `[2^29, 2^30)`.
@@ -18,7 +18,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     `live_and_clip_ids_in_their_ranges`. The full `cargo test` is green.
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-001, REQ-002] Note-effect trait surface and the routing module, with no
+- [x?] **T-002** [REQ-001, REQ-002] Note-effect trait surface and the routing module, with no
   behaviour change.
   - _Files_: `Engine/src/audio/devices/mod.rs`, `Engine/src/audio/devices/container.rs`,
     `Engine/src/audio/devices/note_fx/mod.rs` (new), `Engine/src/audio/devices/note_fx/routing.rs`
@@ -34,7 +34,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     in order. The full `cargo test` is green.
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-001, REQ-013] Switch the channel and Chain to `route_note` and the note phase.
+- [x?] **T-003** [REQ-001, REQ-013] Switch the channel and Chain to `route_note` and the note phase.
   - _Files_: `Engine/src/audio/types.rs`, `Engine/src/audio/devices/chain.rs`,
     `Engine/src/audio/devices/layer.rs`
   - _Output_:
@@ -47,7 +47,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     `layer::tests::note_effect_in_one_slot_only` pass using a fake transposing note effect.
   - _Depends on_: T-002
 
-- [ ] **T-004** [REQ-011] Note effects inside `ModulatedDevice`.
+- [x?] **T-004** [REQ-011] Note effects inside `ModulatedDevice`.
   - _Files_: `Engine/src/audio/modulation/host.rs`
   - _Output_: the four methods forwarded. An inner note effect gets `send_note_event` at once,
     not queued.
@@ -56,7 +56,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     wrapped device with a velocity modulator reads 0.25).
   - _Depends on_: T-003
 
-- [ ] **T-005** [REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, REQ-012]
+- [x?] **T-005** [REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, REQ-012]
   `NoteFxHost`, `NoteProcessor` and `NoteCx`.
   - _Files_: `Engine/src/audio/devices/note_fx/host.rs` (new), `Engine/src/audio/devices/note_fx/mod.rs`
   - _Output_: the host from the design's Behaviour details:
@@ -77,7 +77,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     - on overflow, note-offs are kept.
   - _Depends on_: T-002
 
-- [ ] **T-006** [REQ-006, REQ-007] Transport stop, bypass and structural-edit release.
+- [x?] **T-006** [REQ-006, REQ-007] Transport stop, bypass and structural-edit release.
   - _Files_: `Engine/src/audio/types.rs`, `Engine/src/audio/commands.rs`,
     `Engine/src/audio/command_worker.rs`
   - _Output_: `Channel::stop_clip_notes` is used by Pause, Stop and Seek. `release_note_effects`
@@ -87,7 +87,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     is green.
   - _Depends on_: T-003, T-005
 
-- [ ] **T-007** [REQ-013] Separate outputs skip leading note effects (amends spec 006 REQ-007).
+- [x?] **T-007** [REQ-013] Separate outputs skip leading note effects (amends spec 006 REQ-007).
   - _Files_: `Engine/src/audio/types.rs`, `Engine/src/audio/mixing.rs`
   - _Output_: `Channel::aux_source_index()`. `process_aux_source` and both `start` sites use it,
     and the leading note effects get their note phase first.
@@ -95,7 +95,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     Layer with a separate output behind a fake note effect still fills its return).
   - _Depends on_: T-003
 
-- [ ] **T-008** [REQ-034] Factory registration and conformance harness.
+- [x?] **T-008** [REQ-034] Factory registration and conformance harness.
   - _Files_: `Engine/src/audio/devices/factory.rs`, `Engine/src/audio/devices/note_fx/conformance.rs` (new)
   - _Output_: `NOTE_EFFECT_IDS` (empty to start, filled in by each device task),
     `create_note_effect`, the `"note_effect"` category string, and the conformance checks from the
@@ -106,7 +106,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
 
 ## Phase 2: first devices (wave 1)
 
-- [ ] **T-009** [REQ-014, REQ-015] Scale table, project scale in the engine, and Transpose.
+- [x?] **T-009** [REQ-014, REQ-015] Scale table, project scale in the engine, and Transpose.
   - _Files_: `Engine/src/audio/devices/note_fx/scale.rs` (new),
     `Engine/src/audio/devices/note_fx/transpose.rs` (new), `Engine/src/audio/types.rs`
     (`ProjectSettings::scale_mask`), `Engine/src/audio/transport.rs`, `Engine/src/audio/commands.rs`
@@ -125,14 +125,14 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     logs the mask.
   - _Depends on_: T-008
 
-- [ ] **T-010** [REQ-016] Note Filter.
+- [x?] **T-010** [REQ-016] Note Filter.
   - _Files_: `Engine/src/audio/devices/note_fx/note_filter.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: key and velocity ranges with Invert.
   - _Verify_: `cargo test note_filter` passes with the REQ-016 example (including a note-off after
     the range changes), and conformance passes.
   - _Depends on_: T-008
 
-- [ ] **T-011** [REQ-017] Velocity.
+- [x?] **T-011** [REQ-017] Velocity.
   - _Files_: `Engine/src/audio/devices/note_fx/velocity.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: Curve, Out Low/High and Random. Release is untouched, with a 1/127 floor.
   - _Verify_: `cargo test note_fx::velocity` passes with the REQ-017 examples (0 → 0.5 and
@@ -141,7 +141,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
 
 ## Phase 3: Godot integration (wave 1)
 
-- [ ] **T-012** [REQ-034] Note Effect category in Godot.
+- [x?] **T-012** [REQ-034] Note Effect category in Godot.
   - _Files_: `Godot/data/Device.gd`, `Godot/data/DeviceRegistry.gd`, `Godot/tests/test_note_fx_category.gd` (new)
   - _Output_: `DeviceCategory.NoteEffect`, the strings, the "Note Effects" browser group, the
     icon, `is_note_effect()`, and `creates_instrument_track`.
@@ -149,7 +149,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     `"note_effect"` land under "Note Effects" and nowhere else.
   - _Depends on_: T-008
 
-- [ ] **T-013** [REQ-035] Drop rules.
+- [x?] **T-013** [REQ-035] Drop rules.
   - _Files_: `Godot/data/NoteFx.gd` (new), `Godot/devices/DeviceDropUtil.gd`, `Godot/tests/test_note_fx_drop.gd` (new)
   - _Output_: Note effects are allowed on non-master instrument channels and inside Chain, Layer
     and Drum Machine slots. They are refused on audio channels, buses, master and Multiband
@@ -157,7 +157,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
   - _Verify_: `Godot/tests/run_all.sh note_fx_drop device_drop` passes.
   - _Depends on_: T-012
 
-- [ ] **T-014** [REQ-015] Send the project scale to the engine (amends spec 026).
+- [x?] **T-014** [REQ-015] Send the project scale to the engine (amends spec 026).
   - _Files_: `Godot/data/MusicalScale.gd`, `Godot/data/Project.gd`, `Godot/tests/test_project_scale_sync.gd` (new),
     `docs/specs/026-scale-support/design.md`
   - _Output_: `MusicalScale.mask()`. `set_scale` and project sync send `/project/scale`. A note
@@ -166,7 +166,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     mask, "none" sends 0, and the Scale Type labels match the engine's captured enum list.
   - _Depends on_: T-009
 
-- [ ] **T-015** [REQ-036] Note-effect marker in the device lane.
+- [x?] **T-015** [REQ-036] Note-effect marker in the device lane.
   - _Files_: `Godot/devices/device_lane/DevicePanel.gd`
   - _Output_: a header stripe in `accent_secondary` for note effects.
   - _Verify_: `Godot/tests/run_all.sh device_panel compact_device_panel` passes, with an assert
@@ -174,7 +174,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     of T-033.
   - _Depends on_: T-012
 
-- [ ] **T-016** [REQ-037] Conditional disabling in the Simple View.
+- [x?] **T-016** [REQ-037] Conditional disabling in the Simple View.
   - _Files_: `Godot/devices/simple_view/ParamRules.gd` (new), `Godot/devices/simple_view/SimpleView.gd`,
     `Godot/devices/simple_view/SimpleControl.gd`, `Godot/tests/test_param_rules.gd` (new)
   - _Output_: the rules for Transpose (Root and Scale Type only with Custom), Chord (Strum

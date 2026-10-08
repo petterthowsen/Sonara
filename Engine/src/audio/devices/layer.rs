@@ -814,4 +814,25 @@ mod tests {
         layer.set_slot_separate_out(1, true);
         assert!((render(&mut layer, 1.0) - 0.75).abs() < 1e-6);
     }
+
+    #[test]
+    fn note_effect_in_one_slot_only() {
+        use crate::audio::devices::note_fx::routing::test_devices::{on_keys, Recorder, Shift};
+        use crate::audio::devices::ChainDevice;
+        let (a, log_a) = Recorder::new();
+        let (b, log_b) = Recorder::new();
+        let mut slot_a = ChainDevice::new(8);
+        slot_a.insert_child(0, Box::new(Shift::new(12)));
+        slot_a.insert_child(1, Box::new(a));
+        let mut slot_b = ChainDevice::new(8);
+        slot_b.insert_child(0, Box::new(b));
+        let mut layer = LayerDevice::new(8);
+        layer.insert_child(0, Box::new(slot_a));
+        layer.insert_child(1, Box::new(slot_b));
+
+        layer.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        render(&mut layer, 0.0);
+        assert_eq!(on_keys(&log_a), vec![72]);
+        assert_eq!(on_keys(&log_b), vec![60]);
+    }
 }

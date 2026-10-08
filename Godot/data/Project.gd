@@ -94,7 +94,8 @@ var tempo_map: TempoMap = TempoMap.new():
 var arranger_view: Dictionary = {"automation": true, "routing": true, "automation_follows_clips": false}
 
 ## Project scale (spec 026): root pitch class 0..11 (0 = C) and a MusicalScale type id.
-## UI state only, never sent to the engine. "none" means no scale.
+## Saved with the project; the engine only gets its pitch-class mask (`/project/scale`, spec 027) so
+## Transpose can follow it. "none" means no scale.
 var scale_root: int = 0
 var scale_type: String = "none"
 
@@ -207,6 +208,7 @@ func connect_to_engine() -> void:
 	AssetService.plugin_hosting.sync_to_engine()
 	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
+	_send_scale_to_engine()
 
 
 func _on_engine_confirmed_connected() -> void:
@@ -1371,6 +1373,13 @@ func set_scale(root: int, type_id: String) -> void:
 	scale_root = s.root
 	scale_type = s.type_id
 	scale_changed.emit(scale_root, scale_type)
+	if _connection_state == ConnectionState.CONNECTED:
+		_send_scale_to_engine()
+
+
+## Send the project scale to the engine as a 12-bit pitch-class mask (bit 0 = C, 0 = no scale).
+func _send_scale_to_engine() -> void:
+	AudioEngineOSC.send("/project/scale", [get_scale().mask()])
 
 
 ## The project scale as a MusicalScale value.

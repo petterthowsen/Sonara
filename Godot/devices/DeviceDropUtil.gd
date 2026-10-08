@@ -40,9 +40,17 @@ static func device_for_asset(asset: Asset) -> Device:
 static func device_fits_channel(device: Device, channel: Channel) -> bool:
 	if device == null or channel == null:
 		return false
-	if device.category == Device.DeviceCategory.Instrument:
+	if device.category == Device.DeviceCategory.Instrument or device.is_note_effect():
 		return channel.channel_type == Channel.ChannelType.INSTRUMENT and not channel.is_master
 	return true
+
+
+## Whether `device` may go inside `host_parent` (null = channel root): note effects never go
+## inside a Multiband FX band, where no notes arrive (spec 027 REQ-035).
+static func device_fits_host(device: Device, host_parent: DeviceInstance) -> bool:
+	if device == null or not device.is_note_effect():
+		return true
+	return not NoteFx.is_inside_multiband(host_parent)
 
 
 ## Whether `inst` can be inserted into `host_parent` (null = channel root).
@@ -57,6 +65,11 @@ static func can_drop_instance_on_host(
 		return false  # band positions are fixed (spec 016 D9)
 	if inst.channel_id != channel.id and not can_transfer_to_channel(inst, channel):
 		return false
+	if NoteFx.contains_note_effect(inst):
+		if channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master:
+			return false
+		if NoteFx.is_inside_multiband(host_parent):
+			return false
 	if host_parent == null:
 		return true
 	if Multiband.is_multiband(host_parent) and SlotChain.is_chain(inst):
@@ -72,6 +85,8 @@ static func can_drop_instance_on_host(
 ## (Drum Machine, multi-out plugins) and drum pads stay put: removing them detaches their returns.
 static func can_transfer_to_channel(inst: DeviceInstance, channel: Channel) -> bool:
 	if channel == null or not can_leave_channel(inst) or inst.get_channel() == channel:
+		return false
+	if NoteFx.contains_note_effect(inst) and (channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master):
 		return false
 	return device_fits_channel(inst.device, channel)
 
@@ -559,6 +574,8 @@ static func can_drop_on_container(channel: Channel, container: DeviceInstance, d
 	if data is Asset:
 		if data.type == Asset.TYPE.Audio and _is_drum_machine(container):
 			return channel.channel_type == Channel.ChannelType.INSTRUMENT
+		if not device_fits_host(device_for_asset(data), container):
+			return false
 		return can_drop_asset_on_channel(channel, data)
 	return false
 
@@ -611,6 +628,9 @@ static func can_drop_on_drum_pad(
 	if not data is Asset:
 		return false
 	var asset := data as Asset
+	var asset_device := device_for_asset(asset)
+	if asset_device != null and asset_device.is_note_effect() and channel != null and not device_fits_channel(asset_device, channel):
+		return false
 	if occupied:
 		# A file loads into the pad's sampler; anything else joins the pad's chain.
 		if can_drop_file_on_device(find_file_loading_descendant(occupied), asset):

@@ -360,7 +360,11 @@ fn begin_finish(
     if !channel.mix.is_route_target || channel.mute {
         return;
     }
-    let start = if channel.mix.has_aux_source { 1 } else { 0 };
+    let start = if channel.mix.has_aux_source {
+        channel.aux_source_index() + 1
+    } else {
+        0
+    };
     match channel.begin_device_chain(start, frames) {
         ChainStep::Parked => parked.push_back(id),
         ChainStep::Done { .. } => forward_device_events(channel, status_tx),
@@ -407,7 +411,8 @@ fn drain_parked(
     }
 }
 
-/// Mark channels whose first device writes extra buses into nested child channels.
+/// Mark channels whose aux-source device (the first that isn't a note effect) writes extra
+/// buses into nested child channels.
 fn mark_aux_sources(channel_map: &mut HashMap<ChannelId, Channel>, channel_ids: &[ChannelId]) {
     for &id in channel_ids {
         if let Some(channel) = channel_map.get_mut(&id) {
@@ -584,7 +589,11 @@ pub fn mix_and_output(
         }
         // An aux source already ran its first device in the aux pass (its returns may route
         // elsewhere, e.g. Layer slots to a bus), so only its remaining FX run here.
-        let start = if channel.mix.has_aux_source { 1 } else { 0 };
+        let start = if channel.mix.has_aux_source {
+            channel.aux_source_index() + 1
+        } else {
+            0
+        };
         match channel.begin_device_chain(start, frames) {
             ChainStep::Parked => parked.push_back(id),
             ChainStep::Done { .. } => forward_device_events(channel, status_tx),
@@ -1236,6 +1245,26 @@ mod tests {
             "bus should receive the return, got {}",
             state.channels[&4].buffer_left[0]
         );
+    }
+
+    #[test]
+    fn aux_source_after_leading_note_effects() {
+        // [note effect, Layer-style source]: the source behind the note effect still feeds its
+        // return, and runs once.
+        use crate::audio::devices::note_fx::routing::test_devices::Shift;
+        let mut parent = test_channel(2, Some(1), 0.0);
+        let source = TestAuxDevice::default();
+        let source_calls = Arc::clone(&source.calls);
+        parent.devices.push(Box::new(Shift::new(12)));
+        parent.devices.push(Box::new(source));
+        parent.set_aux_out(0, 3);
+        assert_eq!(parent.aux_source_index(), 1);
+        let child = test_channel(3, Some(2), 0.0);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), parent, child]);
+        mix(&mut state);
+
+        assert_eq!(source_calls.load(Ordering::Relaxed), 1);
+        assert!((state.channels[&3].buffer_left[0] - 0.8).abs() < 1e-4);
     }
 
     /// What the fake plugins did, in order.

@@ -5,7 +5,7 @@
 class_name Device extends RefCounted
 
 enum DeviceType { BuiltIn, LV2, CLAP }
-enum DeviceCategory { Instrument, Effect, Utility }
+enum DeviceCategory { Instrument, Effect, Utility, NoteEffect }
 ## Panel = device custom UI (not the parameter list). Window = popup view (for devices without a native GUI); Companion = shown in the panel while the window or plugin GUI is open.
 ## Immediate UI (plugin-drawn in-device controls) is a planned right-pane view, separate from ParameterList.
 enum ViewType { Panel, Window, Companion, Compact }
@@ -35,7 +35,7 @@ var plugin_path: String = ""
 ## Device type (BuiltIn, LV2, CLAP)
 var device_type: DeviceType = DeviceType.BuiltIn
 
-## Device category (Instrument, Effect, Utility)
+## Device category (Instrument, Effect, Utility, NoteEffect)
 var category: DeviceCategory = DeviceCategory.Effect
 
 ## Version string for compatibility checking
@@ -203,13 +203,13 @@ func extra_stereo_bus_count() -> int:
 
 ## True when dropping this device on an empty tracklist/mixer should create an instrument track.
 func creates_instrument_track() -> bool:
-	return category == DeviceCategory.Instrument or (is_container and device_id != "sonara.builtin.multiband")
+	return category == DeviceCategory.Instrument or category == DeviceCategory.NoteEffect or (is_container and device_id != "sonara.builtin.multiband")
 
 
 ## True when expanding this container should show one focused child at a time (Layer, Drum Machine,
 ## Multiband FX).
 func container_focuses_one_child() -> bool:
-	return is_container and device_id in ["sonara.builtin.layer", "sonara.builtin.drum_machine", "sonara.builtin.multiband"]
+	return is_container and device_id in ["sonara.builtin.layer", "sonara.builtin.drum_machine", "sonara.builtin.multiband", "sonara.builtin.note_layer", "sonara.builtin.note_selector"]
 
 
 ## Get a human-readable device type string
@@ -234,6 +234,8 @@ func get_category_string() -> String:
 			return "Effect"
 		DeviceCategory.Utility:
 			return "Utility"
+		DeviceCategory.NoteEffect:
+			return "Note Effect"
 		_:
 			return "Unknown"
 
@@ -242,6 +244,8 @@ func get_category_string() -> String:
 func get_browser_group() -> String:
 	if DeviceKind.infer(self) == DeviceKind.DRUM:
 		return "Drums"
+	if category == DeviceCategory.NoteEffect:
+		return "Note Effects"
 	return get_category_string()
 
 
@@ -254,6 +258,8 @@ func get_icon() -> String:
 			return "AudioEffect"
 		DeviceCategory.Utility:
 			return "Tool"
+		DeviceCategory.NoteEffect:
+			return "Key"
 		_:
 			return "AudioBusInput"
 
@@ -262,6 +268,11 @@ func get_icon() -> String:
 ## Example: "Dragonfly Hall Reverb" -> "D. Hall Rev"
 func get_short_name(max_length: int = 15) -> String:
 	return Utils.shorten_text(name, max_length)
+
+
+## True for a note effect or note container: it works on notes before the instrument, not audio.
+func is_note_effect() -> bool:
+	return category == DeviceCategory.NoteEffect
 
 
 ## True when this device gets a generated Simple View (`devices/simple_view/`, REQ-001): never

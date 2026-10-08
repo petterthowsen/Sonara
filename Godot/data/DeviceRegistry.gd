@@ -125,6 +125,8 @@ static func _category_from_string(category_str: String) -> Device.DeviceCategory
 			return Device.DeviceCategory.Instrument
 		"utility":
 			return Device.DeviceCategory.Utility
+		"note_effect":
+			return Device.DeviceCategory.NoteEffect
 		_:
 			return Device.DeviceCategory.Effect
 
