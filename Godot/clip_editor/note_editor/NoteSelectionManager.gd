@@ -103,9 +103,10 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 	# Update selection with provided notes
 	_set_selected_notes(notes_in_box)
 
-	# KEEP boundaries at grid-snapped positions - NEVER adjust based on notes
-	# This allows selecting empty space and ensures boundaries follow grid, not notes
-	# The box_selection_start_tick and box_selection_end_tick were already set by update_box_selection()
+	# The boundaries start at the grid-snapped box (so empty space can be selected). Notes the
+	# box only partly covers are selected whole, so the range grows to take in their full span.
+	# It never shrinks: a box wider than its notes keeps its grid edges.
+	_grow_range_to_selected_notes()
 
 	if selected_notes.is_empty():
 		logger.info("Box selection completed - no notes, boundaries at grid: %d-%d" % [
@@ -123,11 +124,25 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 	])
 
 
+func _grow_range_to_selected_notes() -> void:
+	for note in selected_notes:
+		if not note.midi_note_data:
+			continue
+		var pos: Dictionary = get_note_song_position.call(note)
+		box_selection_start_tick = mini(box_selection_start_tick, pos["start_tick"])
+		box_selection_end_tick = maxi(box_selection_end_tick, pos["end_tick"])
+
+
 func _snap_x_to_grid(x: float) -> float:
 	"""Snap X position to time grid."""
 	var ticks = grid_helper.pixels_to_ticks(x)
 	ticks = grid_helper.snap_ticks(ticks)
 	return grid_helper.ticks_to_pixels(ticks)
+
+
+## Make exactly `notes` the selection (no range change, no signal).
+func select_visuals(notes: Array[VisualNote]) -> void:
+	_set_selected_notes(notes)
 
 
 func _set_selected_notes(notes: Array[VisualNote]) -> void:

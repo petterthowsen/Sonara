@@ -100,6 +100,50 @@ const ACTIONS := [
 	{ "id": "notes_octave_down", "label": "Transpose notes down an octave", "group": "Clip Editor", "context": "clip_editor",
 		"requires": "note_selection",
 		"defaults": ["Ctrl+Down"], "allow_echo": true },
+	{ "id": "notes_range_end_right", "label": "Grow selection range end", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_range",
+		"defaults": ["Ctrl+Right"], "allow_echo": true, "description": "Moves the range end later by the smallest visible snap increment." },
+	{ "id": "notes_range_end_left", "label": "Shrink selection range end", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_range",
+		"defaults": ["Ctrl+Left"], "allow_echo": true, "description": "Moves the range end earlier by the smallest visible snap increment." },
+	{ "id": "notes_range_start_left", "label": "Grow selection range start", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_range",
+		"defaults": ["Ctrl+Shift+Left"], "allow_echo": true, "description": "Moves the range start earlier by the smallest visible snap increment." },
+	{ "id": "notes_range_start_right", "label": "Shrink selection range start", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_range",
+		"defaults": ["Ctrl+Shift+Right"], "allow_echo": true, "description": "Moves the range start later by the smallest visible snap increment." },
+	{ "id": "notes_move_by_selection_left", "label": "Move selection left by its length", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Shift+Left"], "allow_echo": true,
+		"description": "The selection range (or, without one, the span of the selected notes) moves back by its own length." },
+	{ "id": "notes_move_by_selection_right", "label": "Move selection right by its length", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Shift+Right"], "allow_echo": true,
+		"description": "The selection range (or, without one, the span of the selected notes) moves forward by its own length." },
+	{ "id": "notes_velocity_up", "label": "Raise velocity", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Alt+Up"], "allow_echo": true, "description": "By a few MIDI velocity steps." },
+	{ "id": "notes_velocity_down", "label": "Lower velocity", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Alt+Down"], "allow_echo": true, "description": "By a few MIDI velocity steps." },
+	{ "id": "notes_length_grow", "label": "Lengthen notes", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Alt+Right"], "allow_echo": true, "description": "By the snap interval." },
+	{ "id": "notes_length_shrink", "label": "Shorten notes", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Alt+Left"], "allow_echo": true, "description": "By the snap interval, never below one snap interval." },
+	{ "id": "notes_quantize", "label": "Quantize notes", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Ctrl+Q"], "description": "Move the selected notes toward the grid, using the strength and mode set in the Quantize options." },
+	{ "id": "notes_flip_vertical", "label": "Flip notes vertically", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Ctrl+Shift+V"], "description": "Invert the pitches of the selected notes around the middle of their pitch range. Not in Drum View." },
+	{ "id": "notes_flip_horizontal", "label": "Flip notes horizontally", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Ctrl+Shift+H"], "description": "Reverse the selected notes in time, within the selection range (or the span of the notes)." },
+	{ "id": "notes_strum", "label": "Strum chords", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
+		"defaults": ["Ctrl+Shift+S"], "description": "Spread the chords among the selected notes using the spread, direction and velocity ramp set in the Strum options. Note ends stay put. Not in Drum View." },
 	{ "id": "toggle_note_value_lanes", "label": "Toggle note value lanes", "group": "Clip Editor", "context": "clip_editor",
 		"defaults": [] },
 
@@ -219,7 +263,9 @@ const STATES := {
 	"clip_drag": "arranger",
 	"clip_resize": "arranger",
 	"box_select": "workspace",
+	"note_hover": "clip_editor",
 	"note_drag": "clip_editor",
+	"note_drag_alt": "clip_editor",
 	"value_lane_draw": "clip_editor",
 }
 
@@ -242,17 +288,19 @@ const CONTEXT_LABELS := {
 ## Mouse gestures and held modifiers for the help bar. Read-only: they can't be rebound.
 ## `context` is a CONTEXTS or STATES id, `mods` a "+"-joined subset of Ctrl/Shift/Alt/Meta ("" =
 ## none), `input` one of GESTURE_INPUTS ("" = only the modifier is held during a state).
+## `"setting"` + `"equals"` show a gesture only while that setting has that value.
+## `"help": false` keeps a fundamental gesture (scroll, pan) out of the help bar.
 ## Each row mirrors the code named in its comment. Where code and label disagree, the code wins.
 const GESTURE_INPUTS := ["click", "double_click", "right_click", "drag", "right_drag",
 		"middle_drag", "wheel", ""]
 
 const GESTURES := [
 	# --- Arranger: Arranger._on_scroll_gui_input, Arranger._input, Timeline/TimelineTrack/TimelineClip ---
-	{ "context": "arranger", "mods": "", "input": "wheel", "label": "scroll" },
+	{ "context": "arranger", "mods": "", "input": "wheel", "label": "scroll", "help": false },
 	{ "context": "arranger", "mods": "Shift", "input": "wheel", "label": "zoom horizontally" },
 	{ "context": "arranger", "mods": "Ctrl", "input": "wheel", "label": "track height" },
 	{ "context": "arranger", "mods": "Alt", "input": "wheel", "label": "scroll horizontally" },
-	{ "context": "arranger", "mods": "", "input": "middle_drag", "label": "pan" },
+	{ "context": "arranger", "mods": "", "input": "middle_drag", "label": "pan", "help": false },
 	{ "context": "arranger", "mods": "", "input": "click", "label": "select clip / set playhead" },
 	{ "context": "arranger", "mods": "", "input": "drag", "label": "move clips" },
 	{ "context": "arranger", "mods": "", "input": "double_click", "label": "open clip / add instance" },
@@ -268,20 +316,34 @@ const GESTURES := [
 	{ "context": "automation_lane", "mods": "Shift", "input": "click", "label": "toggle point" },
 	{ "context": "automation_lane", "mods": "Ctrl", "input": "drag", "label": "select range" },
 	# --- Clip editor: MidiEditor._gui_input and the left/right press handlers ---
-	{ "context": "clip_editor", "mods": "", "input": "wheel", "label": "scroll" },
+	{ "context": "clip_editor", "mods": "", "input": "wheel", "label": "scroll", "help": false },
 	{ "context": "clip_editor", "mods": "Shift", "input": "wheel", "label": "zoom horizontally" },
 	{ "context": "clip_editor", "mods": "Ctrl", "input": "wheel", "label": "zoom vertically" },
 	{ "context": "clip_editor", "mods": "Alt", "input": "wheel", "label": "scroll horizontally" },
-	{ "context": "clip_editor", "mods": "", "input": "middle_drag", "label": "pan" },
+	{ "context": "clip_editor", "mods": "", "input": "middle_drag", "label": "pan", "help": false },
 	{ "context": "clip_editor", "mods": "Shift", "input": "middle_drag", "label": "zoom horizontally" },
 	{ "context": "clip_editor", "mods": "", "input": "click", "label": "place / move note" },
 	{ "context": "clip_editor", "mods": "Ctrl", "input": "click", "label": "toggle note selection" },
 	{ "context": "clip_editor", "mods": "Ctrl", "input": "drag", "label": "box select / duplicate note" },
+	# --- Pointer over a note: MidiEditor._update_note_hover ---
+	{ "context": "note_hover", "mods": "", "input": "drag", "label": "move (note end: resize)" },
+	{ "context": "note_hover", "mods": "Shift", "input": "drag", "label": "move / resize without snap" },
+	# Which of these shows depends on midi_editor/note_drag_modifiers ("setting" + "equals").
+	{ "context": "note_hover", "mods": "Alt", "input": "drag", "label": "length (sideways) / velocity (up, down)",
+		"setting": "midi_editor/note_drag_modifiers", "equals": "Alt: length and velocity" },
+	{ "context": "note_hover", "mods": "Alt", "input": "drag", "label": "velocity (up, down)",
+		"setting": "midi_editor/note_drag_modifiers", "equals": "Ctrl: length, Alt: velocity" },
+	{ "context": "note_hover", "mods": "Ctrl", "input": "drag", "label": "duplicate" },
 	{ "context": "clip_editor", "mods": "", "input": "right_drag", "label": "erase" },
 	{ "context": "clip_editor", "mods": "Alt", "input": "right_click", "label": "hear chord (hold)" },
 	# --- Note drag in progress: NoteEditor._on_drag_updated ---
-	{ "context": "note_drag", "mods": "Shift", "input": "", "label": "change length" },
+	# "note_drag" is the Ctrl-length scheme, "note_drag_alt" the Alt length/velocity one
+	# (setting midi_editor/note_drag_modifiers).
+	{ "context": "note_drag", "mods": "Ctrl", "input": "", "label": "change length" },
+	{ "context": "note_drag", "mods": "Shift", "input": "", "label": "move freely (no snap)" },
 	{ "context": "note_drag", "mods": "Alt", "input": "", "label": "change velocity" },
+	{ "context": "note_drag_alt", "mods": "Alt", "input": "", "label": "length (sideways) / velocity (up, down)" },
+	{ "context": "note_drag_alt", "mods": "Shift", "input": "", "label": "move freely (no snap)" },
 	# --- Value lanes: ValueLaneStemArea._begin / _on_motion ---
 	{ "context": "value_lanes", "mods": "", "input": "drag", "label": "paint values" },
 	{ "context": "value_lanes", "mods": "Ctrl", "input": "drag", "label": "straight line" },

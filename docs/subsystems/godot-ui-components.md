@@ -110,6 +110,7 @@ or styleboxes of their own:
 | `SectionPanel`, `SectionHeader` | PanelContainer | Editor sections; dock and device-frame title bars |
 | `DeviceCard`, `DeviceCardSelected`, `DeviceCardHeader` | PanelContainer | Device cards (lane and compact). Selection swaps `DeviceCard` for `DeviceCardSelected` |
 | `Well` | PanelContainer | Recessed areas, e.g. the channel device list |
+| `ButtonPanel` | PanelContainer | Frames a button plus its options button (e.g. Quantize and its `v`) as one control: darker fill with a border, so a 1 px HBox separation inside reads as a divider |
 | `Floating` | PanelContainer | Tooltips and overlays (`ValueTooltip`, `LabelOverlay`) |
 | `ContextMenu`, `ContextMenuList` | PopupPanel, PopupMenu | Context menus |
 | `FlatButton`, `FlatMenuButton` | Button, MenuButton | Borderless buttons |

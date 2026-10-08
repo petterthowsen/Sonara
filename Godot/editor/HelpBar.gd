@@ -70,7 +70,7 @@ func _ready() -> void:
 func _on_setting_changed(key: String, _value) -> void:
 	if key == SETTING_KEY:
 		_apply_visibility()
-	elif key == KEYBOARD_SETTING_KEY:
+	elif key == KEYBOARD_SETTING_KEY or key == "midi_editor/note_drag_modifiers":
 		_rebuild()
 
 
@@ -191,7 +191,9 @@ static func collect(ctx: String, extras: Array[String] = []) -> Array[Dictionary
 	for i in HotkeyActions.GESTURES.size():
 		var g: Dictionary = HotkeyActions.GESTURES[i]
 		var depth := chain.find(g.context)
-		if depth < 0:
+		if depth < 0 or not g.get("help", true):
+			continue
+		if g.has("setting") and _settings().get_value(g.setting) != g.equals:
 			continue
 		var mask := 0
 		var chips: Array[String] = []

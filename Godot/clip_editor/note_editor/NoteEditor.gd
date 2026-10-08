@@ -27,7 +27,7 @@ var dragging_note: VisualNote = null:
 	set(value):
 		dragging_note = value
 		if value:
-			Hotkeys.begin_state(self, "note_drag")
+			Hotkeys.begin_state(self, "note_drag_alt" if _alt_auto_mode() else "note_drag")
 		else:
 			Hotkeys.end_state(self)
 var drag_start_midi_note: int = 0
@@ -41,11 +41,24 @@ var resize_start_durations: Dictionary = {}  # note_id -> duration_ticks
 
 # Undo snapshots keyed by Clip (captured at gesture start)
 var _history_clip_snapshots: Dictionary = {}  # Clip -> Array snapshot
+var _history_selection_before: Dictionary = {}
+
+## Undo or redo changed the selection (range or notes); overlays should redraw.
+signal selection_range_restored
 
 
 # Drag mode tracking
-enum DragMode { POSITION, RESIZE, VELOCITY }
+## PENDING: Alt is held but the mouse has not moved far enough to tell length from velocity.
+enum DragMode { POSITION, RESIZE, VELOCITY, PENDING }
 var last_drag_mode: DragMode = DragMode.POSITION
+
+## Pixels the mouse must travel with Alt held before the drag becomes length or velocity.
+const ALT_AXIS_THRESHOLD := 6.0
+
+
+## True when one key (Alt) serves both length and velocity, told apart by drag direction.
+func _alt_auto_mode() -> bool:
+	return Settings.get_value("midi_editor/note_drag_modifiers") == Settings.MODS_ALT_AUTO
 
 
 # Newly placed note state
@@ -80,8 +93,9 @@ func _ready():
 
 	# Create selection manager (grid_helper will be set via override below)
 	selection_manager = NoteSelectionManager.new(grid_helper)
-	selection_manager.selection_changed.connect(
-			func(notes): Hotkeys.set_condition("note_selection", not notes.is_empty()))
+	selection_manager.selection_changed.connect(func(notes):
+		Hotkeys.set_condition("note_selection", not notes.is_empty())
+		Hotkeys.set_condition("note_range", selection_manager.has_range()))
 
 	# Provide coordinate conversion callback to selection manager
 	# This allows it to work in the correct coordinate space without tight coupling
@@ -122,6 +136,51 @@ func unbind():
 ## Begin capturing note-list snapshots for the given clips (call before mutating).
 func _history_begin_clips(clips: Array) -> void:
 	_history_clip_snapshots = ClipNotesStateCommand.capture_many(clips)
+	_history_selection_before = capture_selection_state()
+
+
+## The selection as { "range": Vector2i(start, end ticks), "notes": [[Clip, MidiNoteData], ...] },
+## each selected note once.
+func capture_selection_state() -> Dictionary:
+	var notes: Array = []
+	for vn in _selected_note_visuals():
+		notes.append([_clip_for_visual_note(vn), vn.midi_note_data])
+	return {
+		"range": Vector2i(selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick),
+		"notes": notes,
+	}
+
+
+static func _same_selection(a: Dictionary, b: Dictionary) -> bool:
+	if a.get("range") != b.get("range") or a.notes.size() != b.notes.size():
+		return false
+	var data_in_a := {}
+	for pair in a.notes:
+		data_in_a[pair[1]] = true
+	for pair in b.notes:
+		if not data_in_a.has(pair[1]):
+			return false
+	return true
+
+
+## Put a captured selection back (undo/redo). Notes that no longer exist are skipped.
+func restore_selection_state(state: Dictionary) -> void:
+	var visuals: Array[VisualNote] = []
+	for pair in state.get("notes", []):
+		var note_clip: Clip = pair[0]
+		var data: MidiNoteData = pair[1]
+		if multi_clip_mode:
+			visuals.append_array(_visuals_of(data, note_clip))
+		else:
+			var vn := get_visual_note(data.id)
+			if vn:
+				visuals.append(vn)
+	selection_manager.select_visuals(visuals)
+	var range: Vector2i = state.get("range", Vector2i.ZERO)
+	selection_manager.box_selection_start_tick = range.x
+	selection_manager.box_selection_end_tick = range.y
+	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	selection_range_restored.emit()
 
 
 ## Capture snapshots for every clip owning the selected notes.
@@ -142,7 +201,13 @@ func _history_commit(action_name: String) -> void:
 		return
 	var before := _history_clip_snapshots
 	_history_clip_snapshots = {}
-	ClipNotesStateCommand.commit_many(action_name, before)
+	var first: Array[Command] = []
+	var last: Array[Command] = []
+	var selection_now := capture_selection_state()
+	if not _same_selection(_history_selection_before, selection_now):
+		first.append(SelectionStateCommand.new(action_name, self, _history_selection_before, selection_now, true))
+		last.append(SelectionStateCommand.new(action_name, self, _history_selection_before, selection_now, false))
+	ClipNotesStateCommand.commit_many(action_name, before, first, last)
 
 
 # ============================================================================
@@ -244,6 +309,62 @@ func handle_key_input(event: InputEventKey) -> void:
 
 	elif Hotkeys.pressed(event, "notes_nudge_right"):
 		_move_selection_horizontal(get_snap_interval())
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_range_end_right"):
+		_resize_selection_range(0, get_snap_interval())
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_range_end_left"):
+		_resize_selection_range(0, -get_snap_interval())
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_range_start_left"):
+		_resize_selection_range(-get_snap_interval(), 0)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_range_start_right"):
+		_resize_selection_range(get_snap_interval(), 0)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_move_by_selection_left"):
+		_move_selection_by_its_length(-1)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_move_by_selection_right"):
+		_move_selection_by_its_length(1)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_velocity_up"):
+		_adjust_selection_velocity(KEY_VELOCITY_STEP)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_velocity_down"):
+		_adjust_selection_velocity(-KEY_VELOCITY_STEP)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_length_grow"):
+		_adjust_selection_length(get_snap_interval())
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_length_shrink"):
+		_adjust_selection_length(-get_snap_interval())
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_flip_vertical"):
+		flip_selection_vertical()
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_flip_horizontal"):
+		flip_selection_horizontal()
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_quantize"):
+		quantize_selection()
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_strum"):
+		strum_selection()
 		accept_event()
 
 
@@ -411,23 +532,27 @@ func _snapshot_selection() -> void:
 
 
 func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
-	"""Handle note drag update (supports shift-to-resize and alt-for-velocity)."""
+	"""Handle note drag update (ctrl-to-resize, alt-for-velocity, shift-to-bypass-snapping)."""
 	if dragging_note != note or not note.midi_note_data:
 		return
 
-	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
+	var ctrl_pressed = Input.is_key_pressed(KEY_CTRL)
 	var alt_pressed = Input.is_key_pressed(KEY_ALT)
+	var drum_view := layout.is_folded()
 
 	# Drum View draws hits, not bars, so there is no length to drag out (REQ-022).
-	# Shift falls back to plain dragging rather than silently changing durations.
-	if layout.is_folded():
-		shift_pressed = false
+	# Length falls back to plain dragging (Ctrl) or to velocity only (Alt).
+	var auto_alt := _alt_auto_mode()
+	if drum_view or auto_alt:
+		ctrl_pressed = false
 
 	# Determine current mode
 	var current_mode: DragMode
-	if alt_pressed:
+	if alt_pressed and auto_alt and not drum_view:
+		current_mode = _alt_axis_mode(mouse_pos_local)
+	elif alt_pressed:
 		current_mode = DragMode.VELOCITY
-	elif shift_pressed:
+	elif ctrl_pressed:
 		current_mode = DragMode.RESIZE
 	else:
 		current_mode = DragMode.POSITION
@@ -440,21 +565,23 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		_snapshot_selection()
 
 		last_drag_mode = current_mode
-		logger.info("Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY"][current_mode])
+		logger.info("Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY", "PENDING"][current_mode])
+
+	# Alt is down but undecided: nothing moves until the mouse commits to an axis.
+	if current_mode == DragMode.PENDING:
+		return
 
 	var delta_x = mouse_pos_local.x - drag_start_mouse_pos.x
-	var delta_y = mouse_pos_local.y - drag_start_mouse_pos.y
 	var delta_ticks = pixels_to_ticks(delta_x)
 	# Snap the drag delta, not each note, so notes keep their offsets from each other.
-	var snapped_delta_ticks: int = grid_helper.snap_ticks(delta_ticks) if grid_helper else delta_ticks
+	var snapped_delta_ticks: int = _snap_unless_shift(delta_ticks)
 
 	# Each note once, however many of its visuals (loop repeats, linked instances) are selected.
 	var edited := _selected_note_visuals()
 
-	if alt_pressed:
-		# Alt mode: Control velocity
-		# 2 px per 1/127 step, as before the velocity went float.
-		var velocity_delta := int(-delta_y / 2.0) / 127.0
+	if current_mode == DragMode.VELOCITY:
+		# Alt mode: Control velocity. Dragging up raises it, 2 px per 1/127 step.
+		var velocity_delta := int(-(mouse_pos_local.y - drag_start_mouse_pos.y) / 2.0) / 127.0
 
 		for sel_note in edited:
 			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
@@ -466,8 +593,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 			sel_note.midi_note_data.velocity = new_velocity
 
-	elif shift_pressed:
-		# Shift mode: Control note length
+	elif current_mode == DragMode.RESIZE:
+		# Length mode (Ctrl, or Alt dragged sideways): Control note length
 		for sel_note in edited:
 			var start_duration = resize_start_durations.get(sel_note.midi_note_data.id)
 			if start_duration == null:
@@ -511,7 +638,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 	_refresh_notes(edited)
 
-	if not alt_pressed and not shift_pressed:
+	if current_mode == DragMode.POSITION:
 		# A note dragged out of its (unlooped) instance stays in view under the mouse until
 		# the drop moves it into the clip it lands on.
 		for sel_note in selection_manager.selected_notes:
@@ -636,11 +763,35 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 
 
 ## Note length rounded to the nearest grid step, never shorter than one grid step.
+## Alt auto mode: while the mouse is within ALT_AXIS_THRESHOLD of where Alt engaged the drag
+## is PENDING, then the dominant axis picks length (sideways) or velocity (up, down) and
+## stays picked until Alt is released.
+func _alt_axis_mode(mouse_pos_local: Vector2) -> DragMode:
+	if last_drag_mode == DragMode.RESIZE or last_drag_mode == DragMode.VELOCITY:
+		return last_drag_mode
+	if last_drag_mode != DragMode.PENDING:
+		return DragMode.PENDING
+	var moved := mouse_pos_local - drag_start_mouse_pos
+	if moved.length() < ALT_AXIS_THRESHOLD:
+		return DragMode.PENDING
+	return DragMode.RESIZE if absf(moved.x) >= absf(moved.y) else DragMode.VELOCITY
+
+
+## While Shift is held the snap is bypassed and the minimum is a single tick.
 func _snapped_duration(ticks: int) -> int:
+	if Input.is_key_pressed(KEY_SHIFT):
+		return maxi(1, ticks)
 	var snap_interval := get_snap_interval()
 	if grid_helper:
 		ticks = grid_helper.snap_ticks(ticks)
 	return maxi(snap_interval, ticks)
+
+
+## Grid-snapped `ticks`, or `ticks` untouched while Shift is held (free placement).
+func _snap_unless_shift(ticks: int) -> int:
+	if grid_helper and not Input.is_key_pressed(KEY_SHIFT):
+		return grid_helper.snap_ticks(ticks)
+	return ticks
 
 
 func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
@@ -653,15 +804,15 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 	var new_duration := _snapped_duration(resize_start_duration + delta_ticks)
 
-	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
+	var same_length := Input.is_key_pressed(KEY_ALT if _alt_auto_mode() else KEY_CTRL)
 
 	# Update all selected notes (each once; see _selected_note_visuals)
 	var edited := _selected_note_visuals()
 	for sel_note in edited:
 		var note_new_duration: int
 
-		if shift_pressed:
-			# Shift: Set all notes to same duration
+		if same_length:
+			# Length key (Alt or Ctrl, see the note drag modifiers setting): all notes get the same duration
 			note_new_duration = new_duration
 		else:
 			# Default: Apply same delta to each note
@@ -1083,10 +1234,231 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 
 	logger.info("Moved %d note(s) %+d ticks" % [selection_manager.selected_notes.size(), delta_ticks])
 
-	# Don't update selection range - keep grid-snapped box selection boundaries
+	# The selection range goes with the notes (it stops at tick 0).
+	if selection_manager.has_range():
+		var range_delta := maxi(delta_ticks, -selection_manager.box_selection_start_tick)
+		selection_manager.box_selection_start_tick += range_delta
+		selection_manager.box_selection_end_tick += range_delta
+		selection_manager.selection_changed.emit(selection_manager.selected_notes)
 	queue_redraw()
 	update_container_width()
 	_history_commit("Nudge Notes")
+
+
+## MIDI velocity steps per press of the velocity hotkeys (held keys repeat).
+const KEY_VELOCITY_STEP := 4.0 / 127.0
+
+
+## Move the selection range's start by `start_delta` and its end by `end_delta` (negative =
+## earlier). The start stays at 0 or later and the range keeps at least one tick. The notes
+## themselves stay as they are.
+func _resize_selection_range(start_delta: int, end_delta: int) -> void:
+	if not selection_manager.has_range():
+		return
+	var start := maxi(0, selection_manager.box_selection_start_tick + start_delta)
+	var end := selection_manager.box_selection_end_tick + end_delta
+	if end <= start:
+		return
+	selection_manager.box_selection_start_tick = start
+	selection_manager.box_selection_end_tick = end
+	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+
+
+## Move the selected notes and the range by the range's length (the span of the selected
+## notes when there is no range). `direction` is -1 or 1.
+func _move_selection_by_its_length(direction: int) -> void:
+	var span_start := selection_manager.box_selection_start_tick
+	var span_end := selection_manager.box_selection_end_tick
+	if span_end <= span_start:
+		var snapshot := selection_manager.snapshot_selection()
+		if snapshot == null:
+			return
+		span_start = snapshot.start_tick
+		span_end = snapshot.end_tick
+	var delta := (span_end - span_start) * direction
+	# The group moves as one: stop at tick 0 instead of squashing notes against it.
+	delta = maxi(delta, -span_start)
+	if delta == 0:
+		return
+	_move_selection_horizontal(delta)
+
+
+## Run `mutate(note_data)` on every selected note once, then sync and commit one undo step.
+func _edit_selection_data(history_name: String, mutate: Callable) -> void:
+	_apply_selection_edit(history_name, func(notes: Array[MidiNoteData]):
+		for note_data in notes:
+			mutate.call(note_data))
+
+
+## Shared path of the selection tools (quantize, mirror, strum, ...). Runs `edit(notes)` once on
+## the selected notes (an Array[MidiNoteData], each shared note once), then refreshes the
+## visuals, cuts same-pitch overlaps, syncs the engine and records one undo/redo step
+## (ClipNotesStateCommand plus the selection) under `history_name`.
+func _apply_selection_edit(history_name: String, edit: Callable) -> void:
+	if selection_manager.selected_notes.is_empty():
+		return
+	_history_begin_selection()
+	var edited := _selected_note_visuals()
+	var notes: Array[MidiNoteData] = []
+	for sel_note in edited:
+		notes.append(sel_note.midi_note_data)
+	edit.call(notes)
+	_refresh_notes(edited)
+
+	for sel_note in edited:
+		var note_data := sel_note.midi_note_data
+		var note_clip: Clip = _clip_for_visual_note(sel_note)
+		if not note_clip:
+			continue
+		note_clip.cut_overlapping_notes_at_pitch(
+			note_data.note,
+			note_data.start_tick,
+			note_data.start_tick + note_data.duration_ticks,
+			note_clip.allocate_note_id,
+			note_data.id
+		)
+		note_clip.update_midi_note(note_data)
+
+	queue_redraw()
+	update_container_width()
+	_history_commit(history_name)
+
+
+const QUANTIZE_STRENGTH_KEY := "clip_editor/quantize_strength"
+const QUANTIZE_MODE_KEY := "clip_editor/quantize_mode"
+
+
+## Node lookup, not the bare autoload name, so headless scripts that load() this file compile.
+static func _config_value(key: String, default: Variant) -> Variant:
+	var sonara: Node = (Engine.get_main_loop() as SceneTree).root.get_node_or_null("Sonara")
+	return sonara.get_config(key, default) if sonara else default
+
+
+## Remembered quantize strength (0..1); 1 is a hard snap.
+static func quantize_strength() -> float:
+	return clampf(float(_config_value(QUANTIZE_STRENGTH_KEY, 1.0)), 0.0, 1.0)
+
+
+static func quantize_mode() -> NoteTransforms.QuantizeMode:
+	return int(_config_value(QUANTIZE_MODE_KEY, NoteTransforms.QuantizeMode.START)) as NoteTransforms.QuantizeMode
+
+
+## Quantize the selected notes to the grid with the remembered strength and mode (one undo step).
+## Starts of notes inside a loop region stay in the loop. Drum View hits have no length, so the
+## end is left alone there.
+func quantize_selection(strength: float = -1.0, mode: int = -1) -> void:
+	if grid_helper == null:
+		return
+	var use_strength := quantize_strength() if strength < 0.0 else strength
+	var use_mode := quantize_mode() if mode < 0 else mode as NoteTransforms.QuantizeMode
+	if layout.is_folded():
+		use_mode = NoteTransforms.QuantizeMode.START
+	var loop_owner := _loop_owners()
+	_apply_selection_edit("Quantize Notes", func(notes: Array[MidiNoteData]):
+		NoteTransforms.quantize(notes, grid_helper.snap_ticks, use_strength, use_mode)
+		_fold_into_loops(notes, loop_owner))
+
+
+## Selected notes that start inside a loop region, mapped to their instance. Taken before an
+## edit moves them, because the edit may move a start out of the loop.
+func _loop_owners() -> Dictionary:
+	var owners := {}
+	for vn in _selected_note_visuals():
+		var owner_ci := _instance_for_visual_note(vn) if multi_clip_mode else clip_instance
+		if owner_ci and owner_ci.in_loop_region(vn.midi_note_data.start_tick):
+			owners[vn.midi_note_data] = owner_ci
+	return owners
+
+
+func _fold_into_loops(notes: Array[MidiNoteData], owners: Dictionary) -> void:
+	for note_data in notes:
+		if owners.has(note_data):
+			note_data.start_tick = owners[note_data].fold_into_loop(note_data.start_tick)
+
+
+## Invert the selected notes' pitches around the middle of their pitch range (one undo step).
+## Does nothing in Drum View, where rows are pads and not a pitch scale.
+func flip_selection_vertical() -> void:
+	if layout.is_folded():
+		return
+	_apply_selection_edit("Flip Notes Vertically", func(notes: Array[MidiNoteData]):
+		var bounds := NoteTransforms.pitch_bounds(notes)
+		NoteTransforms.mirror_pitch(notes, bounds.x, bounds.y))
+
+
+## Reverse the selected notes in time (one undo step). The axis is the selection range when
+## there is one, else the span of the selected notes.
+func flip_selection_horizontal() -> void:
+	var range_start := selection_manager.box_selection_start_tick
+	var range_end := selection_manager.box_selection_end_tick
+	var loop_owner := _loop_owners()
+	_apply_selection_edit("Flip Notes Horizontally", func(notes: Array[MidiNoteData]):
+		if not selection_manager.has_range():
+			var span := NoteTransforms.tick_bounds(notes)
+			range_start = span.x
+			range_end = span.y
+		NoteTransforms.mirror_time(notes, range_start, range_end, not layout.is_folded())
+		_fold_into_loops(notes, loop_owner))
+
+
+const STRUM_SPREAD_KEY := "clip_editor/strum_spread_ticks"
+const STRUM_DIRECTION_KEY := "clip_editor/strum_direction"
+const STRUM_RAMP_KEY := "clip_editor/strum_velocity_ramp"
+
+
+## Remembered strum spread between neighbouring chord notes, in ticks (960 PPQ).
+static func strum_spread() -> int:
+	return maxi(0, int(_config_value(STRUM_SPREAD_KEY, 30)))
+
+
+static func strum_direction() -> NoteTransforms.StrumDirection:
+	return int(_config_value(STRUM_DIRECTION_KEY, NoteTransforms.StrumDirection.UP)) as NoteTransforms.StrumDirection
+
+
+## Remembered velocity ramp across a strum (-1..1).
+static func strum_velocity_ramp() -> float:
+	return clampf(float(_config_value(STRUM_RAMP_KEY, 0.0)), -1.0, 1.0)
+
+
+## Strum the chords among the selected notes with the remembered spread, direction and velocity
+## ramp (one undo step). Note ends stay where they are. Does nothing in Drum View, where hits
+## have no length and rows are pads.
+func strum_selection() -> void:
+	if layout.is_folded():
+		return
+	# Note ticks are clip ticks, so chords are only found inside one clip: notes of different
+	# clips that happen to share a clip tick are not a chord.
+	var clip_of := {}
+	for vn in _selected_note_visuals():
+		clip_of[vn.midi_note_data] = _clip_for_visual_note(vn)
+	var spread := strum_spread()
+	var direction := strum_direction()
+	var ramp := strum_velocity_ramp()
+	_apply_selection_edit("Strum Notes", func(notes: Array[MidiNoteData]):
+		var per_clip := {}
+		for note_data in notes:
+			var clip: Clip = clip_of.get(note_data)
+			if not per_clip.has(clip):
+				var typed: Array[MidiNoteData] = []
+				per_clip[clip] = typed
+			per_clip[clip].append(note_data)
+		for clip_notes: Array[MidiNoteData] in per_clip.values():
+			NoteTransforms.strum(clip_notes, spread, direction, ramp))
+
+
+func _adjust_selection_velocity(delta: float) -> void:
+	_edit_selection_data("Change Velocity", func(note_data: MidiNoteData):
+		note_data.velocity = clampf(note_data.velocity + delta, MidiNoteData.MIN_VELOCITY, 1.0))
+
+
+## Drum View hits have no length (REQ-022), so this does nothing there.
+func _adjust_selection_length(delta_ticks: int) -> void:
+	if layout.is_folded():
+		return
+	var floor_ticks := get_snap_interval()
+	_edit_selection_data("Resize Notes", func(note_data: MidiNoteData):
+		note_data.duration_ticks = maxi(floor_ticks, note_data.duration_ticks + delta_ticks)
+		last_note_length = note_data.duration_ticks)
 
 
 func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
@@ -1176,8 +1548,7 @@ func update_duplicate_drag(mouse_pos_local: Vector2) -> void:
 	if _dup_origins.is_empty() or not dup_anchor:
 		return
 	var delta_ticks := pixels_to_ticks(mouse_pos_local.x - _dup_start_mouse_pos.x)
-	if grid_helper:
-		delta_ticks = grid_helper.snap_ticks(delta_ticks)
+	delta_ticks = _snap_unless_shift(delta_ticks)
 	var anchor_pitch: int = _dup_origins[dup_anchor].note
 	var delta_steps := layout.row_of_pitch(anchor_pitch) - layout.y_to_row(mouse_pos_local.y)
 	for vn in get_pending_duplicates():

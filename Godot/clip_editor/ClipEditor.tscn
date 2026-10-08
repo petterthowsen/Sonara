@@ -12,6 +12,7 @@
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
 [ext_resource type="Texture2D" uid="uid://1sdwj750u4bc" path="res://assets/icons/headphones.svg" id="10_audit"]
 [ext_resource type="PackedScene" uid="uid://cu5kdhb7wxo8" path="res://clip_editor/value_lanes/NoteValuePane.tscn" id="14_wamqs"]
+[ext_resource type="Texture2D" uid="uid://dycjjtqnsvlib" path="res://assets/icons/chevron-up.svg" id="16_y4ojr"]
 [ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="eye_icon"]
 [ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="layers_icon"]
 [ext_resource type="Texture2D" uid="uid://ccmf42o4fqto1" path="res://assets/icons/pencil.svg" id="pencil_icon"]
@@ -56,6 +57,16 @@ colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 1)
 [sub_resource type="GradientTexture1D" id="GradientTexture1D_ytm0k"]
 gradient = SubResource("Gradient_aar7r")
 width = 3
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_wamqs"]
+content_margin_left = 0.0
+content_margin_top = 4.0
+content_margin_right = 0.0
+content_margin_bottom = 4.0
+color = Color(0.26839215, 0.26839215, 0.26839215, 1)
+grow_begin = 4.0
+grow_end = 4.0
+vertical = true
 
 [node name="ClipEditor" type="VBoxContainer" unique_id=1678526830]
 anchors_preset = 15
@@ -188,9 +199,6 @@ vertical_scroll_mode = 2
 script = ExtResource("3_1pvpx")
 note_height = 30
 scroll_speed_v = null
-scroll_speed_h = null
-pan_zoom_sensitivity = null
-min_width_bars = null
 extra_width_bars = null
 scroll_growth_bars = null
 zoom_min_pixels_per_beat = null
@@ -304,60 +312,121 @@ theme_type_variation = &"SectionPanel"
 
 [node name="Toolbar" type="HBoxContainer" parent="BottomPanel" unique_id=910585644]
 layout_mode = 2
+theme_override_constants/separation = 12
 
-[node name="ModeSwitch" type="Button" parent="BottomPanel/Toolbar" unique_id=205584489]
+[node name="ModeGroup" type="HBoxContainer" parent="BottomPanel/Toolbar" unique_id=1100000001]
+layout_mode = 2
+
+[node name="ModeSwitch" type="Button" parent="BottomPanel/Toolbar/ModeGroup" unique_id=205584489]
 layout_mode = 2
 tooltip_text = "Switch between the piano roll and Drum View"
 toggle_mode = true
 text = "Drum View"
 
-[node name="NoteMapButton" type="Button" parent="BottomPanel/Toolbar" unique_id=1858930092]
+[node name="NoteMapButton" type="Button" parent="BottomPanel/Toolbar/ModeGroup" unique_id=1858930092]
 layout_mode = 2
 tooltip_text = "Note map for this channel"
 text = "Note Map"
 
-[node name="NoteMapPopup" type="PopupMenu" parent="BottomPanel/Toolbar/NoteMapButton" unique_id=1658372459]
+[node name="NoteMapPopup" type="PopupMenu" parent="BottomPanel/Toolbar/ModeGroup/NoteMapButton" unique_id=1658372459]
 oversampling_override = 1.0
 theme_type_variation = &"ContextMenuList"
 
-[node name="NoteMapLoad" type="Button" parent="BottomPanel/Toolbar" unique_id=1947069938]
+[node name="Separator1" type="VSeparator" parent="BottomPanel/Toolbar" unique_id=1790789765]
 layout_mode = 2
-tooltip_text = "Load a note map from the library"
-text = "Load"
+theme_override_constants/separation = 4
+theme_override_styles/separator = SubResource("StyleBoxLine_wamqs")
 
-[node name="NoteMapEdit" type="Button" parent="BottomPanel/Toolbar" unique_id=1663129122]
-layout_mode = 2
-tooltip_text = "Edit this channel's note map"
-text = "Edit"
-
-[node name="NoteMapSave" type="Button" parent="BottomPanel/Toolbar" unique_id=220212741]
-layout_mode = 2
-tooltip_text = "Save this note map to the library"
-text = "Save"
-
-[node name="ToolbarSeparator" type="VSeparator" parent="BottomPanel/Toolbar" unique_id=1790789765]
+[node name="ToggleGroup" type="HBoxContainer" parent="BottomPanel/Toolbar" unique_id=1100000002]
 layout_mode = 2
 
-[node name="Quantize" type="Button" parent="BottomPanel/Toolbar" unique_id=910359271]
-layout_mode = 2
-text = "Quantize"
-
-[node name="AuditionToggle" type="Button" parent="BottomPanel/Toolbar" unique_id=1767014579]
+[node name="AuditionToggle" type="Button" parent="BottomPanel/Toolbar/ToggleGroup" unique_id=1767014579]
 layout_mode = 2
 tooltip_text = "Audition notes: clicking a note plays it on the track's instrument"
 toggle_mode = true
 icon = ExtResource("10_audit")
 
-[node name="ValueLanesToggle" type="Button" parent="BottomPanel/Toolbar" unique_id=1734026615]
+[node name="Separator2" type="VSeparator" parent="BottomPanel/Toolbar" unique_id=1100000003]
+layout_mode = 2
+theme_override_constants/separation = 4
+theme_override_styles/separator = SubResource("StyleBoxLine_wamqs")
+
+[node name="LanesGroup" type="HBoxContainer" parent="BottomPanel/Toolbar" unique_id=1100000004]
+layout_mode = 2
+
+[node name="ValueLanesToggle" type="Button" parent="BottomPanel/Toolbar/LanesGroup" unique_id=1734026615]
 layout_mode = 2
 tooltip_text = "Show the velocity and release lanes below the notes"
 toggle_mode = true
 text = "Value Lanes"
 
-[node name="NextValue" type="SpinBox" parent="BottomPanel/Toolbar" unique_id=1540317795]
+[node name="NextValue" type="SpinBox" parent="BottomPanel/Toolbar/LanesGroup" unique_id=1540317795]
 layout_mode = 2
 tooltip_text = "Velocity of the next note you draw. It follows the last note you touched."
 min_value = 1.0
 max_value = 127.0
 value = 100.0
-prefix = "New note vel "
+prefix = "Vel"
+
+[node name="Separator3" type="VSeparator" parent="BottomPanel/Toolbar" unique_id=1100000005]
+layout_mode = 2
+theme_override_constants/separation = 4
+theme_override_styles/separator = SubResource("StyleBoxLine_wamqs")
+
+[node name="ToolsGroup" type="HBoxContainer" parent="BottomPanel/Toolbar" unique_id=1100000006]
+layout_mode = 2
+
+[node name="QuantizePanel" type="PanelContainer" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=74946472]
+layout_mode = 2
+theme_type_variation = &"ButtonPanel"
+
+[node name="HBox" type="HBoxContainer" parent="BottomPanel/Toolbar/ToolsGroup/QuantizePanel" unique_id=668376464]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Quantize" type="Button" parent="BottomPanel/Toolbar/ToolsGroup/QuantizePanel/HBox" unique_id=910359271]
+layout_mode = 2
+tooltip_text = "Quantize the selected notes to the grid (Ctrl+Q). With nothing selected in clip mode, quantizes all notes."
+text = "Quantize"
+
+[node name="QuantizeOptions" type="Button" parent="BottomPanel/Toolbar/ToolsGroup/QuantizePanel/HBox" unique_id=1100000007]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+tooltip_text = "Quantize strength and mode"
+icon = ExtResource("16_y4ojr")
+icon_alignment = 1
+expand_icon = true
+
+[node name="FlipVertical" type="Button" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000008]
+layout_mode = 2
+tooltip_text = "Flip the selected notes vertically: invert their pitches around the middle of their range (Ctrl+Shift+V). Not in Drum View."
+disabled = true
+text = "Flip V"
+
+[node name="FlipHorizontal" type="Button" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000009]
+layout_mode = 2
+tooltip_text = "Flip the selected notes horizontally: reverse them in time within the selection range (Ctrl+Shift+H)."
+disabled = true
+text = "Flip H"
+
+[node name="StrumPanel" type="PanelContainer" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000012]
+layout_mode = 2
+theme_type_variation = &"ButtonPanel"
+
+[node name="HBox" type="HBoxContainer" parent="BottomPanel/Toolbar/ToolsGroup/StrumPanel" unique_id=1100000013]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Strum" type="Button" parent="BottomPanel/Toolbar/ToolsGroup/StrumPanel/HBox" unique_id=1100000010]
+layout_mode = 2
+tooltip_text = "Strum the chords among the selected notes (Ctrl+Shift+S): each note starts a little after the previous one, in pitch order. Note ends stay put. Not in Drum View."
+disabled = true
+text = "Strum"
+
+[node name="StrumOptions" type="Button" parent="BottomPanel/Toolbar/ToolsGroup/StrumPanel/HBox" unique_id=1100000011]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+tooltip_text = "Strum spread, direction and velocity ramp"
+icon = ExtResource("16_y4ojr")
+icon_alignment = 1
+expand_icon = true

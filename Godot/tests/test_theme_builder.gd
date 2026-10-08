@@ -44,7 +44,7 @@ func _test_variations_exist() -> void:
 		_assert(t.get_type_variation_base(name) == ThemeBuilder.VARIATIONS[name],
 			"variation '%s' has base '%s'" % [name, ThemeBuilder.VARIATIONS[name]])
 	for name in [&"SectionPanel", &"SectionHeader", &"DeviceCard", &"DeviceCardSelected", &"DeviceCardHeader",
-			&"Well", &"Floating", &"ContextMenu", &"ContextMenuList"]:
+			&"Well", &"ButtonPanel", &"Floating", &"ContextMenu", &"ContextMenuList"]:
 		_assert(t.has_stylebox(&"panel", name), "'%s' has a panel style" % name)
 	_assert(not t.get_type_list().has(&"PrimaryPanel") and not t.get_type_list().has(&"DarkPanel"),
 		"PrimaryPanel and DarkPanel are gone")
@@ -55,7 +55,12 @@ func _test_radius() -> void:
 		var t := ThemeBuilder.build(_palette({"corner_radius": radius}))
 		var checked := 0
 		var wrong := 0
+		var panel := t.get_stylebox(&"panel", &"ButtonPanel") as StyleBoxFlat
+		_assert(panel.corner_radius_top_left == (radius + 1 if radius > 0 else 0),
+			"radius %d: ButtonPanel is one pixel rounder than the buttons (square stays square)" % radius)
 		for type in t.get_stylebox_type_list():
+			if type == &"ButtonPanel":
+				continue
 			for item in t.get_stylebox_list(type):
 				var s := t.get_stylebox(item, type) as StyleBoxFlat
 				if s == null:

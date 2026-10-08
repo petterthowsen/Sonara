@@ -49,6 +49,19 @@ var drum_mode: bool = false
 ## small set of styleboxes (see NoteContainer.note_style).
 const VELOCITY_SHADES: int = 16
 
+## Brightness (HSV value) of every note's body. Velocity is no longer encoded in it.
+const BODY_BRIGHTNESS: float = 0.55
+## The velocity bar's fill is the body darkened by VELOCITY_FILL_DARKEN, its empty track by
+## the stronger VELOCITY_TRACK_DARKEN. The bar covers the bottom part of a bar note; the
+## pitch label takes the rest.
+const VELOCITY_FILL_DARKEN: float = 0.75
+const VELOCITY_TRACK_DARKEN: float = 0.5
+const VELOCITY_BAR_HEIGHT_FRACTION: float = 0.4
+
+var _bar_velocity: float = -1.0
+var _bar_track_color: Color = Color.BLACK
+var _bar_fill_color: Color = Color.BLACK
+
 ## The scene's stylebox, before any shared per-colour box replaces it.
 var _base_style: StyleBoxFlat = null
 ## Fallback box for a note with no NoteContainer parent (it can't share one).
@@ -66,6 +79,10 @@ func _ready():
 	focus_mode = Control.FOCUS_NONE
 	if label:
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# The pitch label sits above the velocity bar, in the top part of the note.
+		label.anchor_bottom = 1.0 - VELOCITY_BAR_HEIGHT_FRACTION
+		label.offset_top = 0.0
+		label.offset_bottom = 0.0
 	_base_style = get_theme_stylebox("panel") as StyleBoxFlat
 	_apply_absolute_layout()
 	if label:
@@ -93,7 +110,7 @@ func prepare_piano_roll_layout() -> void:
 
 
 ## Drum View: the note is a hit marker at its start instead of a bar spanning its
-## duration. Velocity shading is kept, the pitch label is hidden (a whole row is
+## duration. The velocity bar fills the marker from the bottom, the pitch label is hidden (a whole row is
 ## one pitch already) and the note cannot be resized (REQ-022).
 func prepare_drum_layout() -> void:
 	set_drum_mode(true)
@@ -106,6 +123,7 @@ func set_drum_mode(on: bool) -> void:
 		return
 	drum_mode = on
 	_label_row_height = -1.0
+	queue_redraw()
 	if label:
 		label.visible = not on
 
@@ -148,38 +166,37 @@ func _update_visual() -> void:
 	if not is_node_ready():
 		return
 	
-	# Start with base track color (clamp only for drawing)
+	# The body is one brightness for every note; velocity is the bar drawn over its bottom half.
 	var display_color = Utils.display_color(note_color)
-	
-	# Always apply velocity-based brightness if we have note data
-	if midi_note_data:
-		# Map velocity (1/127..1) to brightness (0.2-0.8)
-		var velocity = midi_note_data.velocity
-		var velocity_normalized = (velocity * 127.0 - 1.0) / 126.0  # Normalize to 0.0-1.0
-		velocity_normalized = roundf(velocity_normalized * (VELOCITY_SHADES - 1)) / (VELOCITY_SHADES - 1)
-		var brightness = lerp(0.2, 0.8, velocity_normalized)
-		
-		display_color = Color.from_hsv(
-			display_color.h,
-			display_color.s,
-			brightness
-		)
-	
+	display_color = Color.from_hsv(display_color.h, display_color.s, BODY_BRIGHTNESS)
+
 	# Override with full brightness if selected
 	if is_selected:
 		display_color.v = clamp(display_color.v + selection_brightness_boost, 0.0, 1.0)
 
-	_apply_bg_color(Utils.display_color(display_color))
+	var body := Utils.display_color(display_color)
+	_apply_bg_color(body)
+
+	var velocity := midi_note_data.velocity if midi_note_data else 0.0
+	var track_color := Color.from_hsv(body.h, body.s, body.v * VELOCITY_TRACK_DARKEN)
+	var fill_color := Color.from_hsv(body.h, body.s, body.v * VELOCITY_FILL_DARKEN)
+	if velocity != _bar_velocity or track_color != _bar_track_color or fill_color != _bar_fill_color:
+		_bar_velocity = velocity
+		_bar_track_color = track_color
+		_bar_fill_color = fill_color
+		queue_redraw()
 
 	# Update label
 	if label and midi_note_data:
 		var note_name = Midi.midi_to_note_name(midi_note_data.note)
 		if label.text != note_name:
 			label.text = note_name
-		_apply_label_color(Utils.contrasting_text_color(display_color))
+		_apply_label_color(Color.WHITE)
 
 
 ## Use the container's shared stylebox for this colour instead of editing a per-note copy.
+## The box is drawn by _draw() rather than by the Panel: a Panel paints its own style after
+## a script's _draw(), which would hide the velocity bar under the body.
 func _apply_bg_color(color: Color) -> void:
 	if _base_style == null:
 		return
@@ -194,7 +211,32 @@ func _apply_bg_color(color: Color) -> void:
 		box = _own_style
 	if box != _applied_style:
 		_applied_style = box
-		add_theme_stylebox_override("panel", box)
+		if not has_theme_stylebox_override("panel"):
+			add_theme_stylebox_override("panel", _EMPTY_STYLE)
+		queue_redraw()
+
+
+func _draw() -> void:
+	if _applied_style == null:
+		return
+	var rect := Rect2(Vector2.ZERO, size)
+	draw_style_box(_applied_style, rect)
+	if midi_note_data == null or size.x < 2.0 or size.y < 2.0:
+		return
+	var v := clampf(_bar_velocity, 0.0, 1.0)
+	if drum_mode:
+		# A hit marker is too narrow for a horizontal bar: the fill rises from the bottom.
+		var track := rect.grow(-1.0)
+		draw_rect(track, _bar_track_color)
+		draw_rect(Rect2(track.position.x, track.end.y - track.size.y * v, track.size.x, track.size.y * v), _bar_fill_color)
+		return
+	var bar_h := size.y * VELOCITY_BAR_HEIGHT_FRACTION
+	var track := Rect2(1.0, size.y - bar_h - 1.0, size.x - 2.0, bar_h)
+	draw_rect(track, _bar_track_color)
+	draw_rect(Rect2(track.position, Vector2(track.size.x * v, track.size.y)), _bar_fill_color)
+
+
+static var _EMPTY_STYLE := StyleBoxEmpty.new()
 
 
 func _apply_label_color(text_color: Color) -> void:

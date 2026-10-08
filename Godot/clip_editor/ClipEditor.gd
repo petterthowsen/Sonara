@@ -27,24 +27,27 @@ signal track_mode_track_selected(track: Track)
 
 ## Velocity / release lanes under the note area (docs/specs/019-note-values).
 @onready var value_pane: NoteValuePane = $HSplit/MainPanel/VBox/EditorSplit/NoteValuePane
-@onready var value_lanes_toggle: Button = $BottomPanel/Toolbar/ValueLanesToggle
+@onready var value_lanes_toggle: Button = $BottomPanel/Toolbar/LanesGroup/ValueLanesToggle
 ## Velocity the next drawn note gets (the last touched note's, or what the user typed).
-@onready var next_value_spin: SpinBox = $BottomPanel/Toolbar/NextValue
+@onready var next_value_spin: SpinBox = $BottomPanel/Toolbar/LanesGroup/NextValue
 
-@onready var audition_toggle: Button = $BottomPanel/Toolbar/AuditionToggle
+## Selection tools (quantize, mirror, strum): one button each, see _register_selection_tool.
+@onready var tools_group: HBoxContainer = $BottomPanel/Toolbar/ToolsGroup
+
+@onready var audition_toggle: Button = $BottomPanel/Toolbar/ToggleGroup/AuditionToggle
 const AUDITION_CONFIG_KEY := "clip_editor/audition"
 
 # Note map / Drum View toolbar (docs/specs/002-note-maps)
-@onready var mode_switch: Button = $BottomPanel/Toolbar/ModeSwitch
-@onready var note_map_button: Button = $BottomPanel/Toolbar/NoteMapButton
-@onready var note_map_popup: PopupMenu = $BottomPanel/Toolbar/NoteMapButton/NoteMapPopup
-@onready var note_map_load_button: Button = $BottomPanel/Toolbar/NoteMapLoad
-@onready var note_map_edit_button: Button = $BottomPanel/Toolbar/NoteMapEdit
-@onready var note_map_save_button: Button = $BottomPanel/Toolbar/NoteMapSave
+@onready var mode_switch: Button = $BottomPanel/Toolbar/ModeGroup/ModeSwitch
+@onready var note_map_button: Button = $BottomPanel/Toolbar/ModeGroup/NoteMapButton
+@onready var note_map_popup: PopupMenu = $BottomPanel/Toolbar/ModeGroup/NoteMapButton/NoteMapPopup
 
 ## Popup item ids. Library entries use LIBRARY_ID_BASE + index.
 const NOTE_MAP_ID_NONE := 0
 const NOTE_MAP_ID_AUTO := 1
+const NOTE_MAP_ID_LOAD := 2
+const NOTE_MAP_ID_EDIT := 3
+const NOTE_MAP_ID_SAVE := 4
 const NOTE_MAP_LIBRARY_ID_BASE := 100
 
 var _note_map_editor: NoteMapEditorDialog = null
@@ -140,6 +143,7 @@ func _ready():
 	audition_toggle.toggled.connect(_on_audition_toggled)
 	
 	_setup_note_map_toolbar()
+	_setup_selection_tools()
 	_setup_value_lanes()
 
 	_editor = Sonara.editor
@@ -485,9 +489,6 @@ func _setup_note_map_toolbar() -> void:
 	mode_switch.toggled.connect(_on_mode_switch_toggled)
 	note_map_button.pressed.connect(_on_note_map_button_pressed)
 	note_map_popup.id_pressed.connect(_on_note_map_popup_id_pressed)
-	note_map_load_button.pressed.connect(_on_note_map_load_pressed)
-	note_map_edit_button.pressed.connect(_on_note_map_edit_pressed)
-	note_map_save_button.pressed.connect(_on_note_map_save_pressed)
 	midi_editor.view_state_changed.connect(_sync_note_map_toolbar)
 	# The empty-Drum-View hint opens this same editor (REQ-023).
 	midi_editor.note_map_editor_requested.connect(_on_note_map_edit_pressed)
@@ -513,9 +514,6 @@ func _sync_note_map_toolbar() -> void:
 	mode_switch.text = "Drum View" if midi_editor.drum_view else "Piano Roll"
 
 	note_map_button.disabled = not has_channel
-	note_map_load_button.disabled = not has_channel
-	note_map_edit_button.disabled = not has_channel
-	note_map_save_button.disabled = not has_channel
 	note_map_button.text = _assignment_label(channel)
 
 	if _note_map_editor and _note_map_editor.visible:
@@ -584,9 +582,8 @@ func _rebuild_note_map_popup() -> void:
 	# Auto with no source has nothing to show; still selectable, just empty.
 	note_map_popup.set_item_tooltip(1, "Derived from the channel's instrument")
 
-	if _popup_library_maps.is_empty():
-		return
-	note_map_popup.add_separator("Library")
+	if not _popup_library_maps.is_empty():
+		note_map_popup.add_separator("Library")
 	var current_name := channel.note_map.map_name if (channel and channel.note_map) else ""
 	for i in _popup_library_maps.size():
 		var map := _popup_library_maps[i]
@@ -598,10 +595,27 @@ func _rebuild_note_map_popup() -> void:
 		note_map_popup.set_item_checked(index,
 			channel and channel.note_map_mode == Channel.NoteMapMode.NAMED and map.map_name == current_name)
 
+	note_map_popup.add_separator()
+	note_map_popup.add_item("Load...", NOTE_MAP_ID_LOAD)
+	note_map_popup.set_item_tooltip(note_map_popup.get_item_index(NOTE_MAP_ID_LOAD), "Load a note map from the library")
+	note_map_popup.add_item("Edit...", NOTE_MAP_ID_EDIT)
+	note_map_popup.set_item_tooltip(note_map_popup.get_item_index(NOTE_MAP_ID_EDIT), "Edit this channel's note map")
+	note_map_popup.add_item("Save...", NOTE_MAP_ID_SAVE)
+	note_map_popup.set_item_tooltip(note_map_popup.get_item_index(NOTE_MAP_ID_SAVE), "Save this note map to the library")
+
 
 func _on_note_map_popup_id_pressed(id: int) -> void:
 	var channel := _note_map_channel()
 	if channel == null:
+		return
+	if id == NOTE_MAP_ID_LOAD:
+		_on_note_map_load_pressed()
+		return
+	if id == NOTE_MAP_ID_EDIT:
+		_on_note_map_edit_pressed()
+		return
+	if id == NOTE_MAP_ID_SAVE:
+		_on_note_map_save_pressed()
 		return
 	if id == NOTE_MAP_ID_NONE:
 		_set_assignment(channel, Channel.NoteMapMode.NONE, null)
@@ -698,6 +712,175 @@ func _on_note_map_saved(saved_name: String) -> void:
 		_assign_map(channel, saved)
 		_after_assignment_change()
 	_sync_note_map_toolbar()
+
+
+# ============================================================================
+# SELECTION TOOLS (docs/midi-editor-qol-plan.md, phase 2)
+# ============================================================================
+
+## Tool button -> {"run": Callable, "drum": bool}. A button is enabled only when it has an entry
+## here, notes are selected and, in Drum View, the tool says it applies there. Each tool adds its
+## entry with _register_selection_tool; the tool's work goes through
+## NoteEditor._apply_selection_edit, so it is one undo/redo step.
+var _selection_tools := {}
+
+
+func _setup_selection_tools() -> void:
+	midi_editor.selection_changed.connect(_sync_selection_tools)
+	midi_editor.view_state_changed.connect(_sync_selection_tools)
+	midi_editor.current_track_changed.connect(_sync_selection_tools)
+	_register_selection_tool(tools_group.find_child("Quantize", true, false) as Button,
+			func(editor: NoteEditor): editor.quantize_selection(), true)
+	_register_selection_tool(tools_group.find_child("FlipVertical", true, false) as Button,
+			func(editor: NoteEditor): editor.flip_selection_vertical(), false)
+	_register_selection_tool(tools_group.find_child("FlipHorizontal", true, false) as Button,
+			func(editor: NoteEditor): editor.flip_selection_horizontal(), true)
+	_register_selection_tool(tools_group.find_child("Strum", true, false) as Button,
+			func(editor: NoteEditor): editor.strum_selection(), false)
+	tools_group.find_child("QuantizeOptions", true, false).pressed.connect(_on_quantize_options_pressed)
+	tools_group.find_child("StrumOptions", true, false).pressed.connect(_on_strum_options_pressed)
+	_sync_selection_tools()
+
+
+func _register_selection_tool(button: Button, run: Callable, works_in_drum_view: bool) -> void:
+	_selection_tools[button] = {"run": run, "drum": works_in_drum_view}
+	button.pressed.connect(func():
+		var editor := midi_editor.get_active_note_editor()
+		if editor == null:
+			return
+		# Clip mode: no selection means "all notes". Track mode requires a selection.
+		if editor.selection_manager.selected_notes.is_empty() and not midi_editor.track_mode:
+			editor.selection_manager.select_all(editor.get_all_visual_notes())
+		run.call(editor))
+	_sync_selection_tools()
+
+
+var _quantize_popup: PopupPanel = null
+var _quantize_strength_slider: HSlider = null
+var _quantize_strength_label: Label = null
+var _quantize_mode_check: CheckBox = null
+
+
+## Strength and mode of Quantize. The values persist and the Ctrl+Q hotkey uses them too.
+func _on_quantize_options_pressed() -> void:
+	if _quantize_popup == null:
+		_build_quantize_popup()
+	_quantize_strength_slider.set_value_no_signal(NoteEditor.quantize_strength() * 100.0)
+	_quantize_strength_label.text = "Strength %d%%" % roundi(_quantize_strength_slider.value)
+	_quantize_mode_check.set_pressed_no_signal(
+			NoteEditor.quantize_mode() == NoteTransforms.QuantizeMode.START_AND_END)
+	var button: Button = tools_group.find_child("QuantizeOptions", true, false)
+	var origin := button.get_screen_transform().origin
+	_quantize_popup.reset_size()
+	_quantize_popup.popup(Rect2i(Vector2i(origin), _quantize_popup.get_contents_minimum_size()))
+	# The toolbar is at the bottom of the window: lift the popup above the button.
+	_quantize_popup.position = Vector2i(int(origin.x), int(origin.y - _quantize_popup.size.y))
+
+
+func _build_quantize_popup() -> void:
+	_quantize_popup = PopupPanel.new()
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(220, 0)
+	_quantize_popup.add_child(box)
+	_quantize_strength_label = Label.new()
+	box.add_child(_quantize_strength_label)
+	_quantize_strength_slider = HSlider.new()
+	_quantize_strength_slider.min_value = 0
+	_quantize_strength_slider.max_value = 100
+	_quantize_strength_slider.step = 1
+	_quantize_strength_slider.tooltip_text = "100% snaps notes to the grid; less moves them part of the way."
+	_quantize_strength_slider.value_changed.connect(func(v: float):
+		_quantize_strength_label.text = "Strength %d%%" % roundi(v)
+		Sonara.set_config(NoteEditor.QUANTIZE_STRENGTH_KEY, v / 100.0))
+	_quantize_strength_slider.drag_ended.connect(func(_changed: bool): Sonara.save_config())
+	box.add_child(_quantize_strength_slider)
+	_quantize_mode_check = CheckBox.new()
+	_quantize_mode_check.text = "Quantize note ends too"
+	_quantize_mode_check.tooltip_text = "Also snap each note's end, so its length follows the grid."
+	_quantize_mode_check.toggled.connect(func(on: bool):
+		Sonara.set_config(NoteEditor.QUANTIZE_MODE_KEY,
+				NoteTransforms.QuantizeMode.START_AND_END if on else NoteTransforms.QuantizeMode.START)
+		Sonara.save_config())
+	box.add_child(_quantize_mode_check)
+	add_child(_quantize_popup)
+
+
+var _strum_popup: PopupPanel = null
+var _strum_spread_slider: HSlider = null
+var _strum_spread_label: Label = null
+var _strum_direction_option: OptionButton = null
+var _strum_ramp_slider: HSlider = null
+var _strum_ramp_label: Label = null
+
+
+## Spread, direction and velocity ramp of Strum. The values persist and Ctrl+Shift+S uses them too.
+func _on_strum_options_pressed() -> void:
+	if _strum_popup == null:
+		_build_strum_popup()
+	_strum_spread_slider.set_value_no_signal(NoteEditor.strum_spread())
+	_strum_spread_label.text = "Spread %d ticks" % roundi(_strum_spread_slider.value)
+	_strum_direction_option.select(NoteEditor.strum_direction())
+	_strum_ramp_slider.set_value_no_signal(NoteEditor.strum_velocity_ramp() * 100.0)
+	_strum_ramp_label.text = "Velocity ramp %+d%%" % roundi(_strum_ramp_slider.value)
+	var button: Button = tools_group.find_child("StrumOptions", true, false)
+	var origin := button.get_screen_transform().origin
+	_strum_popup.reset_size()
+	_strum_popup.popup(Rect2i(Vector2i(origin), _strum_popup.get_contents_minimum_size()))
+	_strum_popup.position = Vector2i(int(origin.x), int(origin.y - _strum_popup.size.y))
+
+
+func _build_strum_popup() -> void:
+	_strum_popup = PopupPanel.new()
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(240, 0)
+	_strum_popup.add_child(box)
+	_strum_spread_label = Label.new()
+	box.add_child(_strum_spread_label)
+	_strum_spread_slider = HSlider.new()
+	_strum_spread_slider.min_value = 0
+	_strum_spread_slider.max_value = 240
+	_strum_spread_slider.step = 1
+	_strum_spread_slider.tooltip_text = "Delay between neighbouring chord notes, in ticks (960 per quarter note)."
+	_strum_spread_slider.value_changed.connect(func(v: float):
+		_strum_spread_label.text = "Spread %d ticks" % roundi(v)
+		Sonara.set_config(NoteEditor.STRUM_SPREAD_KEY, roundi(v)))
+	_strum_spread_slider.drag_ended.connect(func(_changed: bool): Sonara.save_config())
+	box.add_child(_strum_spread_slider)
+	_strum_direction_option = OptionButton.new()
+	_strum_direction_option.add_item("Up (low to high)", NoteTransforms.StrumDirection.UP)
+	_strum_direction_option.add_item("Down (high to low)", NoteTransforms.StrumDirection.DOWN)
+	_strum_direction_option.add_item("Alternate", NoteTransforms.StrumDirection.ALTERNATE)
+	_strum_direction_option.tooltip_text = "Order the chord notes are played in. Alternate flips direction every chord."
+	_strum_direction_option.item_selected.connect(func(index: int):
+		Sonara.set_config(NoteEditor.STRUM_DIRECTION_KEY, _strum_direction_option.get_item_id(index))
+		Sonara.save_config())
+	box.add_child(_strum_direction_option)
+	_strum_ramp_label = Label.new()
+	box.add_child(_strum_ramp_label)
+	_strum_ramp_slider = HSlider.new()
+	_strum_ramp_slider.min_value = -100
+	_strum_ramp_slider.max_value = 100
+	_strum_ramp_slider.step = 1
+	_strum_ramp_slider.tooltip_text = "Velocity added across the strum: the first note is unchanged, the last gets the full amount."
+	_strum_ramp_slider.value_changed.connect(func(v: float):
+		_strum_ramp_label.text = "Velocity ramp %+d%%" % roundi(v)
+		Sonara.set_config(NoteEditor.STRUM_RAMP_KEY, v / 100.0))
+	_strum_ramp_slider.drag_ended.connect(func(_changed: bool): Sonara.save_config())
+	box.add_child(_strum_ramp_slider)
+	add_child(_strum_popup)
+
+
+func _sync_selection_tools() -> void:
+	var editor := midi_editor.get_active_note_editor() if midi_editor else null
+	var has_selection: bool = editor != null and editor.selection_manager != null \
+			and not editor.selection_manager.selected_notes.is_empty()
+	var can_run: bool = has_selection or (editor != null and not midi_editor.track_mode)
+	for button: Button in tools_group.find_children("*", "Button", true, false):
+		if button.name == &"QuantizeOptions" or button.name == &"StrumOptions":
+			continue  # always usable: it only sets the remembered options
+		var entry: Dictionary = _selection_tools.get(button, {})
+		button.disabled = entry.is_empty() or not can_run \
+				or (midi_editor.drum_view and not entry["drum"])
 
 
 func _on_grid_helper_changed():

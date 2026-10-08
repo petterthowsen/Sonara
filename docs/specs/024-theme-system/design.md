@@ -238,6 +238,7 @@ themed control reads them through `UiColors.role(&"accent_primary")`, which read
   | `DeviceCardSelected` | DeviceCard | border `border_selected` |
   | `DeviceCardHeader` | PanelContainer | `card_header`, margin `unit` |
   | `Well` | PanelContainer | `well`, margin `unit` |
+  | `ButtonPanel` | PanelContainer | `control_bg` darkened 35%, 1 px `border`, 1 px margin; the dark fill is the divider between a button and its options button |
   | `Floating` | PanelContainer | `floating`, 1 px `border` |
   | `ContextMenu` | PopupPanel | `floating`, 1 px `border` |
   | `ContextMenuList` | PopupMenu | `floating`, 1 px `border` |

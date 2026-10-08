@@ -24,6 +24,7 @@ const VARIATIONS := {
 	&"DeviceCardSelected": &"DeviceCard",
 	&"DeviceCardHeader": &"PanelContainer",
 	&"Well": &"PanelContainer",
+	&"ButtonPanel": &"PanelContainer",
 	&"Floating": &"PanelContainer",
 	&"ContextMenu": &"PopupPanel",
 	&"ContextMenuList": &"PopupMenu",
@@ -480,6 +481,12 @@ static func _variations(t: Theme, p: ThemePalette) -> void:
 	t.set_stylebox(&"panel", &"DeviceCardSelected", box(p, p.role(&"card"), u, -1.0, p.role(&"border_selected"), 1))
 	t.set_stylebox(&"panel", &"DeviceCardHeader", box(p, p.role(&"card_header"), u))
 	t.set_stylebox(&"panel", &"Well", box(p, p.role(&"well"), u))
+	# Frames a button and its options button as one control. The fill is darker than the buttons,
+	# so the gap between them reads as a divider; the 1 px margin keeps the border clear of them.
+	# Its corners are one pixel rounder than the buttons', so the curves line up across the margin.
+	var button_panel := box(p, p.role(&"control_bg").darkened(0.35), 1.0, -1.0, p.role(&"border"), 1)
+	button_panel.set_corner_radius_all(p.radius + 1 if p.radius > 0 else 0)
+	t.set_stylebox(&"panel", &"ButtonPanel", button_panel)
 	t.set_stylebox(&"panel", &"Floating", floating_box(p))
 	t.set_stylebox(&"panel", &"ContextMenu", floating_box(p))
 	t.set_stylebox(&"panel", &"ContextMenuList", floating_box(p))

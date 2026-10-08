@@ -19,6 +19,9 @@ extends Node
 
 
 ## Setting type enum — drives which editor widget the dialog uses.
+const MODS_ALT_AUTO := "Alt: length and velocity"
+const MODS_CTRL_ALT := "Ctrl: length, Alt: velocity"
+
 enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT, COLOR }
 
 
@@ -326,6 +329,17 @@ func _register_all_settings() -> void:
 		"Zoom speed of the Ctrl/Cmd + scroll (vertical) and Shift + scroll (horizontal) wheel zoom, shared by the arranger timeline and the MIDI editor.\n\n"
 		+ "Slow keeps the previous speed, Normal is about a third faster, Fast is for quick navigation.",
 	)).choices(["Slow", "Normal", "Fast"]).sub("Zoom")
+
+	_register(Setting.new(
+		"midi_editor/note_drag_modifiers",
+		"Note Drag Modifiers",
+		Type.CHOICE,
+		MODS_ALT_AUTO,
+		CATEGORY_BEHAVIOR,
+		"Which key changes a note's length while you drag it. Hold the key after grabbing the note. Shift always drags without snapping.\n\n"
+		+ "Alt: length and velocity: hold Alt and drag sideways to change length or up and down to change velocity. The first clear movement decides which.\n"
+		+ "Ctrl: length, Alt: velocity: Ctrl drag changes length, Alt drag changes velocity.",
+	)).choices([MODS_ALT_AUTO, MODS_CTRL_ALT]).sub("MIDI Editor")
 
 	_register(Setting.new(
 		"clip_editor/note_value_display",

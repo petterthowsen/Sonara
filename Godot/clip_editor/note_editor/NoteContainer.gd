@@ -121,8 +121,8 @@ var position_offset_ticks: int = 0:
 			update_container_width()
 
 
-## Display colour -> StyleBoxFlat shared by every note drawn in that colour. Velocity
-## shading is quantised (VisualNote.VELOCITY_SHADES), so this stays small.
+## Display colour -> StyleBoxFlat shared by every note drawn in that colour. Every note
+## body has the same brightness (velocity is a bar, not a shade), so this stays small.
 var _style_cache: Dictionary = {}
 ## Text colour -> LabelSettings shared by every note label in that colour.
 var _label_settings_cache: Dictionary = {}

@@ -24,6 +24,7 @@ func run_tests() -> void:
 	_test_conditions()
 	_test_knob_context()
 	_test_extra_contexts()
+	_test_note_hover()
 
 
 func _bar(ctx: String, mods: int, width := 4000.0) -> String:
@@ -48,12 +49,13 @@ func _test_gestures_valid() -> void:
 
 func _test_no_modifiers() -> void:
 	var text := _plain(_bar("arranger", 0))
-	_assert("Wheel scroll" in text, "arranger lists the wheel gesture: " + text)
+	_assert("Double-click open clip" in text, "arranger lists its gestures: " + text)
+	_assert(not "Wheel scroll" in text and not "Middle-drag pan" in text, "scroll and pan are tagged help:false: " + text)
 	_assert(not "Space" in text, "fundamental hotkeys (Play) are tagged help:false")
 	_assert("Shift …" in text, "arranger hints at Shift")
 	_assert("Ctrl …" in text, "arranger hints at Ctrl")
 	_assert(not "zoom horizontally" in text, "Shift entries stay hidden without Shift")
-	_assert("[color=%s]Wheel[/color]" % HelpBar._chip_color() in _bar("arranger", 0), "chips use the chip colour")
+	_assert("[color=%s]Double-click[/color]" % HelpBar._chip_color() in _bar("arranger", 0), "chips use the chip colour")
 
 
 func _test_shift_held() -> void:
@@ -140,3 +142,17 @@ func _test_conditions() -> void:
 	Hotkeys.set_condition("clip_selection", true)
 	_assert("← move clips left" in _plain(_bar("arranger", 0)), "move keys shown with a clip selection: " + _plain(_bar("arranger", 0)))
 	Hotkeys.set_condition("clip_selection", false)
+
+
+func _test_note_hover() -> void:
+	var key := "midi_editor/note_drag_modifiers"
+	var old = Settings.get_value(key)
+	Settings.set_value(key, Settings.MODS_ALT_AUTO)
+	var text := _plain(_bar("note_hover", 0))
+	_assert("Drag move" in text, "hovering a note lists dragging it: " + text)
+	_assert("Alt …" in text and "Shift …" in text and "Ctrl …" in text, "hovering a note hints at its modifiers: " + text)
+	_assert("length (sideways) / velocity" in _plain(_bar("note_hover", KEY_MASK_ALT)), "Alt over a note: length / velocity")
+	Settings.set_value(key, Settings.MODS_CTRL_ALT)
+	var alt := _plain(_bar("note_hover", KEY_MASK_ALT))
+	_assert("velocity (up, down)" in alt and not "length" in alt, "Alt over a note follows the setting: " + alt)
+	Settings.set_value(key, old)

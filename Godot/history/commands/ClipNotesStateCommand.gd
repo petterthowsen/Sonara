@@ -67,7 +67,10 @@ static func capture_many(clips: Array) -> Dictionary:
 
 
 ## Record one undo step for every clip in `before` (from capture_many) whose notes changed.
-static func commit_many(action_name: String, before: Dictionary) -> void:
+## `first` and `last` commands (SelectionStateCommands) go before and after the note commands
+## in the same step; they alone are enough to record one.
+static func commit_many(action_name: String, before: Dictionary,
+		first: Array[Command] = [], last: Array[Command] = []) -> void:
 	var cmds: Array[Command] = []
 	for c in before.keys():
 		var b: Array = before[c]
@@ -75,8 +78,9 @@ static func commit_many(action_name: String, before: Dictionary) -> void:
 		if snapshots_equal(b, after):
 			continue
 		cmds.append(ClipNotesStateCommand.new(action_name, c, b, after))
-	if cmds.is_empty():
+	if cmds.is_empty() and first.is_empty() and last.is_empty():
 		return
+	cmds.assign(first + cmds + last)
 	HistoryUtil.record_many(action_name, cmds)
 
 

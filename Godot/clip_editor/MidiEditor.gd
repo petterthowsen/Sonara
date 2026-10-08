@@ -229,6 +229,9 @@ signal note_track_picked(track: Track)
 ## refresh the toolbar and the empty-view hint.
 signal view_state_changed
 
+## The selected notes of a note editor changed (the toolbar's selection tools follow it).
+signal selection_changed
+
 ## The user clicked the empty-Drum-View hint (REQ-023).
 signal note_map_editor_requested
 
@@ -274,7 +277,7 @@ var scroll_speed_notes = 2
 	get:
 		return scroll_speed_notes * note_height
 
-@export var scroll_speed_h = 50
+@export var scroll_speed_h: float = 50.0
 
 # Zoom sensitivity: derived live from the shared scroll-zoom sensitivity setting
 # (Settings › Behavior › Zoom), the same one the arranger follows. Vertical keeps
@@ -348,6 +351,7 @@ var clip: Clip:
 		pass
 
 func _ready():
+	mouse_exited.connect(func(): _update_note_hover(false))
 	# Initialize target scroll positions to current values
 	target_scroll_vertical = scroll_vertical
 	target_scroll_horizontal = h_scroll.scroll_horizontal
@@ -1275,10 +1279,30 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.NONE:
 		active_editor.update_hover_cursor(note_editor_pos)
+		_update_note_hover(active_editor.get_note_at_position(note_editor_pos) != null)
 		# A note of another track can be clicked too: show the hand over it.
 		if track_mode and active_editor.mouse_default_cursor_shape == Control.CURSOR_ARROW \
 				and not context_layer.note_at(context_layer.make_canvas_position_local(mevent.global_position)).is_empty():
 			active_editor.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+
+
+var _note_hover_on := false
+
+
+## Help bar: while the pointer is over a note, show what dragging it can do. A state wins over
+## hover, and a drag's own state (begun later) wins over this one.
+func _update_note_hover(over_note: bool) -> void:
+	if over_note == _note_hover_on:
+		return
+	_note_hover_on = over_note
+	if over_note:
+		Hotkeys.begin_state(self, "note_hover")
+	else:
+		Hotkeys.end_state(self)
+
+
+func _exit_tree() -> void:
+	_update_note_hover(false)
 
 
 # ============================================================================
@@ -1476,6 +1500,10 @@ func _update_note_editor_states() -> void:
 		active.modulate.a = 1.0
 
 
+func _on_note_editor_selection_changed(_notes: Array[VisualNote]) -> void:
+	selection_changed.emit()
+
+
 ## Keep a note editor sized to content and wired to this MidiEditor's grid.
 ## The scene editor is reused across binds; re-assigning grid_helper reconnects
 ## zoom/scroll so its notes keep following the piano roll.
@@ -1493,8 +1521,12 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 		editor.notes_changed.connect(_invalidate_sounding)
 	# The focused note editor handles keys itself (see NoteEditor._gui_input); the
 	# range overlays are ours, so refresh them when that changed the selection.
+	if not editor.selection_range_restored.is_connected(_update_selection_overlays):
+		editor.selection_range_restored.connect(_update_selection_overlays)
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
 		editor.key_input_handled.connect(_update_selection_overlays)
+	if editor.selection_manager and not editor.selection_manager.selection_changed.is_connected(_on_note_editor_selection_changed):
+		editor.selection_manager.selection_changed.connect(_on_note_editor_selection_changed)
 	editor.next_values = next_note_values
 	if not editor.note_touched.is_connected(next_note_values.take_from):
 		editor.note_touched.connect(next_note_values.take_from)

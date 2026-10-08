@@ -147,15 +147,16 @@ func _test_notes_share_styleboxes() -> void:
 	var a: VisualNote = by_pitch[60]
 	var b: VisualNote = by_pitch[64]
 	var quiet: VisualNote = by_pitch[67]
-	_assert(a.get_theme_stylebox("panel") == b.get_theme_stylebox("panel"), "same colour and velocity share one stylebox")
-	_assert(a.get_theme_stylebox("panel") != quiet.get_theme_stylebox("panel"), "a different velocity uses another stylebox")
+	# Velocity is a bar, not a shade, so notes of one colour share a box whatever their velocity.
+	_assert(a._applied_style == b._applied_style, "same colour shares one stylebox")
+	_assert(a._applied_style == quiet._applied_style, "velocity does not change the stylebox")
 	_assert(a.label.label_settings == b.label.label_settings, "labels of one text colour share LabelSettings")
 
 	# Selecting one note must not recolour the other through the shared box.
-	var colour_b: Color = (b.get_theme_stylebox("panel") as StyleBoxFlat).bg_color
+	var colour_b: Color = b._applied_style.bg_color
 	a.set_selected(true)
-	_assert((b.get_theme_stylebox("panel") as StyleBoxFlat).bg_color == colour_b, "selecting a note leaves the others' colour alone")
-	_assert((a.get_theme_stylebox("panel") as StyleBoxFlat).bg_color != colour_b, "the selected note is drawn brighter")
+	_assert(b._applied_style.bg_color == colour_b, "selecting a note leaves the others' colour alone")
+	_assert(a._applied_style.bg_color != colour_b, "the selected note is drawn brighter")
 	ctx.clip_editor.queue_free()
 	await process_frame
 
