@@ -1,6 +1,16 @@
 # Sonara DAW - Project Status
 
 
+## Note effects (spec 027, #83)
+
+### Working
+- Wave 1 (T-001…T-017): note flow through chains, Transpose, Note Filter, Velocity, plus the Godot category, drop rules, marker, Simple View disable rules and `/project/scale`. `cargo test` and the targeted Godot tests pass. T-017 live check passed (user, 2026-10-08): Transpose then Velocity on a Polysynth from the virtual keyboard and from a clip, bypassing Transpose mid-note and moving the Polysynth before it leave no hanging notes.
+
+### Not Working / To do
+- Simple View controls for the note effects show normalized knob values instead of real ones (semitones, %, key). Likely a general Simple View issue, not specific to note effects.
+- Waves 2–4 (T-018 onwards) not started.
+
+
 ## Built-in effects UI (spec 012 follow-up)
 
 The engine side of the effects (`docs/specs/012-builtin-effects/plan.md`, phases 1-7) is close to spec. Some of the Godot views need work.
