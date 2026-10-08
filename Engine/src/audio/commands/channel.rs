@@ -336,13 +336,13 @@ pub(super) fn set_send_mute(
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::commands::{process_command, AudioCommand};
+    use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
     use crate::audio::state::EngineState;
 
     #[test]
     fn pan_width_command_clamps() {
         let mut state = EngineState::default();
-        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut effects = CommandEffects::default();
         process_command(
             &mut state,
             AudioCommand::CreateChannel {
@@ -350,7 +350,7 @@ mod tests {
                 name: "T".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         for (input, expected) in [(3.0, 1.0), (-3.0, -1.0), (0.4, 0.4)] {
             process_command(
@@ -360,7 +360,7 @@ mod tests {
                     width: input,
                 },
                 128,
-                &status_tx,
+                &mut effects,
             );
             assert_eq!(state.channels[&2].pan_width, expected);
         }

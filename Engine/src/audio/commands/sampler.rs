@@ -159,7 +159,7 @@ fn with_sampler(
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::commands::{process_command, AudioCommand, EngineStatus};
+    use crate::audio::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
     use crate::audio::devices::DevicePath;
     use crate::audio::state::EngineState;
 
@@ -169,7 +169,13 @@ mod tests {
         let mut state = EngineState::default();
         let (status_tx, status_rx) = crossbeam::channel::unbounded();
         let run = |state: &mut EngineState, cmd| {
-            process_command(state, cmd, 128, &status_tx);
+            // The sampler device sends its own statuses to `status_tx`; forward the command's
+            // so the test reads one stream.
+            let mut effects = CommandEffects::default();
+            process_command(state, cmd, 128, &mut effects);
+            for status in effects.statuses {
+                let _ = status_tx.send(status);
+            }
         };
         run(
             &mut state,

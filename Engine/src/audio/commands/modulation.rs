@@ -1,11 +1,10 @@
 //! Modulator commands: adding, removing and routing modulators, and re-sending them to Godot.
 
 use super::status::BuiltinParamInfo;
-use crate::audio::commands::EngineStatus;
+use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
-use crossbeam::channel::Sender;
 use tracing::warn;
 
 /// Add a modulator to a device, wrapping the device first when needed.
@@ -15,17 +14,17 @@ pub(super) fn add_modulator(
     device_path: DevicePath,
     mod_id: u8,
     kind: String,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     let Some(kind) = crate::audio::modulation::ModulatorKind::from_id(&kind) else {
         let message = format!("Unknown modulator kind '{kind}'");
         warn!("{}", message);
-        log_engine_error(status_tx, &message);
+        log_engine_error(effects, &message);
         return None;
     };
     if let Err(e) = ensure_modulated(state, channel_id, &device_path) {
         warn!("{}", e);
-        log_engine_error(status_tx, &e);
+        log_engine_error(effects, &e);
         return None;
     }
     let result = state
@@ -36,7 +35,7 @@ pub(super) fn add_modulator(
         .map(|modulated| modulated.add_modulator(mod_id, kind));
     match result {
         Some(Ok(())) => {
-            let _ = status_tx.send(EngineStatus::ModulatorAdded {
+            effects.statuses.push(EngineStatus::ModulatorAdded {
                 channel_id,
                 device_path,
                 mod_id,
@@ -45,14 +44,14 @@ pub(super) fn add_modulator(
         }
         Some(Err(e)) => {
             warn!("{}", e);
-            log_engine_error(status_tx, &e);
+            log_engine_error(effects, &e);
             unwrap_if_empty(state, channel_id, &device_path);
         }
         None => {
             let message =
                 format!("No device at channel {channel_id} path {device_path} to modulate");
             warn!("{}", message);
-            log_engine_error(status_tx, &message);
+            log_engine_error(effects, &message);
         }
     }
 
@@ -65,7 +64,7 @@ pub(super) fn remove_modulator(
     channel_id: ChannelId,
     device_path: DevicePath,
     mod_id: u8,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     let result = state
         .channels
@@ -76,7 +75,7 @@ pub(super) fn remove_modulator(
     match result {
         Some(Ok(())) => {
             unwrap_if_empty(state, channel_id, &device_path);
-            let _ = status_tx.send(EngineStatus::ModulatorRemoved {
+            effects.statuses.push(EngineStatus::ModulatorRemoved {
                 channel_id,
                 device_path,
                 mod_id,
@@ -84,12 +83,12 @@ pub(super) fn remove_modulator(
         }
         Some(Err(e)) => {
             warn!("{}", e);
-            log_engine_error(status_tx, &e);
+            log_engine_error(effects, &e);
         }
         None => {
             let message = format!("No modulators at channel {channel_id} path {device_path}");
             warn!("{}", message);
-            log_engine_error(status_tx, &message);
+            log_engine_error(effects, &message);
         }
     }
 }
@@ -102,7 +101,7 @@ pub(super) fn set_modulator_parameter(
     mod_id: u8,
     param_id: u32,
     value: f32,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     let result = state
         .channels
@@ -112,7 +111,7 @@ pub(super) fn set_modulator_parameter(
         .map(|modulated| modulated.set_modulator_param(mod_id, param_id, value));
     match result {
         Some(Ok(value)) => {
-            let _ = status_tx.send(EngineStatus::ModulatorParamChanged {
+            effects.statuses.push(EngineStatus::ModulatorParamChanged {
                 channel_id,
                 device_path,
                 mod_id,
@@ -122,12 +121,12 @@ pub(super) fn set_modulator_parameter(
         }
         Some(Err(e)) => {
             warn!("{}", e);
-            log_engine_error(status_tx, &e);
+            log_engine_error(effects, &e);
         }
         None => {
             let message = format!("No modulators at channel {channel_id} path {device_path}");
             warn!("{}", message);
-            log_engine_error(status_tx, &message);
+            log_engine_error(effects, &message);
         }
     }
 }
@@ -140,7 +139,7 @@ pub(super) fn set_modulator_route(
     mod_id: u8,
     target: String,
     amount: f32,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     let result = state
         .channels
@@ -150,7 +149,7 @@ pub(super) fn set_modulator_route(
         .map(|modulated| modulated.set_modulator_route(mod_id, &target, amount));
     match result {
         Some(Ok(amount)) => {
-            let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+            effects.statuses.push(EngineStatus::ModulatorRouteChanged {
                 channel_id,
                 device_path,
                 mod_id,
@@ -162,8 +161,8 @@ pub(super) fn set_modulator_route(
         // logged and echoed with amount 0, so the UI drops it.
         Some(Err(e)) => {
             warn!("{}", e);
-            log_engine_error(status_tx, &e);
-            let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+            log_engine_error(effects, &e);
+            effects.statuses.push(EngineStatus::ModulatorRouteChanged {
                 channel_id,
                 device_path,
                 mod_id,
@@ -174,8 +173,8 @@ pub(super) fn set_modulator_route(
         None => {
             let message = format!("No modulators at channel {channel_id} path {device_path}");
             warn!("{}", message);
-            log_engine_error(status_tx, &message);
-            let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+            log_engine_error(effects, &message);
+            effects.statuses.push(EngineStatus::ModulatorRouteChanged {
                 channel_id,
                 device_path,
                 mod_id,
@@ -191,7 +190,7 @@ pub(super) fn clear_modulators(
     state: &mut EngineState,
     channel_id: ChannelId,
     device_path: DevicePath,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     let Some(channel) = state.channels.get_mut(&channel_id) else {
         warn!("Channel {} not found for clear modulators", channel_id);
@@ -207,7 +206,7 @@ pub(super) fn clear_modulators(
     if let Some(modulated) = device.as_modulated_mut() {
         modulated.clear_modulators();
     }
-    let _ = status_tx.send(EngineStatus::ModulatorsCleared {
+    effects.statuses.push(EngineStatus::ModulatorsCleared {
         channel_id,
         device_path,
     });
@@ -273,7 +272,7 @@ pub fn modulator_kind_infos() -> Vec<EngineStatus> {
 /// Re-send a device's modulators after a missed status: `ModulatorsCleared`, then one
 /// `ModulatorAdded` per modulator, each of its parameters and each route.
 pub(super) fn resend_modulators(
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
     channel_id: ChannelId,
     device_path: &DevicePath,
     device: &mut dyn crate::audio::devices::AudioDevice,
@@ -284,12 +283,12 @@ pub(super) fn resend_modulators(
     if modulated.modulator_count() == 0 {
         return;
     }
-    let _ = status_tx.send(EngineStatus::ModulatorsCleared {
+    effects.statuses.push(EngineStatus::ModulatorsCleared {
         channel_id,
         device_path: *device_path,
     });
     for (mod_id, kind) in modulated.modulator_kinds() {
-        let _ = status_tx.send(EngineStatus::ModulatorAdded {
+        effects.statuses.push(EngineStatus::ModulatorAdded {
             channel_id,
             device_path: *device_path,
             mod_id,
@@ -297,7 +296,7 @@ pub(super) fn resend_modulators(
         });
         for spec in kind.table().specs {
             if let Some(value) = modulated.get_modulator_param(mod_id, spec.id) {
-                let _ = status_tx.send(EngineStatus::ModulatorParamChanged {
+                effects.statuses.push(EngineStatus::ModulatorParamChanged {
                     channel_id,
                     device_path: *device_path,
                     mod_id,
@@ -308,7 +307,7 @@ pub(super) fn resend_modulators(
         }
     }
     for (mod_id, target, amount) in modulated.modulator_routes() {
-        let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+        effects.statuses.push(EngineStatus::ModulatorRouteChanged {
             channel_id,
             device_path: *device_path,
             mod_id,
@@ -319,8 +318,8 @@ pub(super) fn resend_modulators(
 }
 
 /// Forward a refused modulator command to Godot's `/log` so the UI can show why.
-fn log_engine_error(status_tx: &Sender<EngineStatus>, message: &str) {
-    let _ = status_tx.send(EngineStatus::LogMessage {
+fn log_engine_error(effects: &mut CommandEffects, message: &str) {
+    effects.statuses.push(EngineStatus::LogMessage {
         level: "error".to_string(),
         message: message.to_string(),
     });
@@ -329,7 +328,7 @@ fn log_engine_error(status_tx: &Sender<EngineStatus>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::commands::{process_command, AudioCommand, EngineStatus};
+    use crate::audio::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
     use crate::audio::devices::DevicePath;
     use crate::audio::state::EngineState;
 
@@ -353,7 +352,7 @@ mod tests {
     }
 
     /// Channel 2 with one Filter effect, the modulatable target the tests route into.
-    fn modulator_test_state(status_tx: &Sender<EngineStatus>) -> EngineState {
+    fn modulator_test_state(effects: &mut CommandEffects) -> EngineState {
         let mut state = EngineState::default();
         process_command(
             &mut state,
@@ -362,7 +361,7 @@ mod tests {
                 name: "T".to_string(),
             },
             128,
-            status_tx,
+            effects,
         );
         state.channels.get_mut(&2).unwrap().devices.push(
             crate::audio::devices::create_effect("sonara.builtin.filter", 48_000.0, 512)
@@ -380,9 +379,9 @@ mod tests {
 
     #[test]
     fn modulator_commands_wrap_and_echo() {
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
-        let mut state = modulator_test_state(&status_tx);
-        while status_rx.try_recv().is_ok() {}
+        let mut effects = CommandEffects::default();
+        let mut state = modulator_test_state(&mut effects);
+        effects.statuses.clear();
         let path = DevicePath::root(0);
 
         process_command(
@@ -394,12 +393,12 @@ mod tests {
                 kind: "lfo".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         assert_eq!(modulator_count(&mut state), 1, "the device is wrapped");
         assert!(matches!(
-            status_rx.try_recv(),
-            Ok(EngineStatus::ModulatorAdded { mod_id: 0, kind, .. }) if kind == "lfo"
+            effects.next_status(),
+            Some(EngineStatus::ModulatorAdded { mod_id: 0, kind, .. }) if kind == "lfo"
         ));
 
         // LFO Rate (id 10) lands at the requested normalized value.
@@ -413,11 +412,11 @@ mod tests {
                 value: 0.75,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         assert!(matches!(
-            status_rx.try_recv(),
-            Ok(EngineStatus::ModulatorParamChanged { param_id: 10, value, .. })
+            effects.next_status(),
+            Some(EngineStatus::ModulatorParamChanged { param_id: 10, value, .. })
                 if (value - 0.75).abs() < 1e-6
         ));
 
@@ -432,11 +431,11 @@ mod tests {
                 amount: 4.0,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         assert!(matches!(
-            status_rx.try_recv(),
-            Ok(EngineStatus::ModulatorRouteChanged { target, amount, .. })
+            effects.next_status(),
+            Some(EngineStatus::ModulatorRouteChanged { target, amount, .. })
                 if target == "param/2" && amount == 1.0
         ));
         assert!(state.channels.get_mut(&2).unwrap().devices[0]
@@ -457,9 +456,9 @@ mod tests {
                 amount: 0.5,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
-        let refused: Vec<_> = status_rx.try_iter().collect();
+        let refused: Vec<_> = std::mem::take(&mut effects.statuses);
         assert!(refused
             .iter()
             .any(|s| matches!(s, EngineStatus::LogMessage { level, .. } if level == "error")));
@@ -478,7 +477,7 @@ mod tests {
                 mod_id: 0,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         assert_eq!(modulator_count(&mut state), 0);
         assert!(state.channels.get_mut(&2).unwrap().devices[0]
@@ -488,8 +487,8 @@ mod tests {
 
     #[test]
     fn clear_modulators_unwraps() {
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
-        let mut state = modulator_test_state(&status_tx);
+        let mut effects = CommandEffects::default();
+        let mut state = modulator_test_state(&mut effects);
         let path = DevicePath::root(0);
         process_command(
             &mut state,
@@ -500,9 +499,9 @@ mod tests {
                 kind: "ad".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
-        while status_rx.try_recv().is_ok() {}
+        effects.statuses.clear();
         process_command(
             &mut state,
             AudioCommand::ClearModulators {
@@ -510,11 +509,11 @@ mod tests {
                 device_path: path,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         assert!(matches!(
-            status_rx.try_recv(),
-            Ok(EngineStatus::ModulatorsCleared { .. })
+            effects.next_status(),
+            Some(EngineStatus::ModulatorsCleared { .. })
         ));
         assert!(state.channels.get_mut(&2).unwrap().devices[0]
             .as_modulated_mut()
@@ -523,8 +522,8 @@ mod tests {
 
     #[test]
     fn get_device_state_resends_modulators() {
-        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
-        let mut state = modulator_test_state(&status_tx);
+        let mut effects = CommandEffects::default();
+        let mut state = modulator_test_state(&mut effects);
         let path = DevicePath::root(0);
         process_command(
             &mut state,
@@ -535,7 +534,7 @@ mod tests {
                 kind: "lfo".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         process_command(
             &mut state,
@@ -547,9 +546,9 @@ mod tests {
                 amount: 0.5,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
-        let (get_tx, get_rx) = crossbeam::channel::unbounded();
+        let mut get_effects = CommandEffects::default();
         process_command(
             &mut state,
             AudioCommand::GetDeviceState {
@@ -557,9 +556,9 @@ mod tests {
                 device_path: path,
             },
             128,
-            &get_tx,
+            &mut get_effects,
         );
-        let replies: Vec<_> = get_rx.try_iter().collect();
+        let replies: Vec<_> = std::mem::take(&mut get_effects.statuses);
         assert!(matches!(replies[0], EngineStatus::ModulatorsCleared { .. }));
         assert!(replies.iter().any(|s| matches!(
             s,

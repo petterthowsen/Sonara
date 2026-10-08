@@ -1,7 +1,7 @@
 //! Clip commands: the clip pool, MIDI notes, audio clip loading, and clip instances on tracks.
 
 use crate::audio::clip::{Clip, ClipInstance, ClipLoadState, ClipNote};
-use crate::audio::commands::EngineStatus;
+use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::state::EngineState;
 use crate::audio::types::{ClipId, ClipInstanceId, MidiNote, NoteId, Tick, TrackId};
 use tracing::{info, warn};
@@ -23,8 +23,10 @@ pub(super) fn create_clip(state: &mut EngineState, id: ClipId, name: String, cli
 }
 
 /// Remove a clip from the pool.
-pub(super) fn remove_clip(state: &mut EngineState, id: ClipId) {
-    if state.clips.remove(&id).is_some() {
+pub(super) fn remove_clip(state: &mut EngineState, id: ClipId, effects: &mut CommandEffects) {
+    if let Some(clip) = state.clips.remove(&id) {
+        // Dropping the decoded PCM frees memory, so it waits until the lock is released.
+        effects.discard(clip);
         info!("Clip removed: {}", id);
     } else {
         warn!("Clip not found for removal: {}", id);
@@ -162,6 +164,7 @@ pub(super) fn begin_load_audio_clip(
     clip_id: ClipId,
     req_id: String,
     source_path: String,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     if let Some(clip) = state.clips.get_mut(&clip_id) {
         info!(
@@ -171,7 +174,7 @@ pub(super) fn begin_load_audio_clip(
 
         clip.audio_source_path = Some(source_path.clone());
         clip.waveform_cache_key = None;
-        clip.audio_samples.clear();
+        effects.discard(std::mem::take(&mut clip.audio_samples));
         clip.content_length_ticks = 0;
         clip.load_state = ClipLoadState::Loading {
             req_id: req_id.clone(),
@@ -202,6 +205,7 @@ pub(super) fn load_audio_clip(
     samples: Vec<f32>,
     sample_rate: u32,
     channels: usize,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     if let Some(clip) = state.clips.get_mut(&clip_id) {
         if let ClipLoadState::Loading {
@@ -213,6 +217,7 @@ pub(super) fn load_audio_clip(
                     "Stale clip load event for {} (expected req_id {}, got {})",
                     clip_id, current_req, req_id
                 );
+                effects.discard(samples);
                 return None;
             }
         }
@@ -228,7 +233,7 @@ pub(super) fn load_audio_clip(
         // Move rather than clone: decoded files can be hundreds of MB, and this runs
         // with the state lock held
         let total_samples = samples.len();
-        clip.audio_samples = samples;
+        effects.discard(std::mem::replace(&mut clip.audio_samples, samples));
         clip.audio_sample_rate = sample_rate;
         clip.audio_channels = channels;
         clip.audio_source_path = Some(source_path.clone());
@@ -258,6 +263,7 @@ pub(super) fn load_audio_clip(
         });
     } else {
         warn!("Clip not found for load audio: {}", clip_id);
+        effects.discard(samples);
     }
 
     None
@@ -269,6 +275,7 @@ pub(super) fn fail_audio_clip_load(
     clip_id: ClipId,
     req_id: String,
     message: String,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     if let Some(clip) = state.clips.get_mut(&clip_id) {
         warn!(
@@ -276,7 +283,7 @@ pub(super) fn fail_audio_clip_load(
             clip_id, req_id, message
         );
 
-        clip.audio_samples.clear();
+        effects.discard(std::mem::take(&mut clip.audio_samples));
         clip.content_length_ticks = 0;
         clip.waveform_cache_key = None;
         clip.load_state = ClipLoadState::Failed {
@@ -536,13 +543,13 @@ pub(super) fn update_clip_instance_reverse(
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::commands::{process_command, AudioCommand};
+    use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
     use crate::audio::state::EngineState;
 
     #[test]
     fn clip_note_command_stores_float_values() {
         let mut state = EngineState::default();
-        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut effects = CommandEffects::default();
         let clip_id = "c".to_string();
         process_command(
             &mut state,
@@ -552,7 +559,7 @@ mod tests {
                 clip_type: "midi".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         process_command(
             &mut state,
@@ -566,7 +573,7 @@ mod tests {
                 release: 0.25,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         let note = &state.clips[&clip_id].midi_notes[0];
         assert_eq!((note.velocity, note.release), (0.5039, 0.25));
@@ -583,7 +590,7 @@ mod tests {
                 release: 0.9,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         let note = &state.clips[&clip_id].midi_notes[0];
         assert_eq!((note.note, note.velocity, note.release), (62, 0.75, 0.9));

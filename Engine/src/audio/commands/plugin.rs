@@ -3,11 +3,10 @@
 //! `CommandWorker` handles plugin state and GUI commands for subprocess plugins first. What reaches
 //! these functions targets a device that is not a loaded plugin.
 
-use crate::audio::commands::EngineStatus;
+use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
-use crossbeam::channel::Sender;
 use tracing::warn;
 
 /// Answer a state save for a device that is not a plugin, so a project save waiting on it does not
@@ -19,7 +18,7 @@ pub(super) fn save_plugin_state(
     channel_id: ChannelId,
     device_path: DevicePath,
     file_path: String,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     let found = state
         .channels
@@ -32,7 +31,7 @@ pub(super) fn save_plugin_state(
         );
     }
     // Always answer, so a project save waiting on it doesn't time out.
-    let _ = status_tx.send(EngineStatus::PluginStateSaved {
+    effects.statuses.push(EngineStatus::PluginStateSaved {
         channel_id,
         device_path,
         file_path,
@@ -78,7 +77,7 @@ pub(super) fn plugin_gui_unavailable(channel_id: ChannelId, device_path: DeviceP
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::commands::{process_command, AudioCommand, EngineStatus};
+    use crate::audio::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
     use crate::audio::devices::DevicePath;
     use crate::audio::state::EngineState;
 
@@ -87,7 +86,7 @@ mod tests {
     #[test]
     fn save_plugin_state_always_answers() {
         let mut state = EngineState::default();
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let mut effects = CommandEffects::default();
         process_command(
             &mut state,
             AudioCommand::CreateChannel {
@@ -95,12 +94,12 @@ mod tests {
                 name: "T".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         state.channels.get_mut(&2).unwrap().devices.push(Box::new(
             crate::audio::devices::PolySynthDevice::new(48_000.0),
         ));
-        while status_rx.try_recv().is_ok() {}
+        effects.statuses.clear();
 
         for (position, expected) in [(0, 0), (5, -1)] {
             process_command(
@@ -111,9 +110,9 @@ mod tests {
                     file_path: "/tmp/unused.bin".to_string(),
                 },
                 128,
-                &status_tx,
+                &mut effects,
             );
-            let replies: Vec<EngineStatus> = status_rx.try_iter().collect();
+            let replies: Vec<EngineStatus> = std::mem::take(&mut effects.statuses);
             assert_eq!(replies.len(), 1);
             assert!(matches!(
                 &replies[0],

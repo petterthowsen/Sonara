@@ -2,12 +2,11 @@
 //! parameter lists and state replies Godot asks for.
 
 use super::modulation::resend_modulators;
-use crate::audio::commands::EngineStatus;
+use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::midi_types::{NoteEvent, AUDITION_NOTE_ID};
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
-use crossbeam::channel::Sender;
 use tracing::{info, warn};
 
 /// Move a device within its chain, releasing the notes of note effects whose downstream changes.
@@ -45,7 +44,7 @@ pub(super) fn set_device_parameter(
     device_path: DevicePath,
     param_id: u32,
     value: crate::audio::types::ParamSetValue,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     if let Some(channel) = state.channels.get_mut(&channel_id) {
         let Some(device) = channel.device_at_path_mut(&device_path) else {
@@ -90,12 +89,14 @@ pub(super) fn set_device_parameter(
             "Device parameter set: channel={} device={} param={} value={}",
             channel_id, device_path, param_id, normalized
         );
-        let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-            channel_id,
-            device_path,
-            param_id,
-            value: normalized,
-        });
+        effects
+            .statuses
+            .push(EngineStatus::PluginParameterValueChanged {
+                channel_id,
+                device_path,
+                param_id,
+                value: normalized,
+            });
     } else {
         warn!("Channel {} not found for set device parameter", channel_id);
     }
@@ -109,7 +110,7 @@ pub(super) fn set_device_active(
     channel_id: ChannelId,
     device_path: DevicePath,
     active: bool,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     if let Some(channel) = state.channels.get_mut(&channel_id) {
         if let Some(device) = channel.device_at_path_mut(&device_path) {
@@ -120,7 +121,7 @@ pub(super) fn set_device_active(
                             "Device activated: channel={} device={}",
                             channel_id, device_path
                         );
-                        let _ = status_tx.send(EngineStatus::DeviceActiveChanged {
+                        effects.statuses.push(EngineStatus::DeviceActiveChanged {
                             channel_id,
                             device_path,
                             active: true,
@@ -140,7 +141,7 @@ pub(super) fn set_device_active(
                             "Device deactivated: channel={} device={}",
                             channel_id, device_path
                         );
-                        let _ = status_tx.send(EngineStatus::DeviceActiveChanged {
+                        effects.statuses.push(EngineStatus::DeviceActiveChanged {
                             channel_id,
                             device_path,
                             active: false,
@@ -171,7 +172,7 @@ pub(super) fn set_device_enabled(
     channel_id: ChannelId,
     device_path: DevicePath,
     enabled: bool,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     if let Some(channel) = state.channels.get_mut(&channel_id) {
         if let Some(device) = channel.device_at_path_mut(&device_path) {
@@ -182,7 +183,7 @@ pub(super) fn set_device_enabled(
                 channel_id,
                 device_path
             );
-            let _ = status_tx.send(EngineStatus::DeviceEnabledChanged {
+            effects.statuses.push(EngineStatus::DeviceEnabledChanged {
                 channel_id,
                 device_path,
                 enabled,
@@ -274,7 +275,7 @@ pub(super) fn get_plugin_parameters(
     state: &mut EngineState,
     channel_id: ChannelId,
     device_path: DevicePath,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     if let Some(channel) = state.channels.get(&channel_id) {
         if let Some(device) = channel.device_at_path(&device_path) {
@@ -285,7 +286,7 @@ pub(super) fn get_plugin_parameters(
                 channel_id,
                 device_path
             );
-            send_parameter_list(status_tx, channel_id, device_path, device, params);
+            send_parameter_list(effects, channel_id, device_path, device, params);
         } else {
             warn!(
                 "Device not found at channel {} path {}",
@@ -302,7 +303,7 @@ pub(super) fn get_device_state(
     state: &mut EngineState,
     channel_id: ChannelId,
     device_path: DevicePath,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     // Godot missed a status (UDP drops under load): re-send what it can't recompute.
     let Some(device) = state
@@ -317,17 +318,19 @@ pub(super) fn get_device_state(
         return None;
     };
     if let Some(loading_state) = device.loading_state() {
-        let _ = status_tx.send(EngineStatus::DeviceLoadingStateChanged {
-            channel_id,
-            device_path,
-            state: loading_state,
-        });
+        effects
+            .statuses
+            .push(EngineStatus::DeviceLoadingStateChanged {
+                channel_id,
+                device_path,
+                state: loading_state,
+            });
     }
     if device.has_dynamic_parameters() {
         let params = device.parameters();
         // Still loading: the list follows the load, as it normally does.
         if !params.is_empty() {
-            send_parameter_list(status_tx, channel_id, device_path, device, params);
+            send_parameter_list(effects, channel_id, device_path, device, params);
         }
     }
     // Modulators live in the wrapper, not in the parameters: resend them as clear +
@@ -341,9 +344,9 @@ pub(super) fn get_device_state(
             .as_any_mut()
             .downcast_mut::<crate::audio::devices::SamplerDevice>()
         {
-            sampler.resend_zone_states();
+            effects.statuses.extend(sampler.zone_state_statuses());
         }
-        resend_modulators(status_tx, channel_id, &device_path, device);
+        resend_modulators(effects, channel_id, &device_path, device);
     }
 
     None
@@ -355,7 +358,7 @@ pub(super) fn device_ready(
     channel_id: ChannelId,
     device_path: DevicePath,
     restored_values: Vec<(u32, f32)>,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
 ) {
     info!(
         "Device ready notification for channel {} path {}, re-sending parameters",
@@ -379,16 +382,18 @@ pub(super) fn device_ready(
             }
             let params = device.parameters();
             if !params.is_empty() {
-                send_parameter_list(status_tx, channel_id, device_path, device, params);
+                send_parameter_list(effects, channel_id, device_path, device, params);
             }
             // After the parameter list, so Godot doesn't reset them to defaults.
             for (param_id, value) in restored_values {
-                let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                    channel_id,
-                    device_path,
-                    param_id,
-                    value,
-                });
+                effects
+                    .statuses
+                    .push(EngineStatus::PluginParameterValueChanged {
+                        channel_id,
+                        device_path,
+                        param_id,
+                        value,
+                    });
             }
         }
     }
@@ -396,19 +401,19 @@ pub(super) fn device_ready(
 
 /// Send `params` (from `device.parameters()`) to Godot: `param/count`, then one `param/info` each.
 fn send_parameter_list(
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
     channel_id: ChannelId,
     device_path: DevicePath,
     device: &dyn crate::audio::devices::AudioDevice,
     params: Vec<crate::audio::devices::ParamInfo>,
 ) {
-    let _ = status_tx.send(EngineStatus::PluginParameterCount {
+    effects.statuses.push(EngineStatus::PluginParameterCount {
         channel_id,
         device_path,
         count: params.len(),
     });
     for param in params {
-        let _ = status_tx.send(EngineStatus::PluginParameterInfo {
+        effects.statuses.push(EngineStatus::PluginParameterInfo {
             channel_id,
             device_path,
             param_id: param.id,
@@ -433,7 +438,7 @@ fn send_parameter_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::commands::{process_command, AudioCommand, EngineStatus};
+    use crate::audio::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
     use crate::audio::devices::DevicePath;
     use crate::audio::state::EngineState;
 
@@ -442,7 +447,7 @@ mod tests {
         use crate::audio::devices::note_fx::host::tests::test_host;
         use crate::audio::devices::note_fx::routing::test_devices::Recorder;
         let mut state = EngineState::default();
-        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut effects = CommandEffects::default();
         process_command(
             &mut state,
             AudioCommand::CreateChannel {
@@ -450,7 +455,7 @@ mod tests {
                 name: "T".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         let (recorder, log) = Recorder::new();
         {
@@ -469,7 +474,7 @@ mod tests {
                 to_position: 0,
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         let events: Vec<NoteEvent> = log.lock().unwrap().iter().map(|(_, e)| *e).collect();
         assert_eq!(events.len(), 2, "{events:?}");
@@ -481,7 +486,7 @@ mod tests {
         device: Box<dyn crate::audio::devices::AudioDevice>,
     ) -> Vec<EngineStatus> {
         let mut state = EngineState::default();
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let mut effects = CommandEffects::default();
         process_command(
             &mut state,
             AudioCommand::CreateChannel {
@@ -489,10 +494,10 @@ mod tests {
                 name: "T".to_string(),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
         state.channels.get_mut(&2).unwrap().devices.push(device);
-        while status_rx.try_recv().is_ok() {}
+        effects.statuses.clear();
         process_command(
             &mut state,
             AudioCommand::GetDeviceState {
@@ -500,9 +505,9 @@ mod tests {
                 device_path: DevicePath::root(0),
             },
             128,
-            &status_tx,
+            &mut effects,
         );
-        status_rx.try_iter().collect()
+        std::mem::take(&mut effects.statuses)
     }
 
     #[test]

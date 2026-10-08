@@ -680,7 +680,6 @@ mod tests {
     #[test]
     fn set_loop_command_enables_and_clears_the_region() {
         let mut state = EngineState::default();
-        let (tx, _rx) = crossbeam::channel::unbounded();
         let apply = |state: &mut EngineState, enabled, start, end| {
             crate::audio::commands::process_command(
                 state,
@@ -690,7 +689,7 @@ mod tests {
                     end,
                 },
                 64,
-                &tx,
+                &mut crate::audio::commands::CommandEffects::default(),
             );
         };
         apply(&mut state, true, 960, 1920);

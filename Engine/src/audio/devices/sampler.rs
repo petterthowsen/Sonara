@@ -1261,19 +1261,18 @@ impl SamplerDevice {
         }
     }
 
-    /// Send every zone's loading state again (Godot's `state/get`).
-    pub fn resend_zone_states(&self) {
-        let Some(tx) = &self.status_tx else {
-            return;
-        };
-        for zone in &self.zones {
-            let _ = tx.send(EngineStatus::SamplerZoneLoadingState {
+    /// Every zone's loading state, for Godot's `state/get`. Returned rather than sent so the
+    /// caller can queue them in order with its other statuses.
+    pub fn zone_state_statuses(&self) -> Vec<EngineStatus> {
+        self.zones
+            .iter()
+            .map(|zone| EngineStatus::SamplerZoneLoadingState {
                 channel_id: self.channel_id,
                 device_path: self.device_path.clone(),
                 zone_id: zone.id,
                 state: zone.loading_state.clone(),
-            });
-        }
+            })
+            .collect()
     }
 
     // === Voices ===
@@ -2806,8 +2805,11 @@ mod tests {
         assert!(!d.any_voice_active(), "the failed zone is silent");
         d.note_on(72, 1.0);
         assert_eq!(sounding(&d), vec![2]);
-        d.resend_zone_states();
-        assert_eq!(rx.try_iter().count(), 2, "state/get resends every zone");
+        assert_eq!(
+            d.zone_state_statuses().len(),
+            2,
+            "state/get resends every zone"
+        );
     }
 
     // === Single-mode fixture (spec 023 T-005) ===

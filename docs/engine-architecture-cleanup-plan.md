@@ -15,7 +15,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 2: `main.rs` uses the library crate; logging module
 - [x] Phase 3: Split `audio/types.rs`
 - [x] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
-- [ ] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
+- [x] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
 - [ ] Phase 6: Device lookup helpers
 - [ ] Phase 7: Split `audio/command_worker.rs`
 - [ ] Phase 8: Split `osc/server.rs`
@@ -612,6 +612,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 2 | 2026-10-09 | lib 804 / 14; bin engine 0 / 0 | release 0; test build 0 | New baseline: 804 passed, 14 ignored. Live check pending (see notes). |
 | 3 | 2026-10-09 | lib 807 / 14 (804 + 3 new tests) | release 0; test build 0 | Commits `Engine cleanup phase 3` (a) pure move, (b) improvements. See notes below. |
 | 4 | 2026-10-09 | lib 807 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 4` (a) move, (b) improvements. See notes below. |
+| 5 | 2026-10-09 | lib 810 / 14 (807 + 3 new tests) | release 0; test build 0 | Allowed behavior change, own commit. See notes below. |
 
 Phase 1 notes:
 
@@ -702,3 +703,31 @@ Phase 4 notes:
   fixtures stayed with their only users, so no shared `test_support` module was needed.
 - Improvements: deleted `impl Clone for EngineState` (Phase 1 listed it but it was still there; nothing used it);
   merged the generated `use` lines; every new function has a doc comment.
+
+Phase 5 notes:
+
+- `CommandEffects { statuses, trash }` (plus `discard(value)` and a test-only `next_status`) lives in `commands/mod.rs`.
+  `process_command(state, cmd, buffer_size, &mut effects)` returns `()`: it wraps a private `dispatch` that still
+  returns `Option<EngineStatus>`, and pushes that value after everything the command pushed itself. That keeps the
+  old order exactly (channel sends first, returned status last) without touching the 100 dispatcher arms.
+  `status_tx: &Sender<EngineStatus>` parameters became `effects: &mut CommandEffects` in `transport`, `device`,
+  `modulation`, `plugin` and `clip`.
+- `CommandWorker::apply_locked` locks in an inner block, then sends the statuses in order and drops `trash`.
+- Trash: a removed `Clip` (`remove_clip`) and clip PCM that is replaced or cleared (`load_audio_clip`,
+  `begin_load_audio_clip`, `fail_audio_clip_load`; `Vec::clear` used to keep the allocation, now the buffer is taken
+  and freed after the unlock) and the incoming `samples` of a stale or orphaned `LoadAudioClip`. Channels, devices,
+  the tempo maps and `clear_project` were already detached under the lock and dropped after it in `CommandWorker`,
+  and there is no `process_command` arm that removes a track or channel, so nothing else needed `trash`.
+  Left under the lock: the `ModulatedDevice` wrapper dropped by `unwrap_if_empty`, modulators dropped by
+  `clear_modulators`, and sampler zones dropped by `remove_zone` (small, and the device APIs don't return them).
+- Deviation (same pattern): `SamplerDevice::resend_zone_states` sent through the device's own `status_tx`
+  inside `GetDeviceState`. It is now `zone_state_statuses() -> Vec<EngineStatus>` and the command queues the result,
+  so those statuses keep their place between the parameter list and the modulators instead of jumping ahead.
+- Lock-held sends that remain, listed rather than fixed: `SamplerDevice` (`emit_loading`, `emit_zone_loading`) and
+  `SfizzDevice` (loading state) send through their own `status_tx` from inside commands, with the lock held. They
+  can now arrive before the same command's `CommandEffects` statuses. The audio callback and `mix_and_output`
+  use `try_send` (non-blocking) under the lock. `render/worker.rs` sends outside the lock everywhere
+  (`try_send` for progress). `CommandWorker` sends nothing with the lock held (`poll_devices`, `add_device` and the
+  rest collect first).
+- Flaky: `audio::ipc::process_manager::tests::watcher_records_exit_code_and_stderr` failed once in a full
+  `cargo test` run and passed in 3 reruns.

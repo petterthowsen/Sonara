@@ -1,10 +1,9 @@
 //! Transport and project-level commands: init, play/pause/stop/seek, loop, tempo, time signature, scale.
 
-use crate::audio::commands::EngineStatus;
+use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::project::ProjectSettings;
 use crate::audio::state::EngineState;
 use crate::audio::types::Tick;
-use crossbeam::channel::Sender;
 use std::sync::atomic::Ordering;
 use tracing::info;
 
@@ -60,10 +59,7 @@ pub(super) fn pause(state: &mut EngineState) -> Option<EngineStatus> {
 }
 
 /// Stop the transport, rewind to tick 0 and release the clip notes.
-pub(super) fn stop(
-    state: &mut EngineState,
-    status_tx: &Sender<EngineStatus>,
-) -> Option<EngineStatus> {
+pub(super) fn stop(state: &mut EngineState, effects: &mut CommandEffects) -> Option<EngineStatus> {
     let position = state
         .settings
         .format_tick_position(state.get_current_tick());
@@ -84,7 +80,7 @@ pub(super) fn stop(
     // Send both playing state change and playhead reset
     // Note: only one status can be returned, so we'll send playhead via the channel
     // and return playing state
-    let _ = status_tx.send(EngineStatus::PlayheadUpdate(0));
+    effects.statuses.push(EngineStatus::PlayheadUpdate(0));
     Some(EngineStatus::PlayingStateChanged(false))
 }
 

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use super::block_clock::BlockClock;
-use super::commands::{process_command, AudioCommand, EngineStatus};
+use super::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::{
     PluginBlockStats, PluginIpcHandle, PluginLoad, HUNG_STALL_TIMEOUT,
 };
@@ -920,17 +920,24 @@ impl CommandWorker {
         }
     }
 
-    /// Apply a fast command with the state lock held.
+    /// Apply a fast command with the state lock held, then send its statuses and drop what it
+    /// removed after the lock is released.
+    ///
+    /// Sending blocks when the status channel is full, and dropping a clip's PCM frees memory.
+    /// With the lock held either would make the audio callback miss its `try_lock` and output
+    /// silence, so `process_command` only collects them in `CommandEffects`. Statuses go out in
+    /// the order the command produced them.
     fn apply_locked(&self, cmd: AudioCommand) {
-        let status = process_command(
-            &mut self.lock_state(),
-            cmd,
-            self.max_buffer_size,
-            &self.status_tx,
-        );
-        if let Some(status) = status {
+        let mut effects = CommandEffects::default();
+        {
+            let mut state = self.lock_state();
+            process_command(&mut state, cmd, self.max_buffer_size, &mut effects);
+        }
+        let CommandEffects { statuses, trash } = effects;
+        for status in statuses {
             self.send_status(status);
         }
+        drop(trash);
     }
 
     /// Scan for CLAP plugins and report each one to Godot.

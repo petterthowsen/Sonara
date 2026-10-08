@@ -27,7 +27,6 @@ use crate::audio::devices::DevicePath;
 use crate::audio::project::ProjectSettings;
 use crate::audio::state::EngineState;
 use crate::audio::types::{ChannelId, ClipId, ClipInstanceId, MidiNote, NoteId, Tick, TrackId};
-use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::warn;
@@ -615,17 +614,57 @@ pub enum AudioCommand {
     },
 }
 
+/// What applying a command produced, handled by the caller after it releases the state lock.
+///
+/// Sending a status can block (the channel is bounded) and dropping a channel, clip or device
+/// frees memory. Neither belongs under the state lock: while it is held, the audio callback
+/// misses its `try_lock` and outputs silence.
+#[derive(Default)]
+pub struct CommandEffects {
+    /// Statuses for Godot, in the order the command produced them.
+    pub statuses: Vec<EngineStatus>,
+    /// Objects the command removed from the state, dropped after the lock is released.
+    pub trash: Vec<Box<dyn std::any::Any + Send>>,
+}
+
+impl CommandEffects {
+    /// Take the oldest queued status, as a test would read it off a channel.
+    #[cfg(test)]
+    pub(crate) fn next_status(&mut self) -> Option<EngineStatus> {
+        (!self.statuses.is_empty()).then(|| self.statuses.remove(0))
+    }
+
+    /// Queue `value` to be dropped by the caller once the state lock is released.
+    pub fn discard<T: Send + 'static>(&mut self, value: T) {
+        self.trash.push(Box::new(value));
+    }
+}
+
 /// Apply a command to the engine state. Runs on the command thread with the state lock held, so
 /// it must stay fast; slow commands are handled by `CommandWorker` instead.
 ///
-/// This is only the dispatcher: each arm calls the function for that command in the domain
-/// module (`transport`, `channel`, `track`, `clip`, `device`, ...). Returns the status the command
-/// produced, if any; statuses it needs to send earlier go through `status_tx`.
+/// Statuses for Godot and removed objects are collected in `effects`; the caller sends and drops
+/// them after it releases the lock, in order.
 pub fn process_command(
     state: &mut EngineState,
     cmd: AudioCommand,
     buffer_size: usize,
-    status_tx: &Sender<EngineStatus>,
+    effects: &mut CommandEffects,
+) {
+    if let Some(status) = dispatch(state, cmd, buffer_size, effects) {
+        effects.statuses.push(status);
+    }
+}
+
+/// The dispatcher: each arm calls the function for that command in the domain module
+/// (`transport`, `channel`, `track`, `clip`, `device`, ...). Returns the status the command
+/// produced, if any; statuses it needs to send earlier are pushed to `effects` directly, so
+/// they come first.
+fn dispatch(
+    state: &mut EngineState,
+    cmd: AudioCommand,
+    buffer_size: usize,
+    effects: &mut CommandEffects,
 ) -> Option<EngineStatus> {
     if state.is_rendering()
         && matches!(
@@ -645,7 +684,7 @@ pub fn process_command(
         }
         AudioCommand::Play => return transport::play(state),
         AudioCommand::Pause => return transport::pause(state),
-        AudioCommand::Stop => return transport::stop(state, status_tx),
+        AudioCommand::Stop => return transport::stop(state, effects),
         AudioCommand::Seek(tick) => transport::seek(state, tick),
         AudioCommand::SetLoop {
             enabled,
@@ -770,7 +809,7 @@ pub fn process_command(
             name,
             clip_type,
         } => clip::create_clip(state, id, name, clip_type),
-        AudioCommand::RemoveClip { id } => clip::remove_clip(state, id),
+        AudioCommand::RemoveClip { id } => clip::remove_clip(state, id, effects),
         AudioCommand::AddNoteToClip {
             clip_id,
             note_id,
@@ -814,7 +853,7 @@ pub fn process_command(
             clip_id,
             req_id,
             source_path,
-        } => return clip::begin_load_audio_clip(state, clip_id, req_id, source_path),
+        } => return clip::begin_load_audio_clip(state, clip_id, req_id, source_path, effects),
         AudioCommand::LoadAudioClip {
             clip_id,
             req_id,
@@ -833,13 +872,14 @@ pub fn process_command(
                 samples,
                 sample_rate,
                 channels,
+                effects,
             )
         }
         AudioCommand::FailAudioClipLoad {
             clip_id,
             req_id,
             message,
-        } => return clip::fail_audio_clip_load(state, clip_id, req_id, message),
+        } => return clip::fail_audio_clip_load(state, clip_id, req_id, message, effects),
         AudioCommand::CreateClipInstance {
             track_id,
             instance_id,
@@ -924,7 +964,7 @@ pub fn process_command(
                 device_path,
                 param_id,
                 value,
-                status_tx,
+                effects,
             )
         }
         AudioCommand::AddModulator {
@@ -933,20 +973,13 @@ pub fn process_command(
             mod_id,
             kind,
         } => {
-            return modulation::add_modulator(
-                state,
-                channel_id,
-                device_path,
-                mod_id,
-                kind,
-                status_tx,
-            )
+            return modulation::add_modulator(state, channel_id, device_path, mod_id, kind, effects)
         }
         AudioCommand::RemoveModulator {
             channel_id,
             device_path,
             mod_id,
-        } => modulation::remove_modulator(state, channel_id, device_path, mod_id, status_tx),
+        } => modulation::remove_modulator(state, channel_id, device_path, mod_id, effects),
         AudioCommand::SetModulatorParameter {
             channel_id,
             device_path,
@@ -960,7 +993,7 @@ pub fn process_command(
             mod_id,
             param_id,
             value,
-            status_tx,
+            effects,
         ),
         AudioCommand::SetModulatorRoute {
             channel_id,
@@ -975,22 +1008,22 @@ pub fn process_command(
             mod_id,
             target,
             amount,
-            status_tx,
+            effects,
         ),
         AudioCommand::ClearModulators {
             channel_id,
             device_path,
-        } => return modulation::clear_modulators(state, channel_id, device_path, status_tx),
+        } => return modulation::clear_modulators(state, channel_id, device_path, effects),
         AudioCommand::SetDeviceActive {
             channel_id,
             device_path,
             active,
-        } => device::set_device_active(state, channel_id, device_path, active, status_tx),
+        } => device::set_device_active(state, channel_id, device_path, active, effects),
         AudioCommand::SetDeviceEnabled {
             channel_id,
             device_path,
             enabled,
-        } => device::set_device_enabled(state, channel_id, device_path, enabled, status_tx),
+        } => device::set_device_enabled(state, channel_id, device_path, enabled, effects),
         AudioCommand::LoadDeviceFile {
             channel_id,
             device_path,
@@ -1097,22 +1130,22 @@ pub fn process_command(
         AudioCommand::GetPluginParameters {
             channel_id,
             device_path,
-        } => device::get_plugin_parameters(state, channel_id, device_path, status_tx),
+        } => device::get_plugin_parameters(state, channel_id, device_path, effects),
         AudioCommand::GetDeviceState {
             channel_id,
             device_path,
-        } => return device::get_device_state(state, channel_id, device_path, status_tx),
+        } => return device::get_device_state(state, channel_id, device_path, effects),
         AudioCommand::DeviceReady {
             channel_id,
             device_path,
             restored_values,
-        } => device::device_ready(state, channel_id, device_path, restored_values, status_tx),
+        } => device::device_ready(state, channel_id, device_path, restored_values, effects),
         // Only non-plugin devices get here: the command worker handles subprocess plugins.
         AudioCommand::SavePluginState {
             channel_id,
             device_path,
             file_path,
-        } => plugin::save_plugin_state(state, channel_id, device_path, file_path, status_tx),
+        } => plugin::save_plugin_state(state, channel_id, device_path, file_path, effects),
         AudioCommand::LoadPluginState {
             channel_id,
             device_path,
@@ -1230,4 +1263,77 @@ pub fn process_command(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stop sends the playhead reset first and the play state second; Godot relies on the order.
+    #[test]
+    fn stop_collects_statuses_in_order() {
+        let mut state = EngineState::default();
+        let mut effects = CommandEffects::default();
+        process_command(&mut state, AudioCommand::Stop, 64, &mut effects);
+        assert!(matches!(
+            effects.statuses.as_slice(),
+            [
+                EngineStatus::PlayheadUpdate(0),
+                EngineStatus::PlayingStateChanged(false)
+            ]
+        ));
+    }
+
+    /// A removed clip is handed back in `trash` instead of being dropped under the lock.
+    #[test]
+    fn removed_clip_goes_to_trash() {
+        let mut state = EngineState::default();
+        let mut effects = CommandEffects::default();
+        for cmd in [
+            AudioCommand::CreateClip {
+                id: "c".to_string(),
+                name: "C".to_string(),
+                clip_type: "audio".to_string(),
+            },
+            AudioCommand::RemoveClip {
+                id: "c".to_string(),
+            },
+        ] {
+            process_command(&mut state, cmd, 64, &mut effects);
+        }
+        assert!(state.clips.is_empty());
+        assert_eq!(effects.trash.len(), 1);
+        assert!(effects.statuses.is_empty());
+    }
+
+    /// Replacing an audio clip's PCM discards the old buffer through `trash`.
+    #[test]
+    fn loading_audio_discards_the_old_pcm() {
+        let mut state = EngineState::default();
+        let mut effects = CommandEffects::default();
+        let load = |req: &str, samples: Vec<f32>| AudioCommand::LoadAudioClip {
+            clip_id: "c".to_string(),
+            req_id: req.to_string(),
+            source_path: "x.wav".to_string(),
+            cache_key: None,
+            samples,
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        process_command(
+            &mut state,
+            AudioCommand::CreateClip {
+                id: "c".to_string(),
+                name: "C".to_string(),
+                clip_type: "audio".to_string(),
+            },
+            64,
+            &mut effects,
+        );
+        process_command(&mut state, load("a", vec![0.0; 8]), 64, &mut effects);
+        let before = effects.trash.len();
+        process_command(&mut state, load("b", vec![0.5; 8]), 64, &mut effects);
+        assert_eq!(effects.trash.len(), before + 1);
+        assert_eq!(state.clips["c"].audio_samples, vec![0.5; 8]);
+    }
 }

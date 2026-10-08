@@ -1147,13 +1147,14 @@ mod tests {
 
     #[test]
     fn transport_commands_are_ignored_while_rendering() {
-        use crate::audio::commands::{process_command, AudioCommand};
-        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
+        let mut effects = CommandEffects::default();
         let mut state = EngineState::default();
         state.rendering.store(true, Ordering::Release);
-        assert!(process_command(&mut state, AudioCommand::Play, 64, &status_tx).is_none());
+        process_command(&mut state, AudioCommand::Play, 64, &mut effects);
+        assert!(effects.statuses.is_empty());
         assert!(!state.get_is_playing());
-        process_command(&mut state, AudioCommand::Seek(960), 64, &status_tx);
+        process_command(&mut state, AudioCommand::Seek(960), 64, &mut effects);
         assert_eq!(state.get_current_tick(), 0);
     }
 }
