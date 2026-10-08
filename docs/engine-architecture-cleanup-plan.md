@@ -10,7 +10,7 @@ order. When a phase has to deviate from this plan, update this file first.
 
 ## Checklist
 
-- [ ] Phase 0: Baseline
+- [x] Phase 0: Baseline
 - [ ] Phase 1: Unused dependencies and dead code
 - [ ] Phase 2: `main.rs` uses the library crate; logging module
 - [ ] Phase 3: Split `audio/types.rs`
@@ -607,4 +607,4 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 
 | Phase | Date | Tests (passed / ignored) | Warnings | Notes |
 |---|---|---|---|---|
-| 0 | | | | |
+| 0 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (duplicate run) | release 138; test build 117 | Baseline. No flaky test seen. Port 7000 held by user's engine (live checks pending). |
