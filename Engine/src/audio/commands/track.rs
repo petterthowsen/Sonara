@@ -3,17 +3,14 @@
 //! The automation commands only mutate lane data. They send no `EngineStatus`, so playback never
 //! rewrites what Godot has stored and saves.
 
-use crate::audio::automation::AutomationLane;
-use crate::audio::automation::AutomationLaneId;
-use crate::audio::automation::AutomationPoint;
-use crate::audio::automation::AutomationPointId;
-use crate::audio::automation::AutomationTarget;
+use crate::audio::automation::{
+    AutomationLane, AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
+};
 use crate::audio::commands::EngineStatus;
 use crate::audio::state::EngineState;
 use crate::audio::track::Track;
 use crate::audio::types::{ChannelId, TrackId};
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Create a track routed to a channel.
 pub(super) fn create_track(state: &mut EngineState, id: TrackId, channel_id: ChannelId) {

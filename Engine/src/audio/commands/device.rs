@@ -4,13 +4,11 @@
 use super::modulation::resend_modulators;
 use crate::audio::commands::EngineStatus;
 use crate::audio::devices::DevicePath;
-use crate::audio::midi_types::NoteEvent;
-use crate::audio::midi_types::AUDITION_NOTE_ID;
+use crate::audio::midi_types::{NoteEvent, AUDITION_NOTE_ID};
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
 use crossbeam::channel::Sender;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Move a device within its chain, releasing the notes of note effects whose downstream changes.
 pub(super) fn move_device(

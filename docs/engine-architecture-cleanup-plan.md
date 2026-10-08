@@ -14,7 +14,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 1: Unused dependencies and dead code
 - [x] Phase 2: `main.rs` uses the library crate; logging module
 - [x] Phase 3: Split `audio/types.rs`
-- [ ] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
+- [x] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
 - [ ] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
 - [ ] Phase 6: Device lookup helpers
 - [ ] Phase 7: Split `audio/command_worker.rs`
@@ -611,6 +611,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 1 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (unchanged) | lib crate 0; `engine` bin 58 (was 138) | See notes below. |
 | 2 | 2026-10-09 | lib 804 / 14; bin engine 0 / 0 | release 0; test build 0 | New baseline: 804 passed, 14 ignored. Live check pending (see notes). |
 | 3 | 2026-10-09 | lib 807 / 14 (804 + 3 new tests) | release 0; test build 0 | Commits `Engine cleanup phase 3` (a) pure move, (b) improvements. See notes below. |
+| 4 | 2026-10-09 | lib 807 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 4` (a) move, (b) improvements. See notes below. |
 
 Phase 1 notes:
 
@@ -678,3 +679,26 @@ Phase 3 notes:
   `devices/container.rs` `copy_interleaved` is a plain slice copy, not an interleave, so it was left alone.
   New tests: `fader_gain` floor, interleave/deinterleave round-trips over SIMD and tail lengths.
 - Flaky: one `cargo test` run in the (b) commit failed one lib test (name not captured); the rerun passed 807.
+
+Phase 4 notes:
+
+- Layout (lines include tests): `audio/state.rs` 130, `audio/commands/{mod 1230 (the 580-line `AudioCommand` enum plus a
+  600-line dispatcher), status 386, transport 138, channel 369, track 223, clip 595, device 539, sampler 291,
+  layer 221, modulation 577, plugin 124, device_data 69}`. `commands.rs` became `commands/mod.rs` with `git mv`.
+- Each of the 89 handled commands is now a `pub(super) fn` in its domain module taking the destructured fields
+  (plus `state`, `buffer_size` and `status_tx` only where the body uses them). Bodies moved verbatim; `super::` paths
+  became `crate::audio::`. A function returns `Option<EngineStatus>` only when the old arm had `return Some/None`;
+  the dispatcher writes `return module::f(..)` for those and a plain call for the rest, so the match still
+  evaluates to `()` and `None` follows it, as before. The dispatcher is about 600 lines after `rustfmt` (the plan
+  estimated 250): multi-field arms wrap.
+- Deviations from the table: the sampler sample-loading commands (`BeginLoadDeviceSample`, `LoadDeviceSample`,
+  `FailDeviceSampleLoad`) are in `sampler.rs` because they use `with_sampler`; `AuditionDevice` is in `device.rs` (it
+  is not sampler-specific). `SetPluginGuiVisible | SetPluginGuiSize` share one function,
+  `plugin::plugin_gui_unavailable`. The `other @ (...)` arm for worker-only commands stays inline in the dispatcher.
+  `EngineStatus`, `BuiltinParamInfo` and `AudioConfigReport` are re-exported from `commands/mod.rs`, so
+  `crate::audio::commands::EngineStatus` still works; `EngineState` is imported from `audio::state` everywhere
+  (no re-export in `commands`; `audio::engine` still re-exports it).
+- Tests moved to the domain they cover (device 4 + 1 helper, modulation 5, channel 1, clip 1, sampler 1, plugin 1);
+  fixtures stayed with their only users, so no shared `test_support` module was needed.
+- Improvements: deleted `impl Clone for EngineState` (Phase 1 listed it but it was still there; nothing used it);
+  merged the generated `use` lines; every new function has a doc comment.

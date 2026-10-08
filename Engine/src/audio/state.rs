@@ -113,14 +113,6 @@ impl EngineState {
     }
 }
 
-impl Clone for EngineState {
-    fn clone(&self) -> Self {
-        // Can't derive Clone because Channel has trait objects (AudioDevice)
-        // This is only used for command processing, which we don't use Clone for
-        panic!("EngineState cannot be cloned (contains non-cloneable trait objects)");
-    }
-}
-
 impl Default for EngineState {
     fn default() -> Self {
         Self {

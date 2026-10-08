@@ -4,8 +4,7 @@ use crate::audio::channel::Channel;
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
 use std::time::Instant;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Create a mixer channel with the given id and name.
 pub(super) fn create_channel(

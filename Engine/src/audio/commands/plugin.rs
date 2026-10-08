@@ -10,7 +10,8 @@ use crate::audio::types::ChannelId;
 use crossbeam::channel::Sender;
 use tracing::warn;
 
-/// Answer a state save for a device that is not a plugin, so a waiting project save does not time out.
+/// Answer a state save for a device that is not a plugin, so a project save waiting on it does not
+/// time out. Reports size 0 for an existing device and -1 for a missing one.
 ///
 /// Only non-plugin devices get here: the command worker handles subprocess plugins.
 pub(super) fn save_plugin_state(
@@ -47,7 +48,7 @@ pub(super) fn load_plugin_state(channel_id: ChannelId, device_path: DevicePath) 
     );
 }
 
-/// Warn that the device is not a CLAP plugin; the command worker handles real ones.
+/// Warn that a plugin GUI cannot be opened because the device is not a CLAP plugin.
 pub(super) fn open_plugin_gui(channel_id: ChannelId, device_path: DevicePath) {
     // Subprocess plugins are handled by the command worker before this point.
     warn!(
@@ -56,7 +57,7 @@ pub(super) fn open_plugin_gui(channel_id: ChannelId, device_path: DevicePath) {
     );
 }
 
-/// Warn that the device is not a CLAP plugin; the command worker handles real ones.
+/// Warn that a plugin GUI cannot be closed because the device is not a CLAP plugin.
 pub(super) fn close_plugin_gui(channel_id: ChannelId, device_path: DevicePath) {
     // Subprocess plugins are handled by the command worker before this point.
     warn!(
@@ -65,9 +66,9 @@ pub(super) fn close_plugin_gui(channel_id: ChannelId, device_path: DevicePath) {
     );
 }
 
-/// Warn that no subprocess plugin exists at the path (visibility and size commands).
+/// Warn that no subprocess plugin exists at the path, for the GUI visibility and size commands.
 ///
-/// The command worker handles these for subprocess plugins, the only ones they apply to
+/// The command worker handles these for subprocess plugins, the only ones they apply to.
 pub(super) fn plugin_gui_unavailable(channel_id: ChannelId, device_path: DevicePath) {
     warn!(
         "Plugin GUI visibility/size: no subprocess plugin at channel {} device {}",

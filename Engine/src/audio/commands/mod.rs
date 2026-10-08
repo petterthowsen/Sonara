@@ -19,12 +19,10 @@ mod transport;
 pub use modulation::modulator_kind_infos;
 pub use status::{AudioConfigReport, BuiltinParamInfo, EngineStatus};
 
-use crate::audio::automation::AutomationLaneId;
-use crate::audio::automation::AutomationPoint;
-use crate::audio::automation::AutomationPointId;
-use crate::audio::automation::AutomationTarget;
-use crate::audio::devices::sampler_zones::GroupPlayMode;
-use crate::audio::devices::sampler_zones::ZoneSettings;
+use crate::audio::automation::{
+    AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
+};
+use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
 use crate::audio::devices::DevicePath;
 use crate::audio::project::ProjectSettings;
 use crate::audio::state::EngineState;
@@ -619,6 +617,10 @@ pub enum AudioCommand {
 
 /// Apply a command to the engine state. Runs on the command thread with the state lock held, so
 /// it must stay fast; slow commands are handled by `CommandWorker` instead.
+///
+/// This is only the dispatcher: each arm calls the function for that command in the domain
+/// module (`transport`, `channel`, `track`, `clip`, `device`, ...). Returns the status the command
+/// produced, if any; statuses it needs to send earlier go through `status_tx`.
 pub fn process_command(
     state: &mut EngineState,
     cmd: AudioCommand,

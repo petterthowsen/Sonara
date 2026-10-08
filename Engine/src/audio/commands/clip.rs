@@ -1,14 +1,10 @@
 //! Clip commands: the clip pool, MIDI notes, audio clip loading, and clip instances on tracks.
 
-use crate::audio::clip::Clip;
-use crate::audio::clip::ClipInstance;
-use crate::audio::clip::ClipLoadState;
-use crate::audio::clip::ClipNote;
+use crate::audio::clip::{Clip, ClipInstance, ClipLoadState, ClipNote};
 use crate::audio::commands::EngineStatus;
 use crate::audio::state::EngineState;
 use crate::audio::types::{ClipId, ClipInstanceId, MidiNote, NoteId, Tick, TrackId};
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Create an empty clip; an unknown type string becomes a MIDI clip.
 pub(super) fn create_clip(state: &mut EngineState, id: ClipId, name: String, clip_type: String) {

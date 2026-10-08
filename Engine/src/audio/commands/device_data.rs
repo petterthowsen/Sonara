@@ -3,8 +3,7 @@
 use crate::audio::devices::DevicePath;
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Subscribe to a device data stream (spectrum, oscilloscope, ...).
 pub(super) fn subscribe_device_data(

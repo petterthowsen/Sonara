@@ -1,7 +1,6 @@
 //! Sampler commands: zones, groups, focus, and sample loading.
 
-use crate::audio::devices::sampler_zones::GroupPlayMode;
-use crate::audio::devices::sampler_zones::ZoneSettings;
+use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
 use crate::audio::devices::DevicePath;
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
