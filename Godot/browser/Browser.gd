@@ -96,10 +96,10 @@ func _setup_ui() -> void:
 	_sync_mode_toggle_text()
 	
 	# Setup tab buttons
-	_create_tab_button("S", "Samples", Asset.TYPE.Audio)
-	_create_tab_button("D", "Devices", Asset.TYPE.Device)
+	_create_tab_button("", "Samples", Asset.TYPE.Audio, preload("res://assets/icons/audio-waveform.svg"))
+	_create_tab_button("", "Devices", Asset.TYPE.Device, preload("res://assets/icons/panel-top.svg"))
 	_create_tab_button("SFZ", "SFZ", Asset.TYPE.SFZ)
-	_create_tab_button("P", "Presets", Asset.TYPE.Preset)
+	_create_tab_button("", "Presets", Asset.TYPE.Preset, preload("res://assets/icons/star.svg"))
 
 	# Create ItemLists for each category
 	_create_item_list(Asset.TYPE.Audio)
@@ -125,9 +125,13 @@ func _setup_ui() -> void:
 	_switch_tab(Asset.TYPE.Audio)
 
 
-func _create_tab_button(text: String, tooltip: String, asset_type: Asset.TYPE) -> void:
+func _create_tab_button(text: String, tooltip: String, asset_type: Asset.TYPE, icon: Texture2D = null) -> void:
 	var btn = Button.new()
 	btn.text = text
+	if icon:
+		btn.icon = icon
+		btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		btn.expand_icon = false
 	btn.tooltip_text = tooltip
 	btn.toggle_mode = true
 	btn.pressed.connect(_on_tab_button_pressed.bindv([asset_type]))
