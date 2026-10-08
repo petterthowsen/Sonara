@@ -54,7 +54,8 @@ static func pulse_alpha() -> float:
 
 ## Start or stop redrawing `control` every frame for the pulsing overlay.
 static func set_pulsing(control: Control, on: bool) -> void:
-	var pulse: Node = control.get_meta(&"_mod_pulse", null)
+	# get_meta with a null default still errors on a missing key, so check first.
+	var pulse: Node = control.get_meta(&"_mod_pulse") if control.has_meta(&"_mod_pulse") else null
 	if on and pulse == null:
 		pulse = _MOD_PULSE.new()
 		control.add_child(pulse, false, Node.INTERNAL_MODE_BACK)
