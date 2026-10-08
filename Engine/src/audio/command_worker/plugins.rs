@@ -429,6 +429,108 @@ impl CommandWorker {
             device_path,
         });
     }
+
+    /// Activate or deactivate a device: a subprocess plugin with the lock released, anything else
+    /// under the lock.
+    pub(super) fn set_device_active(
+        &self,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        active: bool,
+    ) {
+        match self.plugin_handle(channel_id, &device_path) {
+            Some(handle) => self.set_plugin_active(handle, channel_id, device_path, active),
+            None => self.apply_locked(AudioCommand::SetDeviceActive {
+                channel_id,
+                device_path,
+                active,
+            }),
+        }
+    }
+
+    /// Open a device's GUI: a subprocess plugin's with the lock released, anything else under
+    /// the lock (where it is refused).
+    pub(super) fn open_gui(
+        &self,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        window_handle: Option<u64>,
+    ) {
+        match self.plugin_handle(channel_id, &device_path) {
+            Some(handle) => self.open_plugin_gui(handle, channel_id, device_path, window_handle),
+            None => self.apply_locked(AudioCommand::OpenPluginGui {
+                channel_id,
+                device_path,
+                window_handle,
+            }),
+        }
+    }
+
+    /// Close a device's GUI: a subprocess plugin's with the lock released, anything else under
+    /// the lock (where it is refused).
+    pub(super) fn close_gui(&self, channel_id: ChannelId, device_path: DevicePath) {
+        match self.plugin_handle(channel_id, &device_path) {
+            Some(handle) => self.close_plugin_gui(handle, channel_id, device_path),
+            None => self.apply_locked(AudioCommand::ClosePluginGui {
+                channel_id,
+                device_path,
+            }),
+        }
+    }
+
+    /// Show or hide a subprocess plugin's GUI.
+    pub(super) fn set_gui_visible(
+        &self,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        visible: bool,
+    ) {
+        match self.plugin_handle(channel_id, &device_path) {
+            Some(handle) => {
+                if let Err(e) = handle.set_gui_visible(visible) {
+                    warn!(
+                        "Failed to {} plugin GUI at channel {} device {}: {}",
+                        if visible { "show" } else { "hide" },
+                        channel_id,
+                        device_path,
+                        e
+                    );
+                }
+            }
+            None => warn!(
+                "SetPluginGuiVisible: no subprocess plugin at channel {} device {}",
+                channel_id, device_path
+            ),
+        }
+    }
+
+    /// Resize a subprocess plugin's GUI and report the size it ended up with.
+    pub(super) fn set_gui_size(
+        &self,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        width: u32,
+        height: u32,
+    ) {
+        match self.plugin_handle(channel_id, &device_path) {
+            Some(handle) => match handle.set_gui_size(width, height) {
+                Ok((width, height)) => self.send_status(EngineStatus::PluginGuiResizeRequest {
+                    channel_id,
+                    device_path,
+                    width,
+                    height,
+                }),
+                Err(e) => warn!(
+                    "Failed to resize plugin GUI at channel {} device {} to {}x{}: {}",
+                    channel_id, device_path, width, height, e
+                ),
+            },
+            None => warn!(
+                "SetPluginGuiSize: no subprocess plugin at channel {} device {}",
+                channel_id, device_path
+            ),
+        }
+    }
 }
 
 /// Queue the key labels and keyswitches an SFZ declared when it loaded. Sent even when empty.

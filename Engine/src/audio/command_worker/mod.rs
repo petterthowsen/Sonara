@@ -4,12 +4,16 @@
 //! worker holds the lock only to read or swap state. Slow work (plugin scans, building and
 //! dropping devices, plugin subprocess round-trips) runs with the lock released. This is safe
 //! because the worker is the only thread that adds or removes channels and devices.
+//!
+//! This file holds `CommandWorker`, its command loop and the dispatcher; the commands live in
+//! `devices` (device chains), `plugins` (subprocess CLAP plugins), `project` (channels and maps),
+//! `render` (offline render), `audio_config` (output stream) and `device_tick` (the poll that
+//! services devices between commands).
 
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tracing::warn;
 
 use super::block_clock::BlockClock;
 use super::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
@@ -193,10 +197,7 @@ impl CommandWorker {
             AudioCommand::RequestAudioConfig => self.report_audio_config(),
             AudioCommand::RequestAudioDevices => self.list_audio_devices(),
             AudioCommand::PipeWireGraph(graph) => self.on_pipewire_graph(graph),
-            route @ AudioCommand::SetChannelRoute { id: 1, .. } => {
-                self.apply_locked(route);
-                self.check_master_output();
-            }
+            route @ AudioCommand::SetChannelRoute { id: 1, .. } => self.set_master_route(route),
             AudioCommand::SavePluginState {
                 channel_id,
                 device_path,
@@ -223,82 +224,27 @@ impl CommandWorker {
                 channel_id,
                 device_path,
                 active,
-            } => match self.plugin_handle(channel_id, &device_path) {
-                Some(handle) => self.set_plugin_active(handle, channel_id, device_path, active),
-                None => self.apply_locked(AudioCommand::SetDeviceActive {
-                    channel_id,
-                    device_path,
-                    active,
-                }),
-            },
+            } => self.set_device_active(channel_id, device_path, active),
             AudioCommand::OpenPluginGui {
                 channel_id,
                 device_path,
                 window_handle,
-            } => match self.plugin_handle(channel_id, &device_path) {
-                Some(handle) => {
-                    self.open_plugin_gui(handle, channel_id, device_path, window_handle)
-                }
-                None => self.apply_locked(AudioCommand::OpenPluginGui {
-                    channel_id,
-                    device_path,
-                    window_handle,
-                }),
-            },
+            } => self.open_gui(channel_id, device_path, window_handle),
             AudioCommand::ClosePluginGui {
                 channel_id,
                 device_path,
-            } => match self.plugin_handle(channel_id, &device_path) {
-                Some(handle) => self.close_plugin_gui(handle, channel_id, device_path),
-                None => self.apply_locked(AudioCommand::ClosePluginGui {
-                    channel_id,
-                    device_path,
-                }),
-            },
+            } => self.close_gui(channel_id, device_path),
             AudioCommand::SetPluginGuiVisible {
                 channel_id,
                 device_path,
                 visible,
-            } => match self.plugin_handle(channel_id, &device_path) {
-                Some(handle) => {
-                    if let Err(e) = handle.set_gui_visible(visible) {
-                        warn!(
-                            "Failed to {} plugin GUI at channel {} device {}: {}",
-                            if visible { "show" } else { "hide" },
-                            channel_id,
-                            device_path,
-                            e
-                        );
-                    }
-                }
-                None => warn!(
-                    "SetPluginGuiVisible: no subprocess plugin at channel {} device {}",
-                    channel_id, device_path
-                ),
-            },
+            } => self.set_gui_visible(channel_id, device_path, visible),
             AudioCommand::SetPluginGuiSize {
                 channel_id,
                 device_path,
                 width,
                 height,
-            } => match self.plugin_handle(channel_id, &device_path) {
-                Some(handle) => match handle.set_gui_size(width, height) {
-                    Ok((width, height)) => self.send_status(EngineStatus::PluginGuiResizeRequest {
-                        channel_id,
-                        device_path,
-                        width,
-                        height,
-                    }),
-                    Err(e) => warn!(
-                        "Failed to resize plugin GUI at channel {} device {} to {}x{}: {}",
-                        channel_id, device_path, width, height, e
-                    ),
-                },
-                None => warn!(
-                    "SetPluginGuiSize: no subprocess plugin at channel {} device {}",
-                    channel_id, device_path
-                ),
-            },
+            } => self.set_gui_size(channel_id, device_path, width, height),
             other => self.apply_locked(other),
         }
     }
@@ -321,5 +267,11 @@ impl CommandWorker {
             self.send_status(status);
         }
         drop(trash);
+    }
+
+    /// Apply a route change for master, then check whether the new route can reach an output.
+    fn set_master_route(&self, route: AudioCommand) {
+        self.apply_locked(route);
+        self.check_master_output();
     }
 }

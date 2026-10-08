@@ -17,7 +17,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
 - [x] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
 - [x] Phase 6: Device lookup helpers
-- [ ] Phase 7: Split `audio/command_worker.rs`
+- [x] Phase 7: Split `audio/command_worker.rs`
 - [ ] Phase 8: Split `osc/server.rs`
 - [ ] Phase 9: OSC argument reader
 - [ ] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
@@ -614,6 +614,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 4 | 2026-10-09 | lib 807 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 4` (a) move, (b) improvements. See notes below. |
 | 5 | 2026-10-09 | lib 810 / 14 (807 + 3 new tests) | release 0; test build 0 | Allowed behavior change, own commit. See notes below. |
 | 6 | 2026-10-09 | lib 814 / 14 (810 + 4 new tests) | release 0; test build 0 | See notes below. |
+| 7 | 2026-10-09 | lib 814 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 7` (a) pure move, (b) handle arms as methods. See notes below. |
 
 Phase 1 notes:
 
@@ -756,3 +757,19 @@ Phase 6 notes:
 - New tests (4, in `state.rs`): missing channel, missing device, wrong type (including message), typed lookup.
 - Flaky: `audio::ipc::process_manager::tests::watcher_records_exit_code_and_stderr` failed again in one full run
   (passes alone and on rerun).
+
+Phase 7 notes:
+
+- Layout (lines): `command_worker/{mod 277, device_tick 386, plugins 599, devices 213, project 69, render 37, audio_config 350}`.
+  `command_worker.rs` became `mod.rs` with `git mv`. `mod.rs` keeps the struct, `new`, `run`, `handle`, `lock_state`,
+  `send_status`, `apply_locked` (and `DEVICE_POLL_INTERVAL`, `AudioSettings`); `device_tick.rs` also owns `PolledPlugin`,
+  `PluginStatsLog`, `PluginStatsReport` and the two stats intervals.
+- Commit (a) verification: the sorted removed and added lines of the commit, compared after dropping the `pub(super) `
+  prefix, differ only in `use` lines, `mod` lines, the new `//!` headers and `impl CommandWorker {` wrappers, three
+  signatures that `rustfmt` re-wrapped (`save_plugin_state`, `load_plugin_state`, `remove_device`) and the three
+  `PolledPlugin` fields made `pub(super)`. Every moved method became `pub(super)` (callers are now in sibling files).
+- Commit (b): the inline `handle` arms became methods in `plugins.rs` (`set_device_active`, `open_gui`, `close_gui`,
+  `set_gui_visible`, `set_gui_size`) and `set_master_route` in `mod.rs`; `handle` is now a flat dispatch (about 95 lines,
+  one call per arm). `collect_sfizz_*` live in `plugins.rs` as the plan says although only `poll_devices` calls them.
+- `device_tick::poll_devices` is still about 170 lines, over the ~150 goal. Left for later: it is one pass in three
+  stages (collect under the lock, service without it, send), and splitting it was not part of this phase.
