@@ -13,7 +13,7 @@
 //! followed by 1 s with a note (C3, held 0.5 s), and reports per-block timing and output levels.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
@@ -32,6 +32,7 @@ use clack_host::process::StartedPluginAudioProcessor;
 use crate::audio::ipc::HostMessage;
 use crate::plugin_host::host::SubprocessHost;
 use crate::plugin_host::operations::load_plugin;
+use crate::plugin_host::vst3::Vst3Instance;
 
 /// Middle C (C3) = MIDI note 60.
 const PROBE_NOTE: u8 = 60;
@@ -61,7 +62,13 @@ impl ProbeOptions {
 /// Run the probe. Returns the process exit code: 0 when the plugin loaded, activated and
 /// processed every block without an error.
 pub fn run(options: &ProbeOptions) -> i32 {
-    match probe(options) {
+    // A `.vst3` bundle takes the VST3 path (spec 028, phase 1); everything else is CLAP.
+    let result = if options.path.extension().is_some_and(|ext| ext == "vst3") {
+        probe_vst3(options)
+    } else {
+        probe(options)
+    };
+    match result {
         Ok(errors) if errors == 0 => {
             println!("\nResult: OK");
             0
@@ -580,6 +587,383 @@ fn process_blocks(
 
     println!(
         "\nProcessing ({} frames per block = {:.2} ms, stereo in/out):",
+        frames,
+        ms(block)
+    );
+    if let Some(first) = first {
+        println!(
+            "  first    block      {:7.3} ms ({:5.1}%)",
+            ms(first),
+            100.0 * first.as_secs_f64() / block.as_secs_f64()
+        );
+    }
+    silence.print("silence", block);
+    note.print("note C3", block);
+
+    let mut problems = errors;
+    if errors > 0 {
+        println!("  {} block(s) returned an error", errors);
+    }
+    for (label, stats) in [("silence", &silence), ("note", &note)] {
+        if !stats.peak.is_finite() {
+            println!("  Output contained NaN or infinity during {}", label);
+            problems += 1;
+        }
+        if stats.max > block {
+            println!(
+                "  Warning: a {} block took longer than real time ({:.3} ms > {:.3} ms)",
+                label,
+                ms(stats.max),
+                ms(block)
+            );
+        }
+    }
+    problems
+}
+
+/// Probe a VST3 bundle (spec 028, phase 1): the same output shape as the CLAP probe —
+/// descriptor, buses, parameters, latency, then 1 s of silence and 1 s with a C3 note held
+/// for 0.5 s, with per-block timing and output levels.
+fn probe_vst3(options: &ProbeOptions) -> Result<u32, String> {
+    use ::vst3::ComWrapper;
+    use ::vst3::Steinberg as sb;
+    use ::vst3::Steinberg::Vst as v3;
+    use ::vst3::Steinberg::Vst::{IComponentTrait, IEditControllerTrait};
+
+    use crate::plugin_host::vst3::{self, HostContext, Vst3Instance, Vst3Module};
+
+    let mut problems = 0u32;
+    println!("Probing {}", options.path.display());
+
+    let load_start = Instant::now();
+    // SAFETY: loading a plugin runs its code; that's the point of the probe.
+    let module = Arc::new(unsafe { Vst3Module::load(&options.path)? });
+    println!(
+        "\nModule loaded in {:.1} ms\n  bundle: {}\n  binary: {}",
+        ms(load_start.elapsed()),
+        module.bundle_path().display(),
+        module.binary_path().display()
+    );
+
+    let classes = vst3::scan::classes_from_factory(module.factory());
+    println!("\nClasses in the bundle:");
+    for class in &classes {
+        println!("    {:<34} {:<28} {}", class.id, class.category, class.name);
+    }
+    let audio_modules: Vec<&vst3::ScannedClass> = classes
+        .iter()
+        .filter(|class| class.category == vst3::moduleinfo::AUDIO_MODULE_CLASS)
+        .collect();
+    let chosen = match &options.plugin_id {
+        Some(wanted) => audio_modules
+            .iter()
+            .copied()
+            .find(|class| class.id.eq_ignore_ascii_case(wanted))
+            .ok_or_else(|| format!("Class {} is not in the bundle", wanted))?,
+        None => audio_modules
+            .first()
+            .copied()
+            .ok_or("The bundle has no audio module classes")?,
+    };
+    let class_id = vst3::tuid_from_hex(&chosen.id)
+        .ok_or_else(|| "The class id is not 32 hex characters".to_string())?;
+
+    println!("\nDescriptor:");
+    println!("  id:           {}", chosen.id);
+    println!("  name:         {}", chosen.name);
+    println!("  vendor:       {}", chosen.vendor);
+    println!("  version:      {}", chosen.version);
+    println!("  subcategories: {}", chosen.subcategories);
+    println!("  category:     {}", chosen.category);
+
+    let host_context = ComWrapper::new(HostContext);
+    let create_start = Instant::now();
+    let mut instance = unsafe {
+        Vst3Instance::create(
+            &module,
+            &class_id,
+            &host_context,
+            options.sample_rate,
+            options.block_frames,
+        )?
+    };
+    println!("\nInstance created in {:.1} ms", ms(create_start.elapsed()));
+
+    println!("\nBuses:");
+    for (media, media_label) in [
+        (v3::MediaTypes_::kAudio as i32, "Audio"),
+        (v3::MediaTypes_::kEvent as i32, "Event"),
+    ] {
+        for (direction, direction_label) in [
+            (v3::BusDirections_::kInput as i32, "input"),
+            (v3::BusDirections_::kOutput as i32, "output"),
+        ] {
+            let count = unsafe { instance.component().getBusCount(media, direction) };
+            println!("  {} {} buses: {}", media_label, direction_label, count);
+            for index in 0..count {
+                match instance.bus_info(media, direction, index) {
+                    Some(bus) => println!(
+                        "    [{}] {} — {} channel(s){}",
+                        index,
+                        vst3::char16_str(&bus.name),
+                        bus.channelCount,
+                        if bus.busType == v3::BusTypes_::kMain as i32 {
+                            ", main"
+                        } else {
+                            ""
+                        }
+                    ),
+                    None => println!("    [{}] <no info>", index),
+                }
+            }
+        }
+    }
+    if instance.audio_input_count() > 1 || instance.audio_output_count() > 1 {
+        println!("  Note: the engine activates only the main audio buses.");
+    }
+
+    match instance.controller() {
+        Some(controller) => {
+            let count = unsafe { controller.getParameterCount() };
+            println!("\nParameters: {}", count);
+            for index in 0..count {
+                let mut info: v3::ParameterInfo = unsafe { std::mem::zeroed() };
+                if unsafe { controller.getParameterInfo(index, &mut info) } != sb::kResultOk {
+                    println!("  [{:3}] <no info>", index);
+                    continue;
+                }
+                use v3::ParameterInfo_::ParameterFlags_ as flags;
+                let mut labels = Vec::new();
+                for (flag, label) in [
+                    (flags::kCanAutomate, "automatable"),
+                    (flags::kIsReadOnly, "read-only"),
+                    (flags::kIsHidden, "hidden"),
+                    (flags::kIsList, "list"),
+                    (flags::kIsBypass, "bypass"),
+                ] {
+                    if info.flags & flag != 0 {
+                        labels.push(label);
+                    }
+                }
+                if info.stepCount > 0 {
+                    labels.push("stepped");
+                }
+                let units = vst3::char16_str(&info.units);
+                println!(
+                    "  [{:3}] id {:<10} {}{} default {} [{}]",
+                    index,
+                    info.id,
+                    vst3::char16_str(&info.title),
+                    if units.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", units)
+                    },
+                    num(info.defaultNormalizedValue),
+                    labels.join(", ")
+                );
+            }
+        }
+        None => println!("\nParameters: none (no edit controller)"),
+    }
+
+    let latency = instance.latency_samples();
+    println!(
+        "\nActivated at {} Hz, max {} frames\nLatency: {} frames ({:.2} ms)",
+        options.sample_rate,
+        options.block_frames,
+        latency,
+        latency as f64 * 1000.0 / options.sample_rate
+    );
+
+    problems += process_blocks_vst3(&mut instance, options);
+    drop(instance);
+    println!("Deactivated");
+
+    Ok(problems)
+}
+
+/// The VST3 processing pass of the probe: 1 s of silence, then a C3 note held for 0.5 s.
+/// Mirrors `process_blocks` for the CLAP path, with the preallocated VST3 event list and
+/// parameter queues standing in for the CLAP event buffers.
+fn process_blocks_vst3(instance: &mut Vst3Instance, options: &ProbeOptions) -> u32 {
+    use ::vst3::ComWrapper;
+    use ::vst3::Steinberg as sb;
+    use ::vst3::Steinberg::Vst as v3;
+
+    use crate::plugin_host::vst3::{EventList, ParameterChanges};
+
+    let frames = options.block_frames.max(1) as usize;
+    let rate = options.sample_rate;
+    let block = Duration::from_secs_f64(frames as f64 / rate);
+    let second_blocks = (rate / frames as f64).ceil() as u64;
+    let note_off_block = second_blocks + second_blocks / 2;
+    let has_audio_input = instance.audio_input_count() > 0;
+
+    let mut in_left = vec![0.0f32; frames];
+    let mut in_right = vec![0.0f32; frames];
+    let mut out_left = vec![0.0f32; frames];
+    let mut out_right = vec![0.0f32; frames];
+    let mut in_channels = [in_left.as_mut_ptr(), in_right.as_mut_ptr()];
+    let mut out_channels = [out_left.as_mut_ptr(), out_right.as_mut_ptr()];
+    let mut in_bus = v3::AudioBusBuffers {
+        numChannels: 2,
+        silenceFlags: 0,
+        __field0: v3::AudioBusBuffers__type0 {
+            channelBuffers32: in_channels.as_mut_ptr(),
+        },
+    };
+    let mut out_bus = v3::AudioBusBuffers {
+        numChannels: 2,
+        silenceFlags: 0,
+        __field0: v3::AudioBusBuffers__type0 {
+            channelBuffers32: out_channels.as_mut_ptr(),
+        },
+    };
+
+    let input_events = ComWrapper::new(EventList::with_capacity(4));
+    let output_events = ComWrapper::new(EventList::with_capacity(128));
+    let in_changes = ComWrapper::new(ParameterChanges::new(32, 16));
+    let out_changes = ComWrapper::new(ParameterChanges::new(32, 16));
+    let input_events_ptr = input_events.to_com_ptr::<v3::IEventList>().unwrap();
+    let output_events_ptr = output_events.to_com_ptr::<v3::IEventList>().unwrap();
+    let in_changes_ptr = in_changes.to_com_ptr::<v3::IParameterChanges>().unwrap();
+    let out_changes_ptr = out_changes.to_com_ptr::<v3::IParameterChanges>().unwrap();
+
+    let mut context: v3::ProcessContext = unsafe { std::mem::zeroed() };
+    context.sampleRate = rate;
+    context.tempo = 120.0;
+    context.timeSigNumerator = 4;
+    context.timeSigDenominator = 4;
+    context.state = (v3::ProcessContext_::StatesAndFlags_::kPlaying
+        | v3::ProcessContext_::StatesAndFlags_::kTempoValid
+        | v3::ProcessContext_::StatesAndFlags_::kProjectTimeMusicValid
+        | v3::ProcessContext_::StatesAndFlags_::kTimeSigValid) as u32;
+
+    // A note on is `kNoteOnEvent` with noteId -1 (spec 028, phase 1).
+    let mut note_on: v3::Event = unsafe { std::mem::zeroed() };
+    note_on.busIndex = 0;
+    note_on.r#type = v3::Event_::EventTypes_::kNoteOnEvent as u16;
+    note_on.__field0 = v3::Event__type0 {
+        noteOn: v3::NoteOnEvent {
+            channel: 0,
+            pitch: PROBE_NOTE as i16,
+            tuning: 0.0,
+            velocity: PROBE_VELOCITY as f32,
+            length: 0,
+            noteId: -1,
+        },
+    };
+    let mut note_off: v3::Event = unsafe { std::mem::zeroed() };
+    note_off.busIndex = 0;
+    note_off.r#type = v3::Event_::EventTypes_::kNoteOffEvent as u16;
+    note_off.__field0 = v3::Event__type0 {
+        noteOff: v3::NoteOffEvent {
+            channel: 0,
+            pitch: PROBE_NOTE as i16,
+            velocity: 0.0,
+            noteId: -1,
+            tuning: 0.0,
+        },
+    };
+
+    let mut first = None;
+    let mut silence = PhaseStats::default();
+    let mut note = PhaseStats::default();
+    let mut errors = 0u32;
+    let mut steady_samples = 0i64;
+    let mut quarter_notes = 0.0f64;
+
+    for index in 0..second_blocks * 2 {
+        input_events.clear();
+        output_events.clear();
+        in_changes.reset();
+        out_changes.reset();
+        if index == second_blocks {
+            input_events.push(&note_on);
+        } else if index == note_off_block {
+            input_events.push(&note_off);
+        }
+        out_left.fill(0.0);
+        out_right.fill(0.0);
+        // Effects don't respond to notes, so the note phase also feeds a 440 Hz tone at
+        // -6 dB into the audio input: an effect that passes audio shows up in the levels,
+        // an instrument has no audio input to ignore.
+        if has_audio_input && index >= second_blocks {
+            for (sample, offset) in in_left.iter_mut().zip(steady_samples..) {
+                let time = offset as f64 / rate;
+                *sample = (time * 440.0 * std::f64::consts::TAU).sin() as f32 * 0.5;
+            }
+            in_right.copy_from_slice(&in_left);
+        }
+
+        context.projectTimeSamples = steady_samples;
+        context.projectTimeMusic = quarter_notes;
+
+        let mut data = v3::ProcessData {
+            processMode: v3::ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: v3::SymbolicSampleSizes_::kSample32 as i32,
+            numSamples: frames as i32,
+            numInputs: if has_audio_input { 1 } else { 0 },
+            numOutputs: 1,
+            inputs: if has_audio_input {
+                &mut in_bus
+            } else {
+                std::ptr::null_mut()
+            },
+            outputs: &mut out_bus,
+            inputParameterChanges: in_changes_ptr.as_ptr(),
+            outputParameterChanges: out_changes_ptr.as_ptr(),
+            inputEvents: input_events_ptr.as_ptr(),
+            outputEvents: output_events_ptr.as_ptr(),
+            processContext: &mut context,
+        };
+
+        let start = Instant::now();
+        let result = unsafe { instance.process(&mut data) };
+        let time = start.elapsed();
+        steady_samples += frames as i64;
+        quarter_notes += frames as f64 / rate * 2.0; // 120 bpm
+
+        if result != sb::kResultOk {
+            errors += 1;
+            if errors <= 3 {
+                println!(
+                    "  process() failed on block {} with tresult {}",
+                    index, result
+                );
+            }
+        }
+        let peak = [out_left.as_slice(), out_right.as_slice()]
+            .iter()
+            .flat_map(|channel| channel.iter())
+            .fold(0.0f32, |peak, sample| {
+                if sample.is_finite() {
+                    peak.max(sample.abs())
+                } else {
+                    f32::INFINITY
+                }
+            });
+        // Parameter changes the processor produced count as output events too.
+        let mut change_points = 0;
+        for queue_index in 0..out_changes.len() {
+            change_points += out_changes
+                .queue(queue_index)
+                .map_or(0, |queue| queue.len());
+        }
+        let events = output_events.len() + change_points;
+
+        if index == 0 {
+            first = Some(time);
+        } else if index < second_blocks {
+            silence.add(time, peak, events);
+        } else {
+            note.add(time, peak, events);
+        }
+    }
+
+    println!(
+        "\nProcessing ({} frames per block = {:.2} ms, stereo out):",
         frames,
         ms(block)
     );

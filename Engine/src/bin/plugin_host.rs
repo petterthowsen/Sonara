@@ -13,10 +13,14 @@
 //! **Usage:**
 //! ```text
 //! plugin_host <control_socket_fd> [--host-key KEY] [--log-dir DIR]
-//! plugin_host --probe <path.clap> [--id PLUGIN_ID] [--rate HZ] [--block FRAMES]
+//! plugin_host --probe <path.clap|bundle.vst3> [--id ID] [--rate HZ] [--block FRAMES]
+//! plugin_host --scan-vst3 <bundle.vst3>
 //! ```
-//! The first form is how the engine starts it. `--probe` loads one plugin standalone and prints
-//! what it reports, without the engine or Godot (`plugin_host/probe.rs`).
+//! The first form is how the engine starts it. `--probe` loads one plugin standalone and
+//! prints what it reports, without the engine or Godot (`plugin_host/probe.rs`); for a
+//! `.vst3` bundle `--id` is the 32 hex character class ID and the probe takes the VST3 path
+//! (`plugin_host/vst3/`). `--scan-vst3` prints the bundle's classes as JSON on stdout, for
+//! the engine's scanner.
 //!
 //! `SONARA_PLUGIN_HOST_WAIT=1` makes the host print its pid and wait for a debugger to attach
 //! before it reads any command.
@@ -46,7 +50,8 @@ struct HostArgs {
 fn usage() -> ! {
     eprintln!(
         "Usage:\n  plugin_host <control_socket_fd> [--host-key KEY] [--log-dir DIR]\n  \
-         plugin_host --probe <path.clap> [--id PLUGIN_ID] [--rate HZ] [--block FRAMES]"
+         plugin_host --probe <path.clap|bundle.vst3> [--id ID] [--rate HZ] [--block FRAMES]\n  \
+         plugin_host --scan-vst3 <bundle.vst3>"
     );
     std::process::exit(2);
 }
@@ -150,6 +155,14 @@ fn claim_fd(fd: i32, what: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    if args.first().map(String::as_str) == Some("--scan-vst3") {
+        let Some(path) = args.get(1) else {
+            usage();
+        };
+        install_x11_error_handler();
+        let code = engine::plugin_host::vst3::scan::run_scan(&PathBuf::from(path));
+        std::process::exit(code);
+    }
     if args.first().map(String::as_str) == Some("--probe") {
         let options = parse_probe_args(&args[1..]);
         tracing_subscriber::fmt()
