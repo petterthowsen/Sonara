@@ -249,7 +249,6 @@ key_height = 0.0
 note_lane_color_white = Color(0.13671875, 0.13671875, 0.13671875, 1)
 note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
-root_accent_color = Color(0.3, 0.55, 1, 0.18)
 
 [node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=1240778112]
 layout_mode = 1
@@ -260,9 +259,9 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("6_j0nq3")
-bar_line_color = Color(1, 1, 1, 0.29411766)
-beat_line_color = Color(0.9607843, 0.9607843, 0.9607843, 0.21568628)
-subdivision_line_color = Color(1, 1, 1, 0.11764706)
+bar_line_color = Color(0.6431373, 0.6431373, 0.6431373, 0.39215687)
+beat_line_color = Color(0.6117647, 0.6117647, 0.6117647, 0.29411766)
+subdivision_line_color = Color(0.63529414, 0.63529414, 0.63529414, 0.1764706)
 
 [node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=291536170]
 layout_mode = 1

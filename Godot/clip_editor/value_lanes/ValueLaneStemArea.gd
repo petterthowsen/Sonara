@@ -57,7 +57,19 @@ var _last_audition_velocity := -1
 var _playhead: TextureRect = null
 
 
+## Theme primary accent, cached for the draw loop (UiColors.role must not run there).
+var _primary_accent := Color("#624d99")
+
+
+func _refresh_theme_colors() -> void:
+	var theme := ThemeDB.get_project_theme()
+	if theme != null and theme.has_color(&"accent_primary", &"Sonara"):
+		_primary_accent = UiColors.role(&"accent_primary")
+	queue_redraw()
+
+
 func _ready() -> void:
+	_refresh_theme_colors()
 	Hotkeys.set_context(self, "value_lanes")
 	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -172,7 +184,8 @@ func _draw_stem(stem: Dictionary, hovered: bool) -> void:
 	x = clampf(x, edge, size.x - edge)
 	var nd: MidiNoteData = stem["note_data"]
 	var top := stem_top(descriptor.get_value(nd))
-	var color: Color = Utils.display_color(stem["color"])
+	# Editable stems use the theme's primary accent; ghosts keep their track colour, dimmed.
+	var color: Color = Utils.display_color(stem["color"]) if stem["ghost"] else _primary_accent
 	var width := STEM_WIDTH
 	if stem["ghost"]:
 		color.a = 0.35
@@ -353,7 +366,9 @@ func _cancel_gesture() -> void:
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_MOUSE_EXIT and _gesture == Gesture.NONE and midi_editor != null:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_refresh_theme_colors()
+	elif what == NOTIFICATION_MOUSE_EXIT and _gesture == Gesture.NONE and midi_editor != null:
 		if _hovered != null:
 			_hovered = null
 			midi_editor.set_hovered_note(null)

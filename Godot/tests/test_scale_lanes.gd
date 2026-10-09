@@ -38,14 +38,15 @@ func _c_major() -> PackedInt32Array:
 
 func _test_lane_color() -> void:
 	var pcs := _c_major()
-	var tint := Color(0.2, 0.85, 0.6, 0.12)  # out-of-scale tint, alpha = strength
-	# D3 (62): in scale, not root: plain white key colour.
-	_assert(NoteLanes.lane_color(62, W, B, pcs, 0, tint, ACCENT) == W, "REQ-005: in-scale white lane keeps the base colour")
-	# C#3 (61): out of scale, black key: dimmed black.
-	_assert(NoteLanes.lane_color(61, W, B, pcs, 0, tint, ACCENT) == B.lerp(Color(tint, B.a), tint.a), "REQ-005: out-of-scale black lane is tinted")
-	# Out-of-scale and in-scale white lanes differ in a scale where a white key is out (C pentatonic: F).
+	var tint := Color(0.2, 0.85, 0.6, 0.12)  # in-scale tint, alpha = strength
+	# D3 (62): in scale, not root: white key colour tinted.
+	_assert(NoteLanes.lane_color(62, W, B, pcs, 0, tint, ACCENT) == W.lerp(Color(tint, W.a), tint.a), "REQ-005: in-scale white lane is tinted")
+	# C#3 (61): out of scale, black key: plain black key colour.
+	_assert(NoteLanes.lane_color(61, W, B, pcs, 0, tint, ACCENT) == B, "REQ-005: out-of-scale black lane uses the plain black key colour")
+	# F in C pentatonic is out of scale: plain; A is in scale: tinted.
 	var pent := MusicalScale.make(0, "major_pentatonic").pitch_classes()
-	_assert(NoteLanes.lane_color(65, W, B, pent, 0, tint, ACCENT) == W.lerp(Color(tint, W.a), tint.a), "REQ-005: out-of-scale white lane is tinted")
+	_assert(NoteLanes.lane_color(65, W, B, pent, 0, tint, ACCENT) == B, "REQ-005: out-of-scale white lane uses the same colour as a black one")
+	_assert(NoteLanes.lane_color(69, W, B, pent, 0, tint, ACCENT) != W, "REQ-005: in-scale white lane differs from out-of-scale")
 	# Root lanes carry the accent in every octave.
 	var root_ok := true
 	for p in [24, 36, 48, 60, 72]:
@@ -78,10 +79,10 @@ func _test_mapped_lane_differs() -> void:
 	var map := NoteMap.new()
 	map.set_entry(61, "Hit", Color.RED)
 	lanes.note_map = map
-	var base: Color = NoteLanes.lane_color(61, W, B, _c_major(), 0, lanes._out_of_scale_tint(), lanes.root_accent_color)
+	var base: Color = NoteLanes.lane_color(61, W, B, _c_major(), 0, lanes._in_scale_tint(), lanes._root_accent())
 	var mapped = lanes._tinted(base, 61)
 	var unmapped = lanes._tinted(base, 63)
-	_assert(mapped != unmapped, "REQ-007: a mapped out-of-scale lane differs from an unmapped one")
+	_assert(mapped != unmapped, "REQ-007: a mapped lane differs from an unmapped one")
 	_assert(unmapped == base, "REQ-007: an unmapped lane keeps the scale shading")
 	lanes.free()
 

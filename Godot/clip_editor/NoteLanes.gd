@@ -24,8 +24,10 @@ var note_map: NoteMap = null:
 
 ## Shared scale state (spec 026), handed down by MidiEditor. Null or inactive means the lanes
 ## look exactly as they did before scale support (REQ-006).
-## Theme secondary accent, cached for the out-of-scale tint (see _refresh_theme_colors).
+## Theme secondary accent, cached for the in-scale tint (see _refresh_theme_colors).
 var _secondary_accent := Color("#36d99e")
+## Theme primary accent, cached for the tonic lanes; alpha comes from `root_accent_strength`.
+var _primary_accent := Color("#624d99")
 
 var scale_context: ScaleContext = null:
 	set(c):
@@ -38,16 +40,16 @@ var scale_context: ScaleContext = null:
 			scale_context.changed.connect(queue_redraw)
 		queue_redraw()
 
-## How strongly out-of-scale lanes are tinted with the theme's secondary accent.
-@export_range(0.0, 1.0) var out_of_scale_tint_strength := 0.12:
+## How strongly in-scale lanes are tinted with the theme's secondary accent.
+@export_range(0.0, 1.0) var in_scale_tint_strength := 0.12:
 	set(t):
-		out_of_scale_tint_strength = t
+		in_scale_tint_strength = t
 		queue_redraw()
 
-## Blended over every lane holding the scale root's pitch class; alpha is the blend strength.
-@export var root_accent_color := Color(0.3, 0.55, 1.0, 0.18):
-	set(c):
-		root_accent_color = c
+## How strongly lanes holding the scale root's pitch class are tinted with the theme's primary accent.
+@export_range(0.0, 1.0) var root_accent_strength := 0.3:
+	set(t):
+		root_accent_strength = t
 		queue_redraw()
 
 ## How strongly a mapped lane is tinted with its entry colour.
@@ -135,7 +137,7 @@ func _draw_lanes():
 		elif highlight:
 			c = lane_color(note, note_lane_color_white, note_lane_color_black,
 					scale_context.pitch_classes(), scale_context.scale.root,
-					_out_of_scale_tint(), root_accent_color)
+					_in_scale_tint(), _root_accent())
 		else:
 			c = note_lane_color_black if Midi.is_black_key(note) else note_lane_color_white
 		c = _tinted(c, note)
@@ -171,24 +173,31 @@ func _tinted(base: Color, note: int) -> Color:
 
 
 ## Lane colour for `pitch` (REQ-005/006). Plain white/black key colour when `scale_pcs` is empty
-## (no scale). Otherwise out-of-scale pitch classes are blended towards `out_tint`, and the root's
-## pitch class (`root` 0..11, -1 for none) towards `accent`; each colour's alpha is its strength.
+## (no scale). Otherwise in-scale pitch classes are blended towards `in_tint` (out-of-scale lanes
+## all use the plain black key colour, white or black key alike), and the root's pitch class (`root` 0..11, -1 for none) is further
+## blended towards `accent`; each colour's alpha is its strength.
 static func lane_color(pitch: int, base_white: Color, base_black: Color,
-		scale_pcs: PackedInt32Array, root: int, out_tint: Color, accent: Color) -> Color:
+		scale_pcs: PackedInt32Array, root: int, in_tint: Color, accent: Color) -> Color:
 	var base := base_black if Midi.is_black_key(pitch) else base_white
 	if scale_pcs.is_empty():
 		return base
 	var pc := posmod(pitch, 12)
 	if not scale_pcs.has(pc):
-		return base.lerp(Color(out_tint.r, out_tint.g, out_tint.b, base.a), out_tint.a)
+		return base_black
+	var tinted := base.lerp(Color(in_tint.r, in_tint.g, in_tint.b, base.a), in_tint.a)
 	if pc == root:
-		return base.lerp(Color(accent.r, accent.g, accent.b, base.a), accent.a)
-	return base
+		return tinted.lerp(Color(accent.r, accent.g, accent.b, base.a), accent.a)
+	return tinted
 
 
-## The secondary accent with `out_of_scale_tint_strength` as alpha, for lane_color.
-func _out_of_scale_tint() -> Color:
-	return Color(_secondary_accent, out_of_scale_tint_strength)
+## The secondary accent with `in_scale_tint_strength` as alpha, for lane_color.
+func _in_scale_tint() -> Color:
+	return Color(_secondary_accent, in_scale_tint_strength)
+
+
+## The primary accent with `root_accent_strength` as alpha, for lane_color.
+func _root_accent() -> Color:
+	return Color(_primary_accent, root_accent_strength)
 
 
 ## Cached theme role (UiColors.role must not run in the draw loop); refreshed on theme change.
@@ -196,6 +205,8 @@ func _refresh_theme_colors() -> void:
 	var theme := ThemeDB.get_project_theme()
 	if theme != null and theme.has_color(&"accent_secondary", &"Sonara"):
 		_secondary_accent = UiColors.role(&"accent_secondary")
+	if theme != null and theme.has_color(&"accent_primary", &"Sonara"):
+		_primary_accent = UiColors.role(&"accent_primary")
 	queue_redraw()
 
 

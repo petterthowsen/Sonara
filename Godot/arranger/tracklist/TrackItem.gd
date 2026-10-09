@@ -29,10 +29,6 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 		queue_redraw()
 
 @export_group("Selection Style")
-@export var unselected_brightness := Utils.HEADER_RESTING_BRIGHTNESS
-@export var unselected_saturation := Utils.HEADER_RESTING_SATURATION
-@export var selected_brightness := 1.05
-@export var active_brightness := 1.25
 ## Neutral selection border, the same colour every selectable item uses (theme `border_selected`).
 var selected_outline_color: Color:
 	get:
@@ -552,7 +548,7 @@ func _update_track_bg_color() -> void:
 	_update_header_style()
 
 
-## Tint the header for unselected, selected, or active.
+## Colour the header with the track colour.
 func _update_header_style() -> void:
 	if track == null:
 		return
@@ -560,17 +556,12 @@ func _update_header_style() -> void:
 	if stylebox == null:
 		return
 
-	var c: Color
-	if is_active:
-		c = Utils.header_color(track.color, active_brightness, 1.05)
-	elif is_selected:
-		c = Utils.header_color(track.color, selected_brightness)
-	else:
-		c = Utils.header_color(track.color, unselected_brightness, unselected_saturation)
+	# Static: the track's own color in every state, like the left stripe. The outline shows selection.
+	var c := Utils.header_color(track.color)
 	stylebox.bg_color = c
 
 	if label:
-		label.modulate.a = 1.0 if (is_selected or is_active) else 0.78
+		label.modulate.a = 1.0
 		label.set_font_color(Utils.contrasting_text_color(c))
 
 

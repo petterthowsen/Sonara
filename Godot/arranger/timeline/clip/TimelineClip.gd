@@ -36,6 +36,8 @@ var track_color: Color = Color.WHITE:
 
 # Selection and hover state
 var is_selected: bool = false
+## How much darker the clip name is while the clip is not selected.
+const NAME_UNSELECTED_DARKEN := 0.25
 ## Another instance of this instance's clip is selected (and this one is not).
 var is_sibling_selected: bool = false
 @export var sibling_border_color: Color = Color(0.21, 0.85, 0.62, 0.6)
@@ -495,6 +497,8 @@ func _draw() -> void:
 		return
 	_name_line.width = width
 	var color := name_settings.font_color if name_settings else Color.WHITE
+	if not is_selected:
+		color = color.darkened(NAME_UNSELECTED_DARKEN)
 	_name_line.draw(get_canvas_item(), Vector2(margin_left, margin_top), color)
 
 

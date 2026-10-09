@@ -66,7 +66,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 - [x] **T-007** [REQ-005, REQ-006, REQ-007, REQ-009] Lane highlighting.
   - _Files_: `Godot/clip_editor/NoteLanes.gd`, `Godot/clip_editor/ClipEditor.tscn` (export values),
     `Godot/tests/test_scale_lanes.gd` (new)
-  - _Output_: `scale_context`, the `out_of_scale_tint_strength` / `root_accent_color` exports, static
+  - _Output_: `scale_context`, the `in_scale_tint_strength` / `root_accent_strength` exports, static
     `lane_color`, `_draw_lanes` using it with the note map tint on top, and folded non-drum rows
     keeping the white/black base.
   - _Verify_: `run_all.sh scale_lanes` passes the REQ-005, 006 and 007 colour checks.

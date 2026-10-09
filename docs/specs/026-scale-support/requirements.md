@@ -70,12 +70,12 @@ restores the previous root and type.
 ### REQ-005: In-scale lanes
 
 WHILE a project scale is set and the clip editor shows the piano roll, the note lanes shall tint
-out-of-scale lanes with the theme's secondary accent colour, keep the white and black key pattern underneath,
+in-scale lanes with the theme's secondary accent colour (out-of-scale lanes keep the plain key colour), keep the white and black key pattern underneath,
 and mark every lane holding the root pitch class with an accent.
 
 - **Acceptance:** a headless test checks the lane colour picked for in-scale, out-of-scale and root
   pitches. Live: with C Major set, the lanes for C2, C3, C4 and so on carry the root accent and the
-  black-key lanes are tinted.
+  C major lanes are tinted while C#, D#, F#, G# and A# stay plain.
 
 ### REQ-006: No scale means no change
 
