@@ -11,14 +11,14 @@
 pub mod futex;
 pub mod hosting;
 pub mod platform_shm;
-pub mod process_manager;
+pub mod process;
 pub mod protocol;
 pub mod shared_memory;
 pub mod wire;
 
 pub use hosting::{HostAssignment, HostingMode, HostingPolicy};
 pub use platform_shm::PlatformSharedMemory;
-pub use process_manager::{
+pub use process::{
     plugin_log_dir, prune_plugin_logs, HostCrash, HostExit, HostLaunch, InstanceConnection,
     PluginProcess, ProcessManager, PLUGIN_LOGS_KEPT, REQUEST_TIMEOUT,
 };
