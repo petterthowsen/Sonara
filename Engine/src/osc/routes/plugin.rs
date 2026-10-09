@@ -6,6 +6,7 @@ use tracing::{info, warn};
 
 use super::RouteCtx;
 use crate::audio::AudioCommand;
+use crate::osc::parse::Args;
 use std::path::PathBuf;
 
 use crate::audio::devices::DevicePath;
@@ -13,6 +14,7 @@ use crate::audio::devices::DevicePath;
 /// Handle plugin routes: `/plugin/*`, `/plugins/*` and `/builtin/*`. Returns false for an address this area doesn't
 /// know, so the caller can try the next area or report an unknown address.
 pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    let a = Args::new(cx.addr, args);
     match parts {
         // Plugin management - path-based: /plugin/{command}
         // /plugin/scan [path:String]* — with no args, the engine uses its built-in
@@ -47,18 +49,15 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             cx.commands.send(AudioCommand::AdvertiseBuiltinDevices)?;
         }
         ["plugin", "get_parameters"] => {
-            if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
-                (args.get(0), args.get(1))
-            {
-                info!(
-                    "Get plugin parameters: channel={} device={}",
-                    channel_id, device_position
-                );
-                cx.commands.send(AudioCommand::GetPluginParameters {
-                    channel_id: *channel_id as usize,
-                    device_path: DevicePath::root(*device_position as usize),
-                })?;
-            }
+            let (channel_id, device_position) = (a.int(0)?, a.int(1)?);
+            info!(
+                "Get plugin parameters: channel={} device={}",
+                channel_id, device_position
+            );
+            cx.commands.send(AudioCommand::GetPluginParameters {
+                channel_id: channel_id as usize,
+                device_path: DevicePath::root(device_position as usize),
+            })?;
         }
         _ => return Ok(false),
     }

@@ -6,10 +6,12 @@ use tracing::{info, warn};
 
 use super::RouteCtx;
 use crate::audio::AudioCommand;
+use crate::osc::parse::Args;
 
 /// Handle transport routes: `/transport/*`. Returns false for an address this area doesn't
 /// know, so the caller can try the next area or report an unknown address.
 pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    let a = Args::new(cx.addr, args);
     match parts {
         // Transport control
         ["transport", "play"] => {
@@ -25,26 +27,25 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             cx.commands.send(AudioCommand::Stop)?;
         }
         ["transport", "seek"] => {
-            if let Some(OscType::Int(ticks)) = args.first() {
-                info!("Seek to tick {}", ticks);
-                cx.commands.send(AudioCommand::Seek(*ticks as i64))?;
-            }
+            let ticks = a.int(0)?;
+            info!("Seek to tick {}", ticks);
+            cx.commands.send(AudioCommand::Seek(ticks as i64))?;
         }
         ["transport", "loop"] => {
-            if let [OscType::Int(enabled), OscType::Int(start), OscType::Int(end)] = args {
-                info!("Loop enabled={} {}..{}", enabled, start, end);
-                cx.commands.send(AudioCommand::SetLoop {
-                    enabled: *enabled != 0,
-                    start: *start as i64,
-                    end: *end as i64,
-                })?;
-            }
+            // Only the exact shape (i i i) was accepted.
+            a.exactly(3)?;
+            let (enabled, start, end) = (a.int(0)?, a.int(1)?, a.int(2)?);
+            info!("Loop enabled={} {}..{}", enabled, start, end);
+            cx.commands.send(AudioCommand::SetLoop {
+                enabled: enabled != 0,
+                start: start as i64,
+                end: end as i64,
+            })?;
         }
         ["transport", "tempo"] => {
-            if let Some(OscType::Float(tempo)) = args.first() {
-                info!("Set tempo to {}", tempo);
-                cx.commands.send(AudioCommand::SetTempo(*tempo))?;
-            }
+            let tempo = a.float(0)?;
+            info!("Set tempo to {}", tempo);
+            cx.commands.send(AudioCommand::SetTempo(tempo))?;
         }
         ["transport", "tempo_map"] => {
             let (points, dropped) = parse_tempo_map_args(args);
@@ -62,11 +63,9 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
                 .send(AudioCommand::SetTimeSignatureMap(changes))?;
         }
         ["transport", "time_signature"] => {
-            if let (Some(OscType::Int(num)), Some(OscType::Int(den))) = (args.get(0), args.get(1)) {
-                info!("Set time signature to {}/{}", num, den);
-                cx.commands
-                    .send(AudioCommand::SetTimeSignature(*num, *den))?;
-            }
+            let (num, den) = (a.int(0)?, a.int(1)?);
+            info!("Set time signature to {}/{}", num, den);
+            cx.commands.send(AudioCommand::SetTimeSignature(num, den))?;
         }
         _ => return Ok(false),
     }

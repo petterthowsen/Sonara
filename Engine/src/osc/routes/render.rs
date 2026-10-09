@@ -7,6 +7,7 @@ use tracing::warn;
 use super::RouteCtx;
 use crate::audio::AudioCommand;
 use crate::audio::EngineStatus;
+use crate::osc::parse::Args;
 use crate::osc::status::send_status;
 
 /// Handle render routes: `/render/*`. Returns false for an address this area doesn't
@@ -49,12 +50,11 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
                 );
             }
         },
-        ["render", "cancel"] => match args.first() {
-            Some(OscType::String(job_id)) => cx.commands.send(AudioCommand::CancelRender {
-                job_id: job_id.clone(),
-            })?,
-            _ => warn!("Ignoring /render/cancel without a job id"),
-        },
+        ["render", "cancel"] => {
+            cx.commands.send(AudioCommand::CancelRender {
+                job_id: Args::new(cx.addr, args).string(0)?.to_string(),
+            })?;
+        }
         _ => return Ok(false),
     }
     Ok(true)

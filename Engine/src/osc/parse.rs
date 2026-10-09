@@ -112,7 +112,7 @@ pub(super) fn segment<T: FromStr>(addr: &str, part: &str) -> Result<T, ArgError>
 /// Reads typed OSC arguments by position; errors name the address and what was expected.
 ///
 /// The plain readers (`int`, `float`, `bool`, `string`, `blob`) accept exactly one OSC type, as
-/// the route arms always did. The `lenient_*` and `*_or_int` readers keep the wider acceptance of
+/// the route arms always did. The `lenient_int` and `*_or_int` readers keep the wider acceptance of
 /// the arms that had it (Godot sends whole numbers as `i`, `h` or `f` depending on how it built
 /// them). The `opt_*` readers return `None` for an argument that is absent or of another type,
 /// for arguments with a default.
@@ -127,9 +127,9 @@ impl<'a> Args<'a> {
         Self { addr, args }
     }
 
-    /// The arguments as received.
-    pub(super) fn raw(&self) -> &'a [OscType] {
-        self.args
+    /// The address the message was sent to.
+    pub(super) fn addr(&self) -> &'a str {
+        self.addr
     }
 
     /// The error for argument `index` not being what the arm needs (`expected` is an OSC type
@@ -219,14 +219,6 @@ impl<'a> Args<'a> {
             .get(i)
             .and_then(osc_int)
             .ok_or_else(|| self.mismatch(i, "i, h or f"))
-    }
-
-    /// A number sent as `f`, `d`, `i` or `h` (see `osc_float`).
-    pub(super) fn lenient_float(&self, i: usize) -> Result<f32, ArgError> {
-        self.args
-            .get(i)
-            .and_then(osc_float)
-            .ok_or_else(|| self.mismatch(i, "f, d, i or h"))
     }
 
     /// A number sent as `f` or `i`.
@@ -362,9 +354,6 @@ mod tests {
         assert_eq!(a.lenient_int(2), Ok(3));
         assert!(a.lenient_int(3).is_err());
         assert!(a.lenient_int(4).is_err());
-        assert_eq!(a.lenient_float(0), Ok(5.0));
-        assert_eq!(a.lenient_float(3), Ok(0.25));
-        assert!(a.lenient_float(4).is_err());
         // float_or_int takes f and i only.
         assert_eq!(a.float_or_int(0), Ok(5.0));
         assert_eq!(a.float_or_int(2), Ok(3.9));

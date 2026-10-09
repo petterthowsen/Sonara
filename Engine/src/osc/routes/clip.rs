@@ -8,34 +8,29 @@ use super::RouteCtx;
 use crate::audio::AudioCommand;
 use crate::osc::audio_files::PendingClip;
 use crate::osc::parse::osc_arg_types;
+use crate::osc::parse::Args;
 use crate::osc::server::OscServer;
 
 /// Handle clip routes: `/clip/*`. Returns false for an address this area doesn't
 /// know, so the caller can try the next area or report an unknown address.
 pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    let a = Args::new(cx.addr, args);
     match parts {
         // Clip management - path-based: /clip/{id}/{command}
         ["clip", "create"] => {
-            if let (
-                Some(OscType::String(id)),
-                Some(OscType::String(clip_type)),
-                Some(OscType::String(name)),
-            ) = (args.get(0), args.get(1), args.get(2))
-            {
-                info!("Create clip {} ({}) - {}", id, clip_type, name);
-                cx.commands.send(AudioCommand::CreateClip {
-                    id: id.clone(),
-                    name: name.clone(),
-                    clip_type: clip_type.clone(),
-                })?;
-            }
+            let (id, clip_type, name) = (a.string(0)?, a.string(1)?, a.string(2)?);
+            info!("Create clip {} ({}) - {}", id, clip_type, name);
+            cx.commands.send(AudioCommand::CreateClip {
+                id: id.to_string(),
+                name: name.to_string(),
+                clip_type: clip_type.to_string(),
+            })?;
         }
         ["clip", "delete"] => {
-            if let Some(OscType::String(id)) = args.first() {
-                info!("Delete clip {}", id);
-                cx.commands
-                    .send(AudioCommand::RemoveClip { id: id.clone() })?;
-            }
+            let id = a.string(0)?;
+            info!("Delete clip {}", id);
+            cx.commands
+                .send(AudioCommand::RemoveClip { id: id.to_string() })?;
         }
         ["clip", id_str, "add_note"] => {
             if let Some(n) = parse_clip_note_args(cx.addr, args) {
@@ -61,13 +56,12 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             }
         }
         ["clip", id_str, "remove_note"] => {
-            if let Some(OscType::Int(note_id)) = args.first() {
-                info!("Remove note from clip {}: note_id {}", id_str, note_id);
-                cx.commands.send(AudioCommand::RemoveNoteFromClip {
-                    clip_id: id_str.to_string(),
-                    note_id: *note_id as u64,
-                })?;
-            }
+            let note_id = a.int(0)?;
+            info!("Remove note from clip {}: note_id {}", id_str, note_id);
+            cx.commands.send(AudioCommand::RemoveNoteFromClip {
+                clip_id: id_str.to_string(),
+                note_id: note_id as u64,
+            })?;
         }
         ["clip", id_str, "update_note"] => {
             if let Some(n) = parse_clip_note_args(cx.addr, args) {
@@ -87,12 +81,10 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             }
         }
         ["clip", id_str, "load_audio_file"] => {
-            if let (
-                Some(OscType::String(file_path)),
-                Some(OscType::Int(_sample_rate)),
-                Some(OscType::Int(_channels)),
-            ) = (args.get(0), args.get(1), args.get(2))
             {
+                let file_path = a.string(0)?.to_string();
+                a.int(1)?; // sample rate, unused: the engine decodes at its own rate
+                a.int(2)?; // channels, unused
                 let req_id = OscServer::generate_clip_request_id(id_str);
                 info!(
                     "Requesting audio load for clip {} (req_id={}) from {}",
@@ -153,11 +145,6 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
                         });
                     }
                 }
-            } else {
-                warn!(
-                    "OSC: load_audio_file missing arguments: got {} args",
-                    args.len()
-                );
             }
         }
         _ => return Ok(false),
