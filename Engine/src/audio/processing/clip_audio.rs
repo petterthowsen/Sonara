@@ -9,9 +9,10 @@ use std::collections::HashMap;
 
 use super::timeline::{advance_tick, frame_rate_at};
 use crate::audio::channel::Channel;
-use crate::audio::clip::{AudioPlayback, Clip, ClipInstance, ClipType};
+use crate::audio::clip::{AudioPlayback, Clip, ClipInstance, ClipType, StretchMode};
 use crate::audio::dsp::gain::db_to_gain;
 use crate::audio::project::ProjectSettings;
+use crate::audio::tempo_map::TempoMap;
 use crate::audio::track::Track;
 use crate::audio::types::*;
 
@@ -39,6 +40,7 @@ pub(super) fn render_audio_clips(
     clips: &HashMap<ClipId, Clip>,
     channels: &mut HashMap<ChannelId, Channel>,
     settings: &ProjectSettings,
+    tempo_map: &TempoMap,
     device_sample_rate: f32,
     tick_rates: &[f64],
     span: BufferSpan,
@@ -94,6 +96,7 @@ pub(super) fn render_audio_clips(
                             instance,
                             clip,
                             settings,
+                            tempo_map,
                             device_sample_rate,
                             current_tick,
                             frame_bpm,
@@ -123,6 +126,7 @@ fn mix_instance_frame(
     instance: &mut ClipInstance,
     clip: &Clip,
     settings: &ProjectSettings,
+    tempo_map: &TempoMap,
     device_sample_rate: f32,
     current_tick: Tick,
     frame_bpm: f64,
@@ -137,6 +141,10 @@ fn mix_instance_frame(
         settings.tempo
     };
 
+    // Stretch plays like Repitch until the pitch-preserving stretcher lands
+    let raw = clip.stretch_mode.effective() == StretchMode::Raw;
+    let origin = instance.start_tick - instance.clip_offset;
+
     // Check if we're in the playback range for this instance
     if current_pos_in_instance >= 0 && current_pos_in_instance < instance.duration_ticks {
         // Initialize playback position for this clip instance if not yet started
@@ -148,12 +156,35 @@ fn mix_instance_frame(
                 instance.wrap_content_tick(instance.clip_offset + current_pos_in_instance);
 
             // Convert total offset (ticks) to sample index in the clip's sample-rate domain
-            instance.playback_position = Some(AudioPlayback::clip_source_frame(
-                total_offset_ticks,
-                recorded_bpm,
-                settings.ppq,
-                clip.audio_sample_rate as f64,
-            ));
+            let clip_sr = clip.audio_sample_rate as f64;
+            instance.playback_position = Some(if raw {
+                AudioPlayback::raw_source_frame(
+                    total_offset_ticks,
+                    origin,
+                    tempo_map,
+                    settings.tempo as f64,
+                    settings.ppq,
+                    clip_sr,
+                )
+            } else {
+                AudioPlayback::clip_source_frame(
+                    total_offset_ticks,
+                    recorded_bpm,
+                    settings.ppq,
+                    clip_sr,
+                )
+            });
+            if raw && instance.loop_enabled && instance.loop_length_ticks > 0 {
+                instance.raw_loop_frames = AudioPlayback::raw_loop_frames(
+                    instance.loop_start_ticks,
+                    instance.loop_length_ticks,
+                    origin,
+                    tempo_map,
+                    settings.tempo as f64,
+                    settings.ppq,
+                    clip_sr,
+                );
+            }
         }
 
         // Get mutable reference to playback position
@@ -162,12 +193,19 @@ fn mix_instance_frame(
         };
 
         // Source frames to advance this frame at the tempo playing now
-        let advance_per_sample = AudioPlayback::clip_advance_per_frame(
-            frame_bpm,
-            recorded_bpm,
-            clip.audio_sample_rate as f64,
-            device_sample_rate as f64,
-        );
+        let advance_per_sample = if raw {
+            AudioPlayback::raw_advance_per_frame(
+                clip.audio_sample_rate as f64,
+                device_sample_rate as f64,
+            )
+        } else {
+            AudioPlayback::clip_advance_per_frame(
+                frame_bpm,
+                recorded_bpm,
+                clip.audio_sample_rate as f64,
+                device_sample_rate as f64,
+            )
+        };
 
         let clip_sample_len = (clip.audio_samples.len() / clip.audio_channels) as f64;
 
@@ -235,20 +273,25 @@ fn mix_instance_frame(
 
         // Handle looping
         if instance.loop_enabled && instance.loop_length_ticks > 0 {
-            let clip_sr = clip.audio_sample_rate as f64;
-            let ppq = settings.ppq;
-            let loop_start_samples = AudioPlayback::clip_source_frame(
-                instance.loop_start_ticks,
-                recorded_bpm,
-                ppq,
-                clip_sr,
-            );
-            let loop_length_samples = AudioPlayback::clip_source_frame(
-                instance.loop_length_ticks,
-                recorded_bpm,
-                ppq,
-                clip_sr,
-            );
+            let (loop_start_samples, loop_length_samples) = if raw {
+                instance.raw_loop_frames
+            } else {
+                let clip_sr = clip.audio_sample_rate as f64;
+                (
+                    AudioPlayback::clip_source_frame(
+                        instance.loop_start_ticks,
+                        recorded_bpm,
+                        settings.ppq,
+                        clip_sr,
+                    ),
+                    AudioPlayback::clip_source_frame(
+                        instance.loop_length_ticks,
+                        recorded_bpm,
+                        settings.ppq,
+                        clip_sr,
+                    ),
+                )
+            };
 
             if loop_length_samples > 0.0
                 && *playback_pos >= loop_start_samples + loop_length_samples
@@ -419,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn set_clip_tempo_moves_the_one_beat_seek() {
+    fn set_clip_timing_moves_the_one_beat_seek() {
         use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
         let mut state = EngineState::default();
         let mut clip = Clip::new("c".to_string(), "Ramp".to_string(), ClipType::Audio);
@@ -437,8 +480,9 @@ mod tests {
         let mut effects = CommandEffects::default();
         process_command(
             &mut state,
-            AudioCommand::SetClipTempo {
+            AudioCommand::SetClipTiming {
                 clip_id: "c".to_string(),
+                mode: StretchMode::Repitch,
                 bpm: 60.0,
             },
             64,
@@ -451,8 +495,9 @@ mod tests {
         // Back to 120 BPM re-seats the instance: one beat is half a second, frame 24 000
         process_command(
             &mut state,
-            AudioCommand::SetClipTempo {
+            AudioCommand::SetClipTiming {
                 clip_id: "c".to_string(),
+                mode: StretchMode::Repitch,
                 bpm: 120.0,
             },
             64,
@@ -460,5 +505,58 @@ mod tests {
         );
         let (l, _) = render_track(&mut state, 960);
         assert!((l[0] - 24_000.0).abs() < 1.0, "got {}", l[0]);
+    }
+
+    fn raw_state(mode: StretchMode, bpm: f64) -> EngineState {
+        let mut state = EngineState::default();
+        state.settings.tempo = bpm as f32;
+        let mut clip = Clip::new("c".to_string(), "Ramp".to_string(), ClipType::Audio);
+        clip.audio_samples = (0..200_000).map(|i| i as f32).collect();
+        clip.audio_channels = 1;
+        clip.audio_sample_rate = 48_000;
+        clip.stretch_mode = mode;
+        clip.content_length_ticks = 100_000;
+        state.clips.insert("c".to_string(), clip);
+        let mut track = Track::new(2, 2);
+        track.clip_instances.push(ClipInstance::new(
+            "i".to_string(),
+            "c".to_string(),
+            0,
+            10_000,
+        ));
+        state.tracks.insert(2, track);
+        state
+    }
+
+    #[test]
+    fn raw_ignores_the_project_tempo() {
+        for bpm in [60.0, 120.0, 240.0] {
+            let mut state = raw_state(StretchMode::Raw, bpm);
+            // Seek one beat in: 960 ticks = 60/bpm seconds of source
+            let (l, _) = render_track(&mut state, 960);
+            let expect = 60.0 / bpm * 48_000.0;
+            assert!((l[0] as f64 - expect).abs() < 1.0, "bpm {bpm}: {}", l[0]);
+            // And the clip advances one source frame per device frame
+            assert!((l[63] - l[0] - 63.0).abs() < 1e-2, "bpm {bpm}");
+        }
+    }
+
+    #[test]
+    fn raw_seek_follows_the_tempo_map_but_not_the_rate() {
+        let mut state = raw_state(StretchMode::Raw, 120.0);
+        state.tempo_map = crate::audio::tempo_map::TempoMap::from_points(vec![(0, 60.0)]);
+        let (l, _) = render_track(&mut state, 960);
+        assert!((l[0] - 48_000.0).abs() < 1.0, "{}", l[0]);
+    }
+
+    #[test]
+    fn stretch_mode_plays_like_repitch_for_now() {
+        let mut a = raw_state(StretchMode::Stretch, 60.0);
+        let mut b = raw_state(StretchMode::Repitch, 60.0);
+        a.clips.get_mut("c").unwrap().recorded_bpm = 120.0;
+        b.clips.get_mut("c").unwrap().recorded_bpm = 120.0;
+        let (la, _) = render_track(&mut a, 960);
+        let (lb, _) = render_track(&mut b, 960);
+        assert_eq!(la, lb);
     }
 }

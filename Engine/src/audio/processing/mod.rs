@@ -123,6 +123,7 @@ pub fn process_audio(
             &state.clips,
             &mut state.channels,
             &state.settings,
+            &state.tempo_map,
             state.device_sample_rate,
             &tick_rates,
             BufferSpan {

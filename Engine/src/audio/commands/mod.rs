@@ -24,6 +24,7 @@ use crate::audio::devices::AudioDevice;
 use crate::audio::automation::{
     AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
 };
+use crate::audio::clip::StretchMode;
 use crate::audio::devices::sampler::zones::{GroupPlayMode, ZoneSettings};
 use crate::audio::devices::DevicePath;
 use crate::audio::project::ProjectSettings;
@@ -299,9 +300,10 @@ pub enum AudioCommand {
         instance_id: ClipInstanceId,
         reverse: bool,
     },
-    /// Set an audio clip's tempo (BPM of the material) and re-seat its instances.
-    SetClipTempo {
+    /// Set an audio clip's stretch mode and tempo (BPM of the material) and re-seat its instances.
+    SetClipTiming {
         clip_id: ClipId,
+        mode: StretchMode,
         bpm: f32,
     },
 
@@ -973,7 +975,9 @@ fn dispatch(
             instance_id,
             reverse,
         } => clip::update_clip_instance_reverse(state, track_id, instance_id, reverse),
-        AudioCommand::SetClipTempo { clip_id, bpm } => clip::set_clip_tempo(state, clip_id, bpm),
+        AudioCommand::SetClipTiming { clip_id, mode, bpm } => {
+            clip::set_clip_timing(state, clip_id, mode, bpm)
+        }
         AudioCommand::MoveDevice {
             channel_id,
             parent_path,

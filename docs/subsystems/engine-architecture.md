@@ -199,24 +199,19 @@ Godot/              # Godot 4.7 UI App
 - SIMD variants (AVX/SSE/NEON) live alongside scalar fallbacks; callers never branch on CPU features—the helpers detect support internally.
 - DSP helpers must remain allocation-free during audio callbacks; any scratch buffers are pre-sized by the caller (e.g., `PolySynthDevice` reuses `voice_buffer`/`temp_buffer`).
 
-### Audio Clip BPM-Based Time Stretching
-Audio clips automatically time-stretch and pitch-shift based on project BPM:
+### Audio Clip Stretch Modes (spec 029)
+Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM of the material). Godot owns both and sends them with `/clip/{id}/set_timing s:mode f:bpm`, which also re-seats the clip's playing instances. The engine defaults (`Repitch`, 120) only apply until it arrives. The engine does not guess a content length when the PCM loads; Godot computes `duration_s x clip_tempo / 60 x ppq` and sends it with the instance positions. `clip.audio_sample_rate` is the rate of the decoded PCM, which the AudioFileService has already resampled to the project rate.
 
-**Key concepts:**
-- Each `Clip` (audio) stores `recorded_bpm: f32` = BPM the audio was originally recorded at
-- `ClipInstance` playback position is tracked per-instance in `Track.audio_playback_positions: HashMap<ClipInstanceId, f64>`
-- Stretch factor calculated as: `stretch = project_bpm / clip.recorded_bpm`
-- Example: Audio recorded at 120 BPM playing in a 200 BPM project → stretch = 1.667x (faster + pitched up)
-- Godot owns `recorded_bpm` and sends it with `/clip/{id}/set_tempo` (the engine default of 120 only applies until it arrives). The engine does not guess a content length when the PCM loads; Godot computes it from the clip tempo and sends it with the instance positions. `clip.audio_sample_rate` is the rate of the decoded PCM, which the AudioFileService has already resampled to the project rate.
+**Modes:**
+- **Raw**: native speed, project tempo ignored. Source time of content tick `c` is `seconds_at(origin + c) - seconds_at(origin)` with `origin = start_tick - clip_offset`, through the project `TempoMap`. The advance per device frame is always `clip_sr / device_sr`. Loop start and length are converted the same way, once when the instance is seated (`ClipInstance.raw_loop_frames`), so the callback does no tempo-map search per frame. All conversions live in `AudioPlayback` (`raw_source_frame`, `raw_advance_per_frame`, `raw_loop_frames`) with unit tests.
+- **Repitch** (varispeed): advance per frame is `bpm_at(tick) / clip_tempo x clip_sr / device_sr`; the seek position is `content_tick / ppq x 60 / clip_tempo x clip_sr`. Pitch follows speed.
+- **Stretch**: pitch-preserving stretching is Phase 4. Until then `StretchMode::effective()` maps it to Repitch.
+
+**Shared mechanics:**
+- `render_audio_clips` (`processing/clip_audio.rs`) steps frame by frame with the same tick cursor as the tick-event stage; `mix_instance_frame` seats an instance (`playback_position = None` means "seat from the current tick") and then advances a fractional source position. Linear interpolation handles fractional positions.
 - Each instance renders into its own `(l, r)` pair, scaled by `ClipInstance.gain_linear` (refreshed once per buffer), then adds to the track sum, so overlapping instances and mono clips never affect each other.
-
-**Implementation details:**
-- Audio playback position advances per-frame with fractional sample tracking (not per-tick) to maintain smoothness
-- Advance amount per frame: `(stretch_factor × device_sample_rate) / clip_sample_rate`
-- Linear interpolation handles fractional sample positions smoothly across any stretch factor
-- Looping respects stretch factor: loop points are converted to clip samples and scaled by stretch
-- Positions reset on Stop/Seek commands, and removed when clips finish playing
-- **Critical**: Position must be tracked continuously frame-by-frame, not recalculated from tick position (which causes aliasing at high stretch factors)
+- Positions reset on Stop/Seek/loop wrap and when a clip's timing changes, and are dropped when the instance ends. Position is tracked frame by frame, not recalculated from the tick (aliasing at high rates).
+- Offline render (`render/worker.rs`) calls the same `process_audio`, so export and analysis use these paths. A tempo-map change during playback does not re-seat Raw instances; they keep their position until the next seat.
 
 ### Audio Mixing Implementation
 **`mixing/mod.rs::mix_and_output` orchestrates four passes, keeping the audio thread real-time safe:**

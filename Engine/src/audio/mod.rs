@@ -33,7 +33,7 @@ pub use automation::{
     AutomationPointId, AutomationTarget, CurveKind,
 };
 pub use channel::{Channel, PanCoefficients, PanMode, Send};
-pub use clip::{AudioPlayback, Clip, ClipInstance, ClipLoadState, ClipNote, ClipType};
+pub use clip::{AudioPlayback, Clip, ClipInstance, ClipLoadState, ClipNote, ClipType, StretchMode};
 pub use devices::{AudioDevice, DelayDevice, ParamId, ParamValue};
 pub use engine::{AudioCommand, AudioEngine, EngineStatus};
 pub use midi_types::*;

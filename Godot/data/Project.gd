@@ -614,8 +614,8 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 				note.release
 			])
 	else:
-		# The engine plays the clip at this tempo, so it must arrive before the instances
-		clip.sync_tempo_to_engine()
+		# The engine plays the clip with this mode and tempo, so it must arrive before the instances
+		clip.sync_timing_to_engine()
 		# Sync audio data (if audio clip)
 		if not clip.audio_file_path.is_empty():
 			_request_clip_audio(clip)
@@ -1013,7 +1013,9 @@ func create_clip_from_asset(asset: Asset, default_color: Color = Color.WHITE, dr
 		clip.waveform_cache_key = ""
 		clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
 		clip.load_progress = 0.0
-		clip.set_recorded_bpm(tempo_map.get_bpm_at_tick(float(drop_tick), tempo))
+		var import_defaults := AudioImportDefaults.for_file(asset.path, tempo_map.get_bpm_at_tick(float(drop_tick), tempo))
+		clip.stretch_mode = import_defaults["mode"]
+		clip.set_recorded_bpm(import_defaults["bpm"])
 		clip.content_length_ticks = ppq * 4  # Placeholder until engine provides length
 	else:
 		# TODO: Load MIDI notes from asset.path when MIDI parser is available

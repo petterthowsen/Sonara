@@ -9,6 +9,11 @@ static var logger := Log.make("Clip")
 
 enum ClipType { AUDIO, MIDI }
 enum LoadState { UNLOADED, LOADING, READY, FAILED }
+## How an audio clip is laid onto the timeline (spec 029). RAW plays at native speed and ignores
+## the project tempo. REPITCH is varispeed: rate = project tempo / clip tempo. STRETCH will keep
+## the pitch; the engine plays it like REPITCH until that lands.
+enum StretchMode { RAW, REPITCH, STRETCH }
+const STRETCH_MODE_NAMES: Array[String] = ["raw", "repitch", "stretch"]
 
 # ============================================================================
 # SIGNALS
@@ -48,6 +53,9 @@ var audio_file_path: String = ""
 ## follow it: one beat of this tempo is 60 / recorded_bpm seconds of the file. Change it with
 ## `set_recorded_bpm` so the engine hears about it.
 var recorded_bpm: float = 120.0
+## Old projects have no stored mode and load as REPITCH with their saved `recorded_bpm`. New
+## imports pick theirs in `AudioImportDefaults`. Change it with `set_stretch_mode`.
+var stretch_mode: StretchMode = StretchMode.REPITCH
 
 ## Decoded audio metadata and peak data (shared ingest with Sampler devices).
 var audio_source: AudioSourceInfo = AudioSourceInfo.new()
@@ -122,12 +130,18 @@ func update_content_length_from_metadata(fallback_tempo: float, project_ppq: int
 	if audio_frames <= 0 or audio_sample_rate <= 0:
 		return
 	var tempo: float = recorded_bpm if recorded_bpm > 0.0 else maxf(1.0, fallback_tempo)
-	var ppq_value: int = max(1, project_ppq)
+	content_length_ticks = content_length_for_tempo(tempo, project_ppq)
+
+
+## Length in ticks of the whole file when its tempo is `bpm`: `duration_s × bpm / 60 × ppq`.
+## 0 until the file's metadata is known.
+func content_length_for_tempo(bpm: float, project_ppq: int) -> int:
+	if audio_frames <= 0 or audio_sample_rate <= 0:
+		return 0
 	var duration_seconds := audio_duration_seconds
 	if duration_seconds <= 0.0:
 		duration_seconds = float(audio_frames) / float(audio_sample_rate)
-	var beats: float = duration_seconds * (tempo / 60.0)
-	content_length_ticks = int(beats * float(ppq_value))
+	return int(duration_seconds * (bpm / 60.0) * float(maxi(1, project_ppq)))
 
 
 # ============================================================================
@@ -475,21 +489,32 @@ static func uniqueness_base(clip_name: String) -> String:
 
 
 ## Set the tempo of the audio material and tell the engine. Does not rescale the length or
-## the instances.
+## the instances; see `AudioClipTiming.tempo_change_command` for the undoable edit that does.
 func set_recorded_bpm(bpm: float) -> void:
 	if bpm <= 0.0 or is_equal_approx(recorded_bpm, bpm):
 		return
 	recorded_bpm = bpm
 	modified_date = Time.get_unix_time_from_system()
 	if _synced_to_engine and type == ClipType.AUDIO:
-		sync_tempo_to_engine()
+		sync_timing_to_engine()
 	clip_modified.emit()
 
 
-## Send the tempo of an audio clip to the engine (the engine defaults to 120).
-func sync_tempo_to_engine() -> void:
+## Set how the audio is laid onto the timeline and tell the engine.
+func set_stretch_mode(mode: StretchMode) -> void:
+	if stretch_mode == mode:
+		return
+	stretch_mode = mode
+	modified_date = Time.get_unix_time_from_system()
+	if _synced_to_engine and type == ClipType.AUDIO:
+		sync_timing_to_engine()
+	clip_modified.emit()
+
+
+## Send the stretch mode and tempo of an audio clip to the engine (it defaults to Repitch at 120).
+func sync_timing_to_engine() -> void:
 	if type == ClipType.AUDIO and recorded_bpm > 0.0:
-		AudioEngineOSC.send("/clip/%s/set_tempo" % id, [recorded_bpm])
+		AudioEngineOSC.send("/clip/%s/set_timing" % id, [STRETCH_MODE_NAMES[stretch_mode], recorded_bpm])
 
 
 ## Set stored content length in ticks.
@@ -543,6 +568,7 @@ func to_json() -> Dictionary:
 		"id": id,
 		"type": ClipType.keys()[type],
 		"color": Utils.color_to_json(color),
+		"stretch_mode": STRETCH_MODE_NAMES[stretch_mode],
 		"midi_notes": _serialize_midi_notes(),
 		"midi_events": _serialize_midi_events(),
 	})
@@ -566,6 +592,9 @@ static func from_json(data: Dictionary) -> Clip:
 	clip.type = ClipType.get(str(data.get("type", "")), clip.type)
 	clip.color = Utils.color_from_json(data.get("color"), clip.color)
 	JsonFields.read(clip, data, JSON_FIELDS)
+	var mode_index := STRETCH_MODE_NAMES.find(str(data.get("stretch_mode", "")))
+	if mode_index >= 0:
+		clip.stretch_mode = mode_index as StretchMode
 	clip._deserialize_midi_notes(data.get("midi_notes", []))
 	clip._deserialize_midi_events(data.get("midi_events", []))
 	clip.load_state = LoadState.UNLOADED

@@ -153,7 +153,7 @@ Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
 | `/clip/{id}/remove_note` | `i:note_id` | Remove MIDI note from clip |
 | `/clip/{id}/update_note` | `i:note_id, i:note, i:start_tick, i:duration, i:velocity` | Update MIDI note in clip |
 | `/clip/{id}/load_audio_file` | `s:abs_path, i:sample_rate_hint, i:channels_hint` | Request async audio decode + waveform generation via AudioFileService |
-| `/clip/{id}/set_tempo` | `f:bpm` | Set an audio clip's tempo (BPM of the material, default 120). The clip plays at `project_bpm / bpm` times its natural speed, and its playing instances re-seat. The engine does not derive the clip length from it: Godot computes `duration_s × bpm / 60 × ppq` and sends it with the instance positions. Phase 3 of spec 029 renames this to `/clip/{id}/set_timing s:mode f:bpm` |
+| `/clip/{id}/set_timing` | `s:mode, f:bpm` | Set an audio clip's stretch mode (`raw`, `repitch` or `stretch`) and tempo (BPM of the material, default 120). `raw` plays at native speed whatever the project tempo; `repitch` plays at `project_bpm / bpm` times natural speed; `stretch` plays like `repitch` until the pitch-preserving stretcher lands (spec 029 phase 4). Playing instances re-seat. An unknown mode is ignored with a warning. The engine does not derive the clip length from the tempo: Godot computes `duration_s x bpm / 60 x ppq` and sends it with the instance positions. Replaces `/clip/{id}/set_tempo f:bpm` |
 
 ### ClipInstance Management (Godot -> Rust)
 

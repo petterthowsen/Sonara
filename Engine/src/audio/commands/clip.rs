@@ -1,6 +1,6 @@
 //! Clip commands: the clip pool, MIDI notes, audio clip loading, and clip instances on tracks.
 
-use crate::audio::clip::{Clip, ClipInstance, ClipLoadState, ClipNote};
+use crate::audio::clip::{Clip, ClipInstance, ClipLoadState, ClipNote, StretchMode};
 use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::state::EngineState;
 use crate::audio::types::{ClipId, ClipInstanceId, MidiNote, NoteId, Tick, TrackId};
@@ -507,9 +507,14 @@ pub(super) fn update_clip_instance_loop(
     }
 }
 
-/// Set an audio clip's tempo (BPM of the material) and re-seat its playing instances, since
-/// their stored source positions were computed with the old tempo.
-pub(super) fn set_clip_tempo(state: &mut EngineState, clip_id: ClipId, bpm: f32) {
+/// Set an audio clip's stretch mode and tempo (BPM of the material) and re-seat its playing
+/// instances, since their stored source positions were computed with the old timing.
+pub(super) fn set_clip_timing(
+    state: &mut EngineState,
+    clip_id: ClipId,
+    mode: StretchMode,
+    bpm: f32,
+) {
     if !(bpm.is_finite() && bpm > 0.0) {
         warn!("Ignoring invalid clip tempo {} for clip {}", bpm, clip_id);
         return;
@@ -519,6 +524,7 @@ pub(super) fn set_clip_tempo(state: &mut EngineState, clip_id: ClipId, bpm: f32)
         return;
     };
     clip.recorded_bpm = bpm;
+    clip.stretch_mode = mode;
     for track in state.tracks.values_mut() {
         for instance in track.clip_instances.iter_mut() {
             if instance.clip_id == clip_id {
@@ -526,7 +532,7 @@ pub(super) fn set_clip_tempo(state: &mut EngineState, clip_id: ClipId, bpm: f32)
             }
         }
     }
-    info!("Clip {} tempo set to {} BPM", clip_id, bpm);
+    info!("Clip {} timing set to {:?} at {} BPM", clip_id, mode, bpm);
 }
 
 /// Play a clip instance backwards or forwards.

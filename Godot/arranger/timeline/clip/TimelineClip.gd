@@ -240,8 +240,9 @@ func _unbind_grid_helper() -> void:
 
 
 ## Point the WaveformView at the clip's peak data and map timeline ticks to source frames.
-## Matches the engine's playback rate (AudioPlayback::clip_advance_per_frame): one tick
-## covers 60 / (recorded_bpm × ppq) seconds of the source file.
+## Matches the engine's playback rate per stretch mode (see `AudioClipTiming.frames_per_tick`):
+## Raw follows the project tempo at the instance start (approximate under a tempo change),
+## Repitch and Stretch follow the clip tempo.
 func _update_waveform() -> void:
 	_update_loop_overlay()
 	if waveform_view == null:
@@ -259,8 +260,8 @@ func _update_waveform() -> void:
 	var gh: GridHelper = timeline.grid_helper if timeline else null
 	if gh == null or not waveform_view.is_data_ready() or gh.pixels_per_beat <= 0.0:
 		return
-	var bpm: float = clip.recorded_bpm if clip.recorded_bpm > 0.0 else gh.tempo
-	var frames_per_tick := float(waveform_view.source_sample_rate()) * 60.0 / (bpm * float(gh.ppq))
+	var frames_per_tick := AudioClipTiming.frames_per_tick(clip, clip_instance.start_ticks,
+			gh.tempo_map, gh.tempo, gh.ppq, float(waveform_view.source_sample_rate()))
 	var frames_per_pixel := float(gh.ppq) / gh.pixels_per_beat * frames_per_tick
 	var segments: Array[Vector3i] = []
 	if clip_instance.loop_enabled:
@@ -495,6 +496,9 @@ func _draw() -> void:
 	var margin_right := header_style.content_margin_right if header_style else 0.0
 	var margin_top := header_style.content_margin_top if header_style else 0.0
 	var width := size.x - margin_left - margin_right
+	var badge_text := _mode_badge_text()
+	if not badge_text.is_empty():
+		width -= _draw_mode_badge(badge_text, margin_right)
 	if width <= 0.0:
 		return
 	_name_line.width = width
@@ -502,6 +506,31 @@ func _draw() -> void:
 	if not is_selected:
 		color = color.darkened(NAME_UNSELECTED_DARKEN)
 	_name_line.draw(get_canvas_item(), Vector2(margin_left, margin_top), color)
+
+
+## `P` / `S` for an audio clip that is not in Raw mode, else empty.
+func _mode_badge_text() -> String:
+	var clip: Clip = clip_instance.clip if clip_instance else null
+	if clip == null or clip.type != Clip.ClipType.AUDIO:
+		return ""
+	return AudioClipTiming.badge(clip.stretch_mode)
+
+
+## Draw the mode badge at the right end of the header. Returns the width it took, with spacing.
+func _draw_mode_badge(text: String, margin_right: float) -> float:
+	var font: Font = name_settings.font if name_settings and name_settings.font else get_theme_font("font", "Label")
+	var font_size: int = maxi(8, (name_settings.font_size if name_settings else get_theme_font_size("font_size", "Label")) - 2)
+	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	var box := Vector2(maxf(text_size.x + 6.0, header_height - 8.0), minf(header_height, size.y) - 6.0)
+	if size.x < box.x + 24.0 or box.y <= 0.0:
+		return 0.0
+	var rect := Rect2(Vector2(size.x - margin_right - box.x, 3.0), box)
+	var color := name_settings.font_color if name_settings else Color.WHITE
+	draw_rect(rect, Color(0, 0, 0, 0.35), true)
+	draw_string(font, Vector2(rect.position.x + (box.x - text_size.x) * 0.5,
+			rect.position.y + (box.y + font.get_ascent(font_size) - font.get_descent(font_size)) * 0.5),
+			text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+	return box.x + 4.0
 
 
 func _set_name_text(text: String) -> void:

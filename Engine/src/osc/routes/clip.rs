@@ -5,7 +5,7 @@ use rosc::OscType;
 use tracing::{info, warn};
 
 use super::RouteCtx;
-use crate::audio::AudioCommand;
+use crate::audio::{AudioCommand, StretchMode};
 use crate::osc::audio_files::PendingClip;
 use crate::osc::parse::osc_arg_types;
 use crate::osc::parse::Args;
@@ -32,11 +32,17 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             cx.commands
                 .send(AudioCommand::RemoveClip { id: id.to_string() })?;
         }
-        ["clip", id_str, "set_tempo"] => {
-            let bpm = a.float_or_int(0)?;
-            info!("Set clip {} tempo: {}", id_str, bpm);
-            cx.commands.send(AudioCommand::SetClipTempo {
+        ["clip", id_str, "set_timing"] => {
+            let mode_name = a.string(0)?;
+            let Some(mode) = StretchMode::parse(mode_name) else {
+                warn!("Clip {} set_timing: unknown mode '{}'", id_str, mode_name);
+                return Ok(true);
+            };
+            let bpm = a.float_or_int(1)?;
+            info!("Set clip {} timing: {} at {} BPM", id_str, mode_name, bpm);
+            cx.commands.send(AudioCommand::SetClipTiming {
                 clip_id: id_str.to_string(),
+                mode,
                 bpm,
             })?;
         }

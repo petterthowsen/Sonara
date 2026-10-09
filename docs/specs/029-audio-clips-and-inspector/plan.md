@@ -12,7 +12,7 @@ something that builds, passes tests and can be checked by hand. Commit at the en
 - [x?] Phase 0: Fix audio clip playback speed and per-instance gain mixing
 - [x?] Phase 1: Inspector framework and `ClipInspector`
 - [x?] Phase 2: Clip gain
-- [ ] Phase 3: Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
+- [x?] Phase 3: Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
 - [ ] Phase 4: Stretch mode (pitch-preserving, Signalsmith Stretch)
 - [ ] Phase 5: Fades
 - [ ] Phase 6: DAWproject, docs, ADR and glossary
@@ -233,39 +233,51 @@ Phase 2 notes (deviations from the list above):
 ## Phase 3 — Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
 
 Engine:
-- [ ] `enum StretchMode { Raw, Repitch, Stretch }` on `Clip`. `Stretch` falls back to Repitch
+- [x?] `enum StretchMode { Raw, Repitch, Stretch }` on `Clip`. `Stretch` falls back to Repitch
   until Phase 4.
-- [ ] Rename the message to `/clip/{id}/set_timing s:mode f:bpm` (or extend it, if Phase 0
+- [x?] Rename the message to `/clip/{id}/set_timing s:mode f:bpm` (or extend it, if Phase 0
   already used that name).
-- [ ] Raw in `clip_audio.rs`:
+- [x?] Raw in `clip_audio.rs`:
   - Seek position comes from `tempo_map.seconds_at` relative to the instance origin, as defined
     under Decisions.
   - Advance per frame = `clip_sr / device_sr`.
   - Loop start and length are converted the same way.
   - Move the conversions into `AudioPlayback` and unit-test them there: constant tempo, a tempo
     ramp, a seek into a loop, and reverse.
-- [ ] Check that offline render (`render/worker.rs`) goes through the same code path.
+- [x?] Check that offline render (`render/worker.rs`) goes through the same code path.
 
 Godot:
-- [ ] `Clip.stretch_mode` with a setter, saved in `to_json` / `from_json`. Old projects default
+- [x?] `Clip.stretch_mode` with a setter, saved in `to_json` / `from_json`. Old projects default
   to Repitch.
-- [ ] `AudioClipInspector` controls:
+- [x?] `AudioClipInspector` controls:
   - mode selector (Raw / Repitch / Stretch)
   - clip tempo field, disabled in Raw
   - ×2 and ÷2 buttons
   - "Length in beats…", which sets the tempo from a typed length: `bpm = beats × 60 / duration_s`
   - reverse
-- [ ] Changing the clip tempo rescales the content length and every instance (see Decisions) as
+- [x?] Changing the clip tempo rescales the content length and every instance (see Decisions) as
   one `MacroCommand`.
-- [ ] Import defaults (Raw plus tempo from the project tempo, or Stretch plus a tempo parsed from
+- [x?] Import defaults (Raw plus tempo from the project tempo, or Stretch plus a tempo parsed from
   the file name), in a small static `AudioImportDefaults.gd`, with tests for the file-name parser.
-- [ ] `TimelineClip._update_waveform`:
+- [x?] `TimelineClip._update_waveform`:
   - Raw uses the project tempo at the instance start to find frames per tick. A tempo change
     under a Raw clip can draw slightly off. Note this as a known limitation.
   - Repitch and Stretch use the clip tempo.
-- [ ] Show the mode on the clip header as a small badge (`R` / `P` / `S`), only when it isn't Raw.
-- [ ] Tests: mode and tempo round-trip through save and load, tempo rescaling keeps the source
+- [x?] Show the mode on the clip header as a small badge (`R` / `P` / `S`), only when it isn't Raw.
+- [x?] Tests: mode and tempo round-trip through save and load, tempo rescaling keeps the source
   region, and the waveform mapping is correct for each mode.
+
+Phase 3 notes (deviations from the list above):
+- Phase 0 had already named the message `set_tempo`; it is now `/clip/{id}/set_timing s:mode f:bpm` (`raw`, `repitch`, `stretch`; unknown mode warns and is ignored). Engine default for a new clip is Repitch at 120.
+- Stretch is offered in the selector, labelled "Stretch (plays as Repitch)" with a tooltip, and the engine maps it to Repitch (`StretchMode::effective`). Phase 4 should drop the label.
+- Raw advances at a constant `clip_sr / device_sr`; only the seek and the loop region use the tempo map. The Raw loop frames are computed when the instance is seated and cached on `ClipInstance`, so a tempo-map edit during playback only takes effect at the next seat.
+- Offline render needs no separate code: `render/worker.rs` calls `process_audio`, which calls `render_audio_clips`.
+- "Length in beats..." is an inline field (Enter applies), not a dialog.
+- Tempo, x2, /2 and the beats field are disabled when every selected clip is Raw. Multi-selection applies to each clip.
+- The clip's tempo edit is `AudioClipTiming.tempo_change_command` (one `MacroCommand`: clip tempo, content length, then a `ClipInstanceTransformCommand` per instance on every track).
+- Import defaults are in `Godot/data/AudioImportDefaults.gd` (`for_file`, `parse_tempo`): an explicit `NNNbpm` wins over a bare `_NNN_`; both need 60-200.
+- Phase 2 loose end fixed: a click on the gain slider that did not move is recorded 0.4 s later, so a double-click reset replaces it and the pair is one undo step. Selection change flushes a waiting click.
+- Tests: Rust unit tests in `audio/clip.rs` and `processing/clip_audio.rs`; Godot `tests/test_audio_clip_timing.gd`.
 
 ## Phase 4 — Stretch mode (pitch-preserving, Signalsmith Stretch)
 
