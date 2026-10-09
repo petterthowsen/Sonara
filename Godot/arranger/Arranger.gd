@@ -29,7 +29,7 @@ var logger : Log = Log.make("Arranger")
 
 # ArrangeBottom: pinned below the vertical scroll, columns aligned to the panels above
 @onready var tracks_panel_footer: PanelContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter
-@onready var add_track_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddTrackButton
+@onready var add_track_button: MenuButton = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddTrackButton
 @onready var add_folder_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddFolderButton
 @onready var automation_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationViewToggle
 @onready var routing_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/RoutingViewToggle
@@ -145,7 +145,10 @@ func _ready():
 	Settings.setting_changed.connect(_on_setting_changed)
 
 	# Connect add track button
-	add_track_button.pressed.connect(_on_add_track_pressed)
+	var add_track_popup := add_track_button.get_popup()
+	add_track_popup.add_item("Instrument Track", 0)
+	add_track_popup.add_item("Audio Track", 1)
+	add_track_popup.id_pressed.connect(_on_add_track_menu_id_pressed)
 	add_folder_button.pressed.connect(_on_add_folder_pressed)
 	automation_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation"))
 	routing_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("routing"))
@@ -768,23 +771,25 @@ func _on_timeline_scroll_bar_changed(value: float) -> void:
 # UI CALLBACKS
 # ============================================================================
 
-func _on_add_track_pressed() -> void:
+func _on_add_track_menu_id_pressed(id: int) -> void:
 	"""Create and add a new track with corresponding channel to the project."""
 	if not current_project:
 		push_warning("[Arranger] Cannot add track: No project active")
 		return
 
+	var kind := "instrument" if id == 0 else "audio"
+
 	# Generate name based on track count
 	var track_num = current_project.tracks.size() + 1
 	var track_name = "Track %d" % track_num
 
-	var cmd := TrackCreateCommand.new(current_project, "instrument", track_name)
+	var cmd := TrackCreateCommand.new(current_project, kind, track_name)
 	HistoryUtil.execute(cmd)
 	var new_track: Track = cmd.track
 	var new_channel: Channel = cmd.channel
 	if new_track and new_channel:
 		new_track.color = new_channel.color
-		logger.info("Added track '%s' (ID %d) with channel (ID %d)" % [track_name, new_track.id, new_channel.id])
+		logger.info("Added %s track '%s' (ID %d) with channel (ID %d)" % [kind, track_name, new_track.id, new_channel.id])
 
 
 func _on_add_folder_pressed() -> void:

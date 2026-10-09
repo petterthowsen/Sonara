@@ -31,6 +31,7 @@ enum Reply {
     Blob(Vec<u8>),
     Text(String),
     Ints(Vec<i32>),
+    Float(f32),
     Other,
 }
 
@@ -91,6 +92,7 @@ unsafe extern "C" fn on_reply(
                     .collect(),
             )
         }
+        Some(b'f') if !args.is_null() => Reply::Float(unsafe { (*args).f }),
         _ => Reply::Other,
     };
     sink.0.push(reply);
@@ -120,6 +122,46 @@ fn query(synth: &mut sfizz::Synth, path: &str) -> Option<Reply> {
         sfizz::sfizz_delete_client(client);
     }
     sink.0.into_iter().next()
+}
+
+/// The normalized 0–1 value the loaded SFZ gives a CC with `set_ccN` / `set_hdccN`. Without one,
+/// this is sfizz's built-in default: 0, except CC7 (MIDI 100), CC10 (0.5) and CC11 (1.0).
+pub fn read_cc_default(synth: &mut sfizz::Synth, cc_number: u8) -> Option<f32> {
+    match query(synth, &format!("/cc{cc_number}/default")) {
+        Some(Reply::Float(value)) => Some(value),
+        _ => None,
+    }
+}
+
+/// Every CC the loaded SFZ uses or labels, named when it has a `label_ccN` and `CC{n}` otherwise.
+///
+/// Replaces `sfizz::Synth::cc_labels`: the C API hands out a `c_str()` of a temporary vector, so
+/// the binding reads freed memory and returns garbage names. The query interface copies the text.
+pub fn read_cc_labels(synth: &mut sfizz::Synth) -> Vec<sfizz::CcLabel> {
+    let Some(Reply::Blob(bits)) = query(synth, "/cc/slots") else {
+        return Vec::new();
+    };
+    (0u8..128)
+        .filter(|&cc| {
+            bits.get(cc as usize / 8)
+                .is_some_and(|b| b & (1 << (cc % 8)) != 0)
+        })
+        .filter_map(|cc| {
+            let label = match query(synth, &format!("/cc{cc}/label")) {
+                Some(Reply::Text(text)) => text,
+                _ => String::new(),
+            };
+            // sfizz labels CC7/10/11 itself; those and unlabeled CCs are not "named by the file".
+            Some(sfizz::CcLabel {
+                cc_number: cc,
+                name: if label.is_empty() {
+                    format!("CC{cc}")
+                } else {
+                    label
+                },
+            })
+        })
+        .collect()
 }
 
 /// Keys the SFZ labels with `label_keyN`.

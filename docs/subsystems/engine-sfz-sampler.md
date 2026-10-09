@@ -32,8 +32,9 @@
 - `reset()` calls `sfizz::Synth::all_sound_off()` when the synth is ready to guarantee note kills on transport stop/seek.
 
 ## SFZ CC Parameters
-- After an SFZ loads, the device merges `synth.cc_labels()` with a host-standard set (Mod Wheel, Volume, Pan, Expression, Sustain) so unlabeled dynamics (often CC1) stay controllable.
+- After an SFZ loads, the device merges the CCs the SFZ uses or labels (`read_cc_labels`, via sfizz `/cc/slots` + `/ccN/label`; never the binding's `cc_labels()`, which reads freed memory) with a host-standard set (Mod Wheel, Volume, Pan, Expression, Sustain) so unlabeled dynamics (often CC1) stay controllable.
 - Labeled CCs go on the `"param"` group (Parameters tab); unlabeled host CCs go on `"cc"` (CCs tab). `param_id` is the CC number (0–127), range 0.0–1.0.
+- Each CC's default (sent after load and reported as the parameter default) is the SFZ's own `set_ccN`/`set_hdccN`, read through sfizz's `/ccN/default` query. Only where the file kept sfizz's built-in value does the host override it: CC7 → 1.0 (unity) and CC1 → 0.5. Never send a generic mid-range default: patches map envelope times to CCs (VPO: `ampeg_attack_oncc73`, `ampeg_release_oncc72`), and 0.5 there means a ~166 ms attack.
 - `set_parameter` sends MIDI HDCC via `try_lock()`; contended locks queue the change for the next block.
 - `take_parameters_changed()` is polled by the command thread's device tick (`command_worker/plugins.rs`). When true, the engine emits `PluginParameterCount` + `PluginParameterInfo` so Godot rebuilds the device panel. No Godot-side special case — same path as CLAP parameter lists.
 

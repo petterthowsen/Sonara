@@ -262,11 +262,12 @@ layout_mode = 2
 [node name="Buttons" type="HBoxContainer" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter" unique_id=808890722]
 layout_mode = 2
 
-[node name="AddTrackButton" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1727724344]
+[node name="AddTrackButton" type="MenuButton" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1727724344]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 icon = ExtResource("2_6tuub")
 icon_alignment = 1
+tooltip_text = "Add Track"
 
 [node name="AddFolderButton" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=562461637]
 custom_minimum_size = Vector2(32, 32)
