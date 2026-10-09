@@ -110,6 +110,8 @@ func _ready():
 
 	if not clip_ctx_menu.make_unique_requested.is_connected(_on_clip_make_unique_requested):
 		clip_ctx_menu.make_unique_requested.connect(_on_clip_make_unique_requested)
+	if not clip_ctx_menu.make_unique_per_track_requested.is_connected(make_unique_per_track):
+		clip_ctx_menu.make_unique_per_track_requested.connect(make_unique_per_track)
 
 	if not clip_ctx_menu.cut_requested.is_connected(_on_clip_cut_requested):
 		clip_ctx_menu.cut_requested.connect(_on_clip_cut_requested)
@@ -1126,6 +1128,17 @@ func _finish_drag() -> void:
 				old_start, inst.duration_ticks, inst.clip_offset,
 				new_start, inst.duration_ticks, inst.clip_offset
 			))
+	if Settings.get_value("arranger/unique_clips_per_track"):
+		var moved_to := {}
+		for inst in _drag_selected_instances:
+			var old_idx: int = _drag_initial_track_indices.get(inst, -1)
+			if inst and inst.track and old_idx >= 0 and old_idx < timeline_tracks.size() \
+					and timeline_tracks[old_idx].track != inst.track:
+				moved_to[inst] = inst.track
+		# The move is already applied, so apply these too before recording them with it.
+		for cmd in _per_track_copies(moved_to):
+			cmd.do()
+			cmds.append(cmd)
 	if _automation_follows_enabled() and _drag_current_tick_delta != 0:
 		cmds.append_array(AutomationActions.shift_track_automation(
 			_drag_automation_moves(), _drag_current_tick_delta, "Move Automation"
@@ -1406,6 +1419,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	var new_instances: Array[ClipInstance] = []
 	var cmds: Array[Command] = []
 	var automation_copies: Array = []
+	var moved_to := {}  # new ClipInstance -> destination track, for copies landing on another track
 	for placement in _plan_placement(source, target_tick, target_track):
 		var original_inst: ClipInstance = placement.instance
 		var dest_track: Track = placement.track
@@ -1417,6 +1431,8 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 		new_instance.duration_ticks = original_inst.duration_ticks
 		new_instance.copy_overrides_from(original_inst)
 		new_instances.append(new_instance)
+		if dest_track != original_inst.track:
+			moved_to[new_instance] = dest_track
 
 		var cmd := ClipInstanceCreateCommand.new(
 			dest_track, clip_ref, new_start, original_inst.duration_ticks,
@@ -1436,6 +1452,8 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	if new_instances.is_empty():
 		return []
 
+	if Settings.get_value("arranger/unique_clips_per_track"):
+		cmds.append_array(_per_track_copies(moved_to))
 	if not automation_copies.is_empty() and _automation_follows_enabled():
 		cmds.append_array(AutomationActions.copy_track_automation_commands(automation_copies, "%s Automation" % action_name))
 
@@ -1447,6 +1465,24 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 
 	_refresh_tracks_for_instances(new_instances)
 	return new_instances
+
+
+## Commands giving each destination track its own copy of the clip for the instances in
+## `moved_to` (instance -> track it lands on), one copy per (track, clip). Run after the instances
+## exist on their tracks.
+func _per_track_copies(moved_to: Dictionary) -> Array[Command]:
+	var cmds: Array[Command] = []
+	if moved_to.is_empty() or project == null:
+		return cmds
+	var groups := {}  # [track, clip] -> Array[ClipInstance]
+	for inst: ClipInstance in moved_to:
+		var key := [moved_to[inst], inst.clip]
+		if not groups.has(key):
+			groups[key] = [] as Array[ClipInstance]
+		groups[key].append(inst)
+	for key in groups:
+		cmds.append(MakeClipUniquePerTrackCommand.new(project, groups[key]))
+	return cmds
 
 
 ## Duplicate selected clips at the selection end. Refuses if they would overlap.
@@ -1690,7 +1726,23 @@ func _on_clip_open_in_editor_requested(clip_ui: TimelineClip) -> void:
 	if clip_selection_manager:
 		clip_selection_manager.select_only(instance)
 	if Sonara.editor:
+		var content_tick := _content_tick_at_mouse(instance)
+		var midi_editor: MidiEditor = Sonara.editor.clip_editor.midi_editor
+		midi_editor.pending_focus_tick = content_tick
 		Sonara.editor.show_clip_editor()
+		# Already bound to this instance: nothing re-frames it, so scroll now.
+		if midi_editor.clip_instance == instance:
+			midi_editor.focus_content_tick(content_tick)
+			midi_editor.pending_focus_tick = -1
+
+
+## Clip content tick under the mouse for `instance`, wrapped into its loop region when looping.
+func _content_tick_at_mouse(instance: ClipInstance) -> int:
+	var rel := pixels_to_ticks(get_local_mouse_position().x) - instance.start_ticks
+	var tick := instance.clip_offset + maxi(0, rel)
+	if instance.loop_enabled and instance.loop_length_ticks > 0 and tick >= instance.loop_start_ticks:
+		tick = instance.loop_start_ticks + (tick - instance.loop_start_ticks) % instance.loop_length_ticks
+	return tick
 
 
 func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Vector2) -> void:
@@ -1796,6 +1848,32 @@ func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
 		return
 	HistoryUtil.execute_many("Make Clips Unique", cmds)
 
+
+## Give each instance's track its own copy of the instance's clip, shared by that track's
+## instances of it. Clips used only on one track are skipped. One undo step.
+func make_unique_per_track(instances: Array[ClipInstance]) -> void:
+	if instances.is_empty() or not Sonara or not Sonara.editor or not Sonara.editor.project:
+		return
+	var cmds := make_unique_per_track_commands(Sonara.editor.project, instances)
+	if cmds.is_empty():
+		return
+	HistoryUtil.execute_many("Make Clips Unique Per Track", cmds)
+
+
+## One command per (track, clip) pair among `instances` whose clip is also used on another track.
+static func make_unique_per_track_commands(proj: Project, instances: Array[ClipInstance]) -> Array[Command]:
+	var cmds: Array[Command] = []
+	var done := {}
+	for inst in instances:
+		if not inst or not inst.clip or not inst.track:
+			continue
+		var key := [inst.track, inst.clip]
+		if done.has(key):
+			continue
+		done[key] = true
+		if MakeClipUniquePerTrackCommand.is_shared_across_tracks(proj, inst):
+			cmds.append(MakeClipUniquePerTrackCommand.new(proj, MakeClipUniquePerTrackCommand.same_track_instances(inst)))
+	return cmds
 
 
 ## Content x range currently inside the scroll viewport.

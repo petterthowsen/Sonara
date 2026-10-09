@@ -1,10 +1,10 @@
 [gd_resource type="Theme" format=3 uid="uid://c77m063o570pp"]
 
-[ext_resource type="Texture2D" uid="uid://dub37xxsmm1ig" path="res://assets/icons/check_checked.svg" id="1_6k5sf"]
-[ext_resource type="FontFile" uid="uid://xwav87q0v0eu" path="res://assets/fonts/OpenSans-SemiBold.woff2" id="1_r4llu"]
-[ext_resource type="Texture2D" uid="uid://d3npf0tlvhnck" path="res://assets/icons/radio_checked.svg" id="2_n4h05"]
-[ext_resource type="Texture2D" uid="uid://ckb3tbgo1162p" path="res://assets/icons/radio_unchecked.svg" id="3_6uy8l"]
-[ext_resource type="Texture2D" uid="uid://cflh10htq6kkm" path="res://assets/icons/check_unchecked.svg" id="4_b6uxf"]
+[ext_resource type="Texture2D" path="res://assets/icons/check_checked.svg" id="1_6k5sf"]
+[ext_resource type="FontFile" path="res://assets/fonts/OpenSans-SemiBold.woff2" id="1_r4llu"]
+[ext_resource type="Texture2D" path="res://assets/icons/radio_checked.svg" id="2_n4h05"]
+[ext_resource type="Texture2D" path="res://assets/icons/radio_unchecked.svg" id="3_6uy8l"]
+[ext_resource type="Texture2D" path="res://assets/icons/check_unchecked.svg" id="4_b6uxf"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6k5sf"]
 content_margin_left = 8.0
@@ -1850,6 +1850,7 @@ TextEdit/colors/selection_color = Color(0.38431373, 0.3019608, 0.6, 0.5)
 TextEdit/styles/focus = SubResource("StyleBoxFlat_2cep0")
 TextEdit/styles/normal = SubResource("StyleBoxFlat_0occ4")
 TextEdit/styles/read_only = SubResource("StyleBoxFlat_jd2pl")
+TimelineClip/colors/sibling_border = Color(0.21176471, 0.8509804, 0.61960787, 0.6)
 TooltipPanel/styles/panel = SubResource("StyleBoxFlat_waqec")
 Tree/colors/font_color = Color(0.875, 0.875, 0.875, 1)
 Tree/colors/font_hovered_color = Color(0.95, 0.95, 0.95, 1)

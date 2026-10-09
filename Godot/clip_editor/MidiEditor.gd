@@ -688,8 +688,22 @@ func scroll_to_note(note: int = -1):
 	target_scroll_vertical = max(0, y - (size.y * 0.5))
 
 
-## Clip-mode: scroll to the start of the instance's visible content and centre vertically on
-## the median pitch of the notes it plays (C3 if none).
+## Clip-content tick to bring into view the next time the instance is framed (-1 = the start).
+## Set by the arranger when a clip is opened by double-clicking its body.
+var pending_focus_tick: int = -1
+
+
+## Scroll so `content_tick` (clip content ticks) sits a quarter of the way into the view.
+func focus_content_tick(content_tick: int) -> void:
+	if track_mode or not grid_helper:
+		return
+	var floor_px := grid_helper.ticks_to_pixels(clip_instance.clip_offset) if clip_instance else 0.0
+	var x := grid_helper.ticks_to_pixels(maxi(0, content_tick)) - size.x * 0.25
+	target_scroll_horizontal = maxf(x, floor_px)
+
+
+## Clip-mode: scroll to the start of the instance's visible content (or the tick the user opened
+## the clip at) and centre vertically on the median pitch of the notes it plays (C3 if none).
 func frame_clip_instance() -> void:
 	if track_mode or not clip_instance or not grid_helper:
 		return
@@ -707,6 +721,9 @@ func frame_clip_instance() -> void:
 		note = pitches[pitches.size() / 2]
 	scroll_to_note(note)
 	target_scroll_horizontal = max(0.0, grid_helper.ticks_to_pixels(range_start))
+	if pending_focus_tick >= 0:
+		focus_content_tick(pending_focus_tick)
+		pending_focus_tick = -1
 
 
 ## Scroll horizontally so `song_tick` is at the left edge (track mode: ticks are song ticks).

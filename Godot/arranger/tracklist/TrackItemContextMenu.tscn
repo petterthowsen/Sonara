@@ -35,6 +35,12 @@ layout_mode = 2
 size_flags_horizontal = 3
 value_type = 1
 
+[node name="MakeUniquePerTrack" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+text = "Make Clips Unique"
+alignment = 0
+
 [node name="BusLink" type="OptionButton" parent="VBoxContainer" unique_id=2048545925]
 layout_mode = 2
 size_flags_horizontal = 3

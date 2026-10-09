@@ -14,10 +14,12 @@ class_name ClipContextMenu extends PopupPanel
 @onready var split: Button = $VBoxContainer/Split
 @onready var merge: Button = $VBoxContainer/Merge
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
+@onready var make_unique_per_track: Button = $VBoxContainer/MakeUniquePerTrack
 @onready var delete: Button = $VBoxContainer/Delete
 
 signal delete_requested(instances: Array[ClipInstance])
 signal make_unique_requested(instances: Array[ClipInstance])
+signal make_unique_per_track_requested(instances: Array[ClipInstance])
 signal cut_requested(instances: Array[ClipInstance])
 signal copy_requested(instances: Array[ClipInstance])
 signal split_requested(instances: Array[ClipInstance])
@@ -48,6 +50,8 @@ func _ready() -> void:
 		copy.pressed.connect(_on_copy_pressed)
 	if is_instance_valid(make_unique):
 		make_unique.pressed.connect(_on_make_unique_pressed)
+	if is_instance_valid(make_unique_per_track):
+		make_unique_per_track.pressed.connect(_on_make_unique_per_track_pressed)
 	if is_instance_valid(delete):
 		delete.pressed.connect(_on_delete_pressed)
 	if is_instance_valid(label):
@@ -138,6 +142,16 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 	if make_unique:
 		make_unique.disabled = not can_make_unique
 
+	# Per-track variant: enabled when ANY selected instance's clip is also used on another track.
+	var can_per_track := false
+	if Sonara and Sonara.editor and Sonara.editor.project:
+		for inst in selected_instances:
+			if MakeClipUniquePerTrackCommand.is_shared_across_tracks(Sonara.editor.project, inst):
+				can_per_track = true
+				break
+	if make_unique_per_track:
+		make_unique_per_track.disabled = not can_per_track
+
 
 ## Commit a clip rename from the menu title.
 func _on_name_changed(new_value) -> void:
@@ -212,6 +226,14 @@ func _on_merge_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	merge_requested.emit(selected_instances.duplicate())
+	hide()
+
+
+## Request Make Unique Per Track for the bound instances.
+func _on_make_unique_per_track_pressed() -> void:
+	if selected_instances.is_empty():
+		return
+	make_unique_per_track_requested.emit(selected_instances.duplicate())
 	hide()
 
 

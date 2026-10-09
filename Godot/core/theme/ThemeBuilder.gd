@@ -461,6 +461,10 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"start_arrow_color": accent,
 		&"loop_color": p.role(&"accent_secondary"),
 	})
+	# Border of arranger clips that share a clip with the selected one: softer than the selection.
+	var sibling: Color = p.role(&"accent_secondary")
+	sibling.a = 0.6
+	_set_colors(t, &"TimelineClip", {&"sibling_border": sibling})
 	t.set_stylebox(&"normal", &"Ruler", box(p, p.role(&"editor_bg"), -1.0))
 
 

@@ -60,6 +60,9 @@ func register_clip_ui(clip_ui: TimelineClip) -> void:
 
 	_clip_ui_by_instance[clip_ui.clip_instance] = weakref(clip_ui)
 	clip_ui.set_selected(selection.contains(clip_ui.clip_instance))
+	clip_ui.set_sibling_selected(_is_sibling_of_selected(clip_ui.clip_instance))
+	if not clip_ui.clip_instance.clip_changed.is_connected(_on_instance_clip_changed):
+		clip_ui.clip_instance.clip_changed.connect(_on_instance_clip_changed)
 	if not clip_ui.select_requested.is_connected(_select_callable):
 		clip_ui.select_requested.connect(_select_callable)
 	if not clip_ui.exclusive_click_requested.is_connected(_exclusive_click_callable):
@@ -349,6 +352,28 @@ func _on_exclusive_click_requested(clip_ui: TimelineClip) -> void:
 	_pending_exclusive = null
 
 
+## True when `inst` is unselected but shares its clip with a selected instance.
+func _is_sibling_of_selected(inst: ClipInstance) -> bool:
+	if inst == null or inst.clip == null or selection.contains(inst):
+		return false
+	for sel in selection.clip_instances:
+		if sel and sel.clip == inst.clip:
+			return true
+	return false
+
+
+func _refresh_siblings() -> void:
+	for key in _clip_ui_by_instance.keys():
+		var clip_ref: WeakRef = _clip_ui_by_instance[key]
+		var clip_ui: TimelineClip = clip_ref.get_ref() if clip_ref else null
+		if clip_ui:
+			clip_ui.set_sibling_selected(_is_sibling_of_selected(clip_ui.clip_instance))
+
+
+func _on_instance_clip_changed(_new_clip: Clip) -> void:
+	_refresh_siblings()
+
+
 func _on_selection_changed() -> void:
 	var stale_instances: Array = []
 	for key in _clip_ui_by_instance.keys():
@@ -360,6 +385,7 @@ func _on_selection_changed() -> void:
 			stale_instances.append(key)
 	for stale in stale_instances:
 		_clip_ui_by_instance.erase(stale)
+	_refresh_siblings()
 	if not is_box_selecting and not _preserve_range and not selection.is_empty():
 		_set_range_from_clips()
 	_preserve_range = false

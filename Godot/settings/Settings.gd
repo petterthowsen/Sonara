@@ -248,6 +248,16 @@ func _register_all_settings() -> void:
 		+ "A plain right-click still opens the clip menu.",
 	)).sub("Arranger")
 
+	_register(Setting.new(
+		"arranger/unique_clips_per_track",
+		"Unique Clips Per Track",
+		Type.BOOL,
+		false,
+		CATEGORY_BEHAVIOR,
+		"When enabled, pasting or moving clips onto another track gives that track its own copy of the clip. "
+		+ "Instances on the same track keep sharing it. You can also do this by hand with Make Unique Per Track.",
+	)).sub("Arranger")
+
 	# --- Behavior: Devices ---
 	_register(Setting.new(
 		"devices/window_grouping",

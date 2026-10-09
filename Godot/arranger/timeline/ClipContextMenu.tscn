@@ -136,6 +136,12 @@ layout_mode = 2
 focus_mode = 0
 text = "Make Unique"
 
+[node name="MakeUniquePerTrack" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Give this track its own copy of the clip, shared by this track's instances"
+text = "Make Unique Per Track"
+
 [node name="Delete" type="Button" parent="VBoxContainer" unique_id=749149364]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2

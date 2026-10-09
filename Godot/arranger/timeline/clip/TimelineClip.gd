@@ -36,6 +36,9 @@ var track_color: Color = Color.WHITE:
 
 # Selection and hover state
 var is_selected: bool = false
+## Another instance of this instance's clip is selected (and this one is not).
+var is_sibling_selected: bool = false
+@export var sibling_border_color: Color = Color(0.21, 0.85, 0.62, 0.6)
 var is_hovered: bool = false
 
 # Drag state
@@ -424,6 +427,14 @@ func set_selected(selected: bool) -> void:
 	is_selected = selected
 	_update_style()
 
+## Mark this instance as sharing its clip with a selected instance (border highlight).
+func set_sibling_selected(value: bool) -> void:
+	if is_sibling_selected == value:
+		return
+	is_sibling_selected = value
+	queue_redraw()
+
+
 func set_hovered(hovered: bool) -> void:
 	"""Set hover state and update visual."""
 	if is_hovered == hovered:
@@ -459,6 +470,7 @@ func _notification(what: int) -> void:
 		queue_redraw()
 	elif what == NOTIFICATION_THEME_CHANGED:
 		_shape_name()
+		queue_redraw()
 
 
 func _draw() -> void:
@@ -466,6 +478,10 @@ func _draw() -> void:
 	var style := _get_current_style()
 	if style:
 		style.draw(get_canvas_item(), Rect2(Vector2.ZERO, size))
+	if is_sibling_selected:
+		var border := get_theme_color(&"sibling_border", &"TimelineClip") \
+				if has_theme_color(&"sibling_border", &"TimelineClip") else sibling_border_color
+		draw_rect(Rect2(Vector2.ONE, size - Vector2(2, 2)), border, false, 2.0)
 	var band := Rect2(0.0, 0.0, size.x, minf(header_height, size.y))
 	if header_style:
 		header_style.draw(get_canvas_item(), band)

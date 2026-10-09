@@ -18,6 +18,7 @@ const ROUTE_NEW := TrackRouteChannelCommand.CREATE_NEW
 @onready var delete_with_channel_button: Button = $VBoxContainer/Buttons/DeleteWithChannel
 @onready var duplicate_button: Button = $VBoxContainer/Buttons/Duplicate
 @onready var duplicate_with_channel_button: Button = $VBoxContainer/Buttons/DuplicateWithChannel
+@onready var make_unique_button: Button = $VBoxContainer/MakeUniquePerTrack
 @onready var bus_link_option: OptionButton = $VBoxContainer/BusLink
 @onready var channel_route_option: OptionButton = $VBoxContainer/ChannelRoute
 
@@ -39,6 +40,7 @@ func _ready() -> void:
 	delete_with_channel_button.pressed.connect(_on_delete_pressed.bind(true))
 	duplicate_button.pressed.connect(_on_duplicate_pressed.bind(false))
 	duplicate_with_channel_button.pressed.connect(_on_duplicate_pressed.bind(true))
+	make_unique_button.pressed.connect(_on_make_unique_pressed)
 	bus_link_option.item_selected.connect(_on_bus_link_selected)
 	channel_route_option.item_selected.connect(_on_channel_route_selected)
 	# The dropdown popups must not steal focus from (and close) this menu.
@@ -120,6 +122,9 @@ func _update_action_buttons() -> void:
 		if TrackDuplicateCommand.can_duplicate(t):
 			any_duplicable = true
 			any_duplicable_with_channel = any_duplicable_with_channel or has_channel
+	if make_unique_button:
+		make_unique_button.visible = not _per_track_commands().is_empty()
+		make_unique_button.tooltip_text = "Give each track its own copy of the clips it shares with other tracks"
 	if delete_button:
 		delete_button.text = "Delete Tracks" if multi else "Delete Track"
 		delete_button.tooltip_text = "Delete, keeping mixer channels" if any_channel else ""
@@ -134,6 +139,21 @@ func _update_action_buttons() -> void:
 		duplicate_with_channel_button.text = "Duplicate Tracks & Channels" if multi else "Duplicate Track & Channel"
 		duplicate_with_channel_button.visible = any_duplicable_with_channel
 		duplicate_with_channel_button.tooltip_text = "Copy clips and the channel (devices, sends, routing)"
+
+
+## Commands giving each bound track its own copy of every clip it shares with another track.
+func _per_track_commands() -> Array[Command]:
+	var instances: Array[ClipInstance] = []
+	for t in current_tracks:
+		instances.append_array(t.clip_instances)
+	if current_project == null:
+		return [] as Array[Command]
+	return Timeline.make_unique_per_track_commands(current_project, instances)
+
+
+func _on_make_unique_pressed() -> void:
+	HistoryUtil.execute_many("Make Clips Unique Per Track", _per_track_commands())
+	hide()
 
 
 ## Disconnect from current track.
