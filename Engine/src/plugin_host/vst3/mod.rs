@@ -7,6 +7,7 @@
 
 pub mod commands;
 pub mod event_list;
+pub mod gui;
 pub mod host_context;
 pub mod instance;
 pub mod module;

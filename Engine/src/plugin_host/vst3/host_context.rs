@@ -84,6 +84,11 @@ impl Vst3Shared {
         });
     }
 
+    /// Tell the engine the plugin's GUI wants a new size.
+    pub fn request_gui_resize(&self, width: u32, height: u32) {
+        self.send_event(PluginEvent::GuiResizeRequest { width, height });
+    }
+
     /// Queue an edit for the processor. Dropped when the queue is full.
     pub fn queue_to_audio(&self, id: ParamID, value: ParamValue) {
         let mut queue = self.to_audio.lock().unwrap();

@@ -19,6 +19,7 @@ use ::vst3::Steinberg::Vst::*;
 use ::vst3::Steinberg::{kResultOk, IBStream};
 use tracing::{error, info, warn};
 
+use super::gui::{self, Vst3Gui};
 use super::host_context::{ComponentHandler, HostContext, Vst3Shared};
 use super::instance::Vst3Instance;
 use super::module::Vst3Module;
@@ -64,6 +65,8 @@ impl Vst3Modules {
 pub struct Vst3State {
     pub instance_id: InstanceId,
     pub span: tracing::Span,
+    /// The open GUI, if any. Declared before `instance`: the view goes before its controller.
+    pub gui: Option<Vst3Gui>,
     /// Dropped first: terminates the controller and the component.
     pub instance: Vst3Instance,
     pub shared: Arc<Vst3Shared>,
@@ -155,17 +158,84 @@ pub fn process_vst3_command(
             }
         }
 
-        // The GUI is phase 4 of spec 028.
-        PluginCommand::OpenGui { .. } => Some(PluginResponse::GuiError {
-            error: "VST3 plugin GUIs are not supported yet".to_string(),
-        }),
-        PluginCommand::CloseGui => Some(PluginResponse::GuiClosed),
-        PluginCommand::SetGuiVisible { .. } | PluginCommand::SetGuiSize { .. } => {
-            Some(PluginResponse::GuiError {
-                error: "GUI is not open".to_string(),
-            })
+        PluginCommand::OpenGui { window_handle } => {
+            let Some(state) = plugin_state.as_mut() else {
+                return Some(PluginResponse::GuiError {
+                    error: "Plugin not initialized".to_string(),
+                });
+            };
+            if let Some(open) = &state.gui {
+                let (width, height) = open.size();
+                return Some(PluginResponse::GuiOpened {
+                    width,
+                    height,
+                    is_resizable: open.resizable,
+                    floating: false,
+                });
+            }
+            // VST3 always needs a parent window (no floating mode).
+            let Some(window_handle) = window_handle else {
+                return Some(PluginResponse::GuiError {
+                    error: "VST3 plugin GUIs need a parent window".to_string(),
+                });
+            };
+            match Vst3Gui::open(&state.instance, &state.shared, window_handle) {
+                Ok((open, (width, height))) => {
+                    info!(
+                        "VST3 GUI open ({}x{}, resizable: {})",
+                        width, height, open.resizable
+                    );
+                    let is_resizable = open.resizable;
+                    state.gui = Some(open);
+                    Some(PluginResponse::GuiOpened {
+                        width,
+                        height,
+                        is_resizable,
+                        floating: false,
+                    })
+                }
+                Err(error) => {
+                    warn!("Failed to open VST3 GUI: {}", error);
+                    Some(PluginResponse::GuiError { error })
+                }
+            }
         }
-        PluginCommand::HasGui => Some(PluginResponse::HasGuiResponse { supported: false }),
+        PluginCommand::CloseGui => {
+            if let Some(state) = plugin_state.as_mut() {
+                state.gui = None;
+            }
+            Some(PluginResponse::GuiClosed)
+        }
+        // VST3 has no show/hide; the engine hides the host window. Report the size.
+        PluginCommand::SetGuiVisible { .. } => {
+            match plugin_state.as_ref().and_then(|s| s.gui.as_ref()) {
+                Some(open) => {
+                    let (width, height) = open.size();
+                    Some(PluginResponse::GuiSize { width, height })
+                }
+                None => Some(PluginResponse::GuiError {
+                    error: "GUI is not open".to_string(),
+                }),
+            }
+        }
+        PluginCommand::SetGuiSize { width, height } => {
+            match plugin_state.as_ref().and_then(|s| s.gui.as_ref()) {
+                Some(open) => {
+                    let (width, height) = open.set_size(width, height);
+                    Some(PluginResponse::GuiSize { width, height })
+                }
+                None => Some(PluginResponse::GuiError {
+                    error: "GUI is not open".to_string(),
+                }),
+            }
+        }
+        PluginCommand::HasGui => {
+            let supported = plugin_state
+                .as_ref()
+                .map(|state| gui::has_gui(&state.instance))
+                .unwrap_or(false);
+            Some(PluginResponse::HasGuiResponse { supported })
+        }
 
         PluginCommand::Shutdown => None,
 
@@ -431,6 +501,7 @@ fn initialize(
     Ok(Vst3State {
         instance_id,
         span: shared.span().clone(),
+        gui: None,
         instance,
         shared,
         _handler: handler,
@@ -592,6 +663,9 @@ fn load_state(instance: &Vst3Instance, blob: &[u8]) -> Result<(), String> {
 /// values after a wholesale change, keep the controller in step with the processor's own
 /// parameter changes, and re-activate when the plugin's latency changed.
 pub fn service_vst3(state: &mut Vst3State, audio: &AudioThreadHandle) {
+    if let Some(open) = &state.gui {
+        open.pump();
+    }
     if state.shared.take_params_rescanned() {
         rebuild_param_map(state, audio);
         info!(

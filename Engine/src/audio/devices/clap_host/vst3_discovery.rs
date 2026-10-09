@@ -262,7 +262,14 @@ mod tests {
     fn configured_paths_replace_defaults_and_keep_env() {
         let configured = vec![PathBuf::from("/a"), PathBuf::from("/b")];
         let paths = resolve_configured_paths(configured.clone(), Some("/home/u"), Some("/b:/c"));
-        assert_eq!(paths, vec![PathBuf::from("/a"), PathBuf::from("/b"), PathBuf::from("/c")]);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
+        );
         assert_eq!(
             resolve_configured_paths(Vec::new(), Some("/home/u"), None),
             resolve_scan_paths(Some("/home/u"), None)
