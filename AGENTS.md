@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Sonara is a Linux-first DAW: a Rust real-time audio engine (`Engine/`) plus a Godot 4.7 UI (`Godot/`). They talk over OSC via UDP on localhost. Godot sends to port 7000 and the engine sends back to port 7001. CLAP plugins run out-of-process in a separate `plugin_host` binary.
+Sonara is a Linux-first DAW: a Rust real-time audio engine (`Engine/`) plus a Godot 4.7 UI (`Godot/`). They talk over OSC via UDP on localhost. Godot sends to port 7000 and the engine sends back to port 7001. CLAP and VST3 plugins run out-of-process in a separate `plugin_host` binary.
 
 Conventions: Middle C = C3 = MIDI note 60. Sequencing uses 960 PPQ.
 
@@ -68,10 +68,10 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - Devices go to sleep after about 3 s of silence and no MIDI (`DeviceSleepState`) so their processing is skipped.
 - Parameters cross the OSC and IPC boundary as normalized 0.0–1.0 values.
 
-### CLAP plugins
+### Plugins (CLAP, VST3)
 - `audio/ipc/` holds `ProcessManager`, the shared-memory ring buffers and the command protocol.
 - `audio/devices/clap_host/subprocess_adapter/` implements `AudioDevice` for plugins.
-- `plugin_host/` is the code that runs inside the subprocess.
+- `plugin_host/` is the code that runs inside the subprocess. `plugin_host/vst3/` is the parallel VST3 path (ADR 0019): the event loop dispatches on `HostedInstance::{Clap, Vst3}`. VST3 discovery is out of process (`vst3_discovery.rs`, `plugin_host --scan-vst3`).
 - Plugins load on a background thread behind an atomic `PluginLoad` state. While it is Loading, Failed or Crashed, the audio thread passes audio through. A crashed plugin can be reloaded with its last saved state.
 
 ### Godot UI (`Godot/`)

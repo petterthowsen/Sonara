@@ -9,7 +9,7 @@ use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
 use crate::audio::devices::{ParamId, ParamValue};
 use crate::audio::ipc::{
-    HostAssignment, HostSharedMemory, InstanceId, PluginCommand, PluginParameterInfo,
+    HostAssignment, HostSharedMemory, InstanceId, PluginCommand, PluginFormat, PluginParameterInfo,
     PluginResponse, ProcessManager, SharedMemory, REQUEST_TIMEOUT,
 };
 use crossbeam::channel::Sender;
@@ -386,6 +386,7 @@ pub struct PluginLoadRequest {
     pub host: HostAssignment,
     pub plugin_path: PathBuf,
     pub plugin_id: String,
+    pub format: PluginFormat,
     pub sample_rate: f32,
     pub max_buffer_size: usize,
     pub load: Arc<PluginLoad>,
@@ -420,6 +421,7 @@ fn run_load(request: PluginLoadRequest) {
         host,
         plugin_path,
         plugin_id,
+        format,
         sample_rate,
         max_buffer_size,
         load,
@@ -466,6 +468,7 @@ fn run_load(request: PluginLoadRequest) {
         plugin_id.clone(),
         sample_rate,
         max_buffer_size,
+        format,
     ) {
         Ok(connection) => connection,
         Err(e) => {

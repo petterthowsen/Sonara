@@ -17,18 +17,30 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
     let a = Args::new(cx.addr, args);
     match parts {
         // Plugin management - path-based: /plugin/{command}
-        // /plugin/scan [path:String]* — with no args, the engine uses its built-in
-        // default search paths (and CLAP_PATH, if set).
+        // /plugin/scan [clap_path:String]* ["--vst3" [vst3_path:String]*] — with no paths in a
+        // section, the engine uses its built-in defaults (plus CLAP_PATH / VST3_PATH, if set).
         ["plugin", "scan"] => {
-            let paths: Vec<PathBuf> = args
-                .iter()
-                .filter_map(|a| match a {
-                    OscType::String(s) => Some(PathBuf::from(s)),
-                    _ => None,
-                })
-                .collect();
-            info!("Scan plugins: {} configured path(s)", paths.len());
-            cx.commands.send(AudioCommand::ScanPlugins { paths })?;
+            let mut paths: Vec<PathBuf> = Vec::new();
+            let mut vst3_paths: Vec<PathBuf> = Vec::new();
+            let mut in_vst3 = false;
+            for arg in args {
+                if let OscType::String(s) = arg {
+                    if s == "--vst3" {
+                        in_vst3 = true;
+                    } else if in_vst3 {
+                        vst3_paths.push(PathBuf::from(s));
+                    } else {
+                        paths.push(PathBuf::from(s));
+                    }
+                }
+            }
+            info!(
+                "Scan plugins: {} CLAP and {} VST3 configured path(s)",
+                paths.len(),
+                vst3_paths.len()
+            );
+            cx.commands
+                .send(AudioCommand::ScanPlugins { paths, vst3_paths })?;
         }
         // /plugins/hosting <mode:s> [plugin_id:s mode:s]* — how plugins are grouped into
         // host processes, plus per-plugin overrides (Phase 5).

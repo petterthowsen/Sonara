@@ -49,6 +49,7 @@ pub fn process_command(
             plugin_id,
             sample_rate,
             max_buffer_size,
+            ..
         } => {
             if plugin_state.is_some() {
                 return Some(PluginResponse::InitializeError {

@@ -91,7 +91,7 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	copy_button.visible = plain
 	paste_button.visible = plain
 	duplicate_button.visible = plain
-	var is_plugin := device.device.device_type == Device.DeviceType.CLAP
+	var is_plugin := device.device.is_plugin()
 	host_individually.visible = is_plugin
 	if is_plugin:
 		host_individually.set_pressed_no_signal(

@@ -402,6 +402,9 @@ func _update_title(frame: DeviceFrame) -> void:
 		var devs := frame.get_devices()
 		text = _device_title(devs[0]) if devs.size() == 1 else frame.channel.name
 	frame.set_title(text)
+	var devs := frame.get_devices()
+	if devs.size() == 1 and devs[0].device and devs[0].device.is_plugin():
+		frame.set_title_tooltip("%s (%s)" % [text, devs[0].device.format_tag()])
 	var window: FrameWindow = _windows.get(frame)
 	if window:
 		window.refresh_title()

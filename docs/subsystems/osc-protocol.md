@@ -412,13 +412,18 @@ velocity). The kinds are engine-global, not per device. Godot stores each kind's
 ordinary `DeviceParameter`s, so the Modulators pane builds its controls from the same component
 set as a device.
 
-#### CLAP Plugins
+#### Plugins (CLAP and VST3)
 
 **Plugin Discovery (Godot -> Rust)**
 ```
-/plugin/scan
+/plugin/scan [clap_path:s]* ["--vst3" [vst3_path:s]*]
 ```
-Scans standard CLAP plugin directories and discovers available plugins.
+Scans the given CLAP directories (plus `CLAP_PATH`) and VST3 directories (plus `VST3_PATH`) and
+discovers available plugins. Strings before the `--vst3` marker are CLAP paths, those after it
+VST3 paths. An empty section falls back to the defaults (`~/.clap`, `/usr/lib/clap`,
+`/usr/local/lib/clap`; `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`). VST3 bundles are
+scanned out of process (from `moduleinfo.json`, or by a throwaway `plugin_host --scan-vst3`),
+never loaded into the engine.
 
 **Response:** one `/plugin/info` per discovered plugin, then `/plugin/scan_complete [i:count]`.
 Godot caches these to avoid scanning on every startup.
@@ -433,8 +438,12 @@ Godot caches these to avoid scanning on every startup.
 | 3 | s | Version |
 | 4 | s | Category |
 | 5 | s | Description, empty if none |
-| 6 | s | Path to the `.clap` bundle |
-| 7 | s | CLAP feature tags joined with `,` (e.g. `audio-effect,reverb,stereo`), may be empty |
+| 6 | s | Path to the `.clap` file, or the `.vst3` bundle directory |
+| 7 | s | Feature tags joined with `,`: CLAP feature tags (e.g. `audio-effect,reverb,stereo`) or the lowercased VST3 subcategories (e.g. `fx,reverb`), may be empty |
+| 8 | s | Format: `clap` or `vst3` |
+
+For VST3 the id (arg 0) is the processor class ID as 32 uppercase hex characters. A plugin
+installed in both formats is reported twice, once per format.
 
 **Adding Devices**
 ```
@@ -445,7 +454,7 @@ Godot caches these to avoid scanning on every startup.
 - **active**: 1=load device (default), 0=don't load (save RAM)
 - **enabled**: 1=process audio (default), 0=bypass
 - **type**: Device type - "builtin", "clap", "lv2", "vst3" (defaults to "builtin")
-- **file**: Path to plugin file (required for plugins, empty for built-ins)
+- **file**: Path to plugin file (required for plugins, empty for built-ins). For `"vst3"` this is the `.vst3` bundle directory and `device_id` is the class ID (32 hex characters).
 
 Examples:
 ```bash

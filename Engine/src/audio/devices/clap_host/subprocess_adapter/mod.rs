@@ -8,8 +8,8 @@ use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::ipc::{
-    futex, BlockEvent, BlockTransport, HostAssignment, InstanceId, PluginCommand, ProcessManager,
-    MAX_BLOCK_EVENTS,
+    futex, BlockEvent, BlockTransport, HostAssignment, InstanceId, PluginCommand, PluginFormat,
+    ProcessManager, MAX_BLOCK_EVENTS,
 };
 use crate::audio::midi_types::NoteEvent;
 use crossbeam::channel::Sender;
@@ -141,6 +141,8 @@ pub struct SubprocessClapAdapter {
 
     /// Plugin bundle path, kept for the reload path (Phase 4).
     plugin_path: PathBuf,
+    /// CLAP or VST3: sent with `Initialize`, including on a crash reload.
+    format: PluginFormat,
     /// The host process this instance runs in (or is loading into), and the hosting mode that
     /// chose it. Compared with the current policy to move instances when it changes (Phase 5).
     host: HostAssignment,
@@ -211,6 +213,7 @@ impl SubprocessClapAdapter {
         plugin_path: PathBuf,
         plugin_id: &str,
         plugin_vendor: &str,
+        format: PluginFormat,
         sample_rate: f32,
         max_buffer_size: usize,
         command_tx: Option<Sender<AudioCommand>>,
@@ -242,6 +245,7 @@ impl SubprocessClapAdapter {
             host: host.clone(),
             plugin_path: plugin_path.clone(),
             plugin_id: plugin_id.to_string(),
+            format,
             sample_rate,
             max_buffer_size,
             load: Arc::clone(&load),
@@ -270,6 +274,7 @@ impl SubprocessClapAdapter {
             sample_rate,
             max_buffer_size,
             plugin_path,
+            format,
             host,
             channel_id,
             device_path,
@@ -946,6 +951,7 @@ impl SubprocessClapAdapter {
             host: self.host.clone(),
             plugin_path: self.plugin_path.clone(),
             plugin_id: self.device_id.clone(),
+            format: self.format,
             sample_rate: self.sample_rate,
             max_buffer_size: self.max_buffer_size,
             load,
@@ -1057,6 +1063,7 @@ impl SubprocessClapAdapter {
             sample_rate,
             max_buffer_size,
             plugin_path: PathBuf::from("/tmp/test.clap"),
+            format: PluginFormat::Clap,
             host: HostAssignment {
                 mode: crate::audio::ipc::HostingMode::Individually,
                 key: "instance-1".to_string(),

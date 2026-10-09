@@ -28,6 +28,8 @@ static func score(asset: Asset, query: String, include_path: bool = false) -> fl
 		if device:
 			best = maxf(best, Utils.fuzzy_match(needle, device.get_category_string()))
 			best = maxf(best, Utils.fuzzy_match(needle, device.author))
+			if device.is_plugin():
+				best = maxf(best, Utils.fuzzy_match(needle, device.format_tag()))
 	if asset.type == Asset.TYPE.Preset:
 		best = maxf(best, Utils.fuzzy_match(needle, asset.author))
 		best = maxf(best, Utils.fuzzy_match(needle, asset.device_name))

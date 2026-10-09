@@ -13,7 +13,7 @@ use super::{
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
-use crate::audio::ipc::ProcessManager;
+use crate::audio::ipc::{PluginFormat, ProcessManager};
 use crate::audio::types::ChannelId;
 
 /// Creates channel devices and describes the built-in devices to Godot.
@@ -52,8 +52,8 @@ impl DeviceFactory {
         self.sample_rate = sample_rate;
     }
 
-    /// Create a device of `device_type` ("builtin" or "clap"). `vendor` is the plugin's vendor
-    /// (CLAP only; it picks the host process in "By vendor" hosting). Logs and returns None for
+    /// Create a device of `device_type` ("builtin", "clap" or "vst3"). `vendor` is the plugin's
+    /// vendor (plugins only; it picks the host process in "By vendor" hosting). Logs and returns None for
     /// unknown or failed devices.
     pub fn create(
         &self,
@@ -66,10 +66,25 @@ impl DeviceFactory {
     ) -> Option<Box<dyn AudioDevice>> {
         match device_type {
             "builtin" => self.create_builtin(device_id, channel_id, device_path),
-            "clap" => self.create_clap(device_id, device_file, vendor, channel_id, device_path),
+            "clap" => self.create_plugin(
+                PluginFormat::Clap,
+                device_id,
+                device_file,
+                vendor,
+                channel_id,
+                device_path,
+            ),
+            "vst3" => self.create_plugin(
+                PluginFormat::Vst3,
+                device_id,
+                device_file,
+                vendor,
+                channel_id,
+                device_path,
+            ),
             _ => {
                 warn!(
-                    "Unknown device type: {} (supported: builtin, clap)",
+                    "Unknown device type: {} (supported: builtin, clap, vst3)",
                     device_type
                 );
                 None
@@ -130,22 +145,28 @@ impl DeviceFactory {
         Some(device)
     }
 
-    /// Create a CLAP plugin device. The plugin subprocess loads on a background thread and is
-    /// activated later.
-    fn create_clap(
+    /// Create a CLAP or VST3 plugin device. The plugin subprocess loads on a background thread
+    /// and is activated later. For VST3, `device_id` is the class ID and `device_file` the
+    /// `.vst3` bundle.
+    fn create_plugin(
         &self,
+        format: PluginFormat,
         device_id: &str,
         device_file: &str,
         vendor: &str,
         channel_id: ChannelId,
         device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
+        let label = format.as_str().to_uppercase();
         if device_file.is_empty() {
-            warn!("CLAP plugin {} missing file path", device_id);
+            warn!("{} plugin {} missing file path", label, device_id);
             return None;
         }
 
-        info!("Loading CLAP plugin {} from {}", device_id, device_file);
+        info!(
+            "Loading {} plugin {} from {}",
+            label, device_id, device_file
+        );
         match SubprocessClapAdapter::new(
             Arc::clone(&self.process_manager),
             channel_id as u32,
@@ -153,6 +174,7 @@ impl DeviceFactory {
             PathBuf::from(device_file),
             device_id,
             vendor,
+            format,
             self.sample_rate,
             self.max_buffer_size,
             Some(self.command_tx.clone()),
@@ -161,13 +183,13 @@ impl DeviceFactory {
         ) {
             Ok(adapter) => {
                 info!(
-                    "CLAP plugin {} created, subprocess loading in background (activation deferred)",
-                    device_id
+                    "{} plugin {} created, subprocess loading in background (activation deferred)",
+                    label, device_id
                 );
                 Some(Box::new(adapter))
             }
             Err(e) => {
-                warn!("Failed to load CLAP plugin {}: {}", device_id, e);
+                warn!("Failed to load {} plugin {}: {}", label, device_id, e);
                 None
             }
         }

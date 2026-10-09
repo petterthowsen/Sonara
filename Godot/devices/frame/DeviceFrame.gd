@@ -165,6 +165,11 @@ func set_title(text: String) -> void:
 	_title_label.tooltip_text = text
 
 
+## Replace the title tooltip (e.g. to name a plugin's format). The next `set_title` resets it.
+func set_title_tooltip(text: String) -> void:
+	_title_label.tooltip_text = text
+
+
 func get_title() -> String:
 	return _title_label.text
 

@@ -13,6 +13,24 @@ use clack_host::prelude::*;
 use crate::audio::ipc::{InstanceId, SharedMemory};
 
 use crate::plugin_host::host::{SubprocessHost, SubprocessHostShared};
+use crate::plugin_host::vst3::commands::Vst3State;
+
+/// One plugin instance in this host process, in whichever format it was loaded as. The two
+/// formats are separate code paths that meet only where the event loop dispatches (spec 028).
+pub enum HostedInstance {
+    Clap(PluginState),
+    Vst3(Vst3State),
+}
+
+impl HostedInstance {
+    /// The log span naming the instance.
+    pub fn span(&self) -> &tracing::Span {
+        match self {
+            HostedInstance::Clap(state) => &state.span,
+            HostedInstance::Vst3(state) => &state.span,
+        }
+    }
+}
 
 /// A parameter's CLAP id and range, found by the engine's index for it.
 #[derive(Debug, Clone, Copy)]

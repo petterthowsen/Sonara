@@ -44,6 +44,9 @@ dirs = "5"          # Cross-platform user directory paths
 # CLAP plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "note-ports", "gui", "latency", "log", "params", "render", "state", "timer"] }
+# VST3 plugin hosting
+vst3 = "0.3"
+libloading = "0.8"
 
 # Serialization for plugin state
 serde = { version = "1.0", features = ["derive"] }

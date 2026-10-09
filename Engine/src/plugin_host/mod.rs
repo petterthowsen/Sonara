@@ -12,6 +12,7 @@ pub mod operations;
 pub mod probe;
 pub mod state;
 pub mod value_text;
+pub mod vst3;
 pub mod x11_error;
 
 // Re-export commonly used types

@@ -257,6 +257,7 @@ mod tests {
             plugin_id: "x".to_string(),
             sample_rate: 48000.0,
             max_buffer_size: 1024,
+            format: Default::default(),
         };
         send_frame(&a, &request(1, init), &[file.as_raw_fd()]).unwrap();
         send_frame(

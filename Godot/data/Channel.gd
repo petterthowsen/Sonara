@@ -730,6 +730,8 @@ func _get_device_type_string(device_type: Device.DeviceType) -> String:
 			return "clap"
 		Device.DeviceType.LV2:
 			return "lv2"
+		Device.DeviceType.VST3:
+			return "vst3"
 		_:
 			return "builtin"
 
