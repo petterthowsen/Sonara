@@ -18,8 +18,8 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
 - [x] Phase 6: Device lookup helpers
 - [x] Phase 7: Split `audio/command_worker.rs`
-- [ ] Phase 8: Split `osc/server.rs`
-- [ ] Phase 9: OSC argument reader
+- [x] Phase 8: Split `osc/server.rs`
+- [x] Phase 9: OSC argument reader
 - [ ] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
 - [ ] Phase 11: Group `audio/devices/`
 - [ ] Phase 12: Split `audio/ipc/process_manager.rs` and `audio/devices/sampler.rs`
@@ -615,6 +615,8 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 5 | 2026-10-09 | lib 810 / 14 (807 + 3 new tests) | release 0; test build 0 | Allowed behavior change, own commit. See notes below. |
 | 6 | 2026-10-09 | lib 814 / 14 (810 + 4 new tests) | release 0; test build 0 | See notes below. |
 | 7 | 2026-10-09 | lib 814 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 7` (a) pure move, (b) handle arms as methods. See notes below. |
+| 8 | 2026-10-09 | lib 823 / 14 (814 + 9 new encode tests) | release 0; test build 0 | Commits `Engine cleanup phase 8` (a) pure move, (b) RouteCtx, `encode_status`, `GuiEvent::apply`. See notes below. |
+| 9 | 2026-10-09 | lib 842 / 14 (823 + 8 `Args` tests + 1 device test + 10 routing tests) | release 0; test build 0 | Allowed behavior change: malformed messages log a WARN. Live Godot check pending. See notes below. |
 
 Phase 1 notes:
 
@@ -773,3 +775,67 @@ Phase 7 notes:
   one call per arm). `collect_sfizz_*` live in `plugins.rs` as the plan says although only `poll_devices` calls them.
 - `device_tick::poll_devices` is still about 170 lines, over the ~150 goal. Left for later: it is one pass in three
   stages (collect under the lock, service without it, send), and splitting it was not part of this phase.
+
+Phase 8 notes:
+
+- Layout (lines, tests included): `osc/{mod 9, server 181, status 223, encode 935 (about 620 production), gui 209, audio_files 383,
+  parse 52 before phase 9}`, `osc/routes/{mod, transport, project, channel, track, clip, device, device_slots, plugin, audio, render,
+  audiofile}.rs`. `server.rs` stays as the file with `OscServer`, `new`, `run` and `send_message`; the receive loop is unchanged.
+- Unknown addresses: before and after, `handle_message` logs `warn!("Unknown OSC address: {addr}")` and returns `Ok(())` (the message is
+  dropped, a bundle goes on). A well-formed device address (`/channel/{id}/device/{path}/...`) with an action nobody knows logs
+  `Unhandled device OSC action {action:?} on channel {id} path {path}` and returns `Ok(())`. A device address that fails
+  `parse_osc_device_addr` falls through to the first-segment dispatch and ends as an unknown address, as before.
+- Commit (a) verification: the sorted, whitespace-normalised lines of the old `server.rs` and of the new files compared as multisets.
+  59 lines (distinct) disappear and about 214 distinct lines appear. Everything else is the same text. The differences are: `use`
+  and `mod` lines and the new `//!` headers; `pub(super)` on the fields of `OscServer`, `Pending*`, and on moved functions; the
+  per-area route method signatures (`&self, parts, args, command_tx` and `-> Result<bool>`), `match parts {`, `_ => return Ok(false)`
+  and `Ok(true)`; the first-segment dispatch in `routes/mod.rs`; `status::spawn(...)` replacing the closure in `run` (its body moved
+  into `status.rs` with `Self::send_status_update` renamed); `GuiEvent` moved out of `run` (de-indented); `args.as_slice()` -> `args`
+  in `/transport/loop`; `super::` prefixes dropped from moved tests and re-wrapped `rustfmt` lines. Stray doc comments were
+  re-attached to the items they belonged to (`send_gui_embedded`, `parse_automation_point`, `parse_tempo_map_args`, `ClipNoteArgs`;
+  the comment above `/render/start` that described `/audio/config/set` moved to that arm).
+- Deviation: the sampler/slot sub-routes of a device address are tried from the `_` arm of `device::handle_device_message`
+  (`device_slots::route`), not from `routes/mod.rs`; the plan's `route` signature takes the device ids too, so `device_slots::route` has
+  its own. `device::route` handles the channel-level `add_device`/`remove_device`/`move_device`/`clear_devices` and `device::handle_device_message`
+  the device-path ones. `RouteCtx` also carries `addr` (needed by a few warnings). `audiofile::route` only needs `&RouteCtx`.
+- Commit (b): `RouteCtx`, free `route` functions, `GuiEvent::apply` (the window part of the main loop), `encode::encode_status`
+  (pure; the socket part is `status::send_status`), nine new tests pin address and OSC types of the playhead, playing state, channel
+  peaks, device-path statuses, the five modulator statuses, `/builtin/modulator_kind`, `param/info`, `/builtin/info`, engine stats and the
+  render/clip statuses. No address, argument order or type changed.
+- Goal check: no production file in `osc/` is over 800 lines. `encode_status` is about 520 lines (the plan allows it).
+
+Phase 9 notes:
+
+- `parse.rs`: `ArgError` (`Arg`, `Segment`, `Invalid`), `segment::<T>`, `Args` with plain readers (`int`, `float`, `bool`, `string`,
+  `blob`, `non_negative`, `unsigned`), the lenient ones that keep the wider acceptance some arms had (`lenient_int` = `osc_int`: `i`,
+  `h` or `f`; `float_or_int`: `f` or `i`), the `opt_*` readers (absent or mistyped -> `None`, for arguments with a default), `exactly`
+  and `mismatch`. `osc_float` stays as the helper `parse_zone_set` uses. Deviation from the plan: it names more readers than the
+  plan's list because the arms differ in what they accepted. `ArgError`'s text is `"{addr}: argument {i}: expected {tag}, got ({all type
+  tags})"`, `"{addr}: path segment '{part}': expected {type}"` or `"{addr}: {message}"`.
+- `routes/mod.rs::warn_on_arg_error` downcasts the route's `anyhow` error: an `ArgError` is logged at WARN and counts as handled
+  (so it is not also reported as an unknown address and does not abort the rest of a bundle); any other error (a closed command
+  channel) goes up as before.
+- Arm-by-arm review. Same acceptance as before: floats stay `f`-only (volume, pan, pan_width, tempo, instance gain, slot volume, modulator
+  values), flags stay `i`-only (`!= 0`), `send/.../amount` stays `f` or `i`, `send/.../add` keeps its defaults (-12 dB, post-fader) for an
+  absent or mistyped optional value, `pan`'s right value is still ignored unless it is an `f`, `add_device` keeps `active`/`enabled`
+  (default true), `type` (default `builtin`) and `file` (default empty), `/audiofile/samples` keeps `i`/`h` non-negative,
+  `gui/visible`, `gui/size`, `multisample`, `focus_zone` and the sampler `audition` keep `osc_int` (`i`, `h` or `f`), `slot/N/note`
+  keeps `i` or `f`, `data/configure` keeps `f`, `i` or `d`, `/transport/loop` still needs exactly three `i`. Casts are unchanged
+  (`as usize`, `as u8` ...), so a negative int still wraps the way it did.
+- Cases that now warn although they were silent: a wrong type, a missing argument or a bad path segment in every converted arm;
+  `aux_out` with a negative index; `modulator/add` with an id outside 0..=255; an unknown `modulator/...` action; the nested
+  `add_device` with a missing id or position; `param/N` with a value that is neither `f` nor `i`; `/render/cancel` and the
+  `gui/*`, `multisample`, `focus_zone`, `audition`, `/project/*`, `/data/configure` messages that already warned now log the
+  `ArgError` text instead of their old text. Left as they were (they already warned in their own words): `gui/open|embed|bounds`,
+  `zone/N/set`, `zone/N/load_file`, `zone_group/N/set`, the clip note messages, `/plugins/hosting`, `/audio/config/set`,
+  `/render/start|analyze` (these answer `RenderFailed`), the automation target parse, and the tempo and time signature maps.
+- Possible differences to be aware of: the nested and channel-level `add_device` share one parser (the channel-level arm still logs
+  `Add device ...`); `midi_event`/`midi_cc` read their arguments after taking `Instant::now()`, as before; `gui/size` with a
+  non-positive size still warns with its old text.
+- Tests: 8 `Args`/`segment`/`ArgError` tests, `add_device` defaults, the modulator parser moved to `Result` (same cases), and 10 routing
+  tests through `handle_packet` (strictness, leniency, defaults, bundle not aborted, WARN text captured).
+- Godot tests: `Godot/tests/run_all.sh -j2` in the worktree (after `godot --headless --path Godot --import`, which a fresh worktree needs
+  for the class cache): 200 of 201 scripts pass. `tests/test_grid_levels.gd` prints `ALL PASSED` but is flagged failed by a compile error
+  (`Identifier not found: AudioEngineOSC` in `data/Project.gd` when `GridHelper` loads standalone); no Godot code was changed here.
+  Live check (engine plus app, `last_warn.log`): pending, port 7000 was held by the user's
+  engine. A static read of every `AudioEngineOSC.send` call in `Godot/` found no argument type that the engine rejects.
