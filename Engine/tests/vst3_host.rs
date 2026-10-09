@@ -215,3 +215,110 @@ fn a_vst3_plugin_runs_in_the_host() {
         PluginResponse::Unloaded
     ));
 }
+
+/// A bundle's first audio class id, or None.
+fn first_class(bundle: &Path) -> Option<engine::audio::devices::clap_host::PluginDescriptor> {
+    vst3_discovery::scan_bundle(bundle).into_iter().next()
+}
+
+/// Phase 5: two instances of one bundle share a host process and both work; a CLAP plugin
+/// can live in the same process; killing the host leaves every instance reporting a dead
+/// host (the engine then passes audio through and can reload from saved state, ADR 0009).
+#[test]
+fn vst3_instances_share_a_host_and_survive_a_crash_as_a_failure() {
+    let Some(bundle) = find_bundle() else {
+        eprintln!("no VST3 bundle installed: skipping");
+        return;
+    };
+    let Some(plugin) = first_class(&bundle) else {
+        eprintln!("no audio class: skipping");
+        return;
+    };
+    link_plugin_host();
+    let manager = ProcessManager::new();
+    let spawn = |id, key: &str| {
+        manager
+            .spawn_instance(
+                id,
+                key,
+                bundle.clone(),
+                plugin.id.clone(),
+                RATE,
+                FRAMES,
+                PluginFormat::Vst3,
+            )
+            .expect("the VST3 plugin loads")
+    };
+    let a = spawn(1, "shared");
+    let b = spawn(2, "shared");
+    assert_eq!(a.host_pid(), b.host_pid(), "one host process for both");
+    for connection in [&a, &b] {
+        match connection
+            .request(
+                PluginCommand::Activate { sample_rate: RATE },
+                REQUEST_TIMEOUT,
+            )
+            .unwrap()
+        {
+            PluginResponse::ActivateResult { success: true, .. } => {}
+            other => panic!("activation failed: {other:?}"),
+        }
+    }
+    let tone = plugin.category != engine::audio::devices::DeviceCategory::Instrument;
+    let note = [BlockEvent::note(10, 1, 60, 0.8, true)];
+    run_block(&a, &note, tone);
+    run_block(&b, &note, tone);
+
+    // Unloading one leaves the other running.
+    manager.shutdown_instance(1);
+    assert!(b.is_alive());
+    run_block(&b, &[], tone);
+
+    // A CLAP plugin joins the same host process, when one is installed.
+    let clap = Path::new(&std::env::var("HOME").unwrap_or_default())
+        .join(".clap/DragonflyRoomReverb.clap");
+    if clap.exists() {
+        let descriptors = engine::audio::devices::clap_host::PluginScanner::with_paths(vec![clap
+            .parent()
+            .unwrap()
+            .to_path_buf()]);
+        let mut scanner = descriptors;
+        let _ = scanner.scan();
+        if let Some(descriptor) = scanner
+            .all_plugins()
+            .find(|d| d.path == clap && d.id.contains("Room"))
+            .or_else(|| scanner.all_plugins().find(|d| d.path == clap))
+        {
+            let mixed = manager.spawn_instance(
+                3,
+                "shared",
+                descriptor.path.clone(),
+                descriptor.id.clone(),
+                RATE,
+                FRAMES,
+                PluginFormat::Clap,
+            );
+            match mixed {
+                Ok(c) => {
+                    assert_eq!(c.host_pid(), b.host_pid(), "mixed host");
+                    eprintln!("mixed CLAP+VST3 host checked");
+                    run_block(&b, &[], tone);
+                    manager.shutdown_instance(3);
+                }
+                Err(e) => eprintln!("CLAP plugin did not load ({e}); skipping mixed check"),
+            }
+        };
+    }
+
+    // Kill the host: the connection notices, and requests fail instead of hanging.
+    b.kill_host();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while b.is_alive() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!b.is_alive(), "a killed host is reported dead");
+    assert!(b
+        .request(PluginCommand::SaveState, Duration::from_millis(500))
+        .is_err());
+    manager.shutdown_instance(2);
+}
