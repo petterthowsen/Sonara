@@ -1,8 +1,10 @@
 //! Live MIDI scheduling: places each channel's queued live input inside the current buffer.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::audio::state::EngineState;
+use crate::audio::channel::Channel;
+use crate::audio::types::ChannelId;
 
 /// Drain each channel's live MIDI queue into `scheduled_midi_events` with frame offsets.
 ///
@@ -11,14 +13,14 @@ use crate::audio::state::EngineState;
 /// between events instead of snapping them all to frame 0. Events older than one buffer
 /// (held up on the way in) play at frame 0.
 pub(super) fn schedule_live_midi_events(
-    state: &mut EngineState,
+    channels: &mut HashMap<ChannelId, Channel>,
     callback_start: Instant,
     frame_count: usize,
     sample_rate: f32,
 ) {
     let last_frame = frame_count.saturating_sub(1);
 
-    for channel in state.channels.values_mut() {
+    for channel in channels.values_mut() {
         channel.scheduled_midi_events.clear();
 
         // Queue order is arrival order, so offsets come out ascending and need no sort
@@ -39,6 +41,7 @@ mod tests {
     use super::*;
     use crate::audio::channel::Channel;
     use crate::audio::midi_types::MidiEvent;
+    use crate::audio::state::EngineState;
     use std::time::Duration;
 
     /// Build a state with one channel holding note-ons that arrived `ages_ms` before `now`.
@@ -69,7 +72,7 @@ mod tests {
         let now = Instant::now();
         // 480 frames = 10 ms at 48 kHz
         let mut state = state_with_events(now, &[10, 5, 1]);
-        schedule_live_midi_events(&mut state, now, 480, 48_000.0);
+        schedule_live_midi_events(&mut state.channels, now, 480, 48_000.0);
         assert_eq!(scheduled_offsets(&state), vec![0, 240, 432]);
     }
 
@@ -77,7 +80,7 @@ mod tests {
     fn stale_and_just_arrived_live_midi_are_clamped() {
         let now = Instant::now();
         let mut state = state_with_events(now, &[50, 0]);
-        schedule_live_midi_events(&mut state, now, 480, 48_000.0);
+        schedule_live_midi_events(&mut state.channels, now, 480, 48_000.0);
         assert_eq!(scheduled_offsets(&state), vec![0, 479]);
     }
 }

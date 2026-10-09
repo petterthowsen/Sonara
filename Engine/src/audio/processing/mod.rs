@@ -1,5 +1,7 @@
 //! Per-buffer audio processing: live MIDI, automation, transport, clip MIDI and audio clips.
 
+mod clip_audio;
+mod clip_midi;
 mod live_midi;
 mod timeline;
 
@@ -7,18 +9,16 @@ use std::time::Instant;
 
 pub use timeline::frames_before_tick;
 
+use clip_audio::{render_audio_clips, BufferSpan};
+use clip_midi::dispatch_clip_midi;
 use live_midi::schedule_live_midi_events;
-use timeline::{advance_tick, collect_tick_events_looped, frame_rate_at};
+use timeline::collect_tick_events_looped;
 
-use super::clip::AudioPlayback;
 use super::devices::apply_transport;
-use super::dsp::gain::db_to_gain;
-use super::render_scratch::ClipNoteEvent;
 use super::rt_debug;
 use super::state::EngineState;
 use super::tempo_map::fill_tick_rates;
 use super::transport::Transport;
-use super::types::*;
 
 /// Process audio for one buffer. `callback_start` is when the audio callback fired and is
 /// used to place live MIDI within the buffer.
@@ -31,13 +31,14 @@ pub fn process_audio(
     // Always schedule incoming MIDI events (even when not playing)
     // This allows live MIDI input to play instruments without transport running
     rt_debug::section("live MIDI scheduling", || {
-        schedule_live_midi_events(state, callback_start, frames, sample_rate)
+        schedule_live_midi_events(&mut state.channels, callback_start, frames, sample_rate)
     });
 
     // Resolve automation before the transport check, so a seek while stopped still applies
     // (REQ-008). When the tick has not moved the per-lane dedup makes this nearly free.
+    let automation_tick = state.get_current_tick();
     rt_debug::section("automation", || {
-        super::automation::apply_automation(state, state.get_current_tick())
+        super::automation::apply_automation(&mut state.tracks, &mut state.channels, automation_tick)
     });
 
     let is_playing = state.get_is_playing();
@@ -102,132 +103,14 @@ pub fn process_audio(
 
     // Dispatch MIDI for each tick event at its exact frame offset
     rt_debug::section("clip MIDI", || {
-        let mut next_wrap = 0;
-        for (event_idx, &(current_tick, frame_offset)) in tick_events.iter().enumerate() {
-            // A loop wrap ends every clip note still sounding, at the wrap frame, before the
-            // note-ons at the loop start
-            if loop_wraps.get(next_wrap) == Some(&event_idx) {
-                next_wrap += 1;
-                for channel in state.channels.values_mut() {
-                    channel.release_clip_notes_at(frame_offset);
-                }
-            }
-
-            // Collect note on/off events from clip instances
-            note_events.clear();
-
-            for (track_id, track) in &state.tracks {
-                for instance in &track.clip_instances {
-                    if instance.muted {
-                        continue;
-                    }
-
-                    // Allow processing at instance end tick for note off events
-                    // but not for note on events (which require being strictly within the instance)
-                    let is_within_instance =
-                        current_tick >= instance.start_tick && current_tick < instance.end_tick();
-                    let is_at_instance_end = current_tick == instance.end_tick();
-
-                    if is_within_instance || is_at_instance_end {
-                        if let Some(clip) = state.clips.get(&instance.clip_id) {
-                            let offset_in_instance = current_tick - instance.start_tick;
-
-                            // Position in the clip's content: loop points live in content
-                            // space (like audio), so `clip_offset` is added before wrapping.
-                            // At the instance end, read the position the last tick ends at rather
-                            // than wrapping it: an end on a loop boundary would otherwise fold to
-                            // the loop start, and notes sounding up to the end never get a note-off.
-                            let unwrapped_pos = instance.clip_offset + offset_in_instance;
-                            let content_pos = if is_within_instance {
-                                instance.wrap_content_tick(unwrapped_pos)
-                            } else {
-                                instance.wrap_content_tick(unwrapped_pos - 1) + 1
-                            };
-                            let just_wrapped = content_pos != unwrapped_pos
-                                && content_pos == instance.loop_start_ticks;
-
-                            // A loop wrap ends every note still sounding at the loop end. Sent
-                            // before the note-ons so a note restarting on the same pitch wins.
-                            if just_wrapped && is_within_instance {
-                                let loop_end =
-                                    instance.loop_start_ticks + instance.loop_length_ticks;
-                                for clip_note in &clip.midi_notes {
-                                    if clip_note.start_tick < loop_end
-                                        && clip_note.start_tick + clip_note.duration_ticks
-                                            >= loop_end
-                                    {
-                                        let transposed_note = (clip_note.note as i16
-                                            + instance.transpose as i16)
-                                            .clamp(0, 127)
-                                            as MidiNote;
-                                        note_events.push(ClipNoteEvent {
-                                            track_id: *track_id,
-                                            clip_note_id: clip_note.id,
-                                            key: transposed_note,
-                                            velocity: clip_note.velocity,
-                                            release: clip_note.release,
-                                            is_on: false,
-                                        });
-                                    }
-                                }
-                            }
-
-                            for clip_note in &clip.midi_notes {
-                                let note_end = clip_note.start_tick + clip_note.duration_ticks;
-
-                                // Entirely before the trimmed start
-                                if note_end <= instance.clip_offset {
-                                    continue;
-                                }
-
-                                // Apply transpose
-                                let transposed_note = (clip_note.note as i16
-                                    + instance.transpose as i16)
-                                    .clamp(0, 127)
-                                    as MidiNote;
-
-                                // Note On
-                                if is_within_instance && clip_note.start_tick == content_pos {
-                                    note_events.push(ClipNoteEvent {
-                                        track_id: *track_id,
-                                        clip_note_id: clip_note.id,
-                                        key: transposed_note,
-                                        velocity: clip_note.velocity,
-                                        release: clip_note.release,
-                                        is_on: true,
-                                    });
-                                }
-
-                                // Note Off at the written end, or clipped to the instance right edge
-                                // so notes longer than the clip don't hang forever.
-                                let note_off_at_written_end = note_end == content_pos;
-                                let note_off_clipped_to_instance = is_at_instance_end
-                                    && clip_note.start_tick < content_pos
-                                    && note_end > content_pos;
-                                if note_off_at_written_end || note_off_clipped_to_instance {
-                                    note_events.push(ClipNoteEvent {
-                                        track_id: *track_id,
-                                        clip_note_id: clip_note.id,
-                                        key: transposed_note,
-                                        velocity: clip_note.velocity,
-                                        release: clip_note.release,
-                                        is_on: false,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            for event in &note_events {
-                if let Some(track) = state.tracks.get_mut(&event.track_id) {
-                    if let Some(channel) = state.channels.get_mut(&track.channel_id) {
-                        channel.send_clip_note(event, frame_offset);
-                    }
-                }
-            }
-        }
+        dispatch_clip_midi(
+            &state.tracks,
+            &state.clips,
+            &mut state.channels,
+            &tick_events,
+            &loop_wraps,
+            &mut note_events,
+        )
     });
     state.render_scratch.tick_events = tick_events;
     state.render_scratch.loop_wraps = loop_wraps;
@@ -235,212 +118,21 @@ pub fn process_audio(
 
     // Generate audio clip content per frame while advancing a local tick cursor
     rt_debug::section("audio clip render", || {
-        let mut render_tick = start_tick;
-        let mut render_acc = start_acc;
-        for frame_idx in 0..frames {
-            // Advance local tick based on ticks_per_sample
-            let frame_rate = frame_rate_at(&tick_rates, frame_idx);
-            render_acc += frame_rate;
-            if render_acc >= 1.0 {
-                let inc = render_acc.floor() as Tick;
-                let (next, wrapped) = advance_tick(render_tick, inc, loop_region);
-                render_tick = next;
-                render_acc -= inc as f64;
-                if wrapped {
-                    // Audio clips re-seat at the loop start like after a seek
-                    for track in state.tracks.values_mut() {
-                        for instance in &mut track.clip_instances {
-                            instance.playback_position = None;
-                        }
-                    }
-                }
-            }
-
-            let current_tick = render_tick;
-            let frame_bpm = frame_rate * 60.0 * sample_rate as f64 / state.settings.ppq as f64;
-
-            // Generate audio from each track
-            for track in state.tracks.values_mut() {
-                let mut sample_left = 0.0;
-                let mut sample_right = 0.0;
-
-                // Note: MIDI audio is now generated by the channel's instrument device (if present)
-                // Tracks no longer hold active voices - they only route MIDI to channels
-
-                // Process audio clips on this track
-                for instance in track.clip_instances.iter_mut() {
-                    if instance.muted {
-                        continue;
-                    }
-
-                    if let Some(clip) = state.clips.get(&instance.clip_id) {
-                        if clip.clip_type == super::clip::ClipType::Audio
-                            && !clip.audio_samples.is_empty()
-                        {
-                            let current_pos_in_instance = current_tick - instance.start_tick;
-                            // A clip without a recorded BPM plays 1:1 at the project tempo
-                            let recorded_bpm = if clip.recorded_bpm > 0.0 {
-                                clip.recorded_bpm
-                            } else {
-                                state.settings.tempo
-                            };
-
-                            // Check if we're in the playback range for this instance
-                            if current_pos_in_instance >= 0
-                                && current_pos_in_instance < instance.duration_ticks
-                            {
-                                // Initialize playback position for this clip instance if not yet started
-                                // Apply clip_offset: start reading from the offset position in the clip
-                                // PLUS account for seeking into the middle of the instance
-                                if instance.playback_position.is_none() {
-                                    // Total offset = clip_offset (trim) + current position in instance (seek)
-                                    let total_offset_ticks = instance.wrap_content_tick(
-                                        instance.clip_offset + current_pos_in_instance,
-                                    );
-
-                                    // Convert total offset (ticks) to sample index in the clip's sample-rate domain
-                                    instance.playback_position =
-                                        Some(AudioPlayback::clip_source_frame(
-                                            total_offset_ticks,
-                                            recorded_bpm,
-                                            state.settings.ppq,
-                                            clip.audio_sample_rate as f64,
-                                        ));
-                                }
-
-                                // Get mutable reference to playback position
-                                let Some(playback_pos) = instance.playback_position.as_mut() else {
-                                    continue;
-                                };
-
-                                // Source frames to advance this frame at the tempo playing now
-                                let advance_per_sample = AudioPlayback::clip_advance_per_frame(
-                                    frame_bpm,
-                                    recorded_bpm,
-                                    clip.audio_sample_rate as f64,
-                                    state.device_sample_rate as f64,
-                                );
-
-                                let clip_sample_len =
-                                    (clip.audio_samples.len() / clip.audio_channels) as f64;
-
-                                // A reversed instance reads the source mirrored around its centre,
-                                // while the playback position (and any loop wrap) still advances
-                                // forward in content time.
-                                let read_pos = if instance.reverse {
-                                    AudioPlayback::reverse_source_frame(
-                                        *playback_pos,
-                                        clip_sample_len,
-                                    )
-                                } else {
-                                    *playback_pos
-                                };
-
-                                // Get the current interpolated sample
-                                let sample_idx = read_pos.floor() as usize;
-                                let frac = (read_pos.fract()) as f32;
-
-                                if sample_idx < clip_sample_len as usize {
-                                    let interleaved_idx = sample_idx * clip.audio_channels;
-                                    let next_idx = sample_idx + 1;
-                                    let interleaved_idx_next =
-                                        if next_idx < clip_sample_len as usize {
-                                            next_idx * clip.audio_channels
-                                        } else {
-                                            interleaved_idx
-                                        };
-
-                                    // Linear interpolation for left channel
-                                    if interleaved_idx < clip.audio_samples.len() {
-                                        let s0_left = clip.audio_samples[interleaved_idx];
-                                        let s1_left = if interleaved_idx_next
-                                            < clip.audio_samples.len()
-                                            && interleaved_idx_next != interleaved_idx
-                                        {
-                                            clip.audio_samples[interleaved_idx_next]
-                                        } else {
-                                            s0_left
-                                        };
-                                        sample_left += s0_left + frac * (s1_left - s0_left);
-                                    }
-
-                                    // Linear interpolation for right channel
-                                    if clip.audio_channels > 1
-                                        && interleaved_idx + 1 < clip.audio_samples.len()
-                                    {
-                                        let s0_right = clip.audio_samples[interleaved_idx + 1];
-                                        let s1_right = if interleaved_idx_next + 1
-                                            < clip.audio_samples.len()
-                                            && interleaved_idx_next != interleaved_idx
-                                        {
-                                            clip.audio_samples[interleaved_idx_next + 1]
-                                        } else {
-                                            s0_right
-                                        };
-                                        sample_right += s0_right + frac * (s1_right - s0_right);
-                                    } else if clip.audio_channels == 1 {
-                                        // Mono: duplicate the interpolated left sample for right
-                                        sample_right += sample_left;
-                                    }
-
-                                    // Apply gain offset
-                                    let gain_linear = db_to_gain(instance.gain_offset);
-                                    sample_left *= gain_linear;
-                                    sample_right *= gain_linear;
-                                }
-
-                                // Advance playback position for next frame
-                                *playback_pos += advance_per_sample;
-
-                                // Handle looping
-                                if instance.loop_enabled && instance.loop_length_ticks > 0 {
-                                    let clip_sr = clip.audio_sample_rate as f64;
-                                    let ppq = state.settings.ppq;
-                                    let loop_start_samples = AudioPlayback::clip_source_frame(
-                                        instance.loop_start_ticks,
-                                        recorded_bpm,
-                                        ppq,
-                                        clip_sr,
-                                    );
-                                    let loop_length_samples = AudioPlayback::clip_source_frame(
-                                        instance.loop_length_ticks,
-                                        recorded_bpm,
-                                        ppq,
-                                        clip_sr,
-                                    );
-
-                                    if loop_length_samples > 0.0
-                                        && *playback_pos >= loop_start_samples + loop_length_samples
-                                    {
-                                        let offset_in_loop = *playback_pos - loop_start_samples;
-                                        *playback_pos = loop_start_samples
-                                            + (offset_in_loop % loop_length_samples);
-                                    }
-                                }
-                            } else if current_pos_in_instance < 0 {
-                                // Not yet at clip start, ensure position is reset
-                                instance.playback_position = None;
-                            } else {
-                                // Past clip end, remove position tracking
-                                instance.playback_position = None;
-                            }
-                        }
-                    }
-                }
-
-                // Write to track's channel
-                if let Some(channel) = state.channels.get_mut(&track.channel_id) {
-                    if frame_idx < channel.buffer_left.len() {
-                        channel.buffer_left[frame_idx] += sample_left;
-                        channel.buffer_right[frame_idx] += sample_right;
-                    }
-                }
-            }
-        }
-
-        // Log playhead position every bar for debugging - disabled for real-time safety
-        // let ticks_per_bar = state.settings.ppq as i64 * state.settings.time_numerator as i64;
-        // let final_tick = state.get_current_tick();
+        render_audio_clips(
+            &mut state.tracks,
+            &state.clips,
+            &mut state.channels,
+            &state.settings,
+            state.device_sample_rate,
+            &tick_rates,
+            BufferSpan {
+                start_tick,
+                start_acc,
+                frames,
+                loop_region,
+                sample_rate,
+            },
+        )
     });
     state.render_scratch.frame_tick_rates = tick_rates;
 }
@@ -448,349 +140,10 @@ pub fn process_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::audio::channel::Channel;
-    use crate::audio::clip::{Clip, ClipInstance, ClipNote, ClipType};
+
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
-    use crate::audio::midi_types::NoteEvent;
-    use crate::audio::track::Track;
-
-    /// Instrument that records the notes it receives as (key, is_note_on).
-    struct NoteRecorder {
-        notes: std::sync::Arc<std::sync::Mutex<Vec<(u8, bool)>>>,
-    }
-
-    impl crate::audio::devices::AudioDevice for NoteRecorder {
-        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
-        fn send_note_event(&mut self, event: &NoteEvent, _offset: usize) {
-            let is_note_on = matches!(event, NoteEvent::On { .. });
-            self.notes.lock().unwrap().push((event.key(), is_note_on));
-        }
-        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
-        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-            None
-        }
-        fn device_id(&self) -> &str {
-            "test.recorder"
-        }
-        fn device_name(&self) -> &str {
-            "Recorder"
-        }
-        fn device_category(&self) -> DeviceCategory {
-            DeviceCategory::Instrument
-        }
-        fn device_variant(&self) -> DeviceVariant {
-            DeviceVariant::BuiltIn
-        }
-        fn parameters(&self) -> Vec<ParamInfo> {
-            Vec::new()
-        }
-        fn reset(&mut self) {
-            panic!("stopping must release notes, not reset devices");
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
-
-    fn clip_event(clip_note_id: NoteId, key: u8, is_on: bool) -> ClipNoteEvent {
-        ClipNoteEvent {
-            track_id: 1,
-            clip_note_id,
-            key,
-            velocity: 100.0 / 127.0,
-            release: crate::audio::DEFAULT_RELEASE,
-            is_on,
-        }
-    }
-
-    #[test]
-    fn releasing_clip_notes_sends_one_note_off_per_held_note() {
-        let notes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut channel = Channel::new(2, "Synth".to_string(), 64, 48_000.0);
-        channel.devices.push(Box::new(NoteRecorder {
-            notes: notes.clone(),
-        }));
-
-        // Two overlapping instances of clip note 1 (key 60), and note 2 (key 64) that already ended
-        channel.send_clip_note(&clip_event(1, 60, true), 0);
-        channel.send_clip_note(&clip_event(1, 60, true), 0);
-        channel.send_clip_note(&clip_event(2, 64, true), 0);
-        channel.send_clip_note(&clip_event(2, 64, false), 0);
-        notes.lock().unwrap().clear();
-
-        channel.release_clip_notes();
-        assert_eq!(*notes.lock().unwrap(), vec![(60, false), (60, false)]);
-
-        // The clip's own note-off after a stop is dropped, and a second release sends nothing
-        notes.lock().unwrap().clear();
-        channel.send_clip_note(&clip_event(1, 60, false), 0);
-        channel.release_clip_notes();
-        assert!(notes.lock().unwrap().is_empty());
-    }
-
-    /// Instrument that records every note event it receives with its frame offset.
-    struct NoteProbe {
-        events: std::sync::Arc<std::sync::Mutex<Vec<(NoteEvent, usize)>>>,
-    }
-
-    impl crate::audio::devices::AudioDevice for NoteProbe {
-        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
-        fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
-            self.events.lock().unwrap().push((*event, frame_offset));
-        }
-        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
-        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-            None
-        }
-        fn device_id(&self) -> &str {
-            "test.note_probe"
-        }
-        fn device_name(&self) -> &str {
-            "Note Probe"
-        }
-        fn device_category(&self) -> DeviceCategory {
-            DeviceCategory::Instrument
-        }
-        fn device_variant(&self) -> DeviceVariant {
-            DeviceVariant::BuiltIn
-        }
-        fn parameters(&self) -> Vec<ParamInfo> {
-            Vec::new()
-        }
-        fn reset(&mut self) {}
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
-
-    /// Play `instances` of one clip holding `note` on a probe channel until `until_tick`,
-    /// returning every event with its absolute frame.
-    fn play_clip_to_probe(
-        note: ClipNote,
-        instances: &[(Tick, Tick)],
-        until_tick: Tick,
-    ) -> Vec<(NoteEvent, usize)> {
-        const BLOCK: usize = 64;
-        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut state = EngineState::default();
-        let mut channel = Channel::new(2, "Probe".to_string(), BLOCK, 48_000.0);
-        channel.devices.push(Box::new(NoteProbe {
-            events: events.clone(),
-        }));
-        state.channels.insert(2, channel);
-
-        let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
-        clip.content_length_ticks = note.start_tick + note.duration_ticks;
-        clip.midi_notes.push(note);
-        state.clips.insert("c".to_string(), clip);
-        let mut track = Track::new(1, 2);
-        for (i, &(start, duration)) in instances.iter().enumerate() {
-            track.clip_instances.push(ClipInstance::new(
-                format!("i{i}"),
-                "c".to_string(),
-                start,
-                duration,
-            ));
-        }
-        state.tracks.insert(1, track);
-
-        state.set_is_playing(true);
-        state.request_playhead_midi_dispatch();
-        let mut absolute = Vec::new();
-        let mut block_start = 0;
-        while state.get_current_tick() < until_tick {
-            process_audio(&mut state, BLOCK, 48_000.0, Instant::now());
-            for (event, offset) in events.lock().unwrap().drain(..) {
-                absolute.push((event, block_start + offset));
-            }
-            block_start += BLOCK;
-        }
-        absolute
-    }
-
-    #[test]
-    fn clip_note_reaches_device_with_float_values() {
-        let note = ClipNote {
-            id: 7,
-            note: 60,
-            velocity: 0.5039,
-            release: 0.25,
-            start_tick: 0,
-            duration_ticks: 480,
-        };
-        let events = play_clip_to_probe(note, &[(0, 960)], 960);
-        assert_eq!(events.len(), 2, "{events:?}");
-
-        let (on, on_frame) = events[0];
-        let (off, off_frame) = events[1];
-        assert!(matches!(on, NoteEvent::On { key: 60, velocity, .. } if velocity == 0.5039));
-        assert!(matches!(off, NoteEvent::Off { key: 60, release, .. } if release == 0.25));
-        assert_eq!(on.note_id(), off.note_id());
-        assert_ne!(on.note_id(), 0);
-        // 120 BPM at 48 kHz: 960 ticks per 24000 frames, so tick 480 lands on frame 12000.
-        assert_eq!(on_frame, 0);
-        assert!(
-            off_frame.abs_diff(12_000) <= 1,
-            "note-off at frame {off_frame}"
-        );
-    }
-
-    #[test]
-    fn overlapping_instances_get_distinct_note_ids() {
-        let note = ClipNote {
-            id: 1,
-            note: 60,
-            velocity: 0.8,
-            release: 0.5,
-            start_tick: 0,
-            duration_ticks: 960,
-        };
-        // The second instance starts while the first instance's note still sounds.
-        let events = play_clip_to_probe(note, &[(0, 960), (480, 960)], 1500);
-        let ons: Vec<_> = events
-            .iter()
-            .filter(|(e, _)| matches!(e, NoteEvent::On { .. }))
-            .collect();
-        let offs: Vec<_> = events
-            .iter()
-            .filter(|(e, _)| matches!(e, NoteEvent::Off { .. }))
-            .collect();
-        assert_eq!((ons.len(), offs.len()), (2, 2), "{events:?}");
-        assert_ne!(ons[0].0.note_id(), ons[1].0.note_id());
-        // The first instance ends first, so each off pairs with its own on.
-        assert_eq!(offs[0].0.note_id(), ons[0].0.note_id());
-        assert_eq!(offs[1].0.note_id(), ons[1].0.note_id());
-        assert!(offs[0].1 < offs[1].1);
-    }
-
-    #[test]
-    fn looped_instance_ending_on_loop_boundary_releases_last_note() {
-        let notes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut state = EngineState::default();
-        let mut channel = Channel::new(2, "Synth".to_string(), 64, 48_000.0);
-        channel.devices.push(Box::new(NoteRecorder {
-            notes: notes.clone(),
-        }));
-        state.channels.insert(2, channel);
-
-        // Four back-to-back beats, the last one held right up to the loop end
-        let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
-        for (i, note) in [60u8, 62, 64, 65].into_iter().enumerate() {
-            clip.midi_notes.push(ClipNote {
-                id: i as _,
-                note,
-                velocity: 100.0 / 127.0,
-                release: crate::audio::DEFAULT_RELEASE,
-                start_tick: i as Tick * 960,
-                duration_ticks: 960,
-            });
-        }
-        clip.content_length_ticks = 3840;
-        state.clips.insert("c".to_string(), clip);
-
-        // Two full passes; the instance ends exactly where the loop would wrap again
-        let mut instance = ClipInstance::new("i".to_string(), "c".to_string(), 960, 7680);
-        instance.loop_enabled = true;
-        instance.loop_length_ticks = 3840;
-        let mut track = Track::new(1, 2);
-        track.clip_instances.push(instance);
-        state.tracks.insert(1, track);
-
-        state.set_is_playing(true);
-        state.request_playhead_midi_dispatch();
-        while state.get_current_tick() < 10_000 {
-            process_audio(&mut state, 64, 48_000.0, Instant::now());
-        }
-
-        let notes = notes.lock().unwrap();
-        let ons = notes.iter().filter(|(_, on)| *on).count();
-        let offs = notes.iter().filter(|(_, on)| !*on).count();
-        assert_eq!(ons, 8, "two passes of four notes, nothing past the end");
-        assert_eq!(offs, 8, "every note is released, including the last");
-        assert_eq!(notes.last(), Some(&(65, false)));
-    }
-
-    #[test]
-    fn clip_seek_is_tempo_independent() {
-        // 960 ticks into a clip recorded at 120 BPM, whatever the project tempo
-        for _project_bpm in [60.0, 120.0, 200.0] {
-            assert_eq!(
-                AudioPlayback::clip_source_frame(960, 120.0, 960, 48_000.0),
-                24_000.0
-            );
-        }
-    }
-
-    #[test]
-    fn reverse_reads_the_file_backwards() {
-        // Position 0 is the last frame; the end clamps to the first frame.
-        assert_eq!(AudioPlayback::reverse_source_frame(0.0, 1_000.0), 999.0);
-        assert_eq!(AudioPlayback::reverse_source_frame(999.0, 1_000.0), 0.0);
-        assert_eq!(AudioPlayback::reverse_source_frame(1_000.0, 1_000.0), 0.0);
-    }
-
-    /// One 64-frame buffer of a mono ramp clip on track 2, played at 1:1 (120 BPM, 48 kHz).
-    fn render_ramp(reverse: bool) -> Vec<f32> {
-        let mut state = EngineState::default();
-
-        let mut clip = Clip::new("c".to_string(), "Ramp".to_string(), ClipType::Audio);
-        clip.audio_samples = (0..200).map(|i| i as f32).collect();
-        clip.audio_channels = 1;
-        clip.audio_sample_rate = 48_000;
-        clip.recorded_bpm = 120.0;
-        clip.content_length_ticks = 960;
-        state.clips.insert("c".to_string(), clip);
-
-        let mut instance = ClipInstance::new("i".to_string(), "c".to_string(), 0, 960);
-        instance.reverse = reverse;
-        let mut track = Track::new(2, 2);
-        track.clip_instances.push(instance);
-        state.tracks.insert(2, track);
-        state
-            .channels
-            .insert(2, Channel::new(2, "Audio".to_string(), 64, 48_000.0));
-
-        state.set_is_playing(true);
-        state.set_current_tick(0);
-        state.set_fractional_tick_accumulator(0.0);
-        process_audio(&mut state, 64, 48_000.0, Instant::now());
-        state.channels.get(&2).unwrap().buffer_left.clone()
-    }
-
-    #[test]
-    fn reverse_instance_plays_the_clip_backwards() {
-        let forward = render_ramp(false);
-        let backward = render_ramp(true);
-        // 1:1 playback, so frame i reads source frame i forwards and 199 - i reversed.
-        assert_eq!(forward[0], 0.0);
-        assert_eq!(forward[63], 63.0);
-        assert_eq!(backward[0], 199.0);
-        assert_eq!(backward[63], 136.0);
-    }
-
-    #[test]
-    fn clip_loop_bounds_on_clip_timeline() {
-        // A one-beat loop of a 120 BPM clip wraps at 24 000 frames at 60 and 200 BPM alike
-        let loop_len = AudioPlayback::clip_source_frame(960, 120.0, 960, 48_000.0);
-        assert_eq!(loop_len, 24_000.0);
-    }
-
-    #[test]
-    fn clip_rate_follows_tempo() {
-        assert_eq!(
-            AudioPlayback::clip_advance_per_frame(120.0, 120.0, 48_000.0, 48_000.0),
-            1.0
-        );
-        assert_eq!(
-            AudioPlayback::clip_advance_per_frame(60.0, 120.0, 48_000.0, 48_000.0),
-            0.5
-        );
-        assert!(
-            (AudioPlayback::clip_advance_per_frame(200.0, 120.0, 48_000.0, 48_000.0) - 5.0 / 3.0)
-                .abs()
-                < 1e-12
-        );
-    }
 
     /// Device that records the last transport it was given.
     struct TransportRecorder {

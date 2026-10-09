@@ -9,6 +9,7 @@
 //! list. It keeps a cursor that walks forward with the playhead and binary-searches only when the
 //! tick jumps backwards (seek, loop).
 
+use std::collections::HashMap;
 use std::fmt;
 
 use tracing::warn;
@@ -16,7 +17,8 @@ use tracing::warn;
 use super::channel::Channel;
 use super::devices::DevicePath;
 use super::state::EngineState;
-use super::types::{Tick, TrackId};
+use super::track::Track;
+use super::types::{ChannelId, Tick, TrackId};
 
 /// Identifier for a point within a lane. Allocated by Godot, mirroring `NoteId`.
 pub type AutomationPointId = u64;
@@ -372,11 +374,11 @@ impl AutomationLane {
 /// Runs on the audio callback once per buffer, before the transport's `is_playing` check, so a
 /// seek while stopped still resolves (REQ-008). Real-time safe: no allocation, no I/O, and each
 /// lane costs one cursor step.
-pub fn apply_automation(state: &mut EngineState, tick: Tick) {
-    // Disjoint field borrows: lanes live on tracks, targets live on channels.
-    let tracks = &mut state.tracks;
-    let channels = &mut state.channels;
-
+pub fn apply_automation(
+    tracks: &mut HashMap<TrackId, Track>,
+    channels: &mut HashMap<ChannelId, Channel>,
+    tick: Tick,
+) {
     for track in tracks.values_mut() {
         if track.automation_lanes.is_empty() {
             continue;
@@ -837,7 +839,7 @@ mod tests {
         };
         let base = read(&mut state);
 
-        apply_automation(&mut state, 480);
+        apply_automation(&mut state.tracks, &mut state.channels, 480);
         let applied = read(&mut state);
         assert!((applied - 0.5).abs() < 1e-3, "attack became {applied}");
 
@@ -1101,7 +1103,7 @@ mod tests {
             &[(0, 0.1), (960, 0.9)],
         );
 
-        apply_automation(&mut state, 480);
+        apply_automation(&mut state.tracks, &mut state.channels, 480);
 
         let channel = state.channels.get(&2).expect("channel 2");
         assert_eq!(channel.automation_volume, Some(0.5));
@@ -1142,11 +1144,11 @@ mod tests {
             &[(0, 0.2), (9600, 0.8)],
         );
 
-        apply_automation(&mut state, 9600);
+        apply_automation(&mut state.tracks, &mut state.channels, 9600);
         assert_eq!(state.channels[&2].automation_volume, Some(0.8));
 
         // A backwards seek while stopped resolves at the new position.
-        apply_automation(&mut state, 0);
+        apply_automation(&mut state.tracks, &mut state.channels, 0);
         assert_eq!(state.channels[&2].automation_volume, Some(0.2));
     }
 
@@ -1167,7 +1169,7 @@ mod tests {
                 &[(0, 0.1), (960, 0.1)],
             );
 
-            apply_automation(&mut state, 0);
+            apply_automation(&mut state.tracks, &mut state.channels, 0);
             assert_eq!(
                 state.channels[&2]
                     .device_at_path(&DevicePath::root(0))
@@ -1181,7 +1183,7 @@ mod tests {
                 for lane in &mut state.tracks.get_mut(&1).unwrap().automation_lanes {
                     lane.bypassed = true;
                 }
-                apply_automation(&mut state, 0);
+                apply_automation(&mut state.tracks, &mut state.channels, 0);
             } else {
                 release_track_lane(&mut state, 1, "device");
                 release_track_lane(&mut state, 1, "volume");
@@ -1219,7 +1221,7 @@ mod tests {
             &[(0, 0.1), (960, 0.9)],
         );
 
-        apply_automation(&mut state, 0);
+        apply_automation(&mut state.tracks, &mut state.channels, 0);
         assert_eq!(
             state.tracks[&1].automation_lanes[0].captured_base,
             Some(0.3)
@@ -1228,7 +1230,7 @@ mod tests {
         // The device is removed under the lane's feet.
         state.channels.get_mut(&2).unwrap().devices.clear();
         for tick in [240, 480, 720] {
-            apply_automation(&mut state, tick);
+            apply_automation(&mut state.tracks, &mut state.channels, tick);
         }
 
         let lane = &state.tracks[&1].automation_lanes[0];
@@ -1256,14 +1258,14 @@ mod tests {
 
         // A constant lane over 100 buffers applies once and wakes the device once.
         for buffer in 0..100 {
-            apply_automation(&mut state, buffer * 64);
+            apply_automation(&mut state.tracks, &mut state.channels, buffer * 64);
         }
         assert_eq!(sets.load(Ordering::Relaxed), 1);
         assert_eq!(wakes.load(Ordering::Relaxed), 1);
 
         // A real change gets through, and wakes the device exactly once more.
         state.tracks.get_mut(&1).unwrap().automation_lanes[0].update_point(point(2, 96_000, 1.0));
-        apply_automation(&mut state, 48_000);
+        apply_automation(&mut state.tracks, &mut state.channels, 48_000);
         assert_eq!(sets.load(Ordering::Relaxed), 2);
         assert_eq!(wakes.load(Ordering::Relaxed), 2);
     }
@@ -1320,7 +1322,7 @@ mod tests {
         add_lane(&mut state, "volume", AutomationTarget::ChannelVolume, &[]);
         add_lane(&mut state, "device", device_target(), &[]);
 
-        apply_automation(&mut state, 480);
+        apply_automation(&mut state.tracks, &mut state.channels, 480);
 
         let channel = state.channels.get(&2).unwrap();
         assert_eq!(channel.automation_volume, None);
