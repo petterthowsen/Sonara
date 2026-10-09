@@ -177,6 +177,12 @@ func _create_tree(asset_type: Asset.TYPE) -> void:
 	tree.name = "Tree_%s" % Asset.TYPE.keys()[asset_type]
 	tree.hide_root = true
 	tree.visible = false  # Hidden by default
+	if asset_type == Asset.TYPE.Device:
+		# Column 1 carries the dim CLAP/VST3 tag of plugins installed in both formats.
+		tree.columns = 2
+		tree.set_column_expand(0, true)
+		tree.set_column_expand(1, false)
+		tree.set_column_custom_minimum_width(1, 48)
 	
 	# Configure Tree appearance and behavior
 	tree.allow_reselect = true
@@ -543,8 +549,8 @@ func _build_device_hierarchy_tree(root: TreeItem, devices: Array[Asset], tree: T
 		if not hierarchy[category].has(vendor):
 			hierarchy[category][vendor] = {}
 
-		# Store the asset under vendor -> device_name
-		hierarchy[category][vendor][device_name] = asset
+		# Keyed by device id: a plugin installed as CLAP and VST3 shares name and vendor.
+		hierarchy[category][vendor][asset.path] = asset
 
 	# Build the tree structure
 	for category in hierarchy.keys():
@@ -561,11 +567,18 @@ func _build_device_hierarchy_tree(root: TreeItem, devices: Array[Asset], tree: T
 			vendor_item.set_custom_color(0, UiColors.role(&"text_dim"))
 			vendor_item.set_collapsed(true)
 
-			for device_name in hierarchy[category][vendor].keys():
-				var asset = hierarchy[category][vendor][device_name]
+			for device_id in hierarchy[category][vendor].keys():
+				var asset = hierarchy[category][vendor][device_id]
+				var device = AssetService.get_device(device_id)
 				var device_item = tree.create_item(vendor_item)
-				device_item.set_text(0, device_name)
+				device_item.set_text(0, device.name)
 				device_item.set_metadata(0, asset)
+				if device.is_plugin():
+					device_item.set_tooltip_text(0, "%s plugin\n%s" % [device.format_tag(), device.plugin_path])
+					if AssetService.device_registry.has_other_format(device):
+						device_item.set_text(1, device.format_tag())
+						device_item.set_custom_color(1, UiColors.role(&"text_dim"))
+						device_item.set_tooltip_text(1, device_item.get_tooltip_text(0))
 
 
 func _expand_all_tree_items(item: TreeItem) -> void:
@@ -738,6 +751,7 @@ func _sort_tree_items(parent: TreeItem) -> void:
 		children_data.append({
 			"item": child,
 			"text": child.get_text(0),
+			"tag": child.get_text(1) if child.get_tree() and child.get_tree().columns > 1 else "",
 			"is_dir": child.get_metadata(0) == null  # Directories have no metadata
 		})
 		child = next_child
@@ -748,7 +762,9 @@ func _sort_tree_items(parent: TreeItem) -> void:
 		if a.is_dir != b.is_dir:
 			return a.is_dir
 		# Within same type, sort alphabetically (case-insensitive)
-		return a.text.to_lower() < b.text.to_lower()
+		if a.text.to_lower() != b.text.to_lower():
+			return a.text.to_lower() < b.text.to_lower()
+		return a.tag == "CLAP" and b.tag != "CLAP"  # same name: CLAP first
 	)
 	
 	# Reorder children

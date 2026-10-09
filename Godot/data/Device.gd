@@ -4,7 +4,7 @@
 
 class_name Device extends RefCounted
 
-enum DeviceType { BuiltIn, LV2, CLAP }
+enum DeviceType { BuiltIn, LV2, CLAP, VST3 }
 enum DeviceCategory { Instrument, Effect, Utility, NoteEffect }
 ## Panel = device custom UI (not the parameter list). Window = popup view (for devices without a native GUI); Companion = shown in the panel while the window or plugin GUI is open.
 ## Immediate UI (plugin-drawn in-device controls) is a planned right-pane view, separate from ParameterList.
@@ -193,7 +193,17 @@ func has_compact_view() -> bool:
 ## Returns true for CLAP plugins (which may have native GUIs)
 ## Returns false for built-in devices (which use DeviceLane UI)
 func has_gui() -> bool:
-	return device_type == DeviceType.CLAP
+	return is_plugin()
+
+
+## True for hosted third-party plugins (CLAP or VST3).
+func is_plugin() -> bool:
+	return device_type == DeviceType.CLAP or device_type == DeviceType.VST3
+
+
+## Plugin format tag as shown in the UI ("CLAP", "VST3"); empty for non-plugins.
+func format_tag() -> String:
+	return get_device_type_string() if is_plugin() else ""
 
 
 ## Extra stereo output buses beyond the main pair (plugin multi-out). Drum pads use slot count instead.
@@ -221,6 +231,8 @@ func get_device_type_string() -> String:
 			return "LV2"
 		DeviceType.CLAP:
 			return "CLAP"
+		DeviceType.VST3:
+			return "VST3"
 		_:
 			return "Unknown"
 

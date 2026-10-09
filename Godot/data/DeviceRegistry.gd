@@ -23,6 +23,9 @@ signal modulator_kinds_changed()
 
 var _devices: Dictionary[String, Device] = {}
 
+## Plugins per sibling key (category, vendor, name); computed lazily, cleared on change.
+var _sibling_counts: Dictionary = {}
+
 ## Modulator kinds the engine offers (spec 018), by id:
 ## `{id: String, name: String, bipolar: bool, params: Array[DeviceParameter]}`. Kinds are
 ## engine-global, not per device; a modulator builds its controls from `params`.
@@ -82,6 +85,7 @@ func scan_plugins() -> void:
 			removed.append(device)
 	for device in removed:
 		_devices.erase(device.device_id)
+		_sibling_counts.clear()
 	logger.info("Plugin scan: cleared %d cached plugins" % removed.size())
 	if not removed.is_empty():
 		devices_changed.emit([] as Array[Device], removed)
@@ -108,6 +112,7 @@ func _request_builtin_devices() -> void:
 
 func _register(device: Device) -> void:
 	_devices[device.device_id] = device
+	_sibling_counts.clear()
 	device_registered.emit(device)
 
 
@@ -135,7 +140,8 @@ static func _category_from_string(category_str: String) -> Device.DeviceCategory
 ## PLUGINS (ENGINE → GODOT)
 ## ============================================================================
 
-## One plugin found during a scan: [id, name, vendor, version, category, description, path, features].
+## One plugin found during a scan: [id, name, vendor, version, category, description, path, features,
+## format ("clap" | "vst3", absent = "clap")].
 func _on_plugin_info_received(args: Array) -> void:
 	if args.size() < 7:
 		logger.warn("Invalid /plugin/info message: %s" % str(args))
@@ -146,10 +152,12 @@ func _on_plugin_info_received(args: Array) -> void:
 	var category := _category_from_string(args[4])
 	var description: String = args[5]
 
-	var device := Device.new(plugin_id, plugin_name, category, Device.DeviceType.CLAP)
+	var format: String = str(args[8]).to_lower() if args.size() >= 9 else "clap"
+	var device_type := Device.DeviceType.VST3 if format == "vst3" else Device.DeviceType.CLAP
+	var device := Device.new(plugin_id, plugin_name, category, device_type)
 	device.author = args[2]
 	device.version = args[3]
-	device.description = description if description != "" else "CLAP Plugin"
+	device.description = description if description != "" else "%s Plugin" % device.get_device_type_string()
 	device.title = plugin_name
 	device.plugin_path = args[6]
 	if args.size() >= 8 and args[7] is String and not String(args[7]).is_empty():
@@ -165,6 +173,35 @@ func _on_plugin_info_received(args: Array) -> void:
 		device.audio_in_channels = 2
 	device.audio_out_channels = 2
 	_register(device)
+
+
+## True when a plugin of the same category, vendor and name is also installed in another format.
+func has_other_format(device: Device) -> bool:
+	if not device.is_plugin():
+		return false
+	if _sibling_counts.is_empty() and not _devices.is_empty():
+		_rebuild_siblings()
+	return int(_sibling_counts.get(_sibling_key(device), 0)) > 1
+
+
+static func _normalize(s: String) -> String:
+	var out := ""
+	for ch in s.to_lower():
+		if ch.to_upper() != ch or (ch >= "0" and ch <= "9"):
+			out += ch
+	return out
+
+
+static func _sibling_key(device: Device) -> String:
+	return "%d|%s|%s" % [device.category, _normalize(device.author), _normalize(device.name)]
+
+
+func _rebuild_siblings() -> void:
+	_sibling_counts.clear()
+	for device in _devices.values():
+		if device.is_plugin():
+			var key := _sibling_key(device)
+			_sibling_counts[key] = int(_sibling_counts.get(key, 0)) + 1
 
 
 func _on_plugin_scan_complete(args: Array) -> void:

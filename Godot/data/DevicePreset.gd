@@ -89,7 +89,7 @@ static func capture_now(inst: DeviceInstance, preset_name: String = "", preset_a
 		data.erase(key)
 	_strip_open_slots(data)
 	preset.device = data
-	if inst.device.device_type == Device.DeviceType.CLAP:
+	if inst.device.is_plugin():
 		preset.plugin = {"vendor": inst.device.author, "version": inst.device.version}
 	preset.returns = _capture_returns(inst)
 	var file_roots: Array = [data]
