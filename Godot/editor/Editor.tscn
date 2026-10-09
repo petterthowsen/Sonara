@@ -2,6 +2,7 @@
 
 [ext_resource type="Theme" uid="uid://c77m063o570pp" path="res://assets/Sonara_Theme.tres" id="1_10umj"]
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="2_ribbq"]
+[ext_resource type="PackedScene" path="res://editor/inspector/InspectorPanel.tscn" id="inspector_panel"]
 [ext_resource type="Texture2D" uid="uid://kev1as0j2s0c" path="res://assets/icons/play.svg" id="4_hi76l"]
 [ext_resource type="Script" uid="uid://cb24qblgyl84v" path="res://editor/MainMenu.gd" id="4_wmsa6"]
 [ext_resource type="Texture2D" uid="uid://r2a82ngldduk" path="res://assets/icons/circle-stop.svg" id="5_6l011"]
@@ -279,65 +280,8 @@ grow_vertical = 2
 size_flags_horizontal = 3
 theme_type_variation = &"SectionPanel"
 
-[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector" unique_id=1709571549]
+[node name="InspectorPanel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector" unique_id=1709571549 instance=ExtResource("inspector_panel")]
 layout_mode = 2
-
-[node name="Label" type="Label" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=1803303598]
-layout_mode = 2
-text = "Inspector"
-
-[node name="LineEdit" type="LineEdit" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=60769332]
-layout_mode = 2
-placeholder_text = "Search..."
-
-[node name="Items" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=1722195554]
-layout_mode = 2
-
-[node name="Button" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=523419353]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button2" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=1171722823]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button3" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=109519789]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button4" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=151093574]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button5" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=157300881]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button6" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=820704345]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="PanelContainer2" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=150366578]
-layout_mode = 2
-theme_type_variation = &"Well"
-
-[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/PanelContainer2" unique_id=190795155]
-layout_mode = 2
-text = "Dark Panel"
-fit_content = true
-autowrap_mode = 0
 
 [node name="MiddleCenter" type="VSplitContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit" unique_id=1061258867]
 layout_mode = 2

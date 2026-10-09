@@ -92,6 +92,8 @@ signal view_changed(view: int)  # Editor.View
 # primary panels: arranger, mixer and clip editor
 @onready var arranger: Arranger = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/Arranger
 @onready var mixer: Mixer = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/Mixer
+# Found by name: DockHost reparents the Inspector dock panel, which breaks fixed paths.
+@onready var inspector_panel: InspectorPanel = find_child("InspectorPanel", true, false)
 @onready var clip_editor: ClipEditor = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/ClipEditor
 
 # secondary panels
@@ -247,6 +249,7 @@ func _connect_ui_signals():
 	
 	# Arranger selection changes
 	arranger.clips_selected.connect(_on_arranger_clips_selected)
+	project_closed.connect(func() -> void: inspector_panel.set_selection([]))
 
 	# Clip editor (MIDI editor) track-mode track list selection
 	clip_editor.track_mode_track_selected.connect(_on_clip_editor_track_mode_track_selected)
@@ -1131,6 +1134,7 @@ func _on_arranger_clips_selected(clips: Array[ClipInstance], multi_track: bool) 
 
 	# Emit new multi-clip signal
 	clips_selected.emit(clips, multi_track)
+	inspector_panel.set_selection(clips)
 
 	if not clips.is_empty() and _clip_selection_selects_tracks():
 		var tracks: Array[Track] = []

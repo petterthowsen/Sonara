@@ -1,0 +1,23 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://editor/inspector/InspectorPanel.gd" id="1_panel"]
+
+[node name="InspectorPanel" type="ScrollContainer"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+script = ExtResource("1_panel")
+
+[node name="Content" type="VBoxContainer" parent="."]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="EmptyLabel" type="Label" parent="Content"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Nothing selected"
+horizontal_alignment = 1
+
+[node name="Sections" type="VBoxContainer" parent="Content"]
+unique_name_in_owner = true
+layout_mode = 2

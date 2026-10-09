@@ -10,7 +10,7 @@ something that builds, passes tests and can be checked by hand. Commit at the en
 ## Checklist
 
 - [x?] Phase 0: Fix audio clip playback speed and per-instance gain mixing
-- [ ] Phase 1: Inspector framework and `ClipInspector`
+- [x?] Phase 1: Inspector framework and `ClipInspector`
 - [ ] Phase 2: Clip gain
 - [ ] Phase 3: Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
 - [ ] Phase 4: Stretch mode (pitch-preserving, Signalsmith Stretch)
@@ -160,22 +160,22 @@ another player and that the waveform's end lines up with the clip's end.
 
 Goal: select clips and see and edit their basic properties. Godot only.
 
-- [ ] Replace the placeholder children of the Inspector node in `Editor.tscn` with
+- [x?] Replace the placeholder children of the Inspector node in `Editor.tscn` with
   `Godot/editor/inspector/InspectorPanel.tscn`. It's a `ScrollContainer` → `VBoxContainer`, plus
   an empty state ("Nothing selected").
-- [ ] `InspectorPanel.gd`:
+- [x?] `InspectorPanel.gd`:
   - Listen to the clip selection manager (`changed`).
   - Keep a list of section scenes. For each selection, show the sections whose
     `static func handles(objects: Array) -> bool` is true, then call `bind(objects)` /
     `unbind()`.
   - Reuse section instances rather than rebuilding them on every selection change.
-- [ ] `InspectorSection.gd` base class:
+- [x?] `InspectorSection.gd` base class:
   - A collapsible header (reuse `CollapsingContainer`).
   - A two-column `GridContainer` of label and editor rows.
   - Helpers that show a "mixed" value and suppress feedback loops.
   - The section listens to model signals (`instance_modified`, `clip_modified`,
     `position_changed` and so on) and refreshes. It never polls.
-- [ ] `ClipInspector`:
+- [x?] `ClipInspector`:
   - Name (`Clip.set_name`) and colour (clip colour plus an override reset).
   - Position, length and offset, as bars.beats.ticks fields that accept typed input. Use the
     existing BBT formatting and parsing in `TimeSignatureMap` / `GridHelper`. Don't add a new
@@ -183,15 +183,25 @@ Goal: select clips and see and edit their basic properties. Godot only.
   - Loop on/off with loop start and loop length.
   - Mute.
   - Read-only: clip type and "shared by N instances", with a "Make Unique" button.
-- [ ] Edits go through `ClipInstanceTransformCommand` (position, length, offset) and
+- [x?] Edits go through `ClipInstanceTransformCommand` (position, length, offset) and
   `PropertyCommand` (everything else).
-- [ ] Add `set_color` to `Clip.gd` if needed, so the timeline and inspector update from the
+- [x?] Add `set_color` to `Clip.gd` if needed, so the timeline and inspector update from the
   signal.
-- [ ] Tests (`Godot/tests/test_inspector.gd`):
+- [x?] Tests (`Godot/tests/test_inspector.gd`):
   - Sections appear and disappear with the selection.
   - Mixed values show "—".
   - Editing the name or position updates the model and undoes in one step.
-- [ ] Update `godot-architecture.md` with a short "Inspector" section.
+- [x?] Update `godot-architecture.md` with a short "Inspector" section.
+
+Phase 1 notes (deviations from the list above):
+- `CollapsingContainer` hides children that don't fit; it is not a collapsible section. The
+  section header is a flat toggle button with a chevron instead.
+- Sections are scripts listed in `InspectorPanel.section_scripts()` and build their rows in code,
+  not scenes. The panel gets the selection from `Editor.clips_selected` rather than listening to
+  the selection manager itself.
+- Nothing in the timeline draws `Clip.color` or `ClipInstance.color_override` yet (clips use the
+  track colour), so the colour row edits data that has no visible effect until that is wired.
+- Typed positions are not checked for overlap with neighbouring clips.
 
 ## Phase 2 — Clip gain
 

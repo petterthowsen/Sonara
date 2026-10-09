@@ -175,6 +175,14 @@ func set_muted(value: bool) -> void:
 	instance_modified.emit()
 
 
+## Override the clip colour for this instance; `Color.TRANSPARENT` clears the override.
+func set_color_override(new_color: Color) -> void:
+	if color_override == new_color:
+		return
+	color_override = new_color
+	instance_modified.emit()
+
+
 ## End of the source clip's content: its stored length, or the last note's end when that is later.
 func content_end_ticks() -> int:
 	if clip == null:

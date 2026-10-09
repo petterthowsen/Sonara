@@ -452,6 +452,15 @@ func set_name(new_name: String) -> void:
 	clip_modified.emit()
 
 
+## Set the clip colour and notify listeners (inspector, timeline).
+func set_color(new_color: Color) -> void:
+	if color == new_color:
+		return
+	color = new_color
+	modified_date = Time.get_unix_time_from_system()
+	clip_modified.emit()
+
+
 ## Strip trailing ` 2` / `(Unique)` so a copy can take the next free number.
 static func uniqueness_base(clip_name: String) -> String:
 	var s := clip_name.strip_edges()
