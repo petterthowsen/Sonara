@@ -157,7 +157,7 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
-            let afs = AudioFileService::new(1, 48_000).expect("audio file service");
+            let afs = AudioFileService::idle();
             let (tx, rx) = crossbeam::channel::unbounded();
             let file = || Arc::new(Mutex::new(tempfile::tempfile().expect("temp file")));
             Self {
@@ -169,7 +169,7 @@ mod tests {
                     warn: file(),
                     combined: file(),
                 },
-                windows: WindowManager::new(),
+                windows: WindowManager::detached(),
             }
         }
 

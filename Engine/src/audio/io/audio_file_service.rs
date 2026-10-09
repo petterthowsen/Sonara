@@ -81,6 +81,19 @@ pub struct AudioFileService {
 impl AudioFileService {
     /// Create a new service with specified number of workers
     pub fn new(num_workers: usize, project_sample_rate: u32) -> Result<Self> {
+        Self::start(num_workers, project_sample_rate, true)
+    }
+
+    /// A service for tests that only need an `AudioFileService` value to hand around: no worker
+    /// threads, so no job ever runs, and it leaves the user's waveform cache alone (`new` removes
+    /// stale temp files from it).
+    #[cfg(test)]
+    pub(crate) fn idle() -> Self {
+        Self::start(0, 48_000, false).expect("idle audio file service")
+    }
+
+    /// Spawn the workers. `clean_cache` removes stale temp files from the waveform cache first.
+    fn start(num_workers: usize, project_sample_rate: u32, clean_cache: bool) -> Result<Self> {
         let project_sample_rate = Arc::new(AtomicU32::new(project_sample_rate));
         let (job_tx, job_rx) = channel::unbounded();
         let (event_tx, event_rx) = channel::unbounded();
@@ -89,8 +102,10 @@ impl AudioFileService {
         // by the key Godot already has.
         let known_files: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
 
-        if let Ok(dir) = get_cache_dir() {
-            cleanup_stale_temp_files(&dir);
+        if clean_cache {
+            if let Ok(dir) = get_cache_dir() {
+                cleanup_stale_temp_files(&dir);
+            }
         }
 
         // Start worker threads

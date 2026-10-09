@@ -141,6 +141,20 @@ impl WindowManager {
         }
     }
 
+    /// A manager with no winit thread and no display: every command fails to send, so window
+    /// requests return `None`/`false`. Lets tests build a `RouteCtx` without opening anything.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        let (command_tx, _command_rx) = channel();
+        let (_close_event_tx, close_event_rx) = std::sync::mpsc::channel();
+        Self {
+            command_tx,
+            wake_proxy: None,
+            close_event_rx,
+            _thread_handle: None,
+        }
+    }
+
     /// Queue a command for the winit thread and wake its event loop.
     fn send(&self, cmd: WindowCommand) -> bool {
         if self.command_tx.send(cmd).is_err() {
