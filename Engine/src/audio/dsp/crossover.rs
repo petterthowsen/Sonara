@@ -81,11 +81,6 @@ impl MultibandSplitter {
         s
     }
 
-    /// Number of crossovers (1..=5); the splitter makes `count + 1` bands.
-    pub fn crossover_count(&self) -> usize {
-        self.count
-    }
-
     /// Change the number of crossovers. The caller then sets new targets, and normally calls
     /// [`snap`](Self::snap) and [`reset`](Self::reset) (the fade-out, switch, fade-in of spec D13).
     pub fn set_topology(&mut self, count: usize) {

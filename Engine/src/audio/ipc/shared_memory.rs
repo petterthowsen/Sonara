@@ -13,7 +13,7 @@
 use super::platform_shm::PlatformSharedMemory;
 use super::protocol::{BlockControl, BlockEvent, BlockTransport, Doorbell, SharedMemoryLayout};
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 /// Bytes reserved for a host's doorbell mapping.
 const HOST_SHARED_MEMORY_SIZE: usize = 4096;
@@ -168,15 +168,11 @@ impl Default for HostSharedMemory {
     }
 }
 
-/// Read a `BlockEvent` count from a `Relaxed` counter, bounded by the array length.
-pub fn clamped_count(count: &std::sync::atomic::AtomicU32, len: usize) -> usize {
-    (count.load(Ordering::Relaxed) as usize).min(len)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audio::ipc::protocol::{EVENT_NOTE_ON, EVENT_PARAM};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn planes_and_events_are_independent() {

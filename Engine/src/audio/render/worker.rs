@@ -13,13 +13,15 @@ use super::wav::WavOutput;
 use super::{AnalysisTaps, RenderJob, RenderTail};
 use crate::audio::analysis::{Analyzer, AnalyzerConfig};
 use crate::audio::block_clock::{BlockClock, OFFLINE_BLOCK_TIMEOUT};
-use crate::audio::commands::{EngineState, EngineStatus};
+use crate::audio::clip::{ClipLoadState, ClipType};
+use crate::audio::commands::EngineStatus;
 use crate::audio::devices::clap_host::subprocess_adapter::PluginIpcHandle;
 use crate::audio::devices::clap_host::SubprocessClapAdapter;
 use crate::audio::devices::container;
 use crate::audio::mixing::mix_and_output;
 use crate::audio::processing::{frames_before_tick, process_audio};
-use crate::audio::types::{ChannelId, ClipLoadState, ClipType, Tick};
+use crate::audio::state::EngineState;
+use crate::audio::types::{ChannelId, Tick};
 
 /// Master channel ID.
 const MASTER_CHANNEL_ID: ChannelId = 1;
@@ -705,11 +707,13 @@ mod tests {
     use super::super::{AnalysisSpec, PreRoll, RenderJob};
     use super::*;
     use crate::audio::analysis::{AnalysisResult, Resolution};
+    use crate::audio::channel::Channel;
+    use crate::audio::clip::{Clip, ClipInstance, ClipNote};
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue, PolySynthDevice,
     };
     use crate::audio::stream::MAX_BLOCK_FRAMES;
-    use crate::audio::types::{Channel, Clip, ClipInstance, ClipNote, Track};
+    use crate::audio::track::Track;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
@@ -1143,13 +1147,14 @@ mod tests {
 
     #[test]
     fn transport_commands_are_ignored_while_rendering() {
-        use crate::audio::commands::{process_command, AudioCommand};
-        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
+        let mut effects = CommandEffects::default();
         let mut state = EngineState::default();
         state.rendering.store(true, Ordering::Release);
-        assert!(process_command(&mut state, AudioCommand::Play, 64, &status_tx).is_none());
+        process_command(&mut state, AudioCommand::Play, 64, &mut effects);
+        assert!(effects.statuses.is_empty());
         assert!(!state.get_is_playing());
-        process_command(&mut state, AudioCommand::Seek(960), 64, &status_tx);
+        process_command(&mut state, AudioCommand::Seek(960), 64, &mut effects);
         assert_eq!(state.get_current_tick(), 0);
     }
 }

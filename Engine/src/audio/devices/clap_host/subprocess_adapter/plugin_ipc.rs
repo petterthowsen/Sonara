@@ -102,13 +102,6 @@ impl PluginIpcHandle {
         gui::close_gui(&self.connection()?, &self.device_name)
     }
 
-    /// Whether the plugin has a GUI. False if the instance isn't loaded.
-    pub fn has_gui(&self) -> bool {
-        self.connection()
-            .map(|connection| gui::has_gui(&connection))
-            .unwrap_or(false)
-    }
-
     /// Rate `activate` activates at.
     #[allow(dead_code)] // read by tests
     pub fn sample_rate(&self) -> f32 {

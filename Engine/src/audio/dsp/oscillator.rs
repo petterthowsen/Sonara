@@ -1,9 +1,9 @@
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 const SINE_TABLE_SIZE: usize = 65536; // 64k samples for high quality
 
 /// Sine lookup table for fast sine generation
-static SINE_TABLE: Lazy<Vec<f32>> = Lazy::new(|| {
+static SINE_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
     let mut table = Vec::with_capacity(SINE_TABLE_SIZE);
     for i in 0..SINE_TABLE_SIZE {
         let phase = (i as f32 / SINE_TABLE_SIZE as f32) * 2.0 * std::f32::consts::PI;
@@ -16,27 +16,6 @@ static SINE_TABLE: Lazy<Vec<f32>> = Lazy::new(|| {
 pub fn fast_sin(phase: f64) -> f32 {
     let idx = ((phase.fract() * SINE_TABLE_SIZE as f64) as usize) % SINE_TABLE_SIZE;
     SINE_TABLE[idx]
-}
-
-/// Waveform types supported by the oscillator
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Waveform {
-    Sine = 0,
-    Square = 1,
-    Saw = 2,
-    Triangle = 3,
-}
-
-impl From<u8> for Waveform {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Waveform::Sine,
-            1 => Waveform::Square,
-            2 => Waveform::Saw,
-            3 => Waveform::Triangle,
-            _ => Waveform::Sine,
-        }
-    }
 }
 
 /// Four-point polynomial band-limited step residual: the cubic B-spline smoothed step minus the
@@ -111,7 +90,7 @@ impl Oscillator {
     pub fn new() -> Self {
         // Build the shared sine table here (devices are created off the audio thread) rather
         // than on first use, which would allocate and compute 64k sines inside the callback.
-        Lazy::force(&SINE_TABLE);
+        LazyLock::force(&SINE_TABLE);
         Self {
             phase: 0.0,
             phase_increment: 0.0,

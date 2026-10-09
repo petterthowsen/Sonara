@@ -319,15 +319,6 @@ impl<const N: usize> ParamValues<N> {
         }
     }
 
-    pub fn table(&self) -> &'static ParamTable {
-        self.table
-    }
-
-    /// Base (unmodulated) normalized value at `slot`.
-    pub fn norm_at(&self, slot: usize) -> f32 {
-        self.norm[slot]
-    }
-
     /// Base normalized value of `id`, ignoring any modulation offset.
     pub fn get(&self, id: ParamId) -> Option<f32> {
         self.table.slot(id).map(|s| self.norm[s])

@@ -18,7 +18,8 @@ use std::thread::{self, JoinHandle};
 use tracing::{error, info};
 
 use super::analysis::Resolution;
-use super::commands::{EngineState, EngineStatus};
+use super::commands::EngineStatus;
+use super::state::EngineState;
 use super::stream::MAX_BLOCK_FRAMES;
 use super::types::{ChannelId, Tick};
 

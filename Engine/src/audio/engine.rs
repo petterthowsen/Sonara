@@ -5,12 +5,12 @@ use std::thread;
 use tracing::info;
 
 use super::command_worker::CommandWorker;
-pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStatus};
+pub use super::commands::{AudioCommand, EngineStatus};
 use super::pipewire;
+pub use super::state::EngineState;
 use super::stream::{
     CallbackContext, CallbackCounters, StreamControl, StreamRequest, MAX_BLOCK_FRAMES,
 };
-use super::types::*;
 
 /// Capacity of the engine → OSC status channel (~1.6 MB preallocated at 200 bytes per status):
 /// several seconds of meters for 100 channels at 20 Hz. Bounded so sends never allocate. The
@@ -21,7 +21,6 @@ pub const STATUS_CHANNEL_CAPACITY: usize = 8_192;
 pub struct AudioEngine {
     _command_thread: thread::JoinHandle<()>,
     command_tx: Sender<AudioCommand>,
-    status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
     status_rx: Receiver<EngineStatus>,
 }
@@ -96,24 +95,9 @@ impl AudioEngine {
         Ok(Self {
             _command_thread: command_thread,
             command_tx,
-            status_tx,
             state,
             status_rx,
         })
-    }
-
-    /// Create and initialize a new audio engine (convenience method)
-    pub fn new() -> Result<Self> {
-        let (status_tx, status_rx) = crossbeam::channel::bounded(STATUS_CHANNEL_CAPACITY);
-        Self::with_status_channel(status_tx, status_rx)
-    }
-
-    /// Send a command to the audio engine
-    pub fn send_command(&self, cmd: AudioCommand) -> Result<()> {
-        self.command_tx
-            .send(cmd)
-            .context("Failed to send command to audio engine")?;
-        Ok(())
     }
 
     /// Hardware callback rate the mixer and devices are running at.
@@ -126,23 +110,8 @@ impl AudioEngine {
         self.command_tx.clone()
     }
 
-    /// Get a handle to send status updates (for log forwarder)
-    pub fn status_sender(&self) -> Sender<EngineStatus> {
-        self.status_tx.clone()
-    }
-
     /// Get status receiver for external use
     pub fn status_receiver(&self) -> Receiver<EngineStatus> {
         self.status_rx.clone()
-    }
-
-    /// Check if audio is currently playing
-    pub fn is_playing(&self) -> bool {
-        self.state.lock().unwrap().get_is_playing()
-    }
-
-    /// Get current playhead position
-    pub fn current_tick(&self) -> Tick {
-        self.state.lock().unwrap().get_current_tick()
     }
 }

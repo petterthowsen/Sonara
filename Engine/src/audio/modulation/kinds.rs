@@ -189,10 +189,6 @@ impl ModParams {
         Self { kind, norm }
     }
 
-    pub fn kind(&self) -> ModulatorKind {
-        self.kind
-    }
-
     pub fn table(&self) -> &'static ParamTable {
         self.kind.table()
     }
@@ -200,11 +196,6 @@ impl ModParams {
     /// Normalized value of `id`, as last set.
     pub fn get(&self, id: ParamId) -> Option<f32> {
         self.table().slot(id).map(|s| self.norm[s])
-    }
-
-    /// Normalized value at `slot`.
-    pub fn norm_at(&self, slot: usize) -> f32 {
-        self.norm[slot]
     }
 
     /// Real value of `id` (a choice index for enums, 0 or 1 for bools).

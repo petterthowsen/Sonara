@@ -100,23 +100,6 @@ impl AdsrEnvelope {
         self.recalculate_rates();
     }
 
-    /// Set decay time in seconds.
-    pub fn set_decay(&mut self, seconds: f32) {
-        self.decay = seconds.max(0.0005);
-        self.recalculate_rates();
-    }
-
-    /// Set sustain level (0–1).
-    pub fn set_sustain(&mut self, level: f32) {
-        self.sustain = level.clamp(0.0, 1.0);
-    }
-
-    /// Set release time in seconds; takes effect immediately even mid-release.
-    pub fn set_release(&mut self, seconds: f32) {
-        self.release = seconds.max(0.0005);
-        self.recalculate_rates();
-    }
-
     /// Trigger the attack phase (note on), continuing from the current level.
     pub fn gate_on(&mut self) {
         self.retrigger_from_current();
@@ -183,13 +166,6 @@ impl AdsrEnvelope {
             }
         }
         self.current_value
-    }
-
-    /// Process a block of envelope samples
-    pub fn process_block(&mut self, output: &mut [f32], frames: usize) {
-        for i in 0..frames {
-            output[i] = self.process_sample();
-        }
     }
 
     /// Check if the envelope is active (not idle)

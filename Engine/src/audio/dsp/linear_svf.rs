@@ -113,10 +113,6 @@ impl LinearSvf {
         Self::default()
     }
 
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
     #[inline]
     pub fn process(&mut self, v0: f32, c: &SvfCoefs) -> f32 {
         let v3 = v0 - self.ic2eq;

@@ -302,9 +302,9 @@ impl StepClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::project::ProjectSettings;
     use crate::audio::tempo_map::TempoMap;
     use crate::audio::time_signature_map::TimeSignatureMap;
-    use crate::audio::types::ProjectSettings;
 
     const SR: f32 = 48_000.0;
     const BLOCK: u64 = 256;

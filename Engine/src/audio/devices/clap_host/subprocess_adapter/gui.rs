@@ -99,11 +99,3 @@ pub fn close_gui(connection: &InstanceConnection, device_name: &str) -> Result<(
         }
     }
 }
-
-/// Check if plugin supports GUI
-pub fn has_gui(connection: &InstanceConnection) -> bool {
-    matches!(
-        connection.request(PluginCommand::HasGui, REQUEST_TIMEOUT),
-        Ok(PluginResponse::HasGuiResponse { supported: true })
-    )
-}

@@ -1,7 +1,7 @@
 //! Subprocess-based CLAP Device Adapter
 //!
 //! This adapter runs CLAP plugins in separate processes and communicates via IPC.
-//! It replaces the in-process ClapDeviceAdapter for better crash isolation and GUI support.
+//! Running plugins out of process gives crash isolation and GUI support (ADR 0001).
 
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::block_clock::BlockClock;
@@ -996,11 +996,6 @@ impl SubprocessClapAdapter {
         self.gui_open = false;
 
         result
-    }
-
-    /// Check if GUI is supported
-    pub fn has_gui(&mut self) -> bool {
-        self.ipc_handle().has_gui()
     }
 
     /// Check if GUI is open

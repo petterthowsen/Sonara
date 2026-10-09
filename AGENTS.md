@@ -35,9 +35,9 @@ Godot/tests/run_all.sh -j1                       # serial (or -jN / TEST_JOBS=N)
 ## Architecture
 
 ### Engine threads (`Engine/src/`)
-- **Main thread** (`main.rs`, `osc/server.rs`): runs the OSC server. It turns OSC messages into `AudioCommand`s (`audio/commands.rs`) and forwards `EngineStatus` back to Godot.
-- **Command thread** (`audio/command_worker.rs`): applies commands to the `EngineState` it shares with the audio callback. It holds the state lock only briefly. Slow work (plugin scans, creating and dropping devices, plugin IPC) runs with the lock released.
-- **Audio callback** (`audio/engine.rs`, `audio/processing.rs`, `audio/mixing.rs`): real-time. It takes the state lock with a bounded `try_lock` and outputs silence if the lock is still busy. It sends statuses and meters at about 20 Hz.
+- **Main thread** (`main.rs`, `osc/server.rs`, `osc/routes/`): runs the OSC server. `osc/routes/` turns OSC messages into `AudioCommand`s (defined in `audio/commands/`), and `osc/status.rs` with `osc/encode.rs` forwards `EngineStatus` back to Godot.
+- **Command thread** (`audio/command_worker/`): applies commands to the `EngineState` (`audio/state.rs`) it shares with the audio callback. It holds the state lock only briefly. Slow work (plugin scans, creating and dropping devices, plugin IPC) runs with the lock released. Fast commands go through `audio/commands/` `process_command` under the lock; it only collects statuses and removed objects in a `CommandEffects`, which `CommandWorker::apply_locked` sends and drops after the lock is released.
+- **Audio callback** (`audio/engine.rs`, `audio/processing/`, `audio/mixing/`): real-time. It takes the state lock with a bounded `try_lock` and outputs silence if the lock is still busy. It sends statuses and meters at about 20 Hz.
 - **WindowManager thread** (`window_manager.rs`, winit): owns the host windows for plugin GUIs.
 - **AudioFileService** (`audio/io/`): worker pool for decoding (symphonia), resampling (rubato) and waveform caches. The audio thread only ever receives finished PCM. Stale `req_id` completions must be ignored.
 - Commands (main → command thread) and statuses (back to main) travel over crossbeam channels.
@@ -62,9 +62,9 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - Channel types are `INSTRUMENT`, `AUDIO` and `BUS` (`Channel.ChannelType` in Godot). The master channel is identified by ID 1, not by a type.
 - Channel IDs: 0 = none, 1 = master, 2–999 = user channels, 1000 and up = hardware outputs.
 - Tracks (sequencing) are separate from channels (mixing) and point to one through `default_channel_id`.
-- Each channel has an ordered chain of `Box<dyn AudioDevice>` (`audio/devices/mod.rs`). MIDI goes only to the first device.
-- Built-in devices: `polysynth`, `sfizz_device` (SFZ sampler), `spectrum_analyzer`, plus the spec 012 effects `delay`, `eq`, `compressor`, `filter`, `chorus`, `phaser` and `reverb`, and the spec 017 `utility` (all registered in `factory.rs` `EFFECT_IDS` / `create_effect`, checked by `effect_conformance.rs`). Godot discovers them at runtime through `/builtin/request` → `/builtin/info` → `/builtin/complete`.
-- Drum instruments (spec 013: `kick`, `snare`, `hat`, `clap`) come from `DRUM_IDS` / `create_drum` and are checked by `drum_conformance.rs`. They share `audio/devices/drums/` — a generic `DrumHost` over a mono `DrumVoice` impl, with sample-accurate triggers, a two-slot 3 ms retrigger crossfade, the shared global parameters (IDs 90–92) and a 100 ms instrument sleep — plus the drum blocks in `audio/dsp/` (one-shot/burst envelopes, `sweep_osc`, `noise`, `saturate`). Drum Machine pads carry choke targets (sibling pad ids in Godot, a `u128` note mask in the engine): a note-on chokes its target pads through `AudioDevice::choke` (ADR 0015, superseding 0012), which `DrumHost` implements as a 3 ms fade.
+- Each channel has an ordered chain of `Box<dyn AudioDevice>` (`audio/devices/device.rs`). MIDI goes only to the first device.
+- Built-in devices live in `audio/devices/` grouped into `effects/`, `instruments/` and `containers/`: `polysynth`, `sampler`, `sfizz_device` (SFZ sampler), `spectrum_analyzer`, plus the spec 012 effects `delay`, `eq`, `compressor`, `filter`, `chorus`, `phaser` and `reverb`, and the spec 017 `utility` (all registered in `factory.rs` `EFFECT_IDS` / `create_effect`, checked by `effect_conformance.rs`). Godot discovers them at runtime through `/builtin/request` → `/builtin/info` → `/builtin/complete`.
+- Drum instruments (spec 013: `kick`, `snare`, `hat`, `clap`) come from `DRUM_IDS` / `create_drum` and are checked by `drum_conformance.rs`. They share `audio/devices/instruments/drums/` — a generic `DrumHost` over a mono `DrumVoice` impl, with sample-accurate triggers, a two-slot 3 ms retrigger crossfade, the shared global parameters (IDs 90–92) and a 100 ms instrument sleep — plus the drum blocks in `audio/dsp/` (one-shot/burst envelopes, `sweep_osc`, `noise`, `saturate`). Drum Machine pads carry choke targets (sibling pad ids in Godot, a `u128` note mask in the engine): a note-on chokes its target pads through `AudioDevice::choke` (ADR 0015, superseding 0012), which `DrumHost` implements as a 3 ms fade.
 - Devices go to sleep after about 3 s of silence and no MIDI (`DeviceSleepState`) so their processing is skipped.
 - Parameters cross the OSC and IPC boundary as normalized 0.0–1.0 values.
 
@@ -81,7 +81,7 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - `components/GridHelper.gd` handles tempo, zoom, scroll and snapping, and converts between ticks and pixels. Views share one instance.
 - Device visuals extend `devices/DeviceView.gd`. Subscribe to device data streams in `_on_view_shown` and unsubscribe in `_on_view_hidden`.
 
-The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you add an OSC message, update the handler in `osc/server.rs`, the command in `audio/commands.rs`, and the doc.
+The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you add an OSC message, update the route in `osc/routes/` (and `osc/encode.rs` for a status), the command in `audio/commands/`, and the doc.
 
 ## Subsystem references
 

@@ -18,11 +18,12 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use super::block_clock::BlockClock;
-use super::commands::{EngineState, EngineStatus};
+use super::commands::EngineStatus;
 use super::devices::clap_host::subprocess_adapter::PLUGIN_UNDERRUNS;
 use super::mixing::mix_and_output;
 use super::processing::process_audio;
 use super::rt_debug;
+use super::state::EngineState;
 
 /// Largest block the engine renders. Channel, device and plugin buffers are preallocated at this
 /// size, so a buffer-size change never reallocates them.
@@ -116,11 +117,6 @@ impl StreamInfo {
             return 0.0;
         }
         self.period_frames as f32 * 1000.0 / self.sample_rate as f32
-    }
-
-    /// Frames in the whole ALSA buffer.
-    pub fn buffer_frames(&self) -> u32 {
-        self.period_frames * ALSA_PERIODS
     }
 }
 
@@ -863,8 +859,8 @@ mod tests {
 
     #[test]
     fn live_output_is_silent_while_rendering() {
+        use crate::audio::channel::Channel;
         use crate::audio::devices::{AudioDevice, PolySynthDevice};
-        use crate::audio::types::Channel;
 
         let mut state = EngineState::default();
         state.ensure_master_channel(MAX_BLOCK_FRAMES);
@@ -887,7 +883,7 @@ mod tests {
         let state = Mutex::new(state);
         let (status_tx, _status_rx) = crossbeam::channel::unbounded();
 
-        let mut run = |data: &mut [f32]| {
+        let run = |data: &mut [f32]| {
             run_live_block(
                 &state,
                 &rendering,

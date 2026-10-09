@@ -55,35 +55,6 @@ impl MidiEvent {
             frame_offset: 0,
         }
     }
-
-    /// Create a note-off event
-    pub fn note_off(midi_channel: u8, note: u8, received_at: Instant) -> Self {
-        Self {
-            message_type: MidiMessageType::NoteOff,
-            midi_channel,
-            note,
-            velocity: 0,
-            received_at,
-            frame_offset: 0,
-        }
-    }
-
-    /// Create a control change event
-    pub fn control_change(
-        midi_channel: u8,
-        controller: u8,
-        value: u8,
-        received_at: Instant,
-    ) -> Self {
-        Self {
-            message_type: MidiMessageType::ControlChange,
-            midi_channel,
-            note: controller, // CC number stored in note field
-            velocity: value,  // CC value stored in velocity field
-            received_at,
-            frame_offset: 0,
-        }
-    }
 }
 
 /// Release velocity used when a note-off has none (a note-on with velocity 0, the virtual

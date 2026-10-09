@@ -120,11 +120,6 @@ pub struct Ladder {
 }
 
 impl Ladder {
-    pub fn reset(&mut self) {
-        self.s = [0.0; 4];
-        self.bass = 0.0;
-    }
-
     /// Filter one sample.
     #[inline]
     pub fn process(&mut self, x: f32, mode: LadderMode, c: &LadderCoefs) -> f32 {

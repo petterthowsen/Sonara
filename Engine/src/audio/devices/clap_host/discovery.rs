@@ -16,7 +16,6 @@ pub struct PluginDescriptor {
     pub category: DeviceCategory,
     pub path: PathBuf, // Path to .clap bundle
     pub description: Option<String>,
-    pub url: Option<String>,
     /// CLAP feature tags, e.g. ["audio-effect", "reverb"]
     pub features: Vec<String>,
 }
@@ -268,11 +267,6 @@ impl PluginScanner {
             .and_then(|d| d.to_str().ok())
             .map(|s| s.to_string());
 
-        let url = descriptor
-            .url()
-            .and_then(|u| u.to_str().ok())
-            .map(|s| s.to_string());
-
         // Infer category from plugin features
         let category = Self::infer_category(&descriptor);
 
@@ -289,7 +283,6 @@ impl PluginScanner {
             category,
             path: bundle_path.to_path_buf(),
             description,
-            url,
             features,
         })
     }
@@ -319,11 +312,6 @@ impl PluginScanner {
         DeviceCategory::Effect
     }
 
-    /// Get a plugin descriptor by ID
-    pub fn get_plugin(&self, id: &str) -> Option<&PluginDescriptor> {
-        self.discovered_plugins.get(id)
-    }
-
     /// Get all discovered plugins
     /// Vendor of plugin `id` in bundle `path`. Reads that one bundle when the plugin wasn't
     /// scanned in this session (Godot caches its plugin list, so a project can load before any
@@ -348,16 +336,6 @@ impl PluginScanner {
 
     pub fn all_plugins(&self) -> impl Iterator<Item = &PluginDescriptor> {
         self.discovered_plugins.values()
-    }
-
-    /// Get number of discovered plugins
-    pub fn plugin_count(&self) -> usize {
-        self.discovered_plugins.len()
-    }
-
-    /// Clear all discovered plugins
-    pub fn clear(&mut self) {
-        self.discovered_plugins.clear();
     }
 }
 

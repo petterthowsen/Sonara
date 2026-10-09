@@ -179,10 +179,6 @@ impl PeakBuilder {
         }
     }
 
-    pub fn frames(&self) -> u64 {
-        self.frames
-    }
-
     /// Feed one planar chunk. Missing channels are treated as silence.
     pub fn push(&mut self, chunk: &[Vec<f32>]) {
         let len = chunk.first().map(|c| c.len()).unwrap_or(0);

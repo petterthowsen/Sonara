@@ -18,7 +18,7 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use tracing::{error, info, warn};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoopBuilder, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::Window;
 
@@ -138,6 +138,20 @@ impl WindowManager {
             wake_proxy,
             close_event_rx,
             _thread_handle: Some(thread_handle),
+        }
+    }
+
+    /// A manager with no winit thread and no display: every command fails to send, so window
+    /// requests return `None`/`false`. Lets tests build a `RouteCtx` without opening anything.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        let (command_tx, _command_rx) = channel();
+        let (_close_event_tx, close_event_rx) = std::sync::mpsc::channel();
+        Self {
+            command_tx,
+            wake_proxy: None,
+            close_event_rx,
+            _thread_handle: None,
         }
     }
 
@@ -307,12 +321,6 @@ impl WindowManager {
     /// No-op for compatibility (winit thread handles events automatically)
     pub fn pump_events(&mut self) {
         // Events are handled automatically by the winit thread
-    }
-
-    /// No-op for compatibility (window creation now returns handle directly)
-    pub fn get_window_handle(&self, _process_key: &str) -> Option<u64> {
-        // Window handles are now returned directly from create_window()
-        None
     }
 }
 
@@ -804,7 +812,7 @@ fn run_window_thread(
     info!("🧵 Window thread starting");
 
     // Allow event loop on non-main thread (X11 specific)
-    let event_loop = match EventLoopBuilder::new().with_any_thread(true).build() {
+    let event_loop = match EventLoop::builder().with_any_thread(true).build() {
         Ok(el) => el,
         Err(e) => {
             error!("Failed to create EventLoop in window thread: {}", e);

@@ -7,7 +7,7 @@
 
 use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 use nix::unistd::ftruncate;
-use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use tracing::{error, info};
 
 /// Platform-specific shared memory region
@@ -124,16 +124,6 @@ impl PlatformSharedMemory {
     /// Get raw memory pointer
     pub fn as_ptr(&self) -> *const u8 {
         self.ptr
-    }
-
-    /// Get mutable raw memory pointer
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr
-    }
-
-    /// Get size in bytes
-    pub fn size(&self) -> usize {
-        self.size
     }
 
     /// Get memory as slice

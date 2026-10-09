@@ -36,19 +36,14 @@ rosc = "0.11"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
 crossbeam = "0.8"
 chrono = "0.4"
-once_cell = "1.19"  # For static initialization (sine lookup table)
 bincode = "1"       # Compact binary serialization for waveform cache
-byteorder = "1"     # Byte order conversions for cache files
-tempfile = "3"      # Temporary file management
 dirs = "5"          # Cross-platform user directory paths
 
 # CLAP plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "note-ports", "gui", "latency", "log", "params", "render", "state", "timer"] }
-libloading = "0.8"
 
 # Serialization for plugin state
 serde = { version = "1.0", features = ["derive"] }
@@ -74,3 +69,6 @@ x11 = { version = "2.21", features = ["xlib"] }
 [features]
 # Log (de)allocations on the audio thread (`audio/rt_debug.rs`).
 rt-debug = ["dep:assert_no_alloc"]
+
+[dev-dependencies]
+tempfile = "3"      # Temporary files in tests
