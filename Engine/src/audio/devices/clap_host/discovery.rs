@@ -1,7 +1,9 @@
 //! Plugin discovery and scanning for CLAP plugins
 
 use super::super::DeviceCategory;
+use super::vst3_discovery;
 use super::PluginError;
+use crate::audio::ipc::PluginFormat;
 use clack_host::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,13 +18,19 @@ pub struct PluginDescriptor {
     pub category: DeviceCategory,
     pub path: PathBuf, // Path to .clap bundle
     pub description: Option<String>,
-    /// CLAP feature tags, e.g. ["audio-effect", "reverb"]
+    /// CLAP feature tags, e.g. ["audio-effect", "reverb"]; for VST3 the lowercased
+    /// subcategories, e.g. ["fx", "reverb"]
     pub features: Vec<String>,
+    /// CLAP, or VST3 (then `id` is the class ID and `path` the `.vst3` bundle directory)
+    pub format: PluginFormat,
 }
 
 /// Plugin scanner that finds .clap files in standard locations
 pub struct PluginScanner {
     scan_paths: Vec<PathBuf>,
+    /// Where VST3 bundles are looked for (`vst3_discovery::scan_paths`). The paths configured
+    /// in Godot stay CLAP-only for now.
+    vst3_scan_paths: Vec<PathBuf>,
     discovered_plugins: HashMap<String, PluginDescriptor>,
 }
 
@@ -34,6 +42,7 @@ impl PluginScanner {
                 Vec::new(),
                 std::env::var("CLAP_PATH").ok().as_deref(),
             ),
+            vst3_scan_paths: vst3_discovery::default_scan_paths(),
             discovered_plugins: HashMap::new(),
         }
     }
@@ -42,6 +51,7 @@ impl PluginScanner {
     pub fn with_paths(paths: Vec<PathBuf>) -> Self {
         Self {
             scan_paths: paths,
+            vst3_scan_paths: Vec::new(),
             discovered_plugins: HashMap::new(),
         }
     }
@@ -113,6 +123,20 @@ impl PluginScanner {
                 Err(e) => {
                     tracing::warn!("Error scanning directory {:?}: {}", path, e);
                 }
+            }
+        }
+
+        // VST3 bundles: out of process, never loaded into the engine (spec 028)
+        for path in &self.vst3_scan_paths {
+            if !path.exists() {
+                tracing::debug!("VST3 scan path does not exist: {:?}", path);
+                continue;
+            }
+            let plugins = vst3_discovery::scan_directory(path);
+            tracing::info!("Found {} VST3 plugin(s) in {:?}", plugins.len(), path);
+            total_plugins += plugins.len();
+            for plugin in plugins {
+                self.discovered_plugins.insert(plugin.id.clone(), plugin);
             }
         }
 
@@ -284,6 +308,7 @@ impl PluginScanner {
             path: bundle_path.to_path_buf(),
             description,
             features,
+            format: PluginFormat::Clap,
         })
     }
 
@@ -320,7 +345,12 @@ impl PluginScanner {
         if let Some(plugin) = self.discovered_plugins.get(id) {
             return Some(plugin.vendor.clone());
         }
-        match Self::load_plugin_metadata(path) {
+        let loaded = if path.extension().is_some_and(|ext| ext == "vst3") {
+            Ok(vst3_discovery::scan_bundle(path))
+        } else {
+            Self::load_plugin_metadata(path)
+        };
+        match loaded {
             Ok(descriptors) => {
                 for descriptor in descriptors {
                     self.discovered_plugins

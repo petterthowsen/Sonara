@@ -54,6 +54,20 @@ impl EventList {
         true
     }
 
+    /// Order the events by `sampleOffset`, keeping the order of events at the same offset
+    /// (a stable insertion sort: no allocation, and the list is nearly sorted already).
+    pub fn sort_by_sample_offset(&self) {
+        let events = unsafe { &mut *self.events.get() };
+        let events = &mut events[..self.len.get()];
+        for i in 1..events.len() {
+            let mut j = i;
+            while j > 0 && events[j - 1].sampleOffset > events[j].sampleOffset {
+                events.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+    }
+
     pub fn get(&self, index: usize) -> Option<Event> {
         if index >= self.len() {
             return None;
@@ -152,6 +166,24 @@ mod tests {
         list.clear();
         assert_eq!(list.len(), 0);
         assert_eq!(list.capacity(), 2);
+    }
+
+    #[test]
+    fn sorting_is_by_offset_and_stable() {
+        let list = EventList::with_capacity(4);
+        for (offset, pitch) in [(9, 1), (3, 2), (9, 3), (3, 4)] {
+            let mut event = note_event(NOTE_ON, pitch);
+            event.sampleOffset = offset;
+            assert!(list.push(&event));
+        }
+        list.sort_by_sample_offset();
+        let order: Vec<(i32, i16)> = (0..4)
+            .map(|i| {
+                let e = list.get(i).unwrap();
+                (e.sampleOffset, unsafe { e.__field0.noteOn.pitch })
+            })
+            .collect();
+        assert_eq!(order, vec![(3, 2), (3, 4), (9, 1), (9, 3)]);
     }
 
     #[test]

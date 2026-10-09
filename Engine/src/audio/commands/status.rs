@@ -194,8 +194,10 @@ pub enum EngineStatus {
         version: String,
         category: String,
         description: Option<String>,
-        path: String, // Path to plugin file
+        path: String, // Path to plugin file (CLAP) or bundle directory (VST3)
         features: Vec<String>,
+        /// "clap" or "vst3"
+        format: String,
     },
 
     // Builtin device advertisement

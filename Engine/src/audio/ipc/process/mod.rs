@@ -32,7 +32,7 @@ use tracing::{info, warn};
 
 use crate::audio::ipc::hosting::{HostAssignment, HostingPolicy};
 use crate::audio::ipc::protocol::{
-    InstanceId, PluginCommand, PluginEvent, PluginResponse, SharedMemoryLayout,
+    InstanceId, PluginCommand, PluginEvent, PluginFormat, PluginResponse, SharedMemoryLayout,
 };
 use crate::audio::ipc::shared_memory::SharedMemory;
 
@@ -157,6 +157,7 @@ impl ProcessManager {
         plugin_id: String,
         sample_rate: f32,
         max_buffer_size: usize,
+        format: PluginFormat,
     ) -> Result<InstanceConnection, String> {
         info!(
             "Loading plugin {} as instance {} in host {}",
@@ -185,6 +186,7 @@ impl ProcessManager {
                 plugin_id: plugin_id.clone(),
                 sample_rate,
                 max_buffer_size,
+                format,
             },
             &[shared_memory.as_raw_fd()],
             INITIALIZE_TIMEOUT,
@@ -547,6 +549,7 @@ mod tests {
             plugin_id: "x".to_string(),
             sample_rate: 48_000.0,
             max_buffer_size: 64,
+            format: Default::default(),
         });
         assert!(!process.is_hung());
 

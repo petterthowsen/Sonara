@@ -36,6 +36,7 @@ use crate::audio::ipc::{
 };
 use crate::plugin_host::host::SubprocessHost;
 use crate::plugin_host::state::{ParamEntry, ParamMap};
+use crate::plugin_host::vst3::{Vst3ParamMap, Vst3Processor};
 
 /// How long the audio thread blocks on the doorbell while idle. Commands ring the doorbell too,
 /// so this is only a safety net.
@@ -63,6 +64,24 @@ pub enum HostAudioCommand {
     TakeProcessor {
         instance_id: InstanceId,
         reply: SyncSender<Option<StoppedPluginAudioProcessor<SubprocessHost>>>,
+    },
+    /// Hand over a freshly activated VST3 processor and the instance's shared block.
+    SetVst3Processor {
+        instance_id: InstanceId,
+        processor: Vst3Processor,
+        memory: Arc<SharedMemory>,
+        span: tracing::Span,
+        reply: SyncSender<Result<(), String>>,
+    },
+    /// Take the VST3 processor back so the main thread can deactivate the plugin.
+    TakeVst3Processor {
+        instance_id: InstanceId,
+        reply: SyncSender<Option<Vst3Processor>>,
+    },
+    /// Publish a rebuilt VST3 parameter map.
+    SetVst3ParamMap {
+        instance_id: InstanceId,
+        param_map: Arc<Vst3ParamMap>,
     },
     /// Publish a rebuilt parameter map (after `GetParameterInfo` or a rescan).
     SetParamMap {
@@ -150,6 +169,50 @@ impl AudioThreadHandle {
                 None
             }
         }
+    }
+
+    /// Hand over a VST3 instance's processor and wait until the audio thread holds it.
+    pub fn set_vst3_processor(
+        &self,
+        instance_id: InstanceId,
+        processor: Vst3Processor,
+        memory: Arc<SharedMemory>,
+        span: tracing::Span,
+    ) -> Result<(), String> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.send(HostAudioCommand::SetVst3Processor {
+            instance_id,
+            processor,
+            memory,
+            span,
+            reply: reply_tx,
+        });
+        reply_rx
+            .recv_timeout(HANDOFF_TIMEOUT)
+            .map_err(|e| format!("Audio thread didn't take the processor: {}", e))?
+    }
+
+    /// Take a VST3 instance's processor back, blocking until the audio thread has released it.
+    pub fn take_vst3_processor(&self, instance_id: InstanceId) -> Option<Vst3Processor> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.send(HostAudioCommand::TakeVst3Processor {
+            instance_id,
+            reply: reply_tx,
+        });
+        match reply_rx.recv_timeout(HANDOFF_TIMEOUT) {
+            Ok(processor) => processor,
+            Err(e) => {
+                warn!("Audio thread didn't return the VST3 processor: {}", e);
+                None
+            }
+        }
+    }
+
+    pub fn set_vst3_param_map(&self, instance_id: InstanceId, param_map: Arc<Vst3ParamMap>) {
+        self.send(HostAudioCommand::SetVst3ParamMap {
+            instance_id,
+            param_map,
+        });
     }
 
     pub fn set_param_map(&self, instance_id: InstanceId, param_map: Arc<ParamMap>) {
@@ -242,6 +305,8 @@ fn to_param_mod_event(entry: &ParamEntry, sample_offset: u32, amount_norm: f32) 
 struct InstanceSlot {
     instance_id: InstanceId,
     processor: Option<PluginAudioProcessorEnum<SubprocessHost>>,
+    /// Set instead of `processor` for a VST3 instance (the two never both hold one).
+    vst3: Option<Vst3Processor>,
     memory: Option<Arc<SharedMemory>>,
     param_map: Arc<ParamMap>,
     /// Parameter changes queued by the main thread, applied at offset 0 of the next block.
@@ -259,6 +324,7 @@ impl InstanceSlot {
         Self {
             instance_id,
             processor: None,
+            vst3: None,
             memory: None,
             param_map: Arc::new(ParamMap::default()),
             queued_params: Vec::with_capacity(64),
@@ -397,6 +463,51 @@ impl AudioWorker {
                 slot.steady = 0;
                 let _ = reply.send(Ok(()));
             }
+            HostAudioCommand::SetVst3Processor {
+                instance_id,
+                processor,
+                memory,
+                span,
+                reply,
+            } => {
+                let index = self.slot_index(instance_id);
+                let slot = &mut self.slots[index];
+                finish_pending(slot, &mut self.scratch, &self.doorbell);
+                if slot.processor.is_some() || slot.vst3.is_some() {
+                    let _ = reply.send(Err(format!(
+                        "The audio thread already holds a processor for instance {}",
+                        instance_id
+                    )));
+                    return true;
+                }
+                slot.vst3 = Some(processor);
+                slot.memory = Some(memory);
+                slot.span = span;
+                slot.steady = 0;
+                let _ = reply.send(Ok(()));
+            }
+            HostAudioCommand::TakeVst3Processor { instance_id, reply } => {
+                let Some(slot) = self
+                    .slots
+                    .iter_mut()
+                    .find(|slot| slot.instance_id == instance_id)
+                else {
+                    let _ = reply.send(None);
+                    return true;
+                };
+                finish_pending(slot, &mut self.scratch, &self.doorbell);
+                let processor = slot.vst3.take();
+                slot.memory = None;
+                let _ = reply.send(processor);
+            }
+            HostAudioCommand::SetVst3ParamMap {
+                instance_id,
+                param_map,
+            } => {
+                if let Some(vst3) = self.slot(instance_id).vst3.as_mut() {
+                    vst3.set_param_map(param_map);
+                }
+            }
             HostAudioCommand::TakeProcessor { instance_id, reply } => {
                 let Some(slot) = self
                     .slots
@@ -516,7 +627,7 @@ impl AudioWorker {
 /// Answer a request the engine may still be waiting on, so taking the processor or replacing
 /// it never leaves the engine spinning until its deadline.
 fn finish_pending(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &HostSharedMemory) {
-    if slot.processor.is_some() && slot.has_request() {
+    if (slot.processor.is_some() || slot.vst3.is_some()) && slot.has_request() {
         process_request(slot, scratch, doorbell);
     }
 }
@@ -555,6 +666,12 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
     let control = memory.control();
     let seq = control.request_seq.load(Ordering::Acquire);
     if seq == control.done_seq.load(Ordering::Acquire) {
+        return;
+    }
+
+    // A VST3 instance has its own processing path.
+    if let Some(vst3) = slot.vst3.as_mut() {
+        vst3.process_request(slot.instance_id, &slot.span, &memory, || doorbell.ring());
         return;
     }
 

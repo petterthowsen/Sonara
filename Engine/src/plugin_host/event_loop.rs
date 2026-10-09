@@ -24,11 +24,13 @@ use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 
 use crate::audio::ipc::{
     wire, HostMessage, HostRequest, HostSharedMemory, InstanceId, PluginCommand, PluginEvent,
+    PluginFormat,
 };
 use crate::plugin_host::audio_thread::{self, AudioThreadHandle};
 use crate::plugin_host::commands::process_command;
 use crate::plugin_host::logging;
-use crate::plugin_host::state::PluginState;
+use crate::plugin_host::state::{HostedInstance, PluginState};
+use crate::plugin_host::vst3::commands::{process_vst3_command, service_vst3, Vst3Modules};
 
 /// What the reader thread hands to the main loop.
 enum Incoming {
@@ -83,7 +85,8 @@ fn send(socket: &UnixStream, msg: &HostMessage) {
 fn handle_incoming(
     incoming: Incoming,
     socket: &UnixStream,
-    instances: &mut HashMap<InstanceId, PluginState>,
+    instances: &mut HashMap<InstanceId, HostedInstance>,
+    vst3_modules: &mut Vst3Modules,
     event_tx: &Sender<HostMessage>,
     audio: &AudioThreadHandle,
 ) -> bool {
@@ -107,7 +110,7 @@ fn handle_incoming(
     // Log everything done for this command under the instance's span, so each line names the
     // plugin. A new instance gets a provisional span from its plugin id until it has loaded.
     let span = match (instances.get(&instance_id), &command) {
-        (Some(state), _) => state.span.clone(),
+        (Some(hosted), _) => hosted.span().clone(),
         (None, PluginCommand::Initialize { plugin_id, .. }) => {
             logging::instance_span(instance_id, plugin_id)
         }
@@ -123,9 +126,45 @@ fn handle_incoming(
     // The instance's slot: None for an unknown instance, which every command but Initialize
     // answers with "not initialized". Unload leaves it None.
     let mut slot = instances.remove(&instance_id);
-    let response = process_command(command, instance_id, fds, &mut slot, event_tx, audio);
-    if let Some(state) = slot {
-        instances.insert(instance_id, state);
+    // The formats are separate code paths; this is the dispatch point (spec 028).
+    let is_vst3 = match &slot {
+        Some(HostedInstance::Vst3(_)) => true,
+        Some(HostedInstance::Clap(_)) => false,
+        None => matches!(
+            &command,
+            PluginCommand::Initialize {
+                format: PluginFormat::Vst3,
+                ..
+            }
+        ),
+    };
+    let response = if is_vst3 {
+        let mut vst3_slot = match slot.take() {
+            Some(HostedInstance::Vst3(state)) => Some(state),
+            _ => None,
+        };
+        let response = process_vst3_command(
+            command,
+            instance_id,
+            fds,
+            &mut vst3_slot,
+            vst3_modules,
+            event_tx,
+            audio,
+        );
+        slot = vst3_slot.map(HostedInstance::Vst3);
+        response
+    } else {
+        let mut clap_slot = match slot.take() {
+            Some(HostedInstance::Clap(state)) => Some(state),
+            _ => None,
+        };
+        let response = process_command(command, instance_id, fds, &mut clap_slot, event_tx, audio);
+        slot = clap_slot.map(HostedInstance::Clap);
+        response
+    };
+    if let Some(hosted) = slot {
+        instances.insert(instance_id, hosted);
     }
 
     if let Some(response) = response {
@@ -258,7 +297,9 @@ pub fn run_plugin_host(
         .name("ipc-reader".to_string())
         .spawn(move || read_requests(reader_socket, incoming_tx))?;
 
-    let mut instances: HashMap<InstanceId, PluginState> = HashMap::new();
+    let mut instances: HashMap<InstanceId, HostedInstance> = HashMap::new();
+    // Loaded VST3 bundles, shared by this process's VST3 instances.
+    let mut vst3_modules = Vst3Modules::default();
 
     // Unsolicited messages from plugin callbacks (GUI resize requests)
     let (event_tx, event_rx) = mpsc::channel::<HostMessage>();
@@ -275,7 +316,14 @@ pub fn run_plugin_host(
         loop {
             match incoming_rx.try_recv() {
                 Ok(incoming) => {
-                    if !handle_incoming(incoming, &socket, &mut instances, &event_tx, &audio) {
+                    if !handle_incoming(
+                        incoming,
+                        &socket,
+                        &mut instances,
+                        &mut vst3_modules,
+                        &event_tx,
+                        &audio,
+                    ) {
                         return Ok(());
                     }
                 }
@@ -284,7 +332,16 @@ pub fn run_plugin_host(
             }
         }
 
-        for state in instances.values_mut() {
+        for hosted in instances.values_mut() {
+            let state = match hosted {
+                HostedInstance::Clap(state) => state,
+                HostedInstance::Vst3(state) => {
+                    let span = state.span.clone();
+                    let _entered = span.enter();
+                    service_vst3(state, &audio);
+                    continue;
+                }
+            };
             // Parameter list or ranges changed: rebuild the map and publish it to the audio
             // thread.
             if state.shared.take_params_rescanned() {
@@ -324,7 +381,14 @@ pub fn run_plugin_host(
         // thread, so this loop only wakes for commands and timers.
         match incoming_rx.recv_timeout(Duration::from_millis(1)) {
             Ok(incoming) => {
-                if !handle_incoming(incoming, &socket, &mut instances, &event_tx, &audio) {
+                if !handle_incoming(
+                    incoming,
+                    &socket,
+                    &mut instances,
+                    &mut vst3_modules,
+                    &event_tx,
+                    &audio,
+                ) {
                     return Ok(());
                 }
             }

@@ -3,22 +3,28 @@
 //! Deliberately parallel to the CLAP implementation, not shared with it: the two formats meet
 //! only at the few dispatch points later phases add (the plan's ground rules). Phase 1 provides
 //! bundle loading, the host-side COM objects, and the standalone `--probe` / `--scan-vst3`
-//! paths.
+//! paths. Phase 2 adds running instances inside `plugin_host` (`commands`, `processor`).
 
+pub mod commands;
 pub mod event_list;
 pub mod host_context;
 pub mod instance;
 pub mod module;
 pub mod moduleinfo;
 pub mod param_changes;
+pub mod params;
+pub mod processor;
 pub mod scan;
+pub mod state_blob;
 pub mod stream;
 
 pub use event_list::EventList;
-pub use host_context::HostContext;
+pub use host_context::{ComponentHandler, HostContext, Vst3Shared};
 pub use instance::Vst3Instance;
 pub use module::Vst3Module;
 pub use param_changes::{ParamValueQueue, ParameterChanges};
+pub use params::Vst3ParamMap;
+pub use processor::Vst3Processor;
 pub use scan::ScannedClass;
 pub use stream::MemoryStream;
 

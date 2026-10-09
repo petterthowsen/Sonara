@@ -5,6 +5,7 @@
 
 pub mod discovery;
 pub mod subprocess_adapter;
+pub mod vst3_discovery;
 
 // Subprocess adapter submodules are private (accessed through SubprocessClapAdapter)
 

@@ -216,8 +216,9 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
             description,
             path,
             features,
+            format,
         } => {
-            tracing::info!("📨 Sending plugin info: {} ({})", name, id);
+            tracing::info!("📨 Sending plugin info: {} ({}, {})", name, id, format);
             let mut args = vec![
                 OscType::String(id.clone()),
                 OscType::String(name),
@@ -231,6 +232,8 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
             args.push(OscType::String(path));
             // Add feature tags, joined with commas
             args.push(OscType::String(features.join(",")));
+            // Add the plugin format ("clap" or "vst3")
+            args.push(OscType::String(format));
             ("/plugin/info".to_string(), args)
         }
         EngineStatus::BuiltinDeviceInfo {

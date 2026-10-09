@@ -40,6 +40,14 @@ impl MemoryStream {
     pub fn into_bytes(self) -> Vec<u8> {
         self.data.into_inner().bytes
     }
+
+    /// Take the written bytes out through a shared reference (the stream is usually held by
+    /// a `ComWrapper` the plugin also references), leaving it empty.
+    pub fn take_bytes(&self) -> Vec<u8> {
+        let mut data = self.data.borrow_mut();
+        data.pos = 0;
+        std::mem::take(&mut data.bytes)
+    }
 }
 
 impl Class for MemoryStream {

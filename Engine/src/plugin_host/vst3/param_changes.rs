@@ -59,8 +59,9 @@ impl ParamValueQueue {
         self.len.set(0);
     }
 
-    /// Add a point, replacing an existing point at the same offset (VST3 semantics).
-    /// Returns false when the fixed capacity is exhausted.
+    /// Add a point, replacing an existing point at the same offset (VST3 semantics). Points
+    /// stay in ascending offset order, as plugins expect. Returns false when the fixed
+    /// capacity is exhausted.
     pub fn push(&self, sample_offset: int32, value: ParamValue) -> bool {
         let points = unsafe { &mut *self.points.get() };
         if let Some(point) = points[..self.len.get()]
@@ -74,7 +75,9 @@ impl ParamValueQueue {
         if len >= points.len() {
             return false;
         }
-        points[len] = (sample_offset, value);
+        let position = points[..len].partition_point(|(offset, _)| *offset < sample_offset);
+        points.copy_within(position..len, position + 1);
+        points[position] = (sample_offset, value);
         self.len.set(len + 1);
         true
     }
@@ -279,6 +282,19 @@ impl IParameterChangesTrait for ParameterChanges {
 mod tests {
     use super::*;
     use ::vst3::ComRef;
+
+    #[test]
+    fn points_stay_in_ascending_offset_order() {
+        let queue = ParamValueQueue::with_capacity(4);
+        assert!(queue.push(30, 0.3));
+        assert!(queue.push(10, 0.1));
+        assert!(queue.push(20, 0.2));
+        assert!(queue.push(10, 0.15)); // replaces
+        assert!(queue.push(0, 0.0));
+        assert!(!queue.push(40, 0.4)); // full
+        let points: Vec<_> = (0..queue.len()).map(|i| queue.get(i).unwrap()).collect();
+        assert_eq!(points, vec![(0, 0.0), (10, 0.15), (20, 0.2), (30, 0.3)]);
+    }
 
     fn changes() -> (ComWrapper<ParameterChanges>, ComPtr<IParameterChanges>) {
         let wrapper = ComWrapper::new(ParameterChanges::new(2, 4));

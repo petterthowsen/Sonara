@@ -77,7 +77,7 @@ impl CommandWorker {
         let device_path = parent_path.join(insert_pos);
 
         // The vendor picks the host process in "By vendor" hosting.
-        let vendor = if device_type == "clap" {
+        let vendor = if device_type == "clap" || device_type == "vst3" {
             self.plugin_scanner
                 .vendor_of(device_id, Path::new(device_file))
                 .unwrap_or_else(|| "Unknown".to_string())

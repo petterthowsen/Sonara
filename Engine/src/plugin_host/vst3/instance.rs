@@ -56,19 +56,33 @@ unsafe fn factory_instance<I: Interface>(
 }
 
 impl Vst3Instance {
-    /// Create the component and controller for `class_id`, connect them, set up stereo
-    /// buses, and activate: `setupProcessing`, `setActive(true)`, `setProcessing(true)`
-    /// (spec 028, phase 1).
+    /// Create the instance and activate it: `setupProcessing`, `setActive(true)`,
+    /// `setProcessing(true)` (the probe's one-shot path).
     ///
     /// # Safety
-    /// Calls plugin code. The module must have been loaded in this process, and every call
-    /// must happen on one thread.
+    /// As for `create_inactive`.
     pub unsafe fn create(
         module: &Arc<Vst3Module>,
         class_id: &TUID,
         host_context: &ComWrapper<HostContext>,
         sample_rate: f64,
         max_block_frames: u32,
+    ) -> Result<Self, String> {
+        let mut instance = Self::create_inactive(module, class_id, host_context)?;
+        instance.activate(sample_rate, max_block_frames, false)?;
+        Ok(instance)
+    }
+
+    /// Create the component and controller for `class_id`, connect them and set up stereo
+    /// buses. The instance is not active: call `activate` before processing.
+    ///
+    /// # Safety
+    /// Calls plugin code. The module must have been loaded in this process, and every call
+    /// must happen on one thread.
+    pub unsafe fn create_inactive(
+        module: &Arc<Vst3Module>,
+        class_id: &TUID,
+        host_context: &ComWrapper<HostContext>,
     ) -> Result<Self, String> {
         let factory = module.factory();
         let context = host_context
@@ -193,31 +207,6 @@ impl Vst3Instance {
             tracing::warn!("activateBus(event input 0) failed");
         }
 
-        // 6. Real-time float processing, then activate.
-        let mut setup = ProcessSetup {
-            processMode: ProcessModes_::kRealtime as i32,
-            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
-            maxSamplesPerBlock: max_block_frames as i32,
-            sampleRate: sample_rate,
-        };
-        if processor.setupProcessing(&mut setup) != kResultOk {
-            return Err("setupProcessing failed".to_string());
-        }
-        if component.setActive(1) != kResultOk {
-            return Err("setActive(true) failed".to_string());
-        }
-        let active = true;
-        let set_processing_result = processor.setProcessing(1);
-        // kNotImplemented means the plugin does not toggle its processing state; hosts are
-        // expected to continue (sfizz does this). Anything else is a real failure.
-        if set_processing_result != kResultOk && set_processing_result != kNotImplemented {
-            return Err(format!(
-                "setProcessing(true) failed with tresult {}",
-                set_processing_result
-            ));
-        }
-        let processing = true;
-
         Ok(Self {
             _module: module.clone(),
             _host_context: host_context.clone(),
@@ -230,9 +219,92 @@ impl Vst3Instance {
             audio_inputs,
             audio_outputs,
             event_inputs,
-            active,
-            processing,
+            active: false,
+            processing: false,
         })
+    }
+
+    /// `setupProcessing` (real-time or offline, 32-bit float), `setActive(true)` and
+    /// `setProcessing(true)`. Does nothing if already active; deactivate first to change the
+    /// rate, block size or mode.
+    ///
+    /// # Safety
+    /// Calls plugin code, on the thread that owns the instance, with the audio thread not
+    /// processing.
+    pub unsafe fn activate(
+        &mut self,
+        sample_rate: f64,
+        max_block_frames: u32,
+        offline: bool,
+    ) -> Result<(), String> {
+        if self.active {
+            return Ok(());
+        }
+        let mut setup = ProcessSetup {
+            processMode: if offline {
+                ProcessModes_::kOffline
+            } else {
+                ProcessModes_::kRealtime
+            } as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            maxSamplesPerBlock: max_block_frames as i32,
+            sampleRate: sample_rate,
+        };
+        if self.processor.setupProcessing(&mut setup) != kResultOk {
+            return Err("setupProcessing failed".to_string());
+        }
+        if self.component.setActive(1) != kResultOk {
+            return Err("setActive(true) failed".to_string());
+        }
+        self.active = true;
+        let result = self.processor.setProcessing(1);
+        // kNotImplemented means the plugin does not toggle its processing state; hosts are
+        // expected to continue (sfizz does this). Anything else is a real failure.
+        if result != kResultOk && result != kNotImplemented {
+            return Err(format!(
+                "setProcessing(true) failed with tresult {}",
+                result
+            ));
+        }
+        self.processing = true;
+        Ok(())
+    }
+
+    /// `setProcessing(false)` and `setActive(false)`. The audio thread must have handed the
+    /// processor back first.
+    ///
+    /// # Safety
+    /// Calls plugin code, on the thread that owns the instance.
+    pub unsafe fn deactivate(&mut self) {
+        if self.processing {
+            self.processor.setProcessing(0);
+            self.processing = false;
+        }
+        if self.active {
+            self.component.setActive(0);
+            self.active = false;
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// True when the controller is the component object itself (then it is `terminate`d once).
+    pub fn controller_is_component(&self) -> bool {
+        self.controller_is_component
+    }
+
+    /// Give the controller the handler it reports edits and restarts to.
+    ///
+    /// # Safety
+    /// Calls controller code: main thread only.
+    pub unsafe fn set_component_handler(&self, handler: &ComPtr<IComponentHandler>) {
+        if let Some(controller) = &self.controller {
+            if controller.setComponentHandler(handler.as_ptr()) != kResultOk {
+                tracing::warn!("IEditController::setComponentHandler failed");
+            }
+        }
     }
 
     pub fn component(&self) -> &ComPtr<IComponent> {

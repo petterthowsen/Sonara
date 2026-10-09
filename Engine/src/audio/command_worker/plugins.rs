@@ -15,7 +15,7 @@ use crate::audio::ipc::HostingPolicy;
 use crate::audio::types::ChannelId;
 
 impl CommandWorker {
-    /// Scan for CLAP plugins and report each one to Godot.
+    /// Scan for CLAP and VST3 plugins and report each one to Godot.
     pub(super) fn scan_plugins(&mut self, paths: Vec<PathBuf>) {
         info!("Starting plugin scan...");
         self.plugin_scanner.set_paths(paths);
@@ -49,6 +49,7 @@ impl CommandWorker {
                 description: plugin.description.clone(),
                 path: plugin.path.to_string_lossy().to_string(),
                 features: plugin.features.clone(),
+                format: plugin.format.as_str().to_string(),
             });
         }
 

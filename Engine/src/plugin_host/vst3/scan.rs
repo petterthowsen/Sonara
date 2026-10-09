@@ -10,7 +10,7 @@ use ::vst3::Steinberg::{
     kResultOk, IPluginFactory, IPluginFactory2, IPluginFactory2Trait, IPluginFactory3,
     IPluginFactory3Trait, IPluginFactoryTrait, PClassInfo, PClassInfo2, PClassInfoW,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::module::Vst3Module;
@@ -19,7 +19,7 @@ use super::{char16_str, char8_str, tuid_to_hex};
 
 /// One class as the scanner reports it: id (32 uppercase hex characters), name, vendor,
 /// version, subcategories (pipe-joined) and category.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScannedClass {
     pub id: String,
     pub name: String,

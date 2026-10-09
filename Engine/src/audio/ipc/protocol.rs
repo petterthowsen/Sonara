@@ -81,15 +81,38 @@ pub enum LogLevel {
     Error,
 }
 
+/// The plugin format an instance is loaded as (spec 028). The two formats share the IPC
+/// protocol and the shared-memory block; the host dispatches on this at `Initialize`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PluginFormat {
+    #[default]
+    Clap,
+    Vst3,
+}
+
+impl PluginFormat {
+    /// The lowercase name used in device type strings and `/plugin/info`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PluginFormat::Clap => "clap",
+            PluginFormat::Vst3 => "vst3",
+        }
+    }
+}
+
 /// Commands sent from engine to a plugin instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PluginCommand {
     /// Load the plugin into a new instance. The frame carries the instance's shared-memory FD.
+    /// For VST3, `plugin_path` is the `.vst3` bundle and `plugin_id` the class ID as 32 hex
+    /// characters.
     Initialize {
         plugin_path: PathBuf,
         plugin_id: String,
         sample_rate: f32,
         max_buffer_size: usize,
+        #[serde(default)]
+        format: PluginFormat,
     },
 
     /// Activate (or re-activate at a new rate) the plugin for audio processing. Re-activation
