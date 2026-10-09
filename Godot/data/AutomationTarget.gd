@@ -288,3 +288,59 @@ func format_value(channel: Object, normalized: float) -> String:
 					return param.format_value(param.normalized_to_value(normalized))
 			return "%.3f" % normalized
 	return "%.3f" % normalized
+
+
+## Text for typing `normalized` into the value editor: the real number without unit decoration
+## (dB, pan as -100..100 percent, or the device parameter's own edit text).
+func edit_text(channel: Object, normalized: float) -> String:
+	match kind:
+		Kind.CHANNEL_VOLUME, Kind.SEND_AMOUNT:
+			return "%.1f" % normalized_to_db(normalized)
+		Kind.CHANNEL_PAN:
+			return "%d" % int(round(normalized_to_pan(normalized) * 100.0))
+	var param := _edit_param(channel)
+	if param:
+		return param.edit_text(param.normalized_to_value(normalized))
+	return "%.3f" % normalized
+
+
+## Parse text typed by the user into a normalized 0..1 value, or NAN when it isn't a value.
+## Volume and sends take dB, pan takes -100..100 (also `L20`, `R30`, `C`), a device parameter its
+## own units, and an unresolved target the normalized number itself.
+func parse_edit_text(channel: Object, text: String) -> float:
+	var trimmed := text.strip_edges()
+	if trimmed.is_empty():
+		return NAN
+	match kind:
+		Kind.CHANNEL_VOLUME, Kind.SEND_AMOUNT:
+			if trimmed.to_lower().ends_with("db"):
+				trimmed = trimmed.substr(0, trimmed.length() - 2).strip_edges()
+			return db_to_normalized(trimmed.to_float()) if trimmed.is_valid_float() else NAN
+		Kind.CHANNEL_PAN:
+			var upper := trimmed.to_upper()
+			if upper == "C":
+				return 0.5
+			var sign := 1.0
+			if upper.begins_with("L") or upper.begins_with("R"):
+				sign = -1.0 if upper.begins_with("L") else 1.0
+				trimmed = trimmed.substr(1).strip_edges()
+			if not trimmed.is_valid_float():
+				return NAN
+			return pan_to_normalized(sign * trimmed.to_float() / 100.0)
+	var param := _edit_param(channel)
+	if param:
+		var real: float = param.parse_edit_text(trimmed)
+		return NAN if is_nan(real) else clampf(param.value_to_normalized(real), 0.0, 1.0)
+	return clampf(trimmed.to_float(), 0.0, 1.0) if trimmed.is_valid_float() else NAN
+
+
+func _edit_param(channel: Object) -> Object:
+	match kind:
+		Kind.DEVICE_PARAM:
+			var instance := resolve(channel)
+			return instance.get_parameter(param_id) if instance else null
+		Kind.DEVICE_MODULATOR_PARAM:
+			var instance := resolve(channel)
+			var modulator = instance.get_modulator(mod_id) if instance != null else null
+			return modulator.get_parameter(param_id) if modulator else null
+	return null

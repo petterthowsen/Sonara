@@ -38,7 +38,7 @@ func _test_linear_tension_zero() -> void:
 func _test_linear_tension_positive() -> void:
 	var a := _point(1, 0, 0.0, AutomationPoint.CurveType.LINEAR, 0.5)
 	var b := _point(2, 960, 1.0)
-	var expected := {240: 0.0625, 480: 0.25, 720: 0.5625}
+	var expected := {240: 0.032059, 480: 0.119203, 720: 0.356086}
 	for tick in expected:
 		var value := AutomationCurve.evaluate(a, b, tick)
 		_assert(absf(value - expected[tick]) < TOLERANCE,
@@ -48,7 +48,7 @@ func _test_linear_tension_positive() -> void:
 func _test_linear_tension_negative() -> void:
 	var a := _point(1, 0, 0.0, AutomationPoint.CurveType.LINEAR, -0.5)
 	var b := _point(2, 960, 1.0)
-	var expected := {240: 0.5, 480: 0.7071068, 720: 0.8660254}
+	var expected := {240: 0.643914, 480: 0.880797, 720: 0.967941}
 	for tick in expected:
 		var value := AutomationCurve.evaluate(a, b, tick)
 		_assert(absf(value - expected[tick]) < TOLERANCE,

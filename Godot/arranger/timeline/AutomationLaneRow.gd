@@ -3,7 +3,8 @@
 # draws its fill, grid and border along with every other row's), and owns the direct-manipulation input - double-click to insert
 # (and keep dragging the new point), drag to move, shift-click / shift-drag to add or remove
 # points, drag on empty space to box-select, ctrl-drag to select a grid-snapped time range,
-# right-click for the point menu (REQ-013, REQ-018, REQ-019, REQ-020).
+# right-click for the point menu, and drag the handle at a segment's midpoint to bend it (tension;
+# double-click the handle to straighten it) (REQ-013, REQ-018, REQ-019, REQ-020).
 #
 # Hovering a point, or dragging one, shows its value in a `ValueTooltip` formatted like the
 # target's own control (e.g. `-6.0 dB`), so a point can be read without opening anything.
@@ -35,6 +36,15 @@ const CURVE_WIDTH := 1.5
 ## Pixels a tension-warped segment is sampled at. A straight linear segment needs no sampling.
 const CURVE_SAMPLE_PX := 6.0
 const DRAG_THRESHOLD := 3.0
+## Pixels a tension handle may be from the cursor to be grabbed, and the narrowest segment (px)
+## that still gets one, so the handle never sits on top of an end point.
+const HANDLE_HIT_RADIUS := 7.0
+const HANDLE_MIN_SEGMENT_PX := 24.0
+const HANDLE_RADIUS := 3.5
+## A dragged tension this close to zero snaps to a straight line.
+const TENSION_SNAP := 0.04
+## Shift-drag moves a point's value this fraction as fast as the cursor.
+const PRECISION_SCALE := 0.1
 
 var lane: AutomationLane = null
 var track: Track = null
@@ -53,6 +63,19 @@ var _drag_start_pos: Vector2 = Vector2.ZERO
 var _drag_before: Dictionary = {}          # point id -> {tick, value, curve, tension}
 var _drag_anchor_tick: int = 0
 var _drag_anchor_value: float = 0.0
+var _drag_value_delta: float = 0.0         # accumulated so shift can slow the drag mid-gesture
+var _drag_last_y: float = 0.0
+var _value_editor: FloatingValueEditor = null
+
+# --- tension handle state (the midpoint of a LINEAR segment; tension lives on its left point) ---
+var _hover_handle_id: int = -1
+var _tension_drag_id: int = -1
+var _tension_before: Dictionary = {}
+
+# --- Alt-drag on a point: bend the two segments either side of it together ---
+var _bend_point_id: int = -1
+var _bend_start_y: float = 0.0
+var _bend_before: Dictionary = {}          # point id (the left point of each segment) -> state
 
 # --- box select state ---
 enum BoxMode {
@@ -84,6 +107,7 @@ func _notification(what: int) -> void:
 		queue_redraw()
 	elif what == NOTIFICATION_MOUSE_EXIT:
 		_set_hover(-1)
+		_set_handle_hover(-1)
 	elif what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
 		if not is_visible_in_tree():
 			_refresh_tooltip()
@@ -234,6 +258,57 @@ func _point_at(local_pos: Vector2) -> AutomationPoint:
 	return null
 
 
+## The segment starting at `left`'s right neighbour, or null for the last point.
+func _next_point(left: AutomationPoint) -> AutomationPoint:
+	var index := lane.points.find(left)
+	return lane.points[index + 1] if index >= 0 and index + 1 < lane.points.size() else null
+
+
+## Whether the segment from `left` can be bent: a LINEAR ramp between two different values that
+## is wide enough on screen.
+func _segment_bendable(left: AutomationPoint) -> bool:
+	var right := _next_point(left)
+	if right == null or left.curve != AutomationPoint.CurveType.LINEAR:
+		return false
+	if is_equal_approx(left.value, right.value):
+		return false
+	return tick_to_x(right.tick) - tick_to_x(left.tick) >= HANDLE_MIN_SEGMENT_PX
+
+
+## Where `left`'s tension handle sits: on the curve halfway between the two points in time.
+## (NAN, NAN) when the segment has no handle.
+func _handle_centre(left: AutomationPoint) -> Vector2:
+	if not _segment_bendable(left):
+		return Vector2(NAN, NAN)
+	var right := _next_point(left)
+	var mid_tick := (left.tick + right.tick) / 2
+	return Vector2(tick_to_x(mid_tick), value_to_y(AutomationCurve.evaluate(left, right, mid_tick)))
+
+
+## The left point of the bendable segment spanning pixel `x`, or null. The handle is shown for it
+## while the cursor is anywhere over the segment, not only on the handle.
+func _segment_at_x(x: float) -> AutomationPoint:
+	if lane == null:
+		return null
+	for i in range(lane.points.size() - 1):
+		var left: AutomationPoint = lane.points[i]
+		if x >= tick_to_x(left.tick) and x <= tick_to_x(lane.points[i + 1].tick):
+			return left if _segment_bendable(left) else null
+	return null
+
+
+## The left point of the segment whose handle is under `local_pos`, or null.
+func _handle_at(local_pos: Vector2) -> AutomationPoint:
+	if lane == null:
+		return null
+	for i in range(lane.points.size() - 1):
+		var left: AutomationPoint = lane.points[i]
+		var centre := _handle_centre(left)
+		if not is_nan(centre.x) and centre.distance_to(local_pos) <= HANDLE_HIT_RADIUS:
+			return left
+	return null
+
+
 # ============================================================================
 # DRAWING (REQ-013, REQ-018)
 # ============================================================================
@@ -242,6 +317,7 @@ func _draw() -> void:
 	if lane:
 		_draw_range()
 		_draw_curve()
+		_draw_tension_handle()
 		_draw_points()
 		if not lane.resolved:
 			_draw_unresolved_overlay()
@@ -266,7 +342,7 @@ func _draw_curve() -> void:
 	var first_x := tick_to_x(first.tick)
 	var first_y := value_to_y(first.value)
 	if first_x > visible_range.x:
-		draw_line(Vector2(visible_range.x, first_y), Vector2(first_x, first_y), colour, CURVE_WIDTH)
+		draw_line(Vector2(visible_range.x, first_y), Vector2(first_x, first_y), colour, CURVE_WIDTH, true)
 
 	for i in range(lane.points.size() - 1):
 		_draw_segment(lane.points[i], lane.points[i + 1], colour, visible_range)
@@ -275,7 +351,7 @@ func _draw_curve() -> void:
 	var last_x := tick_to_x(last.tick)
 	var last_y := value_to_y(last.value)
 	if last_x < visible_range.y:
-		draw_line(Vector2(last_x, last_y), Vector2(visible_range.y, last_y), colour, CURVE_WIDTH)
+		draw_line(Vector2(last_x, last_y), Vector2(visible_range.y, last_y), colour, CURVE_WIDTH, true)
 
 
 func _draw_segment(left: AutomationPoint, right: AutomationPoint, colour: Color, visible_range: Vector2) -> void:
@@ -288,24 +364,25 @@ func _draw_segment(left: AutomationPoint, right: AutomationPoint, colour: Color,
 
 	if left.curve == AutomationPoint.CurveType.STEP:
 		# Hold the left value to the right point's tick, then jump.
-		draw_line(Vector2(x0, y0), Vector2(x1, y0), colour, CURVE_WIDTH)
-		draw_line(Vector2(x1, y0), Vector2(x1, y1), colour, CURVE_WIDTH)
+		draw_line(Vector2(x0, y0), Vector2(x1, y0), colour, CURVE_WIDTH, true)
+		draw_line(Vector2(x1, y0), Vector2(x1, y1), colour, CURVE_WIDTH, true)
 		return
 
 	if left.tension == 0.0:
-		draw_line(Vector2(x0, y0), Vector2(x1, y1), colour, CURVE_WIDTH)
+		draw_line(Vector2(x0, y0), Vector2(x1, y1), colour, CURVE_WIDTH, true)
 		return
 
-	# A warped ramp is sampled through the SHARED evaluator, so the drawn shape is the one the
-	# engine plays (REQ-005). No phase-1 gesture writes tension, but a hand-edited file can.
-	var steps := clampi(int((x1 - x0) / CURVE_SAMPLE_PX), 2, 128)
-	var previous := Vector2(x0, y0)
+	# A warped ramp is sampled through the SHARED tension warp, so the drawn shape is the one the
+	# engine plays (REQ-005). Samples bunch up towards both ends (cosine spacing): a tension warp
+	# can be almost vertical right at an end point, and evenly spaced samples would skip over that
+	# part and draw it as a straight jump.
+	var steps := clampi(int((x1 - x0) / CURVE_SAMPLE_PX), 16, 160)
+	var path := PackedVector2Array([Vector2(x0, y0)])
 	for step in range(1, steps + 1):
-		var t := float(step) / float(steps)
-		var tick := int(round(lerpf(float(left.tick), float(right.tick), t)))
-		var next := Vector2(tick_to_x(tick), value_to_y(AutomationCurve.evaluate(left, right, tick)))
-		draw_line(previous, next, colour, CURVE_WIDTH)
-		previous = next
+		var t := 0.5 - 0.5 * cos(PI * float(step) / float(steps))
+		var warped := AutomationCurve.apply_tension(t, left.tension)
+		path.append(Vector2(lerpf(x0, x1, t), value_to_y(lerpf(left.value, right.value, warped))))
+	draw_polyline(path, colour, CURVE_WIDTH, true)
 
 
 ## The committed time range from a ctrl-drag, while it belongs to this lane.
@@ -322,6 +399,37 @@ func _draw_range() -> void:
 	draw_line(Vector2(x1, 0.0), Vector2(x1, size.y), Color(0.4, 0.8, 1.0, 0.5), 1.0)
 
 
+## The handle on the hovered (or dragged) segment, drawn on the curve at the segment's midpoint.
+func _draw_tension_handle() -> void:
+	var dragging := _tension_drag_id >= 0 or _bend_point_id >= 0
+	for id in _handle_ids_to_draw():
+		var left := _find_point(id)
+		if left == null:
+			continue
+		var centre := _handle_centre(left)
+		if is_nan(centre.x):
+			continue
+		var colour := Color.WHITE if dragging else get_curve_color().lightened(0.4)
+		var r := HANDLE_RADIUS
+		var diamond := PackedVector2Array([
+			centre + Vector2(0, -r - 1), centre + Vector2(r + 1, 0),
+			centre + Vector2(0, r + 1), centre + Vector2(-r - 1, 0)])
+		draw_colored_polygon(diamond, colour)
+		# The polygon fill has no antialiasing of its own, so smooth its edge with an outline.
+		diamond.append(diamond[0])
+		draw_polyline(diamond, colour, 1.0, true)
+
+
+## Left points of the segments whose handles show: the one being dragged, the two around a point
+## being Alt-bent, else the segment the cursor is over.
+func _handle_ids_to_draw() -> Array:
+	if _tension_drag_id >= 0:
+		return [_tension_drag_id]
+	if _bend_point_id >= 0:
+		return _bend_before.keys()
+	return [_hover_handle_id] if _hover_handle_id >= 0 else []
+
+
 func _draw_points() -> void:
 	var visible_range := _visible_x_range()
 	for point in lane.points:
@@ -336,9 +444,9 @@ func _draw_points() -> void:
 			fill = fill.lightened(0.4)
 		if lane.bypassed:
 			fill.a = 0.45
-		draw_circle(centre, POINT_RADIUS + (1.0 if hovered else 0.0), fill)
+		draw_circle(centre, POINT_RADIUS + (1.0 if hovered else 0.0), fill, true, -1.0, true)
 		if selected:
-			draw_arc(centre, POINT_RADIUS + 2.0, 0.0, TAU, 12, Color(0.4, 0.8, 1.0), 1.5)
+			draw_arc(centre, POINT_RADIUS + 2.0, 0.0, TAU, 24, Color(0.4, 0.8, 1.0), 1.5, true)
 
 
 ## A lane whose target no longer resolves keeps every point but drives nothing (REQ-024); the
@@ -388,13 +496,30 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		_on_lane_pressed(pos)
 		var hit := _point_at(pos)
 
+		var plain := not (event.ctrl_pressed or event.meta_pressed or event.shift_pressed)
+		var handle := _handle_at(pos) if hit == null and plain else null
+		if handle != null:
+			if event.double_click:
+				_reset_tension(handle)
+			else:
+				_begin_tension_drag(handle)
+			accept_event()
+			return
+
+		if hit != null and event.alt_pressed and _plain_except_alt(event):
+			_begin_bend(hit, pos)
+			accept_event()
+			return
+
 		if event.double_click:
 			# Empty space inserts a point and keeps it under the cursor for dragging; on a point it
-			# only re-arms the drag, so it can't stack two points on one spot.
+			# opens the value editor, so it can't stack two points on one spot.
 			if hit == null:
 				hit = _insert_point_at(pos)
-			if hit != null:
-				_begin_point_drag(hit, pos)
+				if hit != null:
+					_begin_point_drag(hit, pos)
+			else:
+				_open_value_editor(hit)
 			accept_event()
 			return
 
@@ -421,7 +546,13 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		return
 
 	# Release.
-	if _box_active:
+	if _bend_point_id >= 0:
+		_finish_bend()
+		accept_event()
+	elif _tension_drag_id >= 0:
+		_finish_tension_drag()
+		accept_event()
+	elif _box_active:
 		_finish_box_select(pos)
 		accept_event()
 	elif _drag_active or _drag_pending:
@@ -429,8 +560,18 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		accept_event()
 
 
+func _plain_except_alt(event: InputEventMouseButton) -> bool:
+	return not (event.ctrl_pressed or event.meta_pressed or event.shift_pressed)
+
+
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	var pos: Vector2 = event.position
+	if _bend_point_id >= 0:
+		_apply_bend(pos)
+		return
+	if _tension_drag_id >= 0:
+		_apply_tension_drag(pos)
+		return
 	if _box_active:
 		_box_current = pos
 		if _box_moved():
@@ -441,10 +582,19 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_drag_pending = false
 		_drag_active = true
 	if _drag_active:
-		_apply_point_drag(pos)
+		_apply_point_drag(pos, event.shift_pressed)
 		return
 	var hover := _point_at(pos)
 	_set_hover(hover.id if hover else -1)
+	var segment := _segment_at_x(pos.x)
+	_set_handle_hover(segment.id if segment else -1)
+
+
+func _set_handle_hover(point_id: int) -> void:
+	if point_id == _hover_handle_id:
+		return
+	_hover_handle_id = point_id
+	queue_redraw()
 
 
 func _set_hover(point_id: int) -> void:
@@ -557,6 +707,8 @@ func _begin_point_drag(point: AutomationPoint, pos: Vector2) -> void:
 	_drag_start_pos = pos
 	_drag_anchor_tick = point.tick
 	_drag_anchor_value = point.value
+	_drag_value_delta = 0.0
+	_drag_last_y = pos.y
 	_drag_before = AutomationActions.capture_point_states(_dragged_points())
 	queue_redraw()
 	_refresh_tooltip()
@@ -580,15 +732,19 @@ func _find_point(point_id: int) -> AutomationPoint:
 
 
 ## Move every dragged point by the same tick/value delta, snapping the grabbed point horizontally
-## so the group keeps its internal spacing (REQ-018).
-func _apply_point_drag(pos: Vector2) -> void:
+## so the group keeps its internal spacing (REQ-018). With `precise` (Shift held) the value follows
+## the cursor at PRECISION_SCALE; the delta accumulates, so toggling Shift never makes it jump.
+func _apply_point_drag(pos: Vector2, precise: bool = false) -> void:
 	var anchor := _find_point(_drag_point_id)
 	if anchor == null:
 		return
 
 	var target_tick := maxi(0, _snap_tick(x_to_tick(pos.x)))
 	var tick_delta := target_tick - _drag_anchor_tick
-	var value_delta := y_to_value(pos.y) - _drag_anchor_value
+	var step := -(pos.y - _drag_last_y) / _value_span() * (PRECISION_SCALE if precise else 1.0)
+	_drag_last_y = pos.y
+	_drag_value_delta = clampf(_drag_value_delta + step, -_drag_anchor_value, 1.0 - _drag_anchor_value)
+	var value_delta := _drag_value_delta
 
 	# Don't drag any point below tick 0.
 	var lowest := 0
@@ -634,6 +790,160 @@ func _finish_point_drag() -> void:
 	_drag_point_id = -1
 	queue_redraw()
 	_refresh_tooltip()
+
+
+# ---------------------------------------------------------------------------
+# Tension handle
+# ---------------------------------------------------------------------------
+
+func _begin_tension_drag(left: AutomationPoint) -> void:
+	_set_hover(-1)
+	_tension_drag_id = left.id
+	_tension_before = AutomationActions.capture_point_states([left])
+	queue_redraw()
+
+
+## Bend the segment so its midpoint follows the cursor: solve for the tension that puts the warped
+## ramp at the cursor's height `w` (as a fraction of the segment's rise).
+func _apply_tension_drag(pos: Vector2) -> void:
+	var left := _find_point(_tension_drag_id)
+	var right := _next_point(left) if left else null
+	if left == null or right == null:
+		return
+	var w := (y_to_value(pos.y) - left.value) / (right.value - left.value)
+	var tension := AutomationCurve.tension_for_midpoint(clampf(w, 0.01, 0.99))
+	if absf(tension) < TENSION_SNAP:
+		tension = 0.0
+	lane.update_point(left.id, left.tick, left.value, left.curve, tension)
+	queue_redraw()
+
+
+func _finish_tension_drag() -> void:
+	var left := _find_point(_tension_drag_id)
+	if left != null and not _tension_before.is_empty() \
+			and not is_equal_approx(left.tension, _tension_before[left.id]["tension"]):
+		AutomationActions.move_points(lane, [left], _tension_before.duplicate(true), true, "Bend Curve")
+	_tension_drag_id = -1
+	_tension_before.clear()
+	queue_redraw()
+
+
+## Alt-drag on a point: the segments before and after it bend together. Dragging up pushes the
+## middle of each segment up, down pushes it down, whichever way the segment slopes; half the row
+## height covers the full tension range.
+func _begin_bend(point: AutomationPoint, pos: Vector2) -> void:
+	var index := lane.points.find(point)
+	var lefts: Array = []
+	if index > 0:
+		lefts.append(lane.points[index - 1])
+	lefts.append(point)
+	lefts = lefts.filter(func(left: AutomationPoint) -> bool: return _bendable_ramp(left))
+	if lefts.is_empty():
+		return
+	_set_hover(-1)
+	_bend_point_id = point.id
+	_bend_start_y = pos.y
+	_bend_before = AutomationActions.capture_point_states(lefts)
+	queue_redraw()
+
+
+## A LINEAR segment starting at `left` between two different values (no on-screen width needed).
+func _bendable_ramp(left: AutomationPoint) -> bool:
+	var right := _next_point(left)
+	return right != null and left.curve == AutomationPoint.CurveType.LINEAR \
+			and not is_equal_approx(left.value, right.value)
+
+
+func _apply_bend(pos: Vector2) -> void:
+	var up := (_bend_start_y - pos.y) / (_value_span() * 0.5)
+	for id in _bend_before:
+		var left := _find_point(id)
+		var right := _next_point(left) if left else null
+		if left == null or right == null:
+			continue
+		var rises := 1.0 if right.value > left.value else -1.0
+		var tension := clampf(_bend_before[id]["tension"] - rises * up, -1.0, 1.0)
+		if absf(tension) < TENSION_SNAP:
+			tension = 0.0
+		lane.update_point(left.id, left.tick, left.value, left.curve, tension)
+	queue_redraw()
+
+
+func _finish_bend() -> void:
+	var changed: Array = []
+	for id in _bend_before:
+		var left := _find_point(id)
+		if left and not is_equal_approx(left.tension, _bend_before[id]["tension"]):
+			changed.append(left)
+	if not changed.is_empty():
+		AutomationActions.move_points(lane, changed, _bend_before.duplicate(true), true, "Bend Curves")
+	_bend_point_id = -1
+	_bend_before.clear()
+	queue_redraw()
+
+
+## Double-click on a handle: back to a straight line, as one undo step.
+func _reset_tension(left: AutomationPoint) -> void:
+	if left.tension != 0.0:
+		AutomationActions.set_curve(lane, [left], left.curve, 0.0)
+	queue_redraw()
+
+
+# ---------------------------------------------------------------------------
+# Typed value entry
+# ---------------------------------------------------------------------------
+
+## Open a floating editor on `point` to type its value exactly, in the target's own units.
+func _open_value_editor(point: AutomationPoint) -> void:
+	if lane == null or timeline == null:
+		return
+	_cancel_pending_drag()
+	if selection_manager:
+		selection_manager.select_only(lane, point.id)
+	if _value_editor and is_instance_valid(_value_editor):
+		_value_editor.queue_free()
+	var channel: Object = track.get_linked_channel() if track else null
+	var text := lane.target.edit_text(channel, point.value) if lane.target else "%.3f" % point.value
+	var editor_size := Vector2(64.0, 22.0)
+	var centre := get_global_transform() * Vector2(tick_to_x(point.tick), value_to_y(point.value))
+	var view_size := get_viewport_rect().size
+	var pos := centre + Vector2(-editor_size.x * 0.5, -editor_size.y - 10.0)
+	pos.x = clampf(pos.x, 0.0, maxf(view_size.x - editor_size.x, 0.0))
+	pos.y = maxf(pos.y, 0.0)
+	var editor := FloatingValueEditor.new()
+	add_child(editor)
+	_value_editor = editor
+	var point_id := point.id
+	editor.committed.connect(func(entered: String) -> void: _commit_typed_value(point_id, entered))
+	editor.open(text, pos, editor_size)
+
+
+## Write a typed value through the lane's point setter as one undo step. Text that doesn't parse
+## leaves the point alone.
+func _commit_typed_value(point_id: int, text: String) -> void:
+	var point := _find_point(point_id)
+	if lane == null or point == null:
+		return
+	var channel: Object = track.get_linked_channel() if track else null
+	var normalized := lane.target.parse_edit_text(channel, text) if lane.target else text.to_float()
+	if is_nan(normalized):
+		logger.info("Ignoring unparsable automation value '%s'" % text)
+		return
+	var before := AutomationActions.capture_point_states([point])
+	lane.update_point(point_id, point.tick, clampf(normalized, 0.0, 1.0))
+	var moved := _find_point(point_id)
+	if moved:
+		AutomationActions.move_points(lane, [moved], before, false)
+	queue_redraw()
+	_refresh_tooltip()
+
+
+## Drop an armed-but-unstarted drag (the first press of a double-click) without committing.
+func _cancel_pending_drag() -> void:
+	_drag_pending = false
+	_drag_active = false
+	_drag_before.clear()
+	_drag_point_id = -1
 
 
 # ---------------------------------------------------------------------------

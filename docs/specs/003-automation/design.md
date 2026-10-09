@@ -172,7 +172,7 @@ Three shapes, matching REQ-005 and replacing the stub's unused `BEZIER` / `EXPON
 - `Linear` — `lerp(a, b, t)`.
 - `Step` — hold `a` until the next point's tick.
 - tension — the same linear ramp warped by the point's `tension: f32` in `-1.0 … 1.0`:
-  `t' = t.powf(exp2(-tension * TENSION_RANGE))`, so `0.0` is exactly linear (satisfying REQ-005's
+  `t' = expm1(k * t) / expm1(k)` with `k = tension * TENSION_RANGE` (opposite tensions mirror each other; finite slope at both ends), so `0.0` is exactly linear (satisfying REQ-005's
   "tension 0.0 evaluates to exactly 0.5 at the midpoint"), positive tension eases in and negative
   eases out. `TENSION_RANGE` is a shared constant so the Rust and GDScript evaluators agree to
   within the 0.001 the requirement allows.

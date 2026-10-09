@@ -4,8 +4,8 @@ class_name AutomationCurve extends RefCounted
 ## `Engine/src/audio/automation.rs::evaluate_segment` / `apply_tension`. The two sides must
 ## change together or the drawn curve stops matching what is heard (REQ-005).
 
-## Exponent range for a point's tension. Shared with the engine: `TENSION_RANGE` there.
-const TENSION_RANGE: float = 2.0
+## Curvature range for a point's tension. Shared with the engine: `TENSION_RANGE` there.
+const TENSION_RANGE: float = 8.0
 
 
 ## Value of the segment between `left` and `right` at `tick`. `right == null` holds `left`'s
@@ -29,9 +29,19 @@ static func evaluate(left: AutomationPoint, right: AutomationPoint, tick: int) -
 
 ## Warp a `0.0..1.0` ramp position by `tension`. Tension `0.0` returns `t` unchanged (exact
 ## early return, matching the engine), so a linear segment evaluates to exactly its midpoint
-## halfway through. NO minus sign: `warped = t ** (2.0 ** (tension * TENSION_RANGE))`.
+## halfway through. `warped = (e^(k*t) - 1) / (e^k - 1)` with `k = tension * TENSION_RANGE`:
+## opposite tensions mirror each other and the slope stays finite at both ends.
 static func apply_tension(t: float, tension: float) -> float:
 	if tension == 0.0:
 		return t
-	var exponent := pow(2.0, clampf(tension, -1.0, 1.0) * TENSION_RANGE)
-	return pow(t, exponent)
+	var k := clampf(tension, -1.0, 1.0) * TENSION_RANGE
+	if absf(k) < 1e-4:
+		return t
+	return (exp(k * t) - 1.0) / (exp(k) - 1.0)
+
+
+## The tension whose warp passes through `w` at the segment's midpoint: inverts
+## `apply_tension(0.5, tension) == 1 / (e^(k/2) + 1)`. Clamped to `-1.0..1.0`.
+static func tension_for_midpoint(w: float) -> float:
+	w = clampf(w, 1e-6, 1.0 - 1e-6)
+	return clampf(2.0 * log(1.0 / w - 1.0) / TENSION_RANGE, -1.0, 1.0)

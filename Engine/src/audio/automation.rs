@@ -31,12 +31,14 @@ pub const VOLUME_DB_MIN: f32 = -60.0;
 /// Upper end of the channel volume range.
 pub const VOLUME_DB_MAX: f32 = 12.0;
 
-/// Exponent range for a point's `tension`. Shared with the GDScript evaluator: the two sides must
+/// Curvature range for a point's `tension`. Shared with the GDScript evaluator: the two sides must
 /// change this together or the drawn curve stops matching what is heard.
 ///
-/// The warped ramp is `t.powf(exp2(tension * TENSION_RANGE))`, so tension `0.0` is exactly linear,
-/// positive tension eases in (below the linear ramp) and negative eases out.
-pub const TENSION_RANGE: f32 = 2.0;
+/// The warped ramp is `expm1(k * t) / expm1(k)` with `k = tension * TENSION_RANGE`, so tension
+/// `0.0` is exactly linear, positive tension eases in (below the linear ramp) and negative eases
+/// out. Opposite tensions are point mirrors of each other and the slope stays finite at both ends
+/// (a power curve `t^e` went vertical at the start for `e < 1`).
+pub const TENSION_RANGE: f32 = 8.0;
 
 /// Convert a normalized `0.0..=1.0` value to channel volume in dB.
 pub fn normalized_to_db(normalized: f32) -> f32 {
@@ -607,8 +609,11 @@ pub fn apply_tension(t: f32, tension: f32) -> f32 {
     if tension == 0.0 {
         return t;
     }
-    let exponent = (tension.clamp(-1.0, 1.0) * TENSION_RANGE).exp2();
-    t.powf(exponent)
+    let k = tension.clamp(-1.0, 1.0) * TENSION_RANGE;
+    if k.abs() < 1e-4 {
+        return t;
+    }
+    (k * t).exp_m1() / k.exp_m1()
 }
 
 #[cfg(test)]
@@ -899,10 +904,25 @@ mod tests {
         // The exact warp, so the GDScript evaluator has a value to match (REQ-005).
         let value = evaluate_segment(&eased_in, &b, 480);
         assert!(
-            (value - 0.25).abs() < 1e-5,
+            (value - 0.119_203).abs() < 1e-5,
             "tension +0.5 midpoint = {}",
             value
         );
+        // Opposite tensions mirror each other through the segment's centre.
+        for tick in [96, 240, 480, 720, 864] {
+            let mirrored = 1.0 - evaluate_segment(&eased_out, &b, 960 - tick);
+            let value = evaluate_segment(&eased_in, &b, tick);
+            assert!(
+                (value - mirrored).abs() < 1e-5,
+                "tension mirror at {}: {} vs {}",
+                tick,
+                value,
+                mirrored
+            );
+        }
+        // Full tension stays finite-sloped at the start: no vertical jump right after the point.
+        let full_out = AutomationPoint::new(1, 0, 0.0, CurveKind::Linear, -1.0);
+        assert!(evaluate_segment(&full_out, &b, 1) < 0.01);
     }
 
     #[test]
