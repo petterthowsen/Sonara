@@ -20,7 +20,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 7: Split `audio/command_worker.rs`
 - [x] Phase 8: Split `osc/server.rs`
 - [x] Phase 9: OSC argument reader
-- [ ] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
+- [x] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
 - [ ] Phase 11: Group `audio/devices/`
 - [ ] Phase 12: Split `audio/ipc/process_manager.rs` and `audio/devices/sampler.rs`
 - [ ] Phase 13: Docs, command classification for #1, close-out
@@ -617,6 +617,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 7 | 2026-10-09 | lib 814 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 7` (a) pure move, (b) handle arms as methods. See notes below. |
 | 8 | 2026-10-09 | lib 823 / 14 (814 + 9 new encode tests) | release 0; test build 0 | Commits `Engine cleanup phase 8` (a) pure move, (b) RouteCtx, `encode_status`, `GuiEvent::apply`. See notes below. |
 | 9 | 2026-10-09 | lib 842 / 14 (823 + 8 `Args` tests + 1 device test + 10 routing tests) | release 0; test build 0 | Allowed behavior change: malformed messages log a WARN. Live Godot check pending. See notes below. |
+| 10 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 10` (a) pure move of `processing.rs`, (a) pure move of `mixing.rs`, (b) stages over disjoint fields. Live `rt-debug` and load check pending. See notes below. |
 
 Phase 1 notes:
 
@@ -839,3 +840,70 @@ Phase 9 notes:
   (`Identifier not found: AudioEngineOSC` in `data/Project.gd` when `GridHelper` loads standalone); no Godot code was changed here.
   Live check (engine plus app, `last_warn.log`): pending, port 7000 was held by the user's
   engine. A static read of every `AudioEngineOSC.send` call in `Godot/` found no argument type that the engine rejects.
+
+Phase 10 notes:
+
+- Layout (lines, tests included): `audio/processing/{mod 202, live_midi 86, timeline 301, clip_midi 437, clip_audio 348}`,
+  `audio/mixing/{mod 344, solo 364, routing 1021, test_support 120}`. Production code in `routing.rs` is about 350 lines; the rest of its
+  size is the routing, send and async-plugin tests. `processing.rs` and `mixing.rs` became `mod.rs` with `git mv`.
+- Commit (a), processing: the sorted, whitespace-trimmed lines of the old file and the new files compared as multisets. The only
+  differences are `use`/`mod` lines, the new `//!` headers, `pub(super)` on `advance_tick`, `collect_tick_events_looped`, `frame_rate_at`
+  and `schedule_live_midi_events`, a `pub use timeline::frames_before_tick`, and one `rustfmt` re-wrap of two signatures. Tests moved
+  with the code they cover (live MIDI tests to `live_midi.rs`, loop and tempo tests to `timeline.rs`); the clip tests waited in `mod.rs`
+  for commit (b).
+- Commit (a), mixing: same comparison. Differences are `use`/`mod` lines, `//!` headers, `pub(super)` on moved functions, re-wrapped
+  signatures, and the test fixtures: `TestDevice`, `add_test_device`, `test_channel`, `state_with`, `mix`, `track_bus_master_state`,
+  `send_to` and the three constants moved to `test_support.rs` (`pub(super)`, fields of `TestDevice` too). The `soloed_*` tests went to
+  `solo.rs`, the master output tests stay in `mod.rs`, everything else (routing, sends, aux sources, async plugins) is in `routing.rs`.
+- Commit (b), processing: `schedule_live_midi_events(&mut channels, ..)`, `dispatch_clip_midi(&tracks, &clips, &mut channels, &tick_events,
+  &loop_wraps, &mut note_events)`, `render_audio_clips(&mut tracks, &clips, &mut channels, &settings, device_sample_rate, &tick_rates,
+  BufferSpan { .. })` and `automation::apply_automation(&mut tracks, &mut channels, tick)` (signature changed from `&mut EngineState`; it already
+  split the borrow itself; its tests were updated). The `rt_debug::section` names are unchanged: "live MIDI scheduling", "automation",
+  "tick events", "clip MIDI", "audio clip render". The two long section bodies are split further (`collect_instance_note_events`,
+  `mix_instance_frame`) so no function is over 150 lines; bodies are verbatim apart from `continue` -> `return` where the early exit
+  now leaves the extracted function, and `sample_left`/`sample_right` becoming `&mut f32` (the mono case still adds the accumulated left
+  sample, as before).
+- Changes on the audio thread beyond moving code: (1) `clip MIDI` read `state.tracks.get_mut(&id)` only to read `channel_id`; it is now
+  `tracks.get(&id)` on a shared reference (no behavior change). (2) The automation tick is read with `get_current_tick()` just before the
+  section instead of inside it (same atomic load, one statement earlier). Nothing allocates, locks or boxes that did not before; no
+  `#[inline]` added. `BufferSpan` is a small `Copy` struct on the stack.
+- Commit (c), mixing: `mix_and_output` is split into `device_prepass`, `apply_fader_and_pan` and `route_in_dependency_order` (private
+  functions in `mixing/mod.rs`, bodies verbatim). It already took only `channels` and `render_scratch` from `EngineState`.
+- No stage still takes `&mut EngineState`, except `process_audio` and `mix_and_output` themselves, which destructure it.
+  `apply_transport` and `fill_tick_rates` calls stay inline in `process_audio` (they are not `rt_debug` sections).
+- Live check (`SONARA_FEATURES=rt-debug ./run_release.sh` with clips through a CLAP plugin and a bus; engine stats load average/peak):
+  pending. Port 7000 was held by the user's engine, so nothing was started.
+- Flaky: `audio::ipc::process_manager::tests::stderr_tail_keeps_only_the_last_lines` and `watcher_records_exit_code_and_stderr` failed in
+  several full `cargo test --lib` runs and passed on rerun and when run alone (`cargo test --lib process_manager`).
+
+Stage map for #1 (what each stage reads and writes). `EngineState` fields: `channels`, `tracks`, `clips`, `settings`, `device_sample_rate`,
+`tempo_map`, `time_signature_map`, `loop_region`, `render_scratch`; the atomics `is_playing`, `current_tick`, `fractional_tick_accumulator`,
+`dispatch_playhead_tick`; `rendering` is read by the callback before these stages and `block_clock` by plugin adapters.
+
+`process_audio` (`processing/`):
+
+| Stage | Reads | Writes |
+|---|---|---|
+| live MIDI scheduling (`live_midi`) | `channels[*].midi_queue` (pops), callback start time, `sample_rate` | `channels[*].scheduled_midi_events` |
+| automation (`automation::apply_automation`) | `current_tick`; `tracks[*].automation_lanes`, `tracks[*].channel_id` | lane cursors/`last_applied`/`captured_base`; the targeted channel parameters (volume, pan, send amounts, device parameters) |
+| transport to devices (inline) | `tempo_map`, `time_signature_map`, `settings`, `is_playing`, `current_tick`, accumulator | `channels[*].devices` (`set_transport`, containers recursively) |
+| tick rates (`tempo_map::fill_tick_rates`) | `tempo_map`, `settings`, tick, accumulator | `render_scratch.frame_tick_rates` |
+| tick events (`timeline::collect_tick_events_looped`) | tick rates, `loop_region`, `dispatch_playhead_tick` (taken, cleared) | `render_scratch.tick_events`, `render_scratch.loop_wraps`; then `current_tick`, accumulator |
+| clip MIDI (`clip_midi`) | `tracks[*].clip_instances`, `tracks[*].channel_id`, `clips[*].midi_notes`, tick events, loop wraps | `render_scratch.note_events`; `channels[*].active_notes` and the devices' note input (`send_clip_note`, `release_clip_notes_at`) |
+| audio clip render (`clip_audio`) | `clips[*]` PCM and recorded BPM, `settings.tempo/ppq`, `device_sample_rate`, tick rates, `loop_region`, `tracks[*].channel_id` | `tracks[*].clip_instances[*].playback_position`; `channels[*].buffer_left/right` (added to) |
+
+`mix_and_output` (`mixing/`); `channels` is the only `EngineState` field besides `render_scratch` (`channel_ids`, `parked`, `ready`):
+
+| Stage | Reads | Writes |
+|---|---|---|
+| route counting (`routing::count_route_inputs`) | `channels[*].output_channel_id`, `send_channels` (ids), `id` | `mix.pending_inputs`, `mix.done`, `mix.is_route_target` |
+| solo roles (`solo::assign_solo_roles`) | `mute`, `solo`, `output_channel_id`, `send_channels` (target, muted), `mix.solo_*` | `mix.solo_up`, `mix.solo_down`, `mix.solo_role` |
+| aux source marking (`routing::mark_aux_sources`) | `extra_out_targets` | `mix.has_aux_source` |
+| aux source pass (`routing::process_aux_sources`) | `mix.has_aux_source`, `extra_out_buffers` | the source channel's device chain, buffers, `sleep_changes` (drained), `extra_out_targets`/`extra_out_buffers` (taken and put back); the child channels' `buffer_left/right` (overwritten); statuses via `try_send` |
+| device pre-pass (`device_prepass`) | `mix.is_route_target`, `mix.has_aux_source` | non-target channels' device chains and `mix.cursor`/`chain_start`, buffers, `sleep_changes`; `render_scratch.parked`; statuses via `try_send` |
+| pre-fader copy (`routing::copy_pre_fader`) | `send_channels`, `buffer_left/right` | `mix.has_pre_fader_copy`, `mix.pre_fader_left/right` |
+| fader and pan (`apply_fader_and_pan`) | `mix.solo_role`, `volume_db`, `pan*`, `automation_*`, `pan_mode`, `mute` | `buffer_left/right` (cleared if silenced), gain smoothing state, `current_gain` |
+| routing sweeps (`route_in_dependency_order`: `begin_finish`, `drain_parked`, `route_finished`, `route_channel`) | `mix.pending_inputs`, `mix.done`, `mix.is_route_target`, `mix.solo_role`, `output_channel_id`, `send_channels`, source buffers and pre-fader copies, target fader gain | route targets' device chains, `mix.done`, `mix.pending_inputs`, `mix.pre_fader_*`; target `buffer_left/right` (added to); `render_scratch.ready`/`parked`; statuses via `try_send` |
+| master output (`write_master_output`) | `channels[1]` buffers and `output_channel_id` | the device output buffer only |
+
+Not covered here: what the callback does around these stages (state lock, rendering guard, meters) lives in `audio/engine.rs`/`stream.rs`.

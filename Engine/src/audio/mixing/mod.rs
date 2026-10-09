@@ -5,7 +5,7 @@ mod solo;
 #[cfg(test)]
 mod test_support;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use crossbeam::channel::Sender;
 
@@ -97,6 +97,34 @@ pub fn mix_and_output(
     // normal pre-pass so remaining FX wait until children mix back in.
     process_aux_sources(channel_map, channel_ids, frames, status_tx);
 
+    device_prepass(channel_map, channel_ids, parked, frames, status_tx);
+
+    // Pre-fader sends take the device output before the fader. Route targets copy theirs in
+    // the routing pass, once their inputs have mixed in and their devices have run.
+    for channel in channel_map.values_mut() {
+        if !channel.mix.is_route_target {
+            copy_pre_fader(channel, frames);
+        }
+    }
+
+    apply_fader_and_pan(channel_map, frames);
+
+    route_in_dependency_order(channel_map, channel_ids, parked, ready, frames, status_tx);
+
+    write_master_output(channel_map, data, channels);
+}
+
+/// First pass: begin and finish the device chains of channels nothing routes into.
+///
+/// Reads: `mix.is_route_target`, `mix.has_aux_source`. Writes: channel buffers and device
+/// state through the chains, `parked`, and the device events sent on `status_tx`.
+fn device_prepass(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    channel_ids: &[ChannelId],
+    parked: &mut VecDeque<ChannelId>,
+    frames: usize,
+    status_tx: &Sender<EngineStatus>,
+) {
     // First pass: process device chains (instruments and effects) before the fader.
     // Route targets are skipped; they run in the routing pass after their inputs mix in.
     // Every chain starts first; a chain that reaches a plugin parks there while the plugin
@@ -123,15 +151,13 @@ pub fn mix_and_output(
         }
     }
     drain_parked(channel_map, parked, frames, status_tx);
+}
 
-    // Pre-fader sends take the device output before the fader. Route targets copy theirs in
-    // the routing pass, once their inputs have mixed in and their devices have run.
-    for channel in channel_map.values_mut() {
-        if !channel.mix.is_route_target {
-            copy_pre_fader(channel, frames);
-        }
-    }
-
+/// Second pass: apply each channel's smoothed fader gain and pan to its own buffer.
+///
+/// Reads: `mix.solo_role`, pan and fader settings. Writes: channel buffers and the gain
+/// smoothing state.
+fn apply_fader_and_pan(channel_map: &mut HashMap<ChannelId, Channel>, frames: usize) {
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
     // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
     // Silent channels are cleared. Send-only sources keep their buffer for sends to a soloed bus.
@@ -152,7 +178,20 @@ pub fn mix_and_output(
             channel.buffer_right[i] = left_in * pan.left_to_right + right_in * pan.right_to_right;
         }
     }
+}
 
+/// Third pass: finish channels in dependency order, mixing each into its route and sends.
+///
+/// Reads and writes the whole `mix` scratch of every channel (`pending_inputs`, `done`) plus
+/// buffers and device state; `ready` and `parked` are preallocated scratch.
+fn route_in_dependency_order(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    channel_ids: &[ChannelId],
+    parked: &mut VecDeque<ChannelId>,
+    ready: &mut Vec<ChannelId>,
+    frames: usize,
+    status_tx: &Sender<EngineStatus>,
+) {
     // Third pass: routing in dependency order (Track → Bus → Master). A channel finishes once
     // every route and send into it has mixed in, so each channel processes exactly once.
     // Each sweep batches the channels that are ready: their chains begin together (so plugins on
@@ -189,8 +228,6 @@ pub fn mix_and_output(
         }
         remaining = remaining.saturating_sub(ready.len());
     }
-
-    write_master_output(channel_map, data, channels);
 }
 
 /// Write master (ID 1) to its hardware output pair: 1000 is outputs 1/2, 1001 is 3/4, …
