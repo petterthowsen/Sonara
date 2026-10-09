@@ -835,7 +835,10 @@ impl PluginProcess {
             if lock(&self.routing.exit).is_some() {
                 return Some(self.routing.crash(self));
             }
-            let suspicious = !self.routing.connected.load(Ordering::Acquire) || self.is_hung();
+            // `is_alive` also reaps the child itself (`try_wait`), so it can see an exit before the
+            // watcher has stored it in `routing.exit`: a dead child counts as suspicious too, and
+            // the loop then waits for the watcher.
+            let suspicious = !self.is_alive() || self.is_hung();
             if !suspicious || Instant::now() >= deadline {
                 if suspicious {
                     return Some(self.routing.crash(self));
