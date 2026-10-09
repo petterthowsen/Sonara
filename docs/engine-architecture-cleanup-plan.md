@@ -23,7 +23,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
 - [x] Phase 11: Group `audio/devices/`
 - [x] Phase 12: Split `audio/ipc/process_manager.rs` and `audio/devices/sampler.rs`
-- [x] Phase 13: Docs, command classification for #1, close-out (GitHub comments are drafts in `.scratch/`; live checks pending)
+- [x] Phase 13: Docs, command classification for #1, close-out (live checks done 2026-10-09)
 
 ## Before you start
 
@@ -1000,8 +1000,15 @@ Phase 13 notes:
 - Command classification: 108 `AudioCommand`s, 69 graph edit, 22 build/teardown, 5 query, 12 command thread only. The classes are judgements from reading the handlers;
   the note column marks the commands that still allocate or free under the state lock.
 - Comments for #67 and #1 are drafts, not posted: `.scratch/issue-67-comment.md` and `.scratch/issue-1-comment.md` (git-excluded).
-- Pending live checks (the user's engine holds port 7000, so none were run):
-  - [ ] Phase 2: start the engine with `./run_release.sh`; `logs/last_info.log` and `last_warn.log` are written and `/project/init` rotates them into `session_<timestamp>_*.log`.
-  - [ ] Phase 9: run Godot against the engine (open a project, play, move a fader, add a device) and check `Engine/logs/last_warn.log` for new argument warnings. File any as issues, don't silence them.
-  - [ ] Phase 10: `SONARA_FEATURES=rt-debug ./run_release.sh` with clips through a CLAP plugin and a bus (only the known `poll_device_data` allocation may show), and compare the engine stats load average/peak with `master`.
+- Live checks, run by the user on 2026-10-09 (all passed):
+  - [x] Phase 2: start the engine with `./run_release.sh`; `logs/last_info.log` and `last_warn.log` are written and `/project/init` rotates them into `session_<timestamp>_*.log`.
+  - [x] Phase 9: run Godot against the engine (open a project, play, move a fader, add a device) and check `Engine/logs/last_warn.log` for new argument warnings. File any as issues, don't silence them.
+  - [x] Phase 10: `SONARA_FEATURES=rt-debug ./run_release.sh` with clips through a CLAP plugin and a bus (only the known `poll_device_data` allocation may show), and compare the engine stats load average/peak with `master`.
+  - Results: rotation into `session_*` files works on every `/project/init`. Godot session (devices, sends,
+    volume) logged no argument warnings. rt-debug, 2 minutes of a track with Dragonfly Hall on a bus:
+    0 allocations during playback; the only 22 were `poll_device_data` while a view subscribed at project
+    load (known, #1). 0 xruns, lock misses and plugin dropouts; load avg 9.5–14.9%, peak 19.3–23.4%
+    under rt-debug (no same-project `master` comparison was run).
+  - Found along the way (pre-existing on `master`): #92 (Godot sends `/project/init` several times at
+    startup) and #93 (rotations within the same second overwrite session logs).
 - Not done on purpose: #67 is not closed, and nothing was pushed.
