@@ -1,75 +1,68 @@
 //! Plugin routes: `/plugin/*`, `/plugins/*` and `/builtin/*`.
 
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use rosc::OscType;
 use tracing::{info, warn};
 
+use super::RouteCtx;
 use crate::audio::AudioCommand;
-use crate::osc::server::OscServer;
 use std::path::PathBuf;
 
 use crate::audio::devices::DevicePath;
 
-impl OscServer {
-    /// Handle plugin routes: `/plugin/*`, `/plugins/*` and `/builtin/*`. Returns false for an address this area doesn't
-    /// know, so the caller can try the next area or report an unknown address.
-    pub(super) fn route_plugin(
-        &self,
-        parts: &[&str],
-        args: &[OscType],
-        command_tx: &Sender<AudioCommand>,
-    ) -> Result<bool> {
-        match parts {
-            // Plugin management - path-based: /plugin/{command}
-            // /plugin/scan [path:String]* — with no args, the engine uses its built-in
-            // default search paths (and CLAP_PATH, if set).
-            ["plugin", "scan"] => {
-                let paths: Vec<PathBuf> = args
-                    .iter()
-                    .filter_map(|a| match a {
-                        OscType::String(s) => Some(PathBuf::from(s)),
-                        _ => None,
-                    })
-                    .collect();
-                info!("Scan plugins: {} configured path(s)", paths.len());
-                command_tx.send(AudioCommand::ScanPlugins { paths })?;
-            }
-            // /plugins/hosting <mode:s> [plugin_id:s mode:s]* — how plugins are grouped into
-            // host processes, plus per-plugin overrides (Phase 5).
-            ["plugins", "hosting"] => match parse_hosting_policy(args) {
-                Ok(policy) => {
-                    info!(
-                        "Plugin hosting: {} ({} override(s))",
-                        policy.mode.name(),
-                        policy.overrides.len()
-                    );
-                    command_tx.send(AudioCommand::SetPluginHosting { policy })?;
-                }
-                Err(e) => warn!("Ignoring /plugins/hosting: {}", e),
-            },
-            ["builtin", "request"] => {
-                info!("Request builtin devices");
-                command_tx.send(AudioCommand::AdvertiseBuiltinDevices)?;
-            }
-            ["plugin", "get_parameters"] => {
-                if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
-                    (args.get(0), args.get(1))
-                {
-                    info!(
-                        "Get plugin parameters: channel={} device={}",
-                        channel_id, device_position
-                    );
-                    command_tx.send(AudioCommand::GetPluginParameters {
-                        channel_id: *channel_id as usize,
-                        device_path: DevicePath::root(*device_position as usize),
-                    })?;
-                }
-            }
-            _ => return Ok(false),
+/// Handle plugin routes: `/plugin/*`, `/plugins/*` and `/builtin/*`. Returns false for an address this area doesn't
+/// know, so the caller can try the next area or report an unknown address.
+pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    match parts {
+        // Plugin management - path-based: /plugin/{command}
+        // /plugin/scan [path:String]* — with no args, the engine uses its built-in
+        // default search paths (and CLAP_PATH, if set).
+        ["plugin", "scan"] => {
+            let paths: Vec<PathBuf> = args
+                .iter()
+                .filter_map(|a| match a {
+                    OscType::String(s) => Some(PathBuf::from(s)),
+                    _ => None,
+                })
+                .collect();
+            info!("Scan plugins: {} configured path(s)", paths.len());
+            cx.commands.send(AudioCommand::ScanPlugins { paths })?;
         }
-        Ok(true)
+        // /plugins/hosting <mode:s> [plugin_id:s mode:s]* — how plugins are grouped into
+        // host processes, plus per-plugin overrides (Phase 5).
+        ["plugins", "hosting"] => match parse_hosting_policy(args) {
+            Ok(policy) => {
+                info!(
+                    "Plugin hosting: {} ({} override(s))",
+                    policy.mode.name(),
+                    policy.overrides.len()
+                );
+                cx.commands
+                    .send(AudioCommand::SetPluginHosting { policy })?;
+            }
+            Err(e) => warn!("Ignoring /plugins/hosting: {}", e),
+        },
+        ["builtin", "request"] => {
+            info!("Request builtin devices");
+            cx.commands.send(AudioCommand::AdvertiseBuiltinDevices)?;
+        }
+        ["plugin", "get_parameters"] => {
+            if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
+                (args.get(0), args.get(1))
+            {
+                info!(
+                    "Get plugin parameters: channel={} device={}",
+                    channel_id, device_position
+                );
+                cx.commands.send(AudioCommand::GetPluginParameters {
+                    channel_id: *channel_id as usize,
+                    device_path: DevicePath::root(*device_position as usize),
+                })?;
+            }
+        }
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Parse `/plugins/hosting <mode:s> [plugin_id:s mode:s]*` into a hosting policy. An unknown

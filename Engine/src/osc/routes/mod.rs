@@ -25,6 +25,20 @@ use crate::audio::AudioCommand;
 use crate::logging::LogWriters;
 use crate::window_manager::WindowManager;
 
+/// What a route handler needs: where to send commands and how to answer Godot directly.
+pub(super) struct RouteCtx<'a> {
+    /// The address of the message being routed, for warnings.
+    pub addr: &'a str,
+    /// Where commands for the command thread go.
+    pub commands: &'a Sender<AudioCommand>,
+    /// The server, to answer Godot directly and reach the AudioFileService.
+    pub server: &'a OscServer,
+    /// The log files `/project/init` rotates.
+    pub log_writers: &'a LogWriters,
+    /// The plugin GUI host windows.
+    pub windows: &'a mut WindowManager,
+}
+
 impl OscServer {
     /// Handle an incoming OSC packet
     pub(super) fn handle_packet(
@@ -61,33 +75,31 @@ impl OscServer {
         // Split address into parts for path-based routing
         let parts: Vec<&str> = addr.split('/').filter(|s| !s.is_empty()).collect();
 
+        let mut cx = RouteCtx {
+            addr,
+            commands: command_tx,
+            server: self,
+            log_writers,
+            windows: window_manager,
+        };
+
         if let Some((channel_id, device_path, action)) = parse_osc_device_addr(&parts) {
-            return self.handle_device_message(
-                channel_id,
-                device_path,
-                &action,
-                args,
-                command_tx,
-                window_manager,
-            );
+            return device::handle_device_message(channel_id, device_path, &action, args, &mut cx);
         }
 
         // Route based on the first address segment
         let handled = match parts.first().copied() {
-            Some("transport") => self.route_transport(&parts, args, command_tx)?,
-            Some("project") => self.route_project(&parts, args, command_tx, log_writers)?,
+            Some("transport") => transport::route(&parts, args, &mut cx)?,
+            Some("project") => project::route(&parts, args, &mut cx)?,
             Some("channel") => {
-                self.route_channel(&parts, args, command_tx)?
-                    || self.route_channel_devices(&parts, args, command_tx)?
+                channel::route(&parts, args, &mut cx)? || device::route(&parts, args, &mut cx)?
             }
-            Some("track") => self.route_track(&parts, args, command_tx)?,
-            Some("clip") => self.route_clip(addr, &parts, args, command_tx)?,
-            Some("plugin" | "plugins" | "builtin") => {
-                self.route_plugin(&parts, args, command_tx)?
-            }
-            Some("audio") => self.route_audio(&parts, args, command_tx)?,
-            Some("render") => self.route_render(&parts, args, command_tx)?,
-            Some("audiofile") => self.route_audiofile(&parts, args)?,
+            Some("track") => track::route(&parts, args, &mut cx)?,
+            Some("clip") => clip::route(&parts, args, &mut cx)?,
+            Some("plugin" | "plugins" | "builtin") => plugin::route(&parts, args, &mut cx)?,
+            Some("audio") => audio::route(&parts, args, &mut cx)?,
+            Some("render") => render::route(&parts, args, &mut cx)?,
+            Some("audiofile") => audiofile::route(&parts, args, &cx)?,
             _ => false,
         };
 

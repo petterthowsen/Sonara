@@ -8,11 +8,33 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
+use super::encode::encode_status;
 use super::gui::GuiEvent;
-use super::server::OscServer;
 use crate::audio::EngineStatus;
+
+/// Encode one status and send it to Godot's port. Parameter changes also log how many bytes went out.
+pub(super) fn send_status(socket: &UdpSocket, client_port: u16, status: EngineStatus) {
+    let is_param_change = status.is_param_change();
+    for msg in encode_status(status) {
+        let packet = OscPacket::Message(msg);
+        if let Ok(buf) = rosc::encoder::encode(&packet) {
+            let client_addr = format!("127.0.0.1:{}", client_port);
+            if let Ok(addr) = client_addr.parse::<SocketAddr>() {
+                match socket.send_to(&buf, addr) {
+                    Ok(bytes) => {
+                        // Only log param changes for debugging
+                        if is_param_change {
+                            info!("📡 OSC sent: {} bytes to {}", bytes, addr);
+                        }
+                    }
+                    Err(e) => warn!("Failed to send OSC: {}", e),
+                }
+            }
+        }
+    }
+}
 
 /// Spawn the status sender thread. It forwards plugin GUI events to the main loop through
 /// `gui_event_tx`, follows audio config changes for the decode rate, and sends a heartbeat once
@@ -100,7 +122,7 @@ pub(super) fn spawn(
                     _ => {}
                 }
 
-                OscServer::send_status_update(&socket_clone, client_port, status);
+                send_status(&socket_clone, client_port, status);
             }
 
             // Send periodic heartbeat

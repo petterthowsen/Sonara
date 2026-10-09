@@ -1,86 +1,76 @@
 //! Transport routes: `/transport/*`.
 
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use rosc::OscType;
 use tracing::{info, warn};
 
+use super::RouteCtx;
 use crate::audio::AudioCommand;
-use crate::osc::server::OscServer;
 
-impl OscServer {
-    /// Handle transport routes: `/transport/*`. Returns false for an address this area doesn't
-    /// know, so the caller can try the next area or report an unknown address.
-    pub(super) fn route_transport(
-        &self,
-        parts: &[&str],
-        args: &[OscType],
-        command_tx: &Sender<AudioCommand>,
-    ) -> Result<bool> {
-        match parts {
-            // Transport control
-            ["transport", "play"] => {
-                info!("Play");
-                command_tx.send(AudioCommand::Play)?;
-            }
-            ["transport", "pause"] => {
-                info!("Pause");
-                command_tx.send(AudioCommand::Pause)?;
-            }
-            ["transport", "stop"] => {
-                info!("Stop");
-                command_tx.send(AudioCommand::Stop)?;
-            }
-            ["transport", "seek"] => {
-                if let Some(OscType::Int(ticks)) = args.first() {
-                    info!("Seek to tick {}", ticks);
-                    command_tx.send(AudioCommand::Seek(*ticks as i64))?;
-                }
-            }
-            ["transport", "loop"] => {
-                if let [OscType::Int(enabled), OscType::Int(start), OscType::Int(end)] = args {
-                    info!("Loop enabled={} {}..{}", enabled, start, end);
-                    command_tx.send(AudioCommand::SetLoop {
-                        enabled: *enabled != 0,
-                        start: *start as i64,
-                        end: *end as i64,
-                    })?;
-                }
-            }
-            ["transport", "tempo"] => {
-                if let Some(OscType::Float(tempo)) = args.first() {
-                    info!("Set tempo to {}", tempo);
-                    command_tx.send(AudioCommand::SetTempo(*tempo))?;
-                }
-            }
-            ["transport", "tempo_map"] => {
-                let (points, dropped) = parse_tempo_map_args(args);
-                if dropped {
-                    warn!("/transport/tempo_map: ignoring malformed trailing argument");
-                }
-                command_tx.send(AudioCommand::SetTempoMap(points))?;
-            }
-            ["transport", "time_signature_map"] => {
-                let (changes, dropped) = parse_time_signature_map_args(args);
-                if dropped {
-                    warn!(
-                        "/transport/time_signature_map: dropped malformed or out-of-range entries"
-                    );
-                }
-                command_tx.send(AudioCommand::SetTimeSignatureMap(changes))?;
-            }
-            ["transport", "time_signature"] => {
-                if let (Some(OscType::Int(num)), Some(OscType::Int(den))) =
-                    (args.get(0), args.get(1))
-                {
-                    info!("Set time signature to {}/{}", num, den);
-                    command_tx.send(AudioCommand::SetTimeSignature(*num, *den))?;
-                }
-            }
-            _ => return Ok(false),
+/// Handle transport routes: `/transport/*`. Returns false for an address this area doesn't
+/// know, so the caller can try the next area or report an unknown address.
+pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    match parts {
+        // Transport control
+        ["transport", "play"] => {
+            info!("Play");
+            cx.commands.send(AudioCommand::Play)?;
         }
-        Ok(true)
+        ["transport", "pause"] => {
+            info!("Pause");
+            cx.commands.send(AudioCommand::Pause)?;
+        }
+        ["transport", "stop"] => {
+            info!("Stop");
+            cx.commands.send(AudioCommand::Stop)?;
+        }
+        ["transport", "seek"] => {
+            if let Some(OscType::Int(ticks)) = args.first() {
+                info!("Seek to tick {}", ticks);
+                cx.commands.send(AudioCommand::Seek(*ticks as i64))?;
+            }
+        }
+        ["transport", "loop"] => {
+            if let [OscType::Int(enabled), OscType::Int(start), OscType::Int(end)] = args {
+                info!("Loop enabled={} {}..{}", enabled, start, end);
+                cx.commands.send(AudioCommand::SetLoop {
+                    enabled: *enabled != 0,
+                    start: *start as i64,
+                    end: *end as i64,
+                })?;
+            }
+        }
+        ["transport", "tempo"] => {
+            if let Some(OscType::Float(tempo)) = args.first() {
+                info!("Set tempo to {}", tempo);
+                cx.commands.send(AudioCommand::SetTempo(*tempo))?;
+            }
+        }
+        ["transport", "tempo_map"] => {
+            let (points, dropped) = parse_tempo_map_args(args);
+            if dropped {
+                warn!("/transport/tempo_map: ignoring malformed trailing argument");
+            }
+            cx.commands.send(AudioCommand::SetTempoMap(points))?;
+        }
+        ["transport", "time_signature_map"] => {
+            let (changes, dropped) = parse_time_signature_map_args(args);
+            if dropped {
+                warn!("/transport/time_signature_map: dropped malformed or out-of-range entries");
+            }
+            cx.commands
+                .send(AudioCommand::SetTimeSignatureMap(changes))?;
+        }
+        ["transport", "time_signature"] => {
+            if let (Some(OscType::Int(num)), Some(OscType::Int(den))) = (args.get(0), args.get(1)) {
+                info!("Set time signature to {}/{}", num, den);
+                cx.commands
+                    .send(AudioCommand::SetTimeSignature(*num, *den))?;
+            }
+        }
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Parse `/transport/tempo_map` args (`i:tick, f:bpm` pairs). The flag is true when a trailing

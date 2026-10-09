@@ -1,39 +1,31 @@
 //! Audio device routes: `/audio/devices/*` and `/audio/config/*`.
 
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use rosc::OscType;
 use tracing::warn;
 
+use super::RouteCtx;
 use crate::audio::AudioCommand;
-use crate::osc::server::OscServer;
 
-impl OscServer {
-    /// Handle audio device routes: `/audio/devices/*` and `/audio/config/*`. Returns false for an address this area doesn't
-    /// know, so the caller can try the next area or report an unknown address.
-    pub(super) fn route_audio(
-        &self,
-        parts: &[&str],
-        args: &[OscType],
-        command_tx: &Sender<AudioCommand>,
-    ) -> Result<bool> {
-        match parts {
-            // Audio device settings (Phase 7)
-            ["audio", "devices", "request"] => {
-                command_tx.send(AudioCommand::RequestAudioDevices)?;
-            }
-            ["audio", "config", "request"] => {
-                command_tx.send(AudioCommand::RequestAudioConfig)?;
-            }
-            // /audio/config/set <device:s> <rate:i> <buffer:i> — device "" is the default.
-            ["audio", "config", "set"] => match parse_audio_config(args) {
-                Ok(command) => command_tx.send(command)?,
-                Err(e) => warn!("Ignoring /audio/config/set: {}", e),
-            },
-            _ => return Ok(false),
+/// Handle audio device routes: `/audio/devices/*` and `/audio/config/*`. Returns false for an address this area doesn't
+/// know, so the caller can try the next area or report an unknown address.
+pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    match parts {
+        // Audio device settings (Phase 7)
+        ["audio", "devices", "request"] => {
+            cx.commands.send(AudioCommand::RequestAudioDevices)?;
         }
-        Ok(true)
+        ["audio", "config", "request"] => {
+            cx.commands.send(AudioCommand::RequestAudioConfig)?;
+        }
+        // /audio/config/set <device:s> <rate:i> <buffer:i> — device "" is the default.
+        ["audio", "config", "set"] => match parse_audio_config(args) {
+            Ok(command) => cx.commands.send(command)?,
+            Err(e) => warn!("Ignoring /audio/config/set: {}", e),
+        },
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Parse `/audio/config/set <device:s> <rate:i> <buffer:i>`.

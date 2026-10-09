@@ -1,11 +1,12 @@
 //! Plugin GUI events and the host windows they drive.
 
 use rosc::OscType;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::parse::osc_int;
 use super::server::OscServer;
 use crate::audio::devices::DevicePath;
+use crate::window_manager::WindowManager;
 
 /// GUI events from the status thread that need `WindowManager` access on the main loop.
 pub(super) enum GuiEvent {
@@ -26,6 +27,59 @@ pub(super) enum GuiEvent {
         channel_id: usize,
         device_path: DevicePath,
     },
+}
+
+impl GuiEvent {
+    /// Apply the event to the host windows: resize and show an embedded GUI, destroy the
+    /// window of a floating or closed one.
+    pub(super) fn apply(self, window_manager: &mut WindowManager) {
+        match self {
+            // The plugin refused to embed and opened its own window: the host window
+            // it was given is unused.
+            GuiEvent::Opened {
+                channel_id,
+                device_path,
+                floating: true,
+                ..
+            } => {
+                let process_key = device_path.to_window_key(channel_id);
+                info!(
+                    "Plugin GUI {} opened floating, destroying its unused host window",
+                    process_key
+                );
+                window_manager.destroy_window(&process_key);
+            }
+            GuiEvent::Opened {
+                channel_id,
+                device_path,
+                width,
+                height,
+                floating: false,
+            }
+            | GuiEvent::Resize {
+                channel_id,
+                device_path,
+                width,
+                height,
+            } => {
+                let process_key = device_path.to_window_key(channel_id);
+                info!("🔄 Resizing window {} to {}x{}", process_key, width, height);
+                window_manager.resize_window(&process_key, width, height);
+                window_manager.show_window(&process_key);
+            }
+            GuiEvent::Closed {
+                channel_id,
+                device_path,
+            } => {
+                let process_key = device_path.to_window_key(channel_id);
+                info!(
+                    "🗑️  Plugin confirmed GUI closed, destroying window: {}",
+                    process_key
+                );
+                window_manager.destroy_window(&process_key);
+            }
+        }
+    }
 }
 
 impl OscServer {

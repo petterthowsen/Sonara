@@ -9,7 +9,6 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use super::audio_files::{PendingClip, PendingDevice};
-use super::gui::GuiEvent;
 use super::status;
 use crate::audio::devices::DevicePath;
 use crate::audio::io::AudioFileService;
@@ -84,52 +83,7 @@ impl OscServer {
         loop {
             // Check for GUI events
             while let Ok(event) = gui_event_rx.try_recv() {
-                match event {
-                    // The plugin refused to embed and opened its own window: the host window
-                    // it was given is unused.
-                    GuiEvent::Opened {
-                        channel_id,
-                        device_path,
-                        floating: true,
-                        ..
-                    } => {
-                        let process_key = device_path.to_window_key(channel_id);
-                        info!(
-                            "Plugin GUI {} opened floating, destroying its unused host window",
-                            process_key
-                        );
-                        window_manager.destroy_window(&process_key);
-                    }
-                    GuiEvent::Opened {
-                        channel_id,
-                        device_path,
-                        width,
-                        height,
-                        floating: false,
-                    }
-                    | GuiEvent::Resize {
-                        channel_id,
-                        device_path,
-                        width,
-                        height,
-                    } => {
-                        let process_key = device_path.to_window_key(channel_id);
-                        info!("🔄 Resizing window {} to {}x{}", process_key, width, height);
-                        window_manager.resize_window(&process_key, width, height);
-                        window_manager.show_window(&process_key);
-                    }
-                    GuiEvent::Closed {
-                        channel_id,
-                        device_path,
-                    } => {
-                        let process_key = device_path.to_window_key(channel_id);
-                        info!(
-                            "🗑️  Plugin confirmed GUI closed, destroying window: {}",
-                            process_key
-                        );
-                        window_manager.destroy_window(&process_key);
-                    }
-                }
+                event.apply(window_manager);
             }
 
             // Check for AudioFileService events

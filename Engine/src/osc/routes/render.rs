@@ -1,70 +1,63 @@
 //! Render routes: `/render/*`.
 
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use rosc::OscType;
 use tracing::warn;
 
+use super::RouteCtx;
 use crate::audio::AudioCommand;
 use crate::audio::EngineStatus;
-use crate::osc::server::OscServer;
+use crate::osc::status::send_status;
 
-impl OscServer {
-    /// Handle render routes: `/render/*`. Returns false for an address this area doesn't
-    /// know, so the caller can try the next area or report an unknown address.
-    pub(super) fn route_render(
-        &self,
-        parts: &[&str],
-        args: &[OscType],
-        command_tx: &Sender<AudioCommand>,
-    ) -> Result<bool> {
-        match parts {
-            ["render", "start"] => match parse_render_start(args) {
-                Ok(job) => command_tx.send(AudioCommand::StartRender(job))?,
-                Err(e) => {
-                    warn!("Rejecting /render/start: {}", e);
-                    let job_id = match args.first() {
-                        Some(OscType::String(id)) => id.clone(),
-                        _ => String::new(),
-                    };
-                    Self::send_status_update(
-                        &self.socket,
-                        self.client_port,
-                        EngineStatus::RenderFailed {
-                            job_id,
-                            error: format!("invalid /render/start: {}", e),
-                        },
-                    );
-                }
-            },
-            ["render", "analyze"] => match parse_render_analyze(args) {
-                Ok(job) => command_tx.send(AudioCommand::StartRender(job))?,
-                Err(e) => {
-                    warn!("Rejecting /render/analyze: {}", e);
-                    let job_id = match args.first() {
-                        Some(OscType::String(id)) => id.clone(),
-                        _ => String::new(),
-                    };
-                    Self::send_status_update(
-                        &self.socket,
-                        self.client_port,
-                        EngineStatus::RenderFailed {
-                            job_id,
-                            error: format!("invalid /render/analyze: {}", e),
-                        },
-                    );
-                }
-            },
-            ["render", "cancel"] => match args.first() {
-                Some(OscType::String(job_id)) => command_tx.send(AudioCommand::CancelRender {
-                    job_id: job_id.clone(),
-                })?,
-                _ => warn!("Ignoring /render/cancel without a job id"),
-            },
-            _ => return Ok(false),
-        }
-        Ok(true)
+/// Handle render routes: `/render/*`. Returns false for an address this area doesn't
+/// know, so the caller can try the next area or report an unknown address.
+pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    match parts {
+        ["render", "start"] => match parse_render_start(args) {
+            Ok(job) => cx.commands.send(AudioCommand::StartRender(job))?,
+            Err(e) => {
+                warn!("Rejecting /render/start: {}", e);
+                let job_id = match args.first() {
+                    Some(OscType::String(id)) => id.clone(),
+                    _ => String::new(),
+                };
+                send_status(
+                    &cx.server.socket,
+                    cx.server.client_port,
+                    EngineStatus::RenderFailed {
+                        job_id,
+                        error: format!("invalid /render/start: {}", e),
+                    },
+                );
+            }
+        },
+        ["render", "analyze"] => match parse_render_analyze(args) {
+            Ok(job) => cx.commands.send(AudioCommand::StartRender(job))?,
+            Err(e) => {
+                warn!("Rejecting /render/analyze: {}", e);
+                let job_id = match args.first() {
+                    Some(OscType::String(id)) => id.clone(),
+                    _ => String::new(),
+                };
+                send_status(
+                    &cx.server.socket,
+                    cx.server.client_port,
+                    EngineStatus::RenderFailed {
+                        job_id,
+                        error: format!("invalid /render/analyze: {}", e),
+                    },
+                );
+            }
+        },
+        ["render", "cancel"] => match args.first() {
+            Some(OscType::String(job_id)) => cx.commands.send(AudioCommand::CancelRender {
+                job_id: job_id.clone(),
+            })?,
+            _ => warn!("Ignoring /render/cancel without a job id"),
+        },
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Parse `/render/start <job_id:s> <start_tick:i> <end_tick:i> <tail_seconds:f>

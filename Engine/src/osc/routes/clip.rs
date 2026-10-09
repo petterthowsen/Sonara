@@ -1,168 +1,168 @@
 //! Clip routes: `/clip/*`.
 
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use rosc::OscType;
 use tracing::{info, warn};
 
+use super::RouteCtx;
 use crate::audio::AudioCommand;
 use crate::osc::audio_files::PendingClip;
 use crate::osc::parse::osc_arg_types;
 use crate::osc::server::OscServer;
 
-impl OscServer {
-    /// Handle clip routes: `/clip/*`. Returns false for an address this area doesn't
-    /// know, so the caller can try the next area or report an unknown address.
-    pub(super) fn route_clip(
-        &self,
-        addr: &str,
-        parts: &[&str],
-        args: &[OscType],
-        command_tx: &Sender<AudioCommand>,
-    ) -> Result<bool> {
-        match parts {
-            // Clip management - path-based: /clip/{id}/{command}
-            ["clip", "create"] => {
-                if let (
-                    Some(OscType::String(id)),
-                    Some(OscType::String(clip_type)),
-                    Some(OscType::String(name)),
-                ) = (args.get(0), args.get(1), args.get(2))
+/// Handle clip routes: `/clip/*`. Returns false for an address this area doesn't
+/// know, so the caller can try the next area or report an unknown address.
+pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
+    match parts {
+        // Clip management - path-based: /clip/{id}/{command}
+        ["clip", "create"] => {
+            if let (
+                Some(OscType::String(id)),
+                Some(OscType::String(clip_type)),
+                Some(OscType::String(name)),
+            ) = (args.get(0), args.get(1), args.get(2))
+            {
+                info!("Create clip {} ({}) - {}", id, clip_type, name);
+                cx.commands.send(AudioCommand::CreateClip {
+                    id: id.clone(),
+                    name: name.clone(),
+                    clip_type: clip_type.clone(),
+                })?;
+            }
+        }
+        ["clip", "delete"] => {
+            if let Some(OscType::String(id)) = args.first() {
+                info!("Delete clip {}", id);
+                cx.commands
+                    .send(AudioCommand::RemoveClip { id: id.clone() })?;
+            }
+        }
+        ["clip", id_str, "add_note"] => {
+            if let Some(n) = parse_clip_note_args(cx.addr, args) {
+                info!(
+                    "Add note to clip {}: note_id {} note {} at tick {} duration {} vel {} rel {}",
+                    id_str,
+                    n.note_id,
+                    n.note,
+                    n.start_tick,
+                    n.duration_ticks,
+                    n.velocity,
+                    n.release
+                );
+                cx.commands.send(AudioCommand::AddNoteToClip {
+                    clip_id: id_str.to_string(),
+                    note_id: n.note_id,
+                    note: n.note,
+                    start_tick: n.start_tick,
+                    duration_ticks: n.duration_ticks,
+                    velocity: n.velocity,
+                    release: n.release,
+                })?;
+            }
+        }
+        ["clip", id_str, "remove_note"] => {
+            if let Some(OscType::Int(note_id)) = args.first() {
+                info!("Remove note from clip {}: note_id {}", id_str, note_id);
+                cx.commands.send(AudioCommand::RemoveNoteFromClip {
+                    clip_id: id_str.to_string(),
+                    note_id: *note_id as u64,
+                })?;
+            }
+        }
+        ["clip", id_str, "update_note"] => {
+            if let Some(n) = parse_clip_note_args(cx.addr, args) {
+                info!(
+                    "Update note in clip {}: note_id {} note {} at tick {} duration {} vel {} rel {}",
+                    id_str, n.note_id, n.note, n.start_tick, n.duration_ticks, n.velocity, n.release
+                );
+                cx.commands.send(AudioCommand::UpdateClipNote {
+                    clip_id: id_str.to_string(),
+                    note_id: n.note_id,
+                    note: n.note,
+                    start_tick: n.start_tick,
+                    duration_ticks: n.duration_ticks,
+                    velocity: n.velocity,
+                    release: n.release,
+                })?;
+            }
+        }
+        ["clip", id_str, "load_audio_file"] => {
+            if let (
+                Some(OscType::String(file_path)),
+                Some(OscType::Int(_sample_rate)),
+                Some(OscType::Int(_channels)),
+            ) = (args.get(0), args.get(1), args.get(2))
+            {
+                let req_id = OscServer::generate_clip_request_id(id_str);
+                info!(
+                    "Requesting audio load for clip {} (req_id={}) from {}",
+                    id_str, req_id, file_path
+                );
+
                 {
-                    info!("Create clip {} ({}) - {}", id, clip_type, name);
-                    command_tx.send(AudioCommand::CreateClip {
-                        id: id.clone(),
-                        name: name.clone(),
-                        clip_type: clip_type.clone(),
-                    })?;
-                }
-            }
-            ["clip", "delete"] => {
-                if let Some(OscType::String(id)) = args.first() {
-                    info!("Delete clip {}", id);
-                    command_tx.send(AudioCommand::RemoveClip { id: id.clone() })?;
-                }
-            }
-            ["clip", id_str, "add_note"] => {
-                if let Some(n) = parse_clip_note_args(addr, args) {
-                    info!(
-                        "Add note to clip {}: note_id {} note {} at tick {} duration {} vel {} rel {}",
-                        id_str, n.note_id, n.note, n.start_tick, n.duration_ticks, n.velocity, n.release
+                    let mut pending_guard = cx.server.pending_clip_loads.lock().unwrap();
+                    pending_guard.insert(
+                        req_id.clone(),
+                        PendingClip {
+                            clip_id: id_str.to_string(),
+                            source_path: file_path.clone(),
+                        },
                     );
-                    command_tx.send(AudioCommand::AddNoteToClip {
-                        clip_id: id_str.to_string(),
-                        note_id: n.note_id,
-                        note: n.note,
-                        start_tick: n.start_tick,
-                        duration_ticks: n.duration_ticks,
-                        velocity: n.velocity,
-                        release: n.release,
-                    })?;
                 }
-            }
-            ["clip", id_str, "remove_note"] => {
-                if let Some(OscType::Int(note_id)) = args.first() {
-                    info!("Remove note from clip {}: note_id {}", id_str, note_id);
-                    command_tx.send(AudioCommand::RemoveNoteFromClip {
-                        clip_id: id_str.to_string(),
-                        note_id: *note_id as u64,
-                    })?;
-                }
-            }
-            ["clip", id_str, "update_note"] => {
-                if let Some(n) = parse_clip_note_args(addr, args) {
-                    info!(
-                        "Update note in clip {}: note_id {} note {} at tick {} duration {} vel {} rel {}",
-                        id_str, n.note_id, n.note, n.start_tick, n.duration_ticks, n.velocity, n.release
-                    );
-                    command_tx.send(AudioCommand::UpdateClipNote {
-                        clip_id: id_str.to_string(),
-                        note_id: n.note_id,
-                        note: n.note,
-                        start_tick: n.start_tick,
-                        duration_ticks: n.duration_ticks,
-                        velocity: n.velocity,
-                        release: n.release,
-                    })?;
-                }
-            }
-            ["clip", id_str, "load_audio_file"] => {
-                if let (
-                    Some(OscType::String(file_path)),
-                    Some(OscType::Int(_sample_rate)),
-                    Some(OscType::Int(_channels)),
-                ) = (args.get(0), args.get(1), args.get(2))
-                {
-                    let req_id = Self::generate_clip_request_id(id_str);
-                    info!(
-                        "Requesting audio load for clip {} (req_id={}) from {}",
-                        id_str, req_id, file_path
-                    );
 
-                    {
-                        let mut pending_guard = self.pending_clip_loads.lock().unwrap();
-                        pending_guard.insert(
-                            req_id.clone(),
-                            PendingClip {
-                                clip_id: id_str.to_string(),
-                                source_path: file_path.clone(),
-                            },
-                        );
-                    }
+                cx.commands.send(AudioCommand::BeginLoadAudioClip {
+                    clip_id: id_str.to_string(),
+                    req_id: req_id.clone(),
+                    source_path: file_path.clone(),
+                })?;
 
-                    command_tx.send(AudioCommand::BeginLoadAudioClip {
-                        clip_id: id_str.to_string(),
-                        req_id: req_id.clone(),
-                        source_path: file_path.clone(),
-                    })?;
-
-                    match self.audio_file_service.lock() {
-                        Ok(service) => {
-                            if let Err(err) = service
-                                .submit_decode_and_waveform(req_id.clone(), file_path.clone())
-                            {
-                                warn!(
-                                    "Failed to submit decode request for clip {} (req_id={}): {}",
-                                    id_str, req_id, err
-                                );
-                                {
-                                    let mut pending_guard = self.pending_clip_loads.lock().unwrap();
-                                    pending_guard.remove(&req_id);
-                                }
-                                let _ = command_tx.send(AudioCommand::FailAudioClipLoad {
-                                    clip_id: id_str.to_string(),
-                                    req_id: req_id.clone(),
-                                    message: err.to_string(),
-                                });
-                            }
-                        }
-                        Err(err) => {
+                match cx.server.audio_file_service.lock() {
+                    Ok(service) => {
+                        if let Err(err) =
+                            service.submit_decode_and_waveform(req_id.clone(), file_path.clone())
+                        {
                             warn!(
-                                "Failed to lock AudioFileService for clip {} (req_id={}): {}",
+                                "Failed to submit decode request for clip {} (req_id={}): {}",
                                 id_str, req_id, err
                             );
                             {
-                                let mut pending_guard = self.pending_clip_loads.lock().unwrap();
+                                let mut pending_guard =
+                                    cx.server.pending_clip_loads.lock().unwrap();
                                 pending_guard.remove(&req_id);
                             }
-                            let _ = command_tx.send(AudioCommand::FailAudioClipLoad {
+                            let _ = cx.commands.send(AudioCommand::FailAudioClipLoad {
                                 clip_id: id_str.to_string(),
                                 req_id: req_id.clone(),
-                                message: "AudioFileService unavailable".to_string(),
+                                message: err.to_string(),
                             });
                         }
                     }
-                } else {
-                    warn!(
-                        "OSC: load_audio_file missing arguments: got {} args",
-                        args.len()
-                    );
+                    Err(err) => {
+                        warn!(
+                            "Failed to lock AudioFileService for clip {} (req_id={}): {}",
+                            id_str, req_id, err
+                        );
+                        {
+                            let mut pending_guard = cx.server.pending_clip_loads.lock().unwrap();
+                            pending_guard.remove(&req_id);
+                        }
+                        let _ = cx.commands.send(AudioCommand::FailAudioClipLoad {
+                            clip_id: id_str.to_string(),
+                            req_id: req_id.clone(),
+                            message: "AudioFileService unavailable".to_string(),
+                        });
+                    }
                 }
+            } else {
+                warn!(
+                    "OSC: load_audio_file missing arguments: got {} args",
+                    args.len()
+                );
             }
-            _ => return Ok(false),
         }
-        Ok(true)
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Arguments of `/clip/{id}/add_note` and `/clip/{id}/update_note`.

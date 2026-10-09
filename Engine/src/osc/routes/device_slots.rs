@@ -2,262 +2,252 @@
 //! Machine slots.
 
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use rosc::OscType;
 use tracing::warn;
 
+use super::RouteCtx;
 use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneRanges, ZoneSettings};
 use crate::audio::devices::DevicePath;
 use crate::audio::AudioCommand;
 use crate::osc::audio_files::{generate_device_request_id, is_audio_sample_path};
 use crate::osc::parse::{osc_float, osc_int};
-use crate::osc::server::OscServer;
 
-impl OscServer {
-    /// Handle the Sampler, Layer and Drum Machine sub-routes of a device address. Returns false
-    /// for an action this area doesn't know.
-    pub(super) fn route_device_slots(
-        &self,
-        channel_id: usize,
-        device_path: DevicePath,
-        action: &[&str],
-        args: &[OscType],
-        command_tx: &Sender<AudioCommand>,
-    ) -> Result<bool> {
-        match action {
-            // Sampler multisample (spec 023)
-            ["multisample"] => match args.first().and_then(osc_int) {
-                Some(on) => command_tx.send(AudioCommand::SetSamplerMode {
+/// Handle the Sampler, Layer and Drum Machine sub-routes of a device address. Returns false
+/// for an action this area doesn't know.
+pub(super) fn route(
+    channel_id: usize,
+    device_path: DevicePath,
+    action: &[&str],
+    args: &[OscType],
+    cx: &mut RouteCtx,
+) -> Result<bool> {
+    match action {
+        // Sampler multisample (spec 023)
+        ["multisample"] => match args.first().and_then(osc_int) {
+            Some(on) => cx.commands.send(AudioCommand::SetSamplerMode {
+                channel_id,
+                device_path,
+                multisample: on != 0,
+            })?,
+            None => warn!("multisample needs an int, got {:?}", args),
+        },
+        ["zone", zid, "set"] => match (zid.parse::<u32>(), parse_zone_set(args)) {
+            (Ok(zone_id), Ok(settings)) => cx.commands.send(AudioCommand::SetSamplerZone {
+                channel_id,
+                device_path,
+                zone_id,
+                settings,
+            })?,
+            (zone_id, settings) => warn!(
+                "Bad zone/{}/set on channel {} path {}: {:?} {:?}",
+                zid,
+                channel_id,
+                device_path,
+                zone_id.err(),
+                settings.err()
+            ),
+        },
+        ["zone", zid, "load_file"] => match (zid.parse::<u32>(), args.first()) {
+            (Ok(zone_id), Some(OscType::String(file_path))) if is_audio_sample_path(file_path) => {
+                let req_id = match args.get(1) {
+                    Some(OscType::String(id)) if !id.is_empty() => id.clone(),
+                    _ => generate_device_request_id(channel_id, &device_path),
+                };
+                cx.server.begin_device_sample_load(
                     channel_id,
                     device_path,
-                    multisample: on != 0,
-                })?,
-                None => warn!("multisample needs an int, got {:?}", args),
-            },
-            ["zone", zid, "set"] => match (zid.parse::<u32>(), parse_zone_set(args)) {
-                (Ok(zone_id), Ok(settings)) => command_tx.send(AudioCommand::SetSamplerZone {
-                    channel_id,
-                    device_path,
-                    zone_id,
-                    settings,
-                })?,
-                (zone_id, settings) => warn!(
-                    "Bad zone/{}/set on channel {} path {}: {:?} {:?}",
-                    zid,
-                    channel_id,
-                    device_path,
-                    zone_id.err(),
-                    settings.err()
-                ),
-            },
-            ["zone", zid, "load_file"] => match (zid.parse::<u32>(), args.first()) {
-                (Ok(zone_id), Some(OscType::String(file_path)))
-                    if is_audio_sample_path(file_path) =>
-                {
-                    let req_id = match args.get(1) {
-                        Some(OscType::String(id)) if !id.is_empty() => id.clone(),
-                        _ => generate_device_request_id(channel_id, &device_path),
-                    };
-                    self.begin_device_sample_load(
-                        channel_id,
-                        device_path,
-                        Some(zone_id),
-                        file_path.clone(),
-                        req_id,
-                        command_tx,
-                    )?;
-                }
-                _ => warn!(
-                    "Bad zone/{}/load_file on channel {} path {}: {:?}",
-                    zid, channel_id, device_path, args
-                ),
-            },
-            ["zone", zid, "remove"] => match zid.parse::<u32>() {
-                Ok(zone_id) => command_tx.send(AudioCommand::RemoveSamplerZone {
-                    channel_id,
-                    device_path,
-                    zone_id,
-                })?,
-                Err(_) => warn!("Bad zone id in zone/{}/remove", zid),
-            },
-            ["zone_group", gid, "set"] => match (gid.parse::<u32>(), parse_zone_group_set(args)) {
-                (Ok(group_id), Ok((gain, mute, solo, play_mode))) => {
-                    command_tx.send(AudioCommand::SetSamplerZoneGroup {
-                        channel_id,
-                        device_path,
-                        group_id,
-                        gain,
-                        mute,
-                        solo,
-                        play_mode,
-                    })?
-                }
-                (group_id, group) => warn!(
-                    "Bad zone_group/{}/set on channel {} path {}: {:?} {:?}",
-                    gid,
-                    channel_id,
-                    device_path,
-                    group_id.err(),
-                    group.err()
-                ),
-            },
-            ["zone_group", gid, "remove"] => match gid.parse::<u32>() {
-                Ok(group_id) => command_tx.send(AudioCommand::RemoveSamplerZoneGroup {
+                    Some(zone_id),
+                    file_path.clone(),
+                    req_id,
+                    cx.commands,
+                )?;
+            }
+            _ => warn!(
+                "Bad zone/{}/load_file on channel {} path {}: {:?}",
+                zid, channel_id, device_path, args
+            ),
+        },
+        ["zone", zid, "remove"] => match zid.parse::<u32>() {
+            Ok(zone_id) => cx.commands.send(AudioCommand::RemoveSamplerZone {
+                channel_id,
+                device_path,
+                zone_id,
+            })?,
+            Err(_) => warn!("Bad zone id in zone/{}/remove", zid),
+        },
+        ["zone_group", gid, "set"] => match (gid.parse::<u32>(), parse_zone_group_set(args)) {
+            (Ok(group_id), Ok((gain, mute, solo, play_mode))) => {
+                cx.commands.send(AudioCommand::SetSamplerZoneGroup {
                     channel_id,
                     device_path,
                     group_id,
-                })?,
-                Err(_) => warn!("Bad group id in zone_group/{}/remove", gid),
-            },
-            ["focus_zone"] => match args.first().and_then(osc_int) {
-                Some(zone_id) => command_tx.send(AudioCommand::SetSamplerFocus {
+                    gain,
+                    mute,
+                    solo,
+                    play_mode,
+                })?
+            }
+            (group_id, group) => warn!(
+                "Bad zone_group/{}/set on channel {} path {}: {:?} {:?}",
+                gid,
+                channel_id,
+                device_path,
+                group_id.err(),
+                group.err()
+            ),
+        },
+        ["zone_group", gid, "remove"] => match gid.parse::<u32>() {
+            Ok(group_id) => cx.commands.send(AudioCommand::RemoveSamplerZoneGroup {
+                channel_id,
+                device_path,
+                group_id,
+            })?,
+            Err(_) => warn!("Bad group id in zone_group/{}/remove", gid),
+        },
+        ["focus_zone"] => match args.first().and_then(osc_int) {
+            Some(zone_id) => cx.commands.send(AudioCommand::SetSamplerFocus {
+                channel_id,
+                device_path,
+                zone_id: zone_id.clamp(0, u32::MAX as i64) as u32,
+            })?,
+            None => warn!("focus_zone needs an int, got {:?}", args),
+        },
+        ["audition"] => match (
+            args.first().and_then(osc_int),
+            args.get(1).and_then(osc_int),
+            args.get(2).and_then(osc_int),
+        ) {
+            (Some(note), Some(velocity), Some(on)) => {
+                cx.commands.send(AudioCommand::AuditionDevice {
                     channel_id,
                     device_path,
-                    zone_id: zone_id.clamp(0, u32::MAX as i64) as u32,
-                })?,
-                None => warn!("focus_zone needs an int, got {:?}", args),
-            },
-            ["audition"] => match (
-                args.first().and_then(osc_int),
-                args.get(1).and_then(osc_int),
-                args.get(2).and_then(osc_int),
-            ) {
-                (Some(note), Some(velocity), Some(on)) => {
-                    command_tx.send(AudioCommand::AuditionDevice {
-                        channel_id,
-                        device_path,
-                        note: note.clamp(0, 127) as u8,
-                        velocity: velocity.clamp(0, 127) as u8,
-                        is_note_on: on != 0,
-                    })?
-                }
-                _ => warn!("audition needs note velocity on, got {:?}", args),
-            },
-            ["slot", slot_str, "volume"] => {
-                if let (Ok(slot), Some(OscType::Float(volume))) =
-                    (slot_str.parse::<usize>(), args.first())
-                {
-                    command_tx.send(AudioCommand::SetLayerSlotVolume {
-                        channel_id,
-                        device_path,
-                        slot,
-                        volume: *volume,
-                    })?;
-                }
+                    note: note.clamp(0, 127) as u8,
+                    velocity: velocity.clamp(0, 127) as u8,
+                    is_note_on: on != 0,
+                })?
             }
-            ["slot", slot_str, "mute"] => {
-                if let (Ok(slot), Some(OscType::Int(mute))) =
-                    (slot_str.parse::<usize>(), args.first())
-                {
-                    command_tx.send(AudioCommand::SetLayerSlotMute {
-                        channel_id,
-                        device_path,
-                        slot,
-                        mute: *mute != 0,
-                    })?;
-                }
+            _ => warn!("audition needs note velocity on, got {:?}", args),
+        },
+        ["slot", slot_str, "volume"] => {
+            if let (Ok(slot), Some(OscType::Float(volume))) =
+                (slot_str.parse::<usize>(), args.first())
+            {
+                cx.commands.send(AudioCommand::SetLayerSlotVolume {
+                    channel_id,
+                    device_path,
+                    slot,
+                    volume: *volume,
+                })?;
             }
-            ["slot", slot_str, "solo"] => {
-                if let (Ok(slot), Some(OscType::Int(solo))) =
-                    (slot_str.parse::<usize>(), args.first())
-                {
-                    command_tx.send(AudioCommand::SetLayerSlotSolo {
-                        channel_id,
-                        device_path,
-                        slot,
-                        solo: *solo != 0,
-                    })?;
-                }
-            }
-            ["slot", slot_str, "note_map"] => match (slot_str.parse::<usize>(), args.first()) {
-                (Ok(slot), Some(OscType::Blob(bytes))) if bytes.len() == 128 => {
-                    let mut map = Box::new([0u8; 128]);
-                    map.copy_from_slice(bytes);
-                    command_tx.send(AudioCommand::SetLayerSlotNoteMap {
-                        channel_id,
-                        device_path,
-                        slot,
-                        map,
-                    })?;
-                }
-                _ => warn!(
-                    "Layer note_map on channel {} path {} slot {} needs a 128-byte blob",
-                    channel_id, device_path, slot_str
-                ),
-            },
-            ["slot", slot_str, "separate_out"] => {
-                if let (Ok(slot), Some(OscType::Int(separate))) =
-                    (slot_str.parse::<usize>(), args.first())
-                {
-                    command_tx.send(AudioCommand::SetLayerSlotSeparateOut {
-                        channel_id,
-                        device_path,
-                        slot,
-                        separate: *separate != 0,
-                    })?;
-                }
-            }
-            ["slot", slot_str, "audition"] => {
-                if let (
-                    Ok(slot),
-                    Some(OscType::Int(note)),
-                    Some(OscType::Int(velocity)),
-                    Some(OscType::Int(on)),
-                ) = (
-                    slot_str.parse::<usize>(),
-                    args.first(),
-                    args.get(1),
-                    args.get(2),
-                ) {
-                    command_tx.send(AudioCommand::AuditionLayerSlot {
-                        channel_id,
-                        device_path,
-                        slot,
-                        note: (*note).clamp(0, 127) as u8,
-                        velocity: (*velocity).clamp(0, 127) as u8,
-                        is_note_on: *on != 0,
-                    })?;
-                }
-            }
-            ["slot", slot_str, "note"] => {
-                if let Ok(slot) = slot_str.parse::<usize>() {
-                    let note = match args.first() {
-                        Some(OscType::Int(n)) => Some(*n as u8),
-                        Some(OscType::Float(n)) => Some(*n as u8),
-                        _ => None,
-                    };
-                    if let Some(note) = note {
-                        command_tx.send(AudioCommand::SetDrumSlotNote {
-                            channel_id,
-                            device_path,
-                            slot,
-                            note,
-                        })?;
-                    }
-                }
-            }
-            ["slot", slot_str, "choke_targets"] => {
-                match (slot_str.parse::<usize>(), args.first()) {
-                    (Ok(slot), Some(OscType::Blob(bytes))) if bytes.len() == 16 => {
-                        let mut le = [0u8; 16];
-                        le.copy_from_slice(bytes);
-                        command_tx.send(AudioCommand::SetDrumSlotChokeTargets {
-                            channel_id,
-                            device_path,
-                            slot,
-                            mask: u128::from_le_bytes(le),
-                        })?;
-                    }
-                    _ => warn!(
-                        "Drum choke_targets on channel {} path {} slot {} needs a 16-byte blob",
-                        channel_id, device_path, slot_str
-                    ),
-                }
-            }
-            _ => return Ok(false),
         }
-        Ok(true)
+        ["slot", slot_str, "mute"] => {
+            if let (Ok(slot), Some(OscType::Int(mute))) = (slot_str.parse::<usize>(), args.first())
+            {
+                cx.commands.send(AudioCommand::SetLayerSlotMute {
+                    channel_id,
+                    device_path,
+                    slot,
+                    mute: *mute != 0,
+                })?;
+            }
+        }
+        ["slot", slot_str, "solo"] => {
+            if let (Ok(slot), Some(OscType::Int(solo))) = (slot_str.parse::<usize>(), args.first())
+            {
+                cx.commands.send(AudioCommand::SetLayerSlotSolo {
+                    channel_id,
+                    device_path,
+                    slot,
+                    solo: *solo != 0,
+                })?;
+            }
+        }
+        ["slot", slot_str, "note_map"] => match (slot_str.parse::<usize>(), args.first()) {
+            (Ok(slot), Some(OscType::Blob(bytes))) if bytes.len() == 128 => {
+                let mut map = Box::new([0u8; 128]);
+                map.copy_from_slice(bytes);
+                cx.commands.send(AudioCommand::SetLayerSlotNoteMap {
+                    channel_id,
+                    device_path,
+                    slot,
+                    map,
+                })?;
+            }
+            _ => warn!(
+                "Layer note_map on channel {} path {} slot {} needs a 128-byte blob",
+                channel_id, device_path, slot_str
+            ),
+        },
+        ["slot", slot_str, "separate_out"] => {
+            if let (Ok(slot), Some(OscType::Int(separate))) =
+                (slot_str.parse::<usize>(), args.first())
+            {
+                cx.commands.send(AudioCommand::SetLayerSlotSeparateOut {
+                    channel_id,
+                    device_path,
+                    slot,
+                    separate: *separate != 0,
+                })?;
+            }
+        }
+        ["slot", slot_str, "audition"] => {
+            if let (
+                Ok(slot),
+                Some(OscType::Int(note)),
+                Some(OscType::Int(velocity)),
+                Some(OscType::Int(on)),
+            ) = (
+                slot_str.parse::<usize>(),
+                args.first(),
+                args.get(1),
+                args.get(2),
+            ) {
+                cx.commands.send(AudioCommand::AuditionLayerSlot {
+                    channel_id,
+                    device_path,
+                    slot,
+                    note: (*note).clamp(0, 127) as u8,
+                    velocity: (*velocity).clamp(0, 127) as u8,
+                    is_note_on: *on != 0,
+                })?;
+            }
+        }
+        ["slot", slot_str, "note"] => {
+            if let Ok(slot) = slot_str.parse::<usize>() {
+                let note = match args.first() {
+                    Some(OscType::Int(n)) => Some(*n as u8),
+                    Some(OscType::Float(n)) => Some(*n as u8),
+                    _ => None,
+                };
+                if let Some(note) = note {
+                    cx.commands.send(AudioCommand::SetDrumSlotNote {
+                        channel_id,
+                        device_path,
+                        slot,
+                        note,
+                    })?;
+                }
+            }
+        }
+        ["slot", slot_str, "choke_targets"] => match (slot_str.parse::<usize>(), args.first()) {
+            (Ok(slot), Some(OscType::Blob(bytes))) if bytes.len() == 16 => {
+                let mut le = [0u8; 16];
+                le.copy_from_slice(bytes);
+                cx.commands.send(AudioCommand::SetDrumSlotChokeTargets {
+                    channel_id,
+                    device_path,
+                    slot,
+                    mask: u128::from_le_bytes(le),
+                })?;
+            }
+            _ => warn!(
+                "Drum choke_targets on channel {} path {} slot {} needs a 16-byte blob",
+                channel_id, device_path, slot_str
+            ),
+        },
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Argument count of `zone/{zid}/set`.
