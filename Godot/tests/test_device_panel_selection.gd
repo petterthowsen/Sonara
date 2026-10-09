@@ -35,6 +35,8 @@ func run_tests() -> void:
 	await _test_left_header_is_a_drag_handle()
 	await _test_drop_selection_moves_the_block()
 	await _test_drop_selection_across_channels()
+	await _test_copy_paste_duplicate()
+	await _test_nested_context_menu()
 	await _test_selection_border()
 	await _test_modulators_toggle_and_scroll()
 	await _test_chevron_scroll()
@@ -116,7 +118,9 @@ func _test_selects_additive_and_range() -> void:
 
 	# Shift-click takes the visual range from the anchor (a) to c.
 	var pc: Control = lane.find_device_panel(c)
-	pc.select_requested.emit(pc, true, true)
+	pa.select_requested.emit(pa, false, false)
+	pa.select_released.emit(pa)
+	pc.select_requested.emit(pc, false, true)
 	_assert(_ids(lane.selected_devices) == [a, b, c], "shift-click takes the range from the anchor: %s" % str(_names(lane.selected_devices)))
 	_assert(pc.is_selected, "the range's end is selected")
 
@@ -230,6 +234,39 @@ func _fresh_device(id: String, container := false) -> Object:
 		device.is_container = container
 		registry._devices[id] = device
 	return device
+
+
+func _test_copy_paste_duplicate() -> void:
+	var ch: Object = _fresh_project()
+	var a := _fx(ch, "a")
+	var b := _fx(ch, "b")
+	var c := _fx(ch, "c")
+	var actions: GDScript = load("res://history/DeviceActions.gd")
+	actions.duplicate_devices([b, a])
+	_assert(_names(ch.devices) == ["a", "b", "a", "b", "c"], "duplicate puts copies after the block in order: %s" % str(_names(ch.devices)))
+	_assert(ch.devices[2] != a and ch.devices[2].id != a.id, "the copy is a new instance")
+	_assert(actions.copy([c]) == 1, "copy reports one device")
+	actions.paste(ch, null, 0)
+	_assert(_names(ch.devices) == ["c", "a", "b", "a", "b", "c"], "paste inserts at the position: %s" % str(_names(ch.devices)))
+
+
+## A context menu request from a slot's row reaches the lane.
+func _test_nested_context_menu() -> void:
+	var ch: Object = _fresh_project()
+	var chain: Object = _device_instance_script.new(_fresh_device("sonara.builtin.chain", true), ch.id, -1)
+	ch.add_device(chain)
+	var inside: Object = _device_instance_script.new(_fresh_device("test.fx.inside"), ch.id, -1)
+	ch.add_device(inside, -1, chain)
+	chain.set_slot_open(_device_instance_script.CHAIN_SLOT, true)
+	var lane := await _lane(ch)
+	var got := []
+	lane.devices.context_menu_requested.connect(func(d, in_slot): got.append([d, in_slot]))
+	var panel: Control = lane.find_device_panel(inside)
+	if panel == null:
+		_assert(false, "the nested device has a panel")
+		return
+	panel.request_context_menu.emit()
+	_assert(got.size() == 1 and got[0][0] == inside and got[0][1], "a nested device's menu request reaches the lane")
 
 
 func _test_selection_border() -> void:

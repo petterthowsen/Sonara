@@ -19,7 +19,7 @@ const PANEL_GAP := 2
 const LISTS_GROUP := "channel_device_lists"
 
 @onready var scroll_container : ScrollContainer = $ScrollContainer
-@onready var vbox : VBoxContainer = $ScrollContainer/VBoxContainer
+@onready var vbox : VBoxContainer = $ScrollContainer/Trailing/VBoxContainer
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
 
 # ============================================================================

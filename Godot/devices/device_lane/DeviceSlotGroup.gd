@@ -61,6 +61,7 @@ func setup(p_container: DeviceInstance, p_key: String, p_nested := false) -> voi
 
 	row = DeviceRow.new()
 	row.in_slot = true
+	row.context_menu_requested.connect(context_menu_requested.emit)
 	row.selection_requested.connect(selection_requested.emit)
 	row.selection_released.connect(selection_released.emit)
 	add_child(row)

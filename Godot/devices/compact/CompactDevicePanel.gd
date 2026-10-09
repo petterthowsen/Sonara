@@ -26,9 +26,15 @@ const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
 @export var collapsed := false
 @export var hide_parameters := false:
 	set(hp):
+		if hp and not hide_parameters:
+			_opened_unselected = false
 		hide_parameters = hp
 		if is_inside_tree():
 			_update_ui_visibility()
+
+## True while the user opened the parameter list on a strip that otherwise hides parameters
+## (an unselected channel). Opening it never selects the channel.
+var _opened_unselected := false
 
 var device_instance: DeviceInstance = null
 var _param_list: ParameterList = null
@@ -62,7 +68,7 @@ signal select_released(panel: CompactDevicePanel)
 func _ready() -> void:
 	_create_note_fx_stripe()
 	collapse_button.toggled.connect(_on_collapse_button_toggled)
-	collapse_button.set_state(not collapsed)
+	collapse_button.set_state(_params_wanted())
 	collapse_button.gui_input.connect(_on_collapse_button_gui_input)
 	collapse_button.mouse_entered.connect(_set_button_hovered.bind(true))
 	collapse_button.mouse_exited.connect(_set_button_hovered.bind(false))
@@ -226,7 +232,14 @@ func _update_ui_visibility() -> void:
 	collapse_button.visible = (has_params or _can_open_window()) and _hovered
 	# Only the parameters panel itself is forced hidden when hide_parameters is set
 	# (channel not selected).
-	parameters.visible = has_params and not hide_parameters and not collapsed
+	parameters.visible = has_params and _params_wanted()
+	_refresh_collapse_icon()
+
+
+## Whether the parameter list is open: not collapsed, and on an unselected strip only when
+## the user asked for it.
+func _params_wanted() -> bool:
+	return not collapsed and (not hide_parameters or _opened_unselected)
 
 
 func _can_open_window() -> bool:
@@ -252,7 +265,7 @@ func _refresh_collapse_icon() -> void:
 		collapse_button.icon = ICON_WINDOW
 		collapse_button.tooltip_text = "Open External Window"
 	else:
-		collapse_button.set_state(not collapsed)
+		collapse_button.set_state(_params_wanted())
 		collapse_button.tooltip_text = ""
 
 
@@ -302,9 +315,7 @@ func _pointer_inside() -> bool:
 func _on_collapse_button_toggled(button_pressed: bool) -> void:
 	"""Handle collapse button toggle."""
 	collapsed = not button_pressed
-	# Parameters only show on the selected channel, so expanding selects it.
-	if not collapsed and hide_parameters:
-		_select_channel()
+	_opened_unselected = button_pressed and hide_parameters
 	_update_ui_visibility()
 	logger.info("Collapsed state changed to: %s" % collapsed)
 

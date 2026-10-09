@@ -30,6 +30,7 @@ func run_tests() -> void:
 	await _test_setup_on_ready_panel()
 	await _test_setup_before_added_to_tree()
 	await _test_chevron_needs_parameters_and_hover()
+	await _test_expand_on_unselected_channel()
 	await _test_value_hides_when_narrow()
 	await _test_enum_does_not_widen()
 	await _test_bool_is_one_row()
@@ -148,6 +149,21 @@ func _test_chevron_needs_parameters_and_hover() -> void:
 	_assert(not panel.collapse_button.visible, "the chevron hides again after hover")
 	_assert(panel.parameters.mouse_filter != Control.MOUSE_FILTER_STOP,
 		"the parameters panel doesn't cut the device panel out of the hover chain")
+	panel.queue_free()
+
+
+## On an unselected strip the chevron opens the parameters without selecting the channel.
+func _test_expand_on_unselected_channel() -> void:
+	_new_channel("Unselected")
+	var instance: Object = _device_with_params("sonara.builtin.fake_unselected", [_float_param(0, "Gain")])
+	var panel: Control = await _panel_for(instance, 160)
+	panel.hide_parameters = true
+	_assert(not panel.parameters.visible and not panel.collapse_button.button_pressed,
+		"an unselected strip shows its chevron closed")
+	panel.collapse_button.button_pressed = true
+	_assert(panel.parameters.visible, "the chevron opens the parameters on an unselected strip")
+	panel.collapse_button.button_pressed = false
+	_assert(not panel.parameters.visible, "the chevron closes them again")
 	panel.queue_free()
 
 

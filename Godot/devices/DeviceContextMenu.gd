@@ -12,6 +12,13 @@ var load_kit: Button = null
 
 var device : DeviceInstance = null
 
+## Devices Copy and Duplicate act on: the lane's selection when it holds `device`, else just it.
+var targets: Array[DeviceInstance] = []
+
+var copy_button: Button = null
+var paste_button: Button = null
+var duplicate_button: Button = null
+
 ## When true (the Drum Machine folder), Remove on a pad device removes the whole pad and its
 ## return channel. Elsewhere (the pad's own lane) it only empties the pad.
 var removes_drum_pad := false
@@ -32,6 +39,42 @@ func _ready() -> void:
 	load_kit.visible = false
 	v_box_container.add_child(load_kit)
 	v_box_container.move_child(load_kit, host_individually.get_index())
+	copy_button = _add_action_button("Copy", _on_copy_pressed)
+	paste_button = _add_action_button("Paste", _on_paste_pressed)
+	duplicate_button = _add_action_button("Duplicate", _on_duplicate_pressed)
+
+
+## A button placed just above Remove.
+func _add_action_button(text: String, handler: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.pressed.connect(handler)
+	v_box_container.add_child(button)
+	v_box_container.move_child(button, remove.get_index())
+	return button
+
+
+func _on_copy_pressed() -> void:
+	DeviceActions.copy(_targets())
+	hide()
+
+
+## Paste after the device the menu is on, in its host.
+func _on_paste_pressed() -> void:
+	if device:
+		var host := device.get_parent_device()
+		var siblings: Array[DeviceInstance] = host.children if host else device.get_channel().devices
+		DeviceActions.paste(device.get_channel(), host, siblings.find(device) + 1)
+	hide()
+
+
+func _on_duplicate_pressed() -> void:
+	DeviceActions.duplicate_devices(_targets())
+	hide()
+
+
+func _targets() -> Array[DeviceInstance]:
+	return targets if targets.has(device) else ([device] as Array[DeviceInstance])
 
 
 func bind_to_device(device_instance : DeviceInstance) -> void:
@@ -42,6 +85,12 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	label.set_value(device.get_display_name())
 	remove.text = "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else "Remove")
 	load_kit.visible = DrumKit.is_drum_machine(device)
+	paste_button.disabled = not DeviceActions.can_paste()
+	# Pads and band chains are fixed by their host; only plain devices copy.
+	var plain := not _pad_return() and not Multiband.is_band_chain(device)
+	copy_button.visible = plain
+	paste_button.visible = plain
+	duplicate_button.visible = plain
 	var is_plugin := device.device.device_type == Device.DeviceType.CLAP
 	host_individually.visible = is_plugin
 	if is_plugin:

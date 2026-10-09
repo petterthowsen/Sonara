@@ -19,7 +19,13 @@ layout_mode = 2
 follow_focus = true
 horizontal_scroll_mode = 0
 
-[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer" unique_id=2105255356]
+[node name="Trailing" type="MarginContainer" parent="ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/margin_bottom = 48
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer/Trailing" unique_id=2105255356]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3

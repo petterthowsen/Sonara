@@ -53,17 +53,23 @@ follow_focus = true
 horizontal_scroll_mode = 2
 vertical_scroll_mode = 0
 
-[node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer" unique_id=195122867]
+[node name="Trailing" type="MarginContainer" parent="Content/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/margin_right = 240
+
+[node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer/Trailing" unique_id=195122867]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 24
 script = ExtResource("4_row")
 
-[node name="Device" parent="Content/ScrollContainer/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
+[node name="Device" parent="Content/ScrollContainer/Trailing/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
 layout_mode = 2
 
-[node name="Device2" parent="Content/ScrollContainer/Devices" unique_id=666575919 instance=ExtResource("3_m4540")]
+[node name="Device2" parent="Content/ScrollContainer/Trailing/Devices" unique_id=666575919 instance=ExtResource("3_m4540")]
 layout_mode = 2
 
 [node name="DeviceContextMenu" parent="." unique_id=1107586009 instance=ExtResource("3_oh1x1")]
