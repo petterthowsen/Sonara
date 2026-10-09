@@ -24,7 +24,7 @@ use crate::audio::devices::AudioDevice;
 use crate::audio::automation::{
     AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
 };
-use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
+use crate::audio::devices::sampler::zones::{GroupPlayMode, ZoneSettings};
 use crate::audio::devices::DevicePath;
 use crate::audio::project::ProjectSettings;
 use crate::audio::state::EngineState;

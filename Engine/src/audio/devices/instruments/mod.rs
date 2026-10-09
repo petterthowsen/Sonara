@@ -4,8 +4,7 @@
 mod drum_conformance;
 pub mod drums;
 mod polysynth;
-mod sampler;
-pub mod sampler_zones;
+pub mod sampler;
 mod sfizz_device;
 pub mod sfizz_keys;
 

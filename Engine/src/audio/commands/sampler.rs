@@ -1,7 +1,7 @@
 //! Sampler commands: zones, groups, focus, and sample loading.
 
 use super::{with_device, CommandEffects};
-use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
+use crate::audio::devices::sampler::zones::{GroupPlayMode, ZoneSettings};
 use crate::audio::devices::{DevicePath, SamplerDevice};
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn sampler_zone_commands_route_to_device() {
-        use crate::audio::devices::sampler_zones::{ZoneRanges, ZoneSettings};
+        use crate::audio::devices::sampler::zones::{ZoneRanges, ZoneSettings};
         let mut state = EngineState::default();
         let (status_tx, status_rx) = crossbeam::channel::unbounded();
         let run = |state: &mut EngineState, cmd| {

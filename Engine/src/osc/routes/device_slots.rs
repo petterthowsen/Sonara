@@ -6,7 +6,7 @@ use rosc::OscType;
 use tracing::warn;
 
 use super::RouteCtx;
-use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneRanges, ZoneSettings};
+use crate::audio::devices::sampler::zones::{GroupPlayMode, ZoneRanges, ZoneSettings};
 use crate::audio::devices::DevicePath;
 use crate::audio::AudioCommand;
 use crate::osc::audio_files::{generate_device_request_id, is_audio_sample_path};
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn zone_osc_parses_nineteen_args() {
-        use crate::audio::devices::sampler_zones::ZoneRanges;
+        use crate::audio::devices::sampler::zones::ZoneRanges;
         let args = zone_args([
             48.0, 62.0, 1.0, 64.0, 60.0, -1.5, 0.8, 0.1, 0.9, 1.0, 2.0, 0.3, 0.6, 0.25, 2.0, 3.0,
             0.0, 10.0, 4.0,
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!((gain, mute, solo), (0.5, false, true));
         assert_eq!(
             mode,
-            crate::audio::devices::sampler_zones::GroupPlayMode::RoundRobin
+            crate::audio::devices::sampler::zones::GroupPlayMode::RoundRobin
         );
         assert!(parse_zone_group_set(&group[..3]).is_err());
     }

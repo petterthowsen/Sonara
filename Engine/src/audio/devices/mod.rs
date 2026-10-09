@@ -29,7 +29,7 @@ pub use factory::{
     NOTE_EFFECT_IDS,
 };
 pub use instruments::{
-    sampler_zones, sfizz_keys, DrumHost, DrumParams, DrumVoice, GlobalParams, PolySynthDevice,
+    sampler, sfizz_keys, DrumHost, DrumParams, DrumVoice, GlobalParams, PolySynthDevice,
     SamplerDevice, SfizzDevice, GLOBAL_SPECS,
 };
 pub use params::*;
