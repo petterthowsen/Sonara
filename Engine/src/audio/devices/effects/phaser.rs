@@ -13,10 +13,12 @@
 //! and makes the switch a smooth fade between "N stages" and "M stages".
 
 use super::effect::{pass_through, TailSleep};
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{dry_wet_gains, MixLaw};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};

@@ -4,8 +4,8 @@ use super::container::{
     apply_gain, copy_interleaved, gain_to_normalized, insert_into_vec, move_in_vec,
     normalized_to_gain, process_serial_chain, remove_from_vec, DeviceContainer,
 };
-use super::note_fx::routing::{route_note, run_note_phase};
-use super::{
+use crate::audio::devices::note_fx::routing::{route_note, run_note_phase};
+use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
     ParamValue, PortFlow,
 };

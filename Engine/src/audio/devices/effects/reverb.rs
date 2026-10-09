@@ -16,10 +16,12 @@
 //! off, bounded by a soft clip; Ducking follows the dry input.
 
 use super::effect::{pass_through, TailSleep};
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, skewed, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};

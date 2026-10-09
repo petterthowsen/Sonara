@@ -3,7 +3,7 @@
 use super::container::{
     copy_interleaved, insert_into_vec, move_in_vec, remove_from_vec, DeviceContainer,
 };
-use super::{
+use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
 use crate::audio::midi_types::NoteEvent;
@@ -596,9 +596,9 @@ mod tests {
 
     #[test]
     fn choke_reaches_a_sampler_inside_a_pad_chain() {
-        use crate::audio::devices::chain::ChainDevice;
-        use crate::audio::devices::sampler::SamplerDevice;
+        use crate::audio::devices::ChainDevice;
         use crate::audio::devices::DevicePath;
+        use crate::audio::devices::SamplerDevice;
 
         // Pads as Godot builds them: a chain per slot holding a Sampler.
         let mut dm = DrumMachineDevice::new(256);

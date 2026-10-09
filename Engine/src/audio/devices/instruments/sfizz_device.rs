@@ -4,11 +4,11 @@
 //! Supports background loading of SFZ files for real-time safety.
 
 use super::sfizz_keys::{read_key_info, read_playable_ranges, KeyInfo};
-use super::{
+use crate::audio::commands::EngineStatus;
+use crate::audio::devices::{
     AudioDevice, DeviceCategory, DevicePath, DeviceVariant, FileLoadingSupport, MidiPort, ParamId,
     ParamInfo, ParamType, ParamValue, PortFlow,
 };
-use crate::audio::commands::EngineStatus;
 use crate::audio::midi_types::{to_u7, NoteEvent};
 use crossbeam::channel::Sender;
 use std::collections::{BTreeMap, HashMap};

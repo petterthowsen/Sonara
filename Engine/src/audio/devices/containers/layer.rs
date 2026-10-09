@@ -4,7 +4,7 @@ use super::container::{
     apply_gain, copy_interleaved, insert_into_vec, move_in_vec, normalized_to_gain,
     remove_from_vec, DeviceContainer,
 };
-use super::{
+use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
 use crate::audio::midi_types::{NoteEvent, SoundingNoteId, AUDITION_NOTE_ID};

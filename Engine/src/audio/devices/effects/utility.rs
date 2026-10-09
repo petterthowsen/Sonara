@@ -17,10 +17,12 @@
 //! - With every control at its default and settled, the block is passed through bit-exact.
 
 use super::effect::{pass_through, TailSleep};
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::crossover::{MultibandSplitter, MAX_BANDS};
 use crate::audio::dsp::gain::db_to_gain;
 use crate::audio::dsp::smoothing::SmoothedParam;

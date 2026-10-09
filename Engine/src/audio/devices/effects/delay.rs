@@ -16,10 +16,12 @@
 //! Dynamics = 30.., Output = 40...
 
 use super::effect::{pass_through, TailSleep};
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{dry_wet_gains, MixLaw};

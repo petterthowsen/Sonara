@@ -4,7 +4,7 @@
 //! Each check builds a fresh device with `create_effect`, so checks don't leak state into each
 //! other. Failures are collected per effect and reported together.
 
-use super::{
+use crate::audio::devices::{
     create_effect, enum_to_norm, norm_to_enum, real_to_norm, AudioDevice, DevicePath, ParamInfo,
     ParamType, EFFECT_IDS,
 };

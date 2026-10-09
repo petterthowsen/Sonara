@@ -470,7 +470,7 @@ impl<V: DrumVoice + 'static> AudioDevice for DrumHost<V> {
 #[cfg(test)]
 mod tests {
     use super::{DrumHost, DrumParams, DrumVoice, FADE_SECONDS};
-    use crate::audio::devices::drums::params::GLOBAL_SPECS;
+    use crate::audio::devices::instruments::drums::params::GLOBAL_SPECS;
     use crate::audio::devices::param_table::ParamSpec;
     use crate::audio::devices::{AudioDevice, ParamId, ParamValue};
     use crate::audio::dsp::Rng;

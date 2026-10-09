@@ -279,7 +279,7 @@ pub fn create_drum(
     sample_rate: f32,
     max_frames: usize,
 ) -> Option<Box<dyn AudioDevice>> {
-    use super::drums::{
+    use super::instruments::drums::{
         clap::ClapVoice, hat::HatVoice, kick::KickVoice, snare::SnareVoice, DrumHost,
     };
     let mut device: Box<dyn AudioDevice> = match device_id {
@@ -302,10 +302,10 @@ pub fn create_effect(
 ) -> Option<Box<dyn AudioDevice>> {
     let mut device: Box<dyn AudioDevice> = match device_id {
         "sonara.builtin.delay" => Box::new(DelayDevice::new(sample_rate, 5000.0)),
-        "sonara.builtin.eq" => Box::new(super::eq::EqDevice::new(sample_rate)),
-        "sonara.builtin.compressor" => {
-            Box::new(super::compressor::CompressorDevice::new(sample_rate))
-        }
+        "sonara.builtin.eq" => Box::new(super::effects::eq::EqDevice::new(sample_rate)),
+        "sonara.builtin.compressor" => Box::new(super::effects::compressor::CompressorDevice::new(
+            sample_rate,
+        )),
         "sonara.builtin.filter" => Box::new(FilterDevice::new(sample_rate)),
         "sonara.builtin.chorus" => Box::new(ChorusDevice::new(sample_rate)),
         "sonara.builtin.phaser" => Box::new(super::PhaserDevice::new(sample_rate)),

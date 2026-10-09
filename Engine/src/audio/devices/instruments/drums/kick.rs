@@ -480,7 +480,7 @@ impl DrumVoice for KickVoice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::devices::drums::host::DrumHost;
+    use crate::audio::devices::instruments::drums::host::DrumHost;
     use crate::audio::devices::AudioDevice;
     use crate::audio::dsp::test_util::{
         instantaneous_freq, left, peak, spectrum_db, time_to_db, to_db,

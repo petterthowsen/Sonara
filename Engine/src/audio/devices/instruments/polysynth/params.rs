@@ -8,8 +8,10 @@
 //! Every parameter also has a *slot*: its index in [`SPECS`]. Modulation routes and the
 //! normalized value array are indexed by slot.
 
-use super::super::param_table::{flatten, linear, slot_table, spec, Kind, ParamSpec, ParamTable};
-use super::super::{ParamId, ParamInfo};
+use crate::audio::devices::param_table::{
+    flatten, linear, slot_table, spec, Kind, ParamSpec, ParamTable,
+};
+use crate::audio::devices::{ParamId, ParamInfo};
 use crate::audio::dsp::FilterMode;
 
 pub const OSC1: ParamId = 0;

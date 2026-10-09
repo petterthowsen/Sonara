@@ -21,7 +21,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 8: Split `osc/server.rs`
 - [x] Phase 9: OSC argument reader
 - [x] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
-- [ ] Phase 11: Group `audio/devices/`
+- [x] Phase 11: Group `audio/devices/`
 - [ ] Phase 12: Split `audio/ipc/process_manager.rs` and `audio/devices/sampler.rs`
 - [ ] Phase 13: Docs, command classification for #1, close-out
 
@@ -618,6 +618,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 8 | 2026-10-09 | lib 823 / 14 (814 + 9 new encode tests) | release 0; test build 0 | Commits `Engine cleanup phase 8` (a) pure move, (b) RouteCtx, `encode_status`, `GuiEvent::apply`. See notes below. |
 | 9 | 2026-10-09 | lib 842 / 14 (823 + 8 `Args` tests + 1 device test + 10 routing tests) | release 0; test build 0 | Allowed behavior change: malformed messages log a WARN. Live Godot check pending. See notes below. |
 | 10 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 10` (a) pure move of `processing.rs`, (a) pure move of `mixing.rs`, (b) stages over disjoint fields. Live `rt-debug` and load check pending. See notes below. |
+| 11 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | One pure-move commit. See notes below. |
 
 Phase 1 notes:
 
@@ -907,3 +908,20 @@ Stage map for #1 (what each stage reads and writes). `EngineState` fields: `chan
 | master output (`write_master_output`) | `channels[1]` buffers and `output_channel_id` | the device output buffer only |
 
 Not covered here: what the callback does around these stages (state lock, rendering guard, meters) lives in `audio/engine.rs`/`stream.rs`.
+
+Phase 11 notes:
+
+- Layout: `devices/{mod, device, params, sleep, factory, param_table}.rs`, `devices/effects/` (chorus, compressor, delay, effect, eq,
+  filter, multiband, phaser, reverb, spectrum_analyzer, utility, `effect_conformance`), `devices/instruments/` (`polysynth/`, `drums/`,
+  `sampler`, `sampler_zones`, `sfizz_device`, `sfizz_keys`, `drum_conformance`), `devices/containers/` (chain, container, layer,
+  drum_machine), `note_fx/` and `clap_host/` unchanged. Each group has a `mod.rs` with the module list and its public re-exports.
+- `device.rs` (the former `mod.rs`, moved with `git mv`, 645 lines with the `AudioDevice` trait), `params.rs` (`ParamId`, `ParamValue`, `ParamType`,
+  `ParamInfo`, the norm/real helpers and their `curve_tests`), `sleep.rs` (`DeviceSleepState`, `has_audio_signal`). `devices/mod.rs` re-exports all of
+  them with `pub use device::*; pub use params::*; pub use sleep::*;`, plus every device type and the modules outside code reaches by path:
+  `container`, `sampler_zones`, `sfizz_keys`, `compressor`, `effect`, `eq` (the last three kept public so their pub helpers stay library API).
+  No path outside `audio/devices/` changed.
+- Path edits inside `devices/`: `use super::<root item>` became `use crate::audio::devices::<item>` in the moved files, `super::param_table`,
+  `super::note_fx` and `super::container` (from `multiband`) became `crate::audio::devices::...`, `factory.rs` reaches `effects::eq`,
+  `effects::compressor` and `instruments::drums`, `instruments` declares `pub mod drums` (was `mod drums`; `factory` needs the voice modules).
+  Sorted-line comparison of all of `audio/devices/**/*.rs` before and after: only `use`/`mod` lines, `//!` headers, re-wrapped imports and
+  the path edits above differ. `AGENTS.md` line 67 now says `audio/devices/instruments/drums/`; `factory.rs` and the conformance file names stay valid.

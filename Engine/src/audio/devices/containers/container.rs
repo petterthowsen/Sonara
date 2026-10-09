@@ -1,6 +1,6 @@
 //! Nested device containers: path addressing, child lists, and serial chain processing.
 
-use super::{has_audio_signal, AudioDevice};
+use crate::audio::devices::{has_audio_signal, AudioDevice};
 use std::fmt;
 
 /// Deepest device nesting a `DevicePath` can address. Paths deeper than this are rejected when
@@ -681,9 +681,7 @@ mod device_path_tests {
             &mut devices,
             &parent,
             0,
-            Box::new(crate::audio::devices::delay::DelayDevice::new(
-                48_000.0, 100.0,
-            )),
+            Box::new(crate::audio::devices::DelayDevice::new(48_000.0, 100.0)),
         );
         assert!(result.is_err());
     }

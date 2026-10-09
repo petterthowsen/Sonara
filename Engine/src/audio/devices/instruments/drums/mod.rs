@@ -1,7 +1,7 @@
 //! Shared foundation for the drum instruments (spec 013, Phase 0).
 //!
 //! A drum is a parameter table plus a [`DrumVoice`] implementation. [`DrumHost`] runs it as an
-//! [`AudioDevice`](super::AudioDevice): sample-accurate triggers, a two-slot retrigger
+//! [`AudioDevice`](crate::audio::devices::AudioDevice): sample-accurate triggers, a two-slot retrigger
 //! crossfade, the shared global parameters and instrument sleep. The [`GlobalParams`] block
 //! (IDs 90–92) is shared by every drum.
 

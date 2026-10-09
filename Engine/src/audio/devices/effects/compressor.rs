@@ -22,10 +22,12 @@
 //!   the input and output, the detector level, the largest reduction) over the whole window.
 
 use super::effect::{pass_through, TailSleep};
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, skewed, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::gain::{dry_wet_gains, MixLaw, SILENCE_DB};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 

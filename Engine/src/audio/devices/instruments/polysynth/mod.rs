@@ -16,7 +16,7 @@
 mod params;
 mod voice;
 
-use super::{
+use crate::audio::devices::{
     AudioDevice, DefaultModulator, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo,
     ParamValue, PortFlow,
 };
@@ -109,7 +109,7 @@ pub struct PolySynthDevice {
 
     is_active: bool,
     is_enabled: bool,
-    sleep_state: super::DeviceSleepState,
+    sleep_state: crate::audio::devices::DeviceSleepState,
 
     /// Queued MIDI for frame-accurate scheduling within the next block.
     /// (frame_offset, key, velocity or release, is_note_on)
@@ -151,7 +151,7 @@ impl PolySynthDevice {
             params,
             is_active: true,
             is_enabled: true,
-            sleep_state: super::DeviceSleepState::new(),
+            sleep_state: crate::audio::devices::DeviceSleepState::new(),
             queued_midi: Vec::with_capacity(128),
             mix_l: Vec::new(),
             mix_r: Vec::new(),

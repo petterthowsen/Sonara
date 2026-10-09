@@ -14,10 +14,10 @@
 //!   order without a separate encode and decode pass.
 
 use super::effect::{pass_through, TailSleep};
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{
+use crate::audio::devices::{
     AudioDevice, DataBuild, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
 };
 use crate::audio::dsp::gain::db_to_gain;

@@ -5,8 +5,10 @@
 //! proves the whole `DrumHost` path (`make` builds a fresh device per check, like the effect
 //! conformance test, so checks don't leak state).
 
-use super::param_table::{flatten, linear, slot_table, spec, ParamSpec, ParamTable, ParamValues};
-use super::{
+use crate::audio::devices::param_table::{
+    flatten, linear, slot_table, spec, ParamSpec, ParamTable, ParamValues,
+};
+use crate::audio::devices::{
     create_drum, enum_to_norm, norm_to_enum, real_to_norm, AudioDevice, DevicePath, DrumHost,
     DrumParams, DrumVoice, ParamId, ParamInfo, ParamType, DRUM_IDS, GLOBAL_SPECS,
 };

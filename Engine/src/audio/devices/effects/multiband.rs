@@ -21,12 +21,16 @@
 //! (the LR4 stages are shared). Children (chains) sleep on their own, so this container has no sleep
 //! state (ADR 0008).
 
-use super::container::DeviceContainer;
-use super::container::{copy_interleaved, insert_into_vec, move_in_vec, remove_from_vec};
-use super::param_table::{
+use crate::audio::devices::container::DeviceContainer;
+use crate::audio::devices::container::{
+    copy_interleaved, insert_into_vec, move_in_vec, remove_from_vec,
+};
+use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::crossover::{MultibandSplitter, MAX_BANDS};
 use crate::audio::dsp::gain::db_to_gain;
 use crate::audio::dsp::smoothing::SmoothedParam;

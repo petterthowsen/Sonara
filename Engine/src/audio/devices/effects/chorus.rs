@@ -18,10 +18,12 @@
 use std::f64::consts::FRAC_PI_2;
 
 use super::effect::pass_through;
-use super::param_table::{
+use crate::audio::devices::param_table::{
     flatten, linear, log, skewed, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::devices::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::delay_line::{DelayLine, MIN_HERMITE_DELAY};
 use crate::audio::dsp::gain::{dry_wet_gains, MixLaw};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};

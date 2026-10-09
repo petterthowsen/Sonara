@@ -20,18 +20,18 @@
 //!   audio, plus one `count = 0` frame when the last voice ends. In multisample mode only the
 //!   focused zone's voices are listed, normalized over that zone's file.
 
-use super::param_table::{
-    flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
-};
 use super::sampler_zones::{
     select_zones, velocity_to_midi, GroupPlayMode, SelectableZone, ZoneGroup, ZoneRanges,
     ZoneSettings, MAX_GROUPS, MAX_ZONES, UNGROUPED,
 };
-use super::{
+use crate::audio::commands::EngineStatus;
+use crate::audio::devices::param_table::{
+    flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
+};
+use crate::audio::devices::{
     has_audio_signal, AudioDevice, DeviceCategory, DevicePath, DeviceSleepState, DeviceVariant,
     FileLoadingSupport, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
-use crate::audio::commands::EngineStatus;
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::dsp::svf::{
     compensation_coef, cutoff_to_g, resonance_to_k, FilterMode, Svf, SvfCoefs,
