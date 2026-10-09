@@ -462,6 +462,8 @@ pub enum AudioCommand {
     // Plugin management
     ScanPlugins {
         paths: Vec<PathBuf>,
+        /// VST3 search paths; empty means the built-in defaults.
+        vst3_paths: Vec<PathBuf>,
     },
     AdvertiseBuiltinDevices,
     GetPluginParameters {

@@ -152,7 +152,7 @@ impl CommandWorker {
     /// Run slow commands with the lock released and everything else under the lock.
     fn handle(&mut self, cmd: AudioCommand) {
         match cmd {
-            AudioCommand::ScanPlugins { paths } => self.scan_plugins(paths),
+            AudioCommand::ScanPlugins { paths, vst3_paths } => self.scan_plugins(paths, vst3_paths),
             AudioCommand::StartRender(job) => self.start_render(job),
             AudioCommand::CancelRender { job_id } => self.cancel_render(&job_id),
             AudioCommand::AdvertiseBuiltinDevices => self.advertise_builtin_devices(),

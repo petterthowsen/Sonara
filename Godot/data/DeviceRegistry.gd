@@ -2,7 +2,7 @@
 # Every known Device type (built-in and plugin), discovered from the engine over OSC.
 # Built-ins arrive via /builtin/request → /builtin/info → /builtin/complete; plugins via
 # /plugin/scan [path:String]* → /plugin/info → /plugin/scan_complete and are cached in
-# plugins.json. Search paths come from the "assets/clap/paths" setting; with no paths given
+# plugins.json. Search paths come from the "assets/clap/paths" and "assets/vst3/paths" settings; with no paths given
 # the engine falls back to its built-in defaults.
 # Owned by AssetService; DeviceAssetProvider only maps these devices to browser Assets.
 class_name DeviceRegistry extends RefCounted
@@ -89,12 +89,24 @@ func scan_plugins() -> void:
 	logger.info("Plugin scan: cleared %d cached plugins" % removed.size())
 	if not removed.is_empty():
 		devices_changed.emit([] as Array[Device], removed)
-	AudioEngineOSC.send("/plugin/scan", _clap_scan_paths())
+	var args := _clap_scan_paths()
+	args.append("--vst3")
+	args.append_array(_vst3_scan_paths())
+	AudioEngineOSC.send("/plugin/scan", args)
 
 
 ## Configured CLAP search paths, expanded and de-duplicated. Order is preserved.
 func _clap_scan_paths() -> Array:
-	var raw = Settings.get_value("assets/clap/paths")
+	return _expanded_paths("assets/clap/paths")
+
+
+## Configured VST3 search paths, expanded and de-duplicated.
+func _vst3_scan_paths() -> Array:
+	return _expanded_paths("assets/vst3/paths")
+
+
+func _expanded_paths(setting: String) -> Array:
+	var raw = Settings.get_value(setting)
 	var seen: Dictionary = {}
 	var paths: Array = []
 	for p in raw:

@@ -29,7 +29,7 @@ pub struct PluginDescriptor {
 pub struct PluginScanner {
     scan_paths: Vec<PathBuf>,
     /// Where VST3 bundles are looked for (`vst3_discovery::scan_paths`). The paths configured
-    /// in Godot stay CLAP-only for now.
+    /// in Godot (`set_vst3_paths`) replace the defaults.
     vst3_scan_paths: Vec<PathBuf>,
     discovered_plugins: HashMap<String, PluginDescriptor>,
 }
@@ -61,6 +61,16 @@ impl PluginScanner {
     pub fn set_paths(&mut self, paths: Vec<PathBuf>) {
         self.scan_paths =
             Self::resolve_scan_paths(paths, std::env::var("CLAP_PATH").ok().as_deref());
+    }
+
+    /// Replace the VST3 scan paths. An empty `paths` falls back to the built-in defaults.
+    /// VST3_PATH entries, if set, are always appended.
+    pub fn set_vst3_paths(&mut self, paths: Vec<PathBuf>) {
+        self.vst3_scan_paths = vst3_discovery::resolve_configured_paths(
+            paths,
+            std::env::var("HOME").ok().as_deref(),
+            std::env::var("VST3_PATH").ok().as_deref(),
+        );
     }
 
     /// Build the effective scan path list: `configured` (or the built-in defaults, if

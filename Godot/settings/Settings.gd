@@ -222,6 +222,16 @@ func _register_all_settings() -> void:
 	)).sub("CLAP Plugins")
 
 	_register(Setting.new(
+		"assets/vst3/paths",
+		"VST3 Plugin Search Paths",
+		Type.PATH_ARRAY,
+		["~/.vst3", "/usr/lib/vst3", "/usr/local/lib/vst3"],
+		CATEGORY_ASSETS,
+		"Directories scanned for .vst3 bundles. Entries in the VST3_PATH environment variable are also scanned.\n\n"
+		+ "Run Edit › Scan Plugins after changing this.",
+	)).sub("VST3 Plugins")
+
+	_register(Setting.new(
 		"arranger/record_arm_follows_active_track",
 		"Record Arm Follows Active Track",
 		Type.BOOL,

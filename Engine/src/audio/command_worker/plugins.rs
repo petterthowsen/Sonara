@@ -16,9 +16,10 @@ use crate::audio::types::ChannelId;
 
 impl CommandWorker {
     /// Scan for CLAP and VST3 plugins and report each one to Godot.
-    pub(super) fn scan_plugins(&mut self, paths: Vec<PathBuf>) {
+    pub(super) fn scan_plugins(&mut self, paths: Vec<PathBuf>, vst3_paths: Vec<PathBuf>) {
         info!("Starting plugin scan...");
         self.plugin_scanner.set_paths(paths);
+        self.plugin_scanner.set_vst3_paths(vst3_paths);
         let count = match self.plugin_scanner.scan() {
             Ok(count) => count,
             Err(e) => {

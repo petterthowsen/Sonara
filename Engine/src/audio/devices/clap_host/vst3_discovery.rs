@@ -47,6 +47,25 @@ pub fn resolve_scan_paths(home: Option<&str>, vst3_path_env: Option<&str>) -> Ve
     paths
 }
 
+/// `configured` (or the default directories when it is empty) followed by the `VST3_PATH`
+/// entries, deduplicated in first-seen order.
+pub fn resolve_configured_paths(
+    configured: Vec<PathBuf>,
+    home: Option<&str>,
+    vst3_path_env: Option<&str>,
+) -> Vec<PathBuf> {
+    if configured.is_empty() {
+        return resolve_scan_paths(home, vst3_path_env);
+    }
+    let mut paths = configured;
+    if let Some(env) = vst3_path_env {
+        paths.extend(std::env::split_paths(env).filter(|path| !path.as_os_str().is_empty()));
+    }
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+    paths
+}
+
 /// Find `.vst3` bundle directories under `root`, sorted. Bundles are not searched inside.
 /// Symlinked folders are followed, each real folder is visited once.
 pub fn find_bundles(root: &Path) -> Vec<PathBuf> {
@@ -237,6 +256,17 @@ mod tests {
             subcategories: subcategories.to_string(),
             category: moduleinfo::AUDIO_MODULE_CLASS.to_string(),
         }
+    }
+
+    #[test]
+    fn configured_paths_replace_defaults_and_keep_env() {
+        let configured = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let paths = resolve_configured_paths(configured.clone(), Some("/home/u"), Some("/b:/c"));
+        assert_eq!(paths, vec![PathBuf::from("/a"), PathBuf::from("/b"), PathBuf::from("/c")]);
+        assert_eq!(
+            resolve_configured_paths(Vec::new(), Some("/home/u"), None),
+            resolve_scan_paths(Some("/home/u"), None)
+        );
     }
 
     #[test]

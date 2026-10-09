@@ -416,12 +416,14 @@ set as a device.
 
 **Plugin Discovery (Godot -> Rust)**
 ```
-/plugin/scan
+/plugin/scan [clap_path:s]* ["--vst3" [vst3_path:s]*]
 ```
-Scans the configured CLAP directories and the standard VST3 directories (`~/.vst3`,
-`/usr/lib/vst3`, `/usr/local/lib/vst3`, plus `VST3_PATH`) and discovers available plugins. VST3
-bundles are scanned out of process (from `moduleinfo.json`, or by a throwaway `plugin_host
---scan-vst3`), never loaded into the engine. The paths configured in Godot are CLAP-only.
+Scans the given CLAP directories (plus `CLAP_PATH`) and VST3 directories (plus `VST3_PATH`) and
+discovers available plugins. Strings before the `--vst3` marker are CLAP paths, those after it
+VST3 paths. An empty section falls back to the defaults (`~/.clap`, `/usr/lib/clap`,
+`/usr/local/lib/clap`; `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`). VST3 bundles are
+scanned out of process (from `moduleinfo.json`, or by a throwaway `plugin_host --scan-vst3`),
+never loaded into the engine.
 
 **Response:** one `/plugin/info` per discovered plugin, then `/plugin/scan_complete [i:count]`.
 Godot caches these to avoid scanning on every startup.
