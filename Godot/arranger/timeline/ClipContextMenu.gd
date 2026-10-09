@@ -1,5 +1,7 @@
 class_name ClipContextMenu extends PopupPanel
 
+static var logger := Log.make("ClipContextMenu")
+
 # Containers
 @onready var v_box: VBoxContainer = $VBoxContainer
 @onready var header: HBoxContainer = $VBoxContainer/Header
@@ -13,6 +15,8 @@ class_name ClipContextMenu extends PopupPanel
 @onready var copy: Button = $VBoxContainer/CutCopy/Copy
 @onready var split: Button = $VBoxContainer/Split
 @onready var merge: Button = $VBoxContainer/Merge
+@onready var transpose_down: Button = $VBoxContainer/Transpose/OctaveDown
+@onready var transpose_up: Button = $VBoxContainer/Transpose/OctaveUp
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
 @onready var make_unique_per_track: Button = $VBoxContainer/MakeUniquePerTrack
 @onready var delete: Button = $VBoxContainer/Delete
@@ -27,6 +31,9 @@ signal merge_requested(instances: Array[ClipInstance])
 
 const SLIDE_SECONDS := 0.3
 const CLIP_GAP := 4.0
+
+## Transpose step of the two octave entries.
+const OCTAVE_SEMITONES := 12
 
 var clip_instance: ClipInstance = null
 var selected_instances: Array[ClipInstance] = []
@@ -44,6 +51,10 @@ func _ready() -> void:
 		split.pressed.connect(_on_split_pressed)
 	if is_instance_valid(merge):
 		merge.pressed.connect(_on_merge_pressed)
+	if is_instance_valid(transpose_down):
+		transpose_down.pressed.connect(_on_transpose_pressed.bind(-OCTAVE_SEMITONES))
+	if is_instance_valid(transpose_up):
+		transpose_up.pressed.connect(_on_transpose_pressed.bind(OCTAVE_SEMITONES))
 	if is_instance_valid(cut):
 		cut.pressed.connect(_on_cut_pressed)
 	if is_instance_valid(copy):
@@ -118,6 +129,15 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 	# Merge needs at least one MIDI instance.
 	if merge:
 		merge.disabled = not ClipMergeActions.can_merge(selected_instances)
+
+	# Transpose rewrites note pitches, so it needs MIDI clips only.
+	var all_midi := not selected_instances.is_empty()
+	for inst in selected_instances:
+		all_midi = all_midi and inst.clip != null and inst.clip.type == Clip.ClipType.MIDI
+	if transpose_down:
+		transpose_down.disabled = not all_midi
+	if transpose_up:
+		transpose_up.disabled = not all_midi
 
 	# Reverse is an audio-clip feature: shown only when every selected instance is audio.
 	if reverse_checkbox:
@@ -227,6 +247,44 @@ func _on_merge_pressed() -> void:
 		return
 	merge_requested.emit(selected_instances.duplicate())
 	hide()
+
+
+## Transpose the selected MIDI clips by `semitones` as one undo step. The edit is destructive:
+## it rewrites the source clips' note pitches, so every instance of a shared clip moves.
+func _on_transpose_pressed(semitones: int) -> void:
+	var clips := _midi_clips_of(selected_instances)
+	if clips.is_empty():
+		return
+	var before := ClipNotesStateCommand.capture_many(clips)
+	var pinned := 0
+	for clip: Clip in clips:
+		for note: MidiNoteData in clip.midi_notes:
+			var moved := note.note + semitones
+			var shifted := clampi(moved, 0, 127)
+			if shifted == note.note:
+				continue
+			if shifted != moved:
+				pinned += 1
+			note.note = shifted
+			clip.update_midi_note(note)
+	if pinned > 0:
+		logger.warn("Transpose: %d note(s) stopped at the 0-127 pitch range" % pinned)
+	ClipNotesStateCommand.commit_many("Transpose %s %s an Octave" % [
+		"Clips" if clips.size() > 1 else "Clip",
+		"Up" if semitones > 0 else "Down",
+	], before)
+	hide()
+
+
+## The distinct MIDI source clips of `instances`, in selection order.
+static func _midi_clips_of(instances: Array[ClipInstance]) -> Array[Clip]:
+	var clips: Array[Clip] = []
+	for inst in instances:
+		if inst == null or inst.clip == null or inst.clip.type != Clip.ClipType.MIDI:
+			continue
+		if not clips.has(inst.clip):
+			clips.append(inst.clip)
+	return clips
 
 
 ## Request Make Unique Per Track for the bound instances.

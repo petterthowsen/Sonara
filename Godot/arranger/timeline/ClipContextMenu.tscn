@@ -131,6 +131,26 @@ tooltip_text = "Merge the selected MIDI clips on each track into one clip. A sin
 focus_mode = 0
 text = "Merge"
 
+[node name="Transpose" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="OctaveDown" type="Button" parent="VBoxContainer/Transpose"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Transpose the clip's notes down one octave (12 semitones)"
+focus_mode = 0
+text = "-1 Oct"
+
+[node name="OctaveUp" type="Button" parent="VBoxContainer/Transpose"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Transpose the clip's notes up one octave (12 semitones)"
+focus_mode = 0
+text = "+1 Oct"
+
 [node name="MakeUnique" type="Button" parent="VBoxContainer" unique_id=1599534461]
 layout_mode = 2
 focus_mode = 0
