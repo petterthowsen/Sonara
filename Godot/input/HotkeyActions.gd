@@ -80,6 +80,18 @@ const ACTIONS := [
 	{ "id": "arranger_move_track_down", "label": "Move clips to track below", "group": "Arranger", "context": "arranger",
 		"requires": "clip_selection",
 		"defaults": ["Down"], "allow_echo": true },
+	{ "id": "arranger_range_end_right", "label": "Grow selection range end", "group": "Arranger", "context": "arranger",
+		"requires": "arranger_range",
+		"defaults": ["Ctrl+Right"], "allow_echo": true, "description": "Moves the range end later by the snap interval." },
+	{ "id": "arranger_range_end_left", "label": "Shrink selection range end", "group": "Arranger", "context": "arranger",
+		"requires": "arranger_range",
+		"defaults": ["Ctrl+Left"], "allow_echo": true, "description": "Moves the range end earlier by the snap interval." },
+	{ "id": "arranger_range_start_left", "label": "Grow selection range start", "group": "Arranger", "context": "arranger",
+		"requires": "arranger_range",
+		"defaults": ["Ctrl+Shift+Left"], "allow_echo": true, "description": "Moves the range start earlier by the snap interval." },
+	{ "id": "arranger_range_start_right", "label": "Shrink selection range start", "group": "Arranger", "context": "arranger",
+		"requires": "arranger_range",
+		"defaults": ["Ctrl+Shift+Right"], "allow_echo": true, "description": "Moves the range start later by the snap interval." },
 
 	# --- Clip Editor ---
 	{ "id": "notes_nudge_left", "label": "Nudge notes left", "group": "Clip Editor", "context": "clip_editor",

@@ -123,6 +123,21 @@ func set_range_start(tick: int) -> void:
 	logger.info("Selection start set to tick %d" % tick)
 
 
+## Move the start/end boundary by a tick delta (keyboard). Needs both boundaries; the range
+## keeps at least one tick and never starts before tick 0. Returns true when it changed.
+func resize_range(start_delta: int, end_delta: int) -> bool:
+	if not (range_visible and range_has_end):
+		return false
+	var start := maxi(0, range_start_tick + start_delta)
+	var end := range_end_tick + end_delta
+	if end <= start:
+		return false
+	_set_range(start, end, true)
+	if timeline:
+		timeline.queue_redraw()
+	return true
+
+
 ## True when a start boundary is visible (end may still be unset).
 func has_range() -> bool:
 	return range_visible

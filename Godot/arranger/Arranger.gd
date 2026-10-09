@@ -130,6 +130,8 @@ func _ready():
 	Hotkeys.set_context(self, "arranger")
 	timeline.clip_selection_manager.selection_changed.connect(
 			func(_i): Hotkeys.set_condition("clip_selection", timeline.clip_selection_manager.has_selection()))
+	timeline.clip_selection_manager.range_changed.connect(
+			func(): Hotkeys.set_condition("arranger_range", timeline.clip_selection_manager.get_full_range() != Vector2i.ZERO))
 	# Initialize target scroll positions to current values
 	target_scroll_vertical = v_scroll.scroll_vertical
 	target_scroll_horizontal = h_scroll.scroll_horizontal
@@ -511,8 +513,25 @@ func _unhandled_input(event: InputEvent) -> void:
 	_handle_input(event)
 
 
+## True for an arrow key while the pointer is over the visible timeline and no text field has focus.
+func _is_arrow_over_timeline(event: InputEventKey) -> bool:
+	if event.keycode not in [KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN]:
+		return false
+	if not is_visible_in_tree():
+		return false
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		return false
+	return timeline.get_global_rect().has_point(get_global_mouse_position())
+
+
 ## Pan the timeline on middle-click before clips/tracks can mark the event handled.
 func _input(event: InputEvent) -> void:
+	# Arrow keys are claimed here, before the focused control turns them into ui_left/ui_up
+	# focus navigation (which runs ahead of _unhandled_input).
+	if event is InputEventKey and event.pressed and _is_arrow_over_timeline(event):
+		_handle_input(event)
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
 		if event.pressed:
 			if not is_visible_in_tree():
@@ -567,6 +586,14 @@ func _handle_input(event: InputEvent) -> void:
 		elif Hotkeys.pressed(event, "edit_select_all"):
 			_select_all_clips()
 			accept_event()
+		elif Hotkeys.pressed(event, "arranger_range_end_right"):
+			_resize_range(0, 1)
+		elif Hotkeys.pressed(event, "arranger_range_end_left"):
+			_resize_range(0, -1)
+		elif Hotkeys.pressed(event, "arranger_range_start_left"):
+			_resize_range(-1, 0)
+		elif Hotkeys.pressed(event, "arranger_range_start_right"):
+			_resize_range(1, 0)
 		elif timeline.clip_selection_manager.has_selection():
 			if Hotkeys.pressed(event, "arranger_move_left"):
 				timeline.move_selection_by_ticks(-timeline.get_move_step_ticks())
@@ -580,6 +607,13 @@ func _handle_input(event: InputEvent) -> void:
 			elif Hotkeys.pressed(event, "arranger_move_track_down"):
 				timeline.move_selection_by_tracks(1)
 				accept_event()
+
+
+## Move a time-range boundary by one snap step (direction -1/0/1 per side).
+func _resize_range(start_dir: int, end_dir: int) -> void:
+	var step := timeline.get_move_step_ticks()
+	if timeline.clip_selection_manager.resize_range(start_dir * step, end_dir * step):
+		accept_event()
 
 
 ## Select all: every clip on the active track, or every track when none is active.
