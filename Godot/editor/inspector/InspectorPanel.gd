@@ -8,7 +8,7 @@ class_name InspectorPanel extends ScrollContainer
 ## Section scripts, top to bottom. Each extends InspectorSection. Phase 2 and 3 of spec 029 add
 ## AudioClipInspector after ClipInspector.
 static func section_scripts() -> Array[GDScript]:
-	return [ClipInspector]
+	return [ClipInspector, AudioClipInspector]
 
 ## Project used by the sections for tick formatting. Falls back to the editor's project when unset.
 var project: Project = null

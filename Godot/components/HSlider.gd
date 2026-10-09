@@ -10,6 +10,10 @@ signal reset_requested
 signal drag_started
 signal drag_ended
 
+## Also restore `default_value` on a double-click (the first click of the pair has already
+## moved the value, so the reset is a second change).
+@export var double_click_resets := false
+
 var _dragging := false
 var _fine_drag := FineDrag.new()
 
@@ -314,7 +318,7 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
-				if event.is_command_or_control_pressed():
+				if event.is_command_or_control_pressed() or (double_click_resets and event.double_click):
 					last_edit_kind = ValueEditKind.Kind.RESET
 					value = default_value
 					last_edit_kind = ValueEditKind.Kind.DRAG

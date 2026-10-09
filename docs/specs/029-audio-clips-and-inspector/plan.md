@@ -11,7 +11,7 @@ something that builds, passes tests and can be checked by hand. Commit at the en
 
 - [x?] Phase 0: Fix audio clip playback speed and per-instance gain mixing
 - [x?] Phase 1: Inspector framework and `ClipInspector`
-- [ ] Phase 2: Clip gain
+- [x?] Phase 2: Clip gain
 - [ ] Phase 3: Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
 - [ ] Phase 4: Stretch mode (pitch-preserving, Signalsmith Stretch)
 - [ ] Phase 5: Fades
@@ -207,16 +207,28 @@ Phase 1 notes (deviations from the list above):
 
 The engine already has `/track/{id}/instance/{id}/set_gain`.
 
-- [ ] `ClipInstance.set_gain_offset(db)` with a signal, sent in `sync_to_engine()`.
-- [ ] Add a gain row to the `AudioClipInspector` section. Create that section here with gain and
+- [x?] `ClipInstance.set_gain_offset(db)` with a signal, sent in `sync_to_engine()`.
+- [x?] Add a gain row to the `AudioClipInspector` section. Create that section here with gain and
   source info only:
   - Gain row: a knob or slider from −inf to +24 dB, double-click to reset.
   - Source info, read-only: file name and path, format, sample rate, channels, duration.
-- [ ] `TimelineClip` passes `db_to_linear(gain_offset)` to `WaveformView.gain`, so the waveform
+- [x?] `TimelineClip` passes `db_to_linear(gain_offset)` to `WaveformView.gain`, so the waveform
   shows the gain.
-- [ ] Optional: drag vertically on the clip's top edge to change gain, with a value tooltip. Do
+- [x?] Optional: drag vertically on the clip's top edge to change gain, with a value tooltip. Do
   this only if it fits the clip interaction modes cleanly.
-- [ ] Tests: the setter syncs, undo works, and the waveform gain follows the setting.
+- [x?] Tests: the setter syncs, undo works, and the waveform gain follows the setting.
+
+Phase 2 notes (deviations from the list above):
+- `/track/{id}/instance/{id}/set_gain f:db` already existed and matches (route, `UpdateClipInstanceGain`,
+  `Track` sync on instance add); no engine change.
+- Range is -60 to +24 dB. The floor is a stand-in for -inf: it shows "-inf", the waveform draws flat
+  and `engine_gain_db()` sends -120 dB. (`gain_offset` is saved in JSON, which can't hold -inf.)
+- Control is `HorSlider` plus a typed dB field, not a knob. `HorSlider` got an opt-in
+  `double_click_resets`. The first click of a double-click already moves the value, so a
+  double-click reset records two undo steps.
+- Top-edge vertical drag skipped: the clip header/top edge is used by the move and select interactions, and I did not add a new interaction mode.
+- Source info shows the file's own sample rate once peaks are loaded, else the playback rate.
+- Tests in `Godot/tests/test_audio_clip_inspector.gd`.
 
 ## Phase 3 — Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
 

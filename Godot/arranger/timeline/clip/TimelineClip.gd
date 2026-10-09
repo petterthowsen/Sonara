@@ -254,6 +254,7 @@ func _update_waveform() -> void:
 		_layout_loop_waveforms([])
 		return
 	waveform_view.reverse = clip_instance.reverse_enabled
+	waveform_view.gain = clip_instance.gain_linear()
 	waveform_view.data = clip.audio_source.data
 	var gh: GridHelper = timeline.grid_helper if timeline else null
 	if gh == null or not waveform_view.is_data_ready() or gh.pixels_per_beat <= 0.0:
@@ -309,6 +310,7 @@ func _layout_loop_waveforms(segments: Array) -> void:
 		view.data = waveform_view.data
 		view.color = waveform_view.color
 		view.reverse = waveform_view.reverse
+		view.gain = waveform_view.gain
 
 
 ## Redraw the dividers between loop passes, creating the overlay the first time a clip loops.

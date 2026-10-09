@@ -56,6 +56,7 @@ in ./components A set of small reusable custom UI controls such as Meters, Slide
 - Multi-selection: a field shows the shared value, or "—" (the `LineEdit` placeholder, a toggle's text) when the values differ. An edit applies to every selected object as one undo step.
 - Edits never touch fields or OSC. `ClipInspector` uses `ClipInstanceTransformCommand` for position, length, offset and the loop region, and `PropertyCommand` for name (`Clip.set_name`), mute, clip colour (`Clip.set_color`) and the colour override reset (`ClipInstance.set_color_override`). A colour-picker drag applies live and is recorded once when the popup closes. Make Unique uses `MakeClipUniqueCommand`.
 - Time fields are `bars.beats.ticks`, formatted and parsed by `InspectorBbt` on top of `TimeSignatureMap` and `ClipTextTime`. Position is a 1-based song position (follows the time signature map). Length, offset and loop start/length are 0-based amounts (`1.0.000` is one bar), measured with the signature at the clip start. Audio that does not loop is limited to its source length.
+- `AudioClipInspector` (selections of audio clip instances only) edits `ClipInstance.set_gain_offset` (-60 dB floor shown as "-inf" and sent to the engine as silence, up to +24 dB) with a `HorSlider` (`double_click_resets`) plus a typed dB field, and shows file, format, sample rate, channels and duration. A slider drag applies live and is one `PropertyCommand` per instance recorded on release. `TimelineClip` feeds `ClipInstance.gain_linear()` to `WaveformView.gain`.
 
 ## Lane layout and note maps
 

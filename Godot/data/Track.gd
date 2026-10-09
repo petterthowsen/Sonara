@@ -541,7 +541,7 @@ func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 		AudioEngineOSC.send("/track/%d/instance/%s/set_transpose" % [id, instance.id], [instance.transpose])
 
 	if instance.gain_offset != 0.0:
-		AudioEngineOSC.send("/track/%d/instance/%s/set_gain" % [id, instance.id], [instance.gain_offset])
+		AudioEngineOSC.send("/track/%d/instance/%s/set_gain" % [id, instance.id], [instance.engine_gain_db()])
 
 	if instance.muted:
 		AudioEngineOSC.send("/track/%d/instance/%s/set_mute" % [id, instance.id], [1])

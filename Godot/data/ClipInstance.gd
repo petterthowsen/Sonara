@@ -14,6 +14,7 @@ signal duration_changed(new_duration_ticks: int)
 signal loop_changed(enabled: bool)
 signal reverse_changed(enabled: bool)
 signal muted_changed(muted: bool)
+signal gain_changed(gain_db: float)
 signal instance_modified()  # Any change to instance properties
 signal clip_changed(new_clip: Clip)  # Source clip retargeted (Make Unique)
 
@@ -45,6 +46,10 @@ var loop_length_ticks: int = 3840  # Length of loop region
 
 # Audio only: play the source samples backwards (mirrored around the clip's centre).
 var reverse_enabled: bool = false
+
+## Gain range of an instance in dB. The floor reads "-inf" and is silent.
+const GAIN_MIN_DB := -60.0
+const GAIN_MAX_DB := 24.0
 
 # Instance-specific overrides (don't affect the source Clip)
 var transpose: int = 0  # Semitones to transpose MIDI (for MIDI clips)
@@ -173,6 +178,28 @@ func set_muted(value: bool) -> void:
 		AudioEngineOSC.send("/track/%d/instance/%s/set_mute" % [track.id, id], [1 if muted else 0])
 	muted_changed.emit(muted)
 	instance_modified.emit()
+
+
+## Set the instance gain in dB (clamped to GAIN_MIN_DB..GAIN_MAX_DB) and sync it to the engine.
+func set_gain_offset(db: float) -> void:
+	db = clampf(db, GAIN_MIN_DB, GAIN_MAX_DB)
+	if gain_offset == db:
+		return
+	gain_offset = db
+	if track and track.is_engine_connected():
+		AudioEngineOSC.send("/track/%d/instance/%s/set_gain" % [track.id, id], [engine_gain_db()])
+	gain_changed.emit(gain_offset)
+	instance_modified.emit()
+
+
+## The gain to send to the engine: the floor of the range means silence.
+func engine_gain_db() -> float:
+	return -120.0 if gain_offset <= GAIN_MIN_DB else gain_offset
+
+
+## Linear gain for display (the waveform): 0 at the floor.
+func gain_linear() -> float:
+	return 0.0 if gain_offset <= GAIN_MIN_DB else db_to_linear(gain_offset)
 
 
 ## Override the clip colour for this instance; `Color.TRANSPARENT` clears the override.
