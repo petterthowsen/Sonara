@@ -22,8 +22,8 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 9: OSC argument reader
 - [x] Phase 10: Split `audio/processing.rs` and `audio/mixing.rs`
 - [x] Phase 11: Group `audio/devices/`
-- [ ] Phase 12: Split `audio/ipc/process_manager.rs` and `audio/devices/sampler.rs`
-- [ ] Phase 13: Docs, command classification for #1, close-out
+- [x] Phase 12: Split `audio/ipc/process_manager.rs` and `audio/devices/sampler.rs`
+- [x] Phase 13: Docs, command classification for #1, close-out (GitHub comments are drafts in `.scratch/`; live checks pending)
 
 ## Before you start
 
@@ -588,9 +588,34 @@ Note that in the **Log**.
 | `audio/devices/mod.rs` | 774 | 774 |
 | `audio/devices/clap_host/adapter.rs` + `host_impl.rs` (dead) | 1,097 | 1,097 |
 
+### File sizes after (production lines, excluding `mod tests`)
+
+Measured at the end of Phase 13 with the same rule as the table above (lines before the `#[cfg(test)] mod tests {` block; separate `tests.rs` and `test_support.rs` files count as 0).
+
+| Before | After | Files | Production total | Largest file |
+|---|---|---|---|---|
+| `osc/server.rs` (3,709) | `osc/` (`server`, `status`, `encode`, `gui`, `audio_files`, `parse`, `routes/*`) | 19 | 3,834 | `encode.rs` 620 |
+| `audio/commands.rs` (3,385) | `audio/commands/` + `audio/state.rs` | 13 | 4,314 | `commands/mod.rs` 1,288 (the `AudioCommand` enum plus the dispatcher) |
+| `audio/devices/sampler.rs` (1,781) | `instruments/sampler/` (without `zones.rs`) | 7 | 1,854 | `mod.rs` 417 |
+| `audio/types.rs` (1,411) | `audio/channel/`, `clip.rs`, `track.rs`, `project.rs`, `dsp/interleave.rs`, `types.rs` | 10 | 1,394 | `channel/chain.rs` 319 |
+| `audio/command_worker.rs` (1,453) | `audio/command_worker/` (with the older `audio_config.rs`) | 7 | 1,931 | `plugins.rs` 599 |
+| `audio/ipc/process_manager.rs` (1,242) | `audio/ipc/process/` | 6 | 1,315 | `launch.rs` 331 |
+| `audio/mixing.rs` (715) | `audio/mixing/` | 4 | 790 | `routing.rs` 354 |
+| `audio/processing.rs` (579) | `audio/processing/` | 5 | 731 | `clip_audio.rs` 259 |
+| `audio/devices/mod.rs` (774) | `devices/{mod, device, params, sleep}.rs` | 4 | 767 | `device.rs` 510 |
+| `clap_host/adapter.rs` + `host_impl.rs` (1,097) | deleted | 0 | 0 | |
+
+The totals grow a little: every new file has its own `use` block, `//!` header and doc comments, and `encode.rs`, `parse.rs` and `routing.rs` gained code in Phases 8 and 9.
+
 Goal: no production file over ~800 lines outside `devices/` DSP code, and no function over ~150
 lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs`) and
 `encode_status`.
+
+Goal check at the end: the exceptions are `commands/mod.rs` (1,288: the plan allows the dispatch match, and the 580-line
+`AudioCommand` enum sits in the same file), `audio/modulation/host.rs` (1,203), `window_manager.rs` (878), `audio/stream.rs` (855)
+and `plugin_host/audio_thread.rs` (825), which were not in this plan, and the device DSP files (`reverb`, `compressor`, `eq`,
+`filter`, `sfizz_device`, `polysynth/mod`, `clap_host/subprocess_adapter/mod`, `note_fx/host`). `command_worker::device_tick::poll_devices`
+is still about 170 lines (Phase 7). Function lengths were not re-measured beyond the ones named in the phase notes.
 
 ## Out of scope
 
@@ -619,6 +644,9 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 9 | 2026-10-09 | lib 842 / 14 (823 + 8 `Args` tests + 1 device test + 10 routing tests) | release 0; test build 0 | Allowed behavior change: malformed messages log a WARN. Live Godot check pending. See notes below. |
 | 10 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | Commits `Engine cleanup phase 10` (a) pure move of `processing.rs`, (a) pure move of `mixing.rs`, (b) stages over disjoint fields. Live `rt-debug` and load check pending. See notes below. |
 | 11 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | One pure-move commit. See notes below. |
+| race fix | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | `crash_info` no longer races the exit watcher (own commit). See notes below. |
+| 12 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | Two pure-move commits (`ipc/process/`, `sampler/`); no (b) commits. See notes below. |
+| 13 | 2026-10-09 | lib 842 / 14 | release 0; test build 0 | Docs, command classification, size table. Comments for #67 and #1 are drafts in `.scratch/`, not posted. Live checks open (see Phase 13 notes). |
 
 Phase 1 notes:
 
@@ -925,3 +953,55 @@ Phase 11 notes:
   `effects::compressor` and `instruments::drums`, `instruments` declares `pub mod drums` (was `mod drums`; `factory` needs the voice modules).
   Sorted-line comparison of all of `audio/devices/**/*.rs` before and after: only `use`/`mod` lines, `//!` headers, re-wrapped imports and
   the path edits above differ. `AGENTS.md` line 67 now says `audio/devices/instruments/drums/`; `factory.rs` and the conformance file names stay valid.
+
+Race fix notes (between Phase 11 and Phase 12):
+
+- Cause confirmed: `PluginProcess::is_alive()` calls `child.try_wait()` itself. When it saw the child's exit before the watcher thread had stored
+  `routing.exit`, `crash_info()` saw `exit == None` on a connected, not-hung host, judged it not "suspicious" and returned `None` at once. In
+  production the command thread's device tick could then report a dead plugin without exit code or stderr.
+- Change (one line plus a comment, `crash_info`): `suspicious = !self.is_alive() || self.is_hung()` instead of `!connected || is_hung()`. A dead
+  child now waits up to `CRASH_STATUS_GRACE` (250 ms) for the watcher. `std::process::Child` caches the status once reaped, so the watcher's own
+  `try_wait` still returns it and records the exit. A connected, living, not-hung host still returns `None` immediately. Alternative not taken:
+  recording the exit from `is_alive()` would put a second writer on `routing.exit`.
+- `stderr_tail_keeps_only_the_last_lines` failed at its `crash_info().expect("crash info")` lines, which is the same race, so the same fix covers it.
+- Verification: `cargo test --lib process_manager` 10 times (16 passed each time; it also passed before the fix because the race shows up under
+  the load of a full run) and `cargo test --lib` 4 times (842 passed each time). Before the fix roughly 1 full run in 3 failed.
+
+Phase 12 notes:
+
+- `ipc/process_manager.rs` became `ipc/process/` (lines, tests included): `mod.rs` 580 (`ProcessManager`, `lock`, timeouts, 9 tests and the `fake_host` helpers), `launch.rs` 406
+  (`HostLaunch`, `split_command`, log dir and pruning, `move_fd_to`, and the `spawn`/`spawn_program`/`connect` methods of `PluginProcess` as a second
+  `impl` block; 3 tests), `process.rs` 268 (`PluginProcess` struct, requests, `is_alive`, `crash_info`, `kill`, `shutdown`, `Drop`), `crash.rs` 340
+  (`HostExit`, `HostCrash`, `signal_name`, `open_pidfd`, `wait_for_exit`, the stderr drain, `start_supervision` as an `impl PluginProcess` block; 4 tests),
+  `routing.rs` 134 (`Routing`, `run_reader`), `connection.rs` 80 (`InstanceConnection`). `ipc/mod.rs` declares `pub mod process` and re-exports the same
+  names as before (`ProcessManager`, `PluginProcess`, `HostCrash`, ...). Deviation from the plan's list: `spawn_program` is a method, so it sits in
+  `launch.rs` as an `impl PluginProcess` block, as does `start_supervision` in `crash.rs`. The tests that need the `fake_host` fixture stayed in `mod.rs`.
+- `devices/instruments/sampler.rs` became `instruments/sampler/` (lines, tests included): `mod.rs` 417 (header, `SamplerDevice`, its constructor and loading methods,
+  `impl AudioDevice`), `params.rs` 383 (parameter ids, tables, `PlayMode`, `LoopMode`, `Params`), `regions.rs` 245 (`SampleBuffer`, `Regions`, `resolve_regions`,
+  `Zone`, `zone_at`, `interpolate_frame`), `voice.rs` 250 (`Voice`, loop and read functions, `render_active_voices`), `multisample.rs` 254 (the multisample-mode `impl
+  SamplerDevice` block), `playback.rs` 305 (the voices `impl SamplerDevice` block), `zones.rs` 566 (`git mv` of `sampler_zones.rs`), `tests.rs` 1,199.
+  `instruments/mod.rs` now has `pub mod sampler` and `devices/mod.rs` re-exports `sampler` instead of `sampler_zones`; call sites use
+  `crate::audio::devices::sampler::zones::...` (no compatibility re-export). Deviation: the 1,170 test lines are device-level behaviour tests sharing fixtures
+  (`device()`, `render()`, `multi()`...), so they live together in `tests.rs` instead of being split per file.
+- Move verification: for both splits, the sorted, trimmed lines (after dropping `pub(super)`/`pub(crate)`) of the old file and of the new files compared as
+  multisets. Differences are only `use` and `mod` lines, `//!` headers, the `impl ... {` wrapper lines of the extra impl blocks, re-wrapped `rustfmt` lines (the
+  `send` signature, `read_voice`, one status match arm) and, for the sampler, the two `// === ... ===` section comments, which became the file headers.
+  The process split also changed `super::protocol::log_file_name` to `crate::audio::ipc::protocol::log_file_name`. Items and fields used across the new files
+  became `pub(super)`.
+- No (b) commits: the pieces are cohesive after the move and the plan says to improve only if needed.
+
+Phase 13 notes:
+
+- Docs updated: `AGENTS.md` (engine threads, device paths, the "adding an OSC message" sentence), `docs/subsystems/engine-architecture.md` (thread model including
+  `CommandEffects`, file tree, stale file references, new Command classification section with the stage read/write map), `engine-audio-thread.md`,
+  `osc-protocol.md` (source of truth is `osc/routes/` and `osc/encode.rs`; `DevicePath::to_osc_addr` path; polysynth params path), `engine-plugin-architecture.md`
+  (`ipc/process/`, no in-process adapter), `engine-sfz-sampler.md` (paths) and ADR 0003 (the file list in Consequences). Every `.rs` path and directory written in
+  those files was checked against the tree.
+- Command classification: 108 `AudioCommand`s, 69 graph edit, 22 build/teardown, 5 query, 12 command thread only. The classes are judgements from reading the handlers;
+  the note column marks the commands that still allocate or free under the state lock.
+- Comments for #67 and #1 are drafts, not posted: `.scratch/issue-67-comment.md` and `.scratch/issue-1-comment.md` (git-excluded).
+- Pending live checks (the user's engine holds port 7000, so none were run):
+  - [ ] Phase 2: start the engine with `./run_release.sh`; `logs/last_info.log` and `last_warn.log` are written and `/project/init` rotates them into `session_<timestamp>_*.log`.
+  - [ ] Phase 9: run Godot against the engine (open a project, play, move a fader, add a device) and check `Engine/logs/last_warn.log` for new argument warnings. File any as issues, don't silence them.
+  - [ ] Phase 10: `SONARA_FEATURES=rt-debug ./run_release.sh` with clips through a CLAP plugin and a bus (only the known `poll_device_data` allocation may show), and compare the engine stats load average/peak with `master`.
+- Not done on purpose: #67 is not closed, and nothing was pushed.

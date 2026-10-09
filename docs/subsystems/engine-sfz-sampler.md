@@ -1,7 +1,7 @@
 # Built-In SFZ Sampler (Sfizz)
 
 ## Overview
-- The engine ships a first-party SFZ instrument implemented in `Engine/src/audio/devices/sfizz_device.rs`.
+- The engine ships a first-party SFZ instrument implemented in `Engine/src/audio/devices/instruments/sfizz_device.rs`.
 - It wraps the `rust-sfizz` crate and is exposed as a built-in device so it follows audio-thread safety rules identical to other native instruments.
 - Godot surfaces the device through `Device.create_builtin_sfizz()` and the asset browser; SFZ files are discovered via `SfzAssetProvider` and loaded using the `/load_file` OSC command.
 
@@ -35,7 +35,7 @@
 - After an SFZ loads, the device merges `synth.cc_labels()` with a host-standard set (Mod Wheel, Volume, Pan, Expression, Sustain) so unlabeled dynamics (often CC1) stay controllable.
 - Labeled CCs go on the `"param"` group (Parameters tab); unlabeled host CCs go on `"cc"` (CCs tab). `param_id` is the CC number (0–127), range 0.0–1.0.
 - `set_parameter` sends MIDI HDCC via `try_lock()`; contended locks queue the change for the next block.
-- `take_parameters_changed()` is polled from `mixing.rs`. When true, the engine emits `PluginParameterCount` + `PluginParameterInfo` so Godot rebuilds the device panel. No Godot-side special case — same path as CLAP parameter lists.
+- `take_parameters_changed()` is polled by the command thread's device tick (`command_worker/plugins.rs`). When true, the engine emits `PluginParameterCount` + `PluginParameterInfo` so Godot rebuilds the device panel. No Godot-side special case — same path as CLAP parameter lists.
 
 ## Lifecycle Expectations
 - `deactivate()` clears the loading state back to `Idle`; callers should re-send a file path when reactivating.

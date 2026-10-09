@@ -5,11 +5,12 @@
 - CLAP plugins live in dedicated subprocesses for crash isolation, GUI compatibility, and sandboxing.
 - Engine/device code talks to the subprocess through the reusable `audio/ipc` layer (command protocol + shared-memory ring buffers).
 - `SubprocessClapAdapter` integrates the subprocess host into the audio device graph without blocking the audio thread.
+- There is no in-process hosting: the old `ClapDeviceAdapter` (with its `SonaraHost` implementation) was never used and was removed in the engine cleanup (ADR 0001, `docs/engine-architecture-cleanup-plan.md` Phase 1). `OpenPluginGui`/`ClosePluginGui` on a device that isn't a subprocess CLAP plugin just log a warning.
 
 ## Structure
 
 - `audio/ipc/` (format agnostic, used by both binaries):
-  - `process_manager.rs`: `ProcessManager` maps a host key to a host process (`PluginProcess`) and an `InstanceId` to its `InstanceConnection`. Each host has one control socket, a reader thread, and one doorbell region. It also holds the `HostingPolicy`.
+  - `process/`: `mod.rs` has `ProcessManager`, which maps a host key to a host process (`PluginProcess`) and an `InstanceId` to its `InstanceConnection`, and holds the `HostingPolicy`. Each host has one control socket, a reader thread, and one doorbell region. The other files: `launch.rs` (`HostLaunch`, wrapper/debugger settings, host log files, `spawn`/`connect`), `process.rs` (`PluginProcess`: requests, hung detection, `crash_info`, shutdown), `crash.rs` (`HostExit`, `HostCrash`, the watcher thread that reaps the child, the stderr tail), `routing.rs` (`Routing`, the reader thread's `run_reader`), `connection.rs` (`InstanceConnection`).
   - `hosting.rs`: Hosting modes (`HostingMode`: Together, ByVendor, ByPlugin, Individually) and `HostingPolicy` (global mode + per-plugin overrides), which turns (plugin id, vendor, instance id) into a `HostAssignment` (mode + host key).
   - `shared_memory.rs`/`platform_shm.rs`: Per-instance block memory (planar audio + event arrays + `BlockControl`) and the per-host `HostSharedMemory` doorbell, both backed by `memfd` (Unix) or OS-specific shared memory.
   - `futex.rs`: `wait`/`wake`/`ring` on a shared `u32`, used for the block handshake.

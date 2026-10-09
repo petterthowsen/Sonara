@@ -21,7 +21,7 @@ let changed = self.parameters_changed.lock().unwrap();
 
 **Denormals:** the callback calls `dsp::denormal::flush_denormals_to_zero()` first thing, so decaying filter, delay and reverb tails flush to zero instead of turning into slow denormal arithmetic. Code that runs audio outside the callback (tests, offline rendering) doesn't get this, so DSP must stay correct without it.
 
-`EngineState` is shared with the command thread (`command_worker.rs`). Anything that thread does with the state lock held must be fast, because the callback gives up after `STATE_LOCK_BUDGET` and outputs silence. Put slow commands (IPC, file or plugin loading, dropping CLAP devices) in `CommandWorker` with the lock released.
+`EngineState` (`audio/state.rs`) is shared with the command thread (`audio/command_worker/`). Anything that thread does with the state lock held must be fast, because the callback gives up after `STATE_LOCK_BUDGET` and outputs silence. Put slow commands (IPC, file or plugin loading, dropping CLAP devices) in `CommandWorker` with the lock released. Fast commands (`audio/commands/`, `process_command`) run with the lock held but must not send statuses or free memory there: they push statuses and removed objects into a `CommandEffects`, and `CommandWorker::apply_locked` sends and drops them after unlocking. If you add a command that removes a channel, clip, PCM buffer or device, push it into `effects.trash`.
 
 ## Audio Processing Pipeline
 
@@ -35,11 +35,11 @@ The audio engine processes each callback in this order:
 6. **Meter audio** (peak detection on output)
 7. **Send status updates** (20Hz, not every frame)
 
-Location: `Engine/src/audio/processing.rs`
+Location: `Engine/src/audio/processing/` (`mod.rs` orders the stages; `live_midi.rs`, `timeline.rs`, `clip_midi.rs` and `clip_audio.rs` hold them). Each stage takes only the `EngineState` fields it uses; `engine-architecture.md` › Command classification lists what each reads and writes.
 
 ### Audio Clip Loading (Async)
 - Heavy lifting (decode, resample, waveform generation) runs in `AudioFileService`, a worker pool created in `main.rs`. Requests arrive via `/clip/{id}/load_audio_file` → `AudioCommand::BeginLoadAudioClip`.
-- `osc::server` forwards `AfsEvent::DecodeReady` as `AudioCommand::LoadAudioClip`, which only copies the already-decoded `Vec<f32>` plus metadata into `EngineState`—never invoke Symphonia or Rubato from the audio callback.
+- `osc/audio_files.rs` (`handle_afs_event`) forwards `AfsEvent::DecodeReady` as `AudioCommand::LoadAudioClip`, which only copies the already-decoded `Vec<f32>` plus metadata into `EngineState`—never invoke Symphonia or Rubato from the audio callback.
 - Waveform levels (`AfsEvent::WaveformLevel`) and progress/errors (`AfsEvent::Progress`/`Error`) stay on the main/OSC threads; the audio thread only needs the final PCM buffer and cache key.
 - Always guard against stale `req_id`s when handling `LoadAudioClip`; reject outdated events so retries do not clobber newer audio.
 
@@ -50,7 +50,7 @@ Location: `Engine/src/audio/processing.rs`
 - `AudioDevice::send_midi_event()` now receives the `frame_offset`; built-ins (`PolySynthDevice`, `SfizzDevice`) and the CLAP adapter honour it to keep envelopes, voice gates, and plugin note-ons aligned with the hardware clock.
 - Never translate offsets back to ticks inside devices—use the given `frame_offset` directly against the block you are rendering.
 
-## Mixing Pipeline (`mixing.rs::mix_and_output`)
+## Mixing Pipeline (`mixing/mod.rs::mix_and_output`)
 
 The mixer now runs five passes to support sends, SIMD-aware devices, and bus effects while keeping the callback allocation-free.
 
@@ -147,9 +147,10 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 
 ## Related Files
 
-- `Engine/src/audio/mixing.rs`: Full mixing implementation (five-pass pipeline)
-- `Engine/src/audio/processing.rs`: Callback pipeline orchestration
+- `Engine/src/audio/mixing/`: Full mixing implementation (`mod.rs` the passes, `routing.rs` routing, sends and aux sources, `solo.rs` solo roles)
+- `Engine/src/audio/processing/`: Callback pipeline orchestration
+- `Engine/src/audio/state.rs`: `EngineState`, the data the callback and command thread share
 - `Engine/src/audio/engine.rs`: Engine initialization
 - `Engine/src/audio/stream.rs`: Output stream thread, watchdog, config selection and the callback
-- `Engine/src/audio/types.rs`: Channel, Track, Voice data structures
+- `Engine/src/audio/channel/`, `clip.rs`, `track.rs`, `project.rs`: Channel, Clip, Track and ProjectSettings data structures (`types.rs` keeps only the ID aliases)
 - `engine-architecture.md`: High-level architecture overview
