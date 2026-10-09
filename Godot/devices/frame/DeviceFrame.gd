@@ -18,6 +18,9 @@ signal maximize_requested
 signal title_bar_pressed
 ## A tab was dragged out of the frame and dropped at `screen_pos` (REQ-013).
 signal tab_torn_off(dev: DeviceInstance, screen_pos: Vector2i)
+## A tab was dragged onto another tab of the same frame: move `dev` to where `target` is in the
+## channel chain.
+signal tab_reorder_requested(dev: DeviceInstance, target: DeviceInstance)
 signal active_device_changed(dev: DeviceInstance)
 ## A tab whose device shows in another frame (torn off) was selected; the frame keeps its
 ## current tab and the manager raises the other frame.
@@ -37,6 +40,15 @@ const ICON_MINIMIZE := preload("res://assets/icons/minus.svg")
 const ICON_MAXIMIZE := preload("res://assets/icons/maximize.svg")
 const ICON_RESTORE := preload("res://assets/icons/minimize.svg")
 const ICON_CLOSE := preload("res://assets/icons/x.svg")
+const CONTEXT_MENU := preload("res://devices/DeviceContextMenu.tscn")
+
+const LIGHT_DIAMETER := 18.0
+const TAB_DOT_SIZE := 10
+const TAB_DOT_ON := Color(1.0, 0.65, 0.0)
+const TAB_DOT_OFF := Color(0.45, 0.2, 0.2)
+## Tab reorder insert marker (the shared drop indicator accent).
+const REORDER_MARKER_COLOR := Color("#5aa0ff")
+const REORDER_MARKER_WIDTH := 3.0
 
 ## Channel this frame groups (a channel frame), or null.
 var channel: Channel = null
@@ -58,9 +70,18 @@ var _refresh_queued := false
 var _press_tab := -1
 ## Where that press happened, in the tab bar's coordinates
 var _press_pos := Vector2.ZERO
+## Tab a drag in progress would be moved onto (-1 = none)
+var _reorder_target := -1
+## Devices whose enabled state the tab dots follow
+var _dot_watched: Dictionary = {}
+static var _dot_textures: Dictionary = {}
 
 var title_bar: PanelContainer
 var _title_label: Label
+## Enabled/active light of the selected device (click bypasses it, ctrl-click sleeps it)
+var _light: DeviceLightButton
+var _reorder_marker: ColorRect
+var _menu: DeviceContextMenu
 var _tabs: TabBar
 var _attach_button: Button
 var _minimize_button: Button
@@ -93,6 +114,12 @@ func _build_title_bar() -> void:
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	title_bar.add_child(row)
 
+	_light = DeviceLightButton.new()
+	_light.diameter = LIGHT_DIAMETER
+	_light.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_light.visible = false
+	row.add_child(_light)
+
 	_title_label = Label.new()
 	_title_label.clip_text = true
 	_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -105,7 +132,7 @@ func _build_title_bar() -> void:
 
 	_tabs = TabBar.new()
 	_tabs.clip_tabs = true
-	_tabs.drag_to_rearrange_enabled = false  # tabs mirror the chain (REQ-012)
+	_tabs.drag_to_rearrange_enabled = false  # reordering goes through the chain (_on_tabs_input)
 	_tabs.focus_mode = Control.FOCUS_NONE
 	_tabs.tab_changed.connect(_on_tab_changed)
 	_tabs.gui_input.connect(_on_tabs_input)
@@ -113,6 +140,13 @@ func _build_title_bar() -> void:
 	# part drags the window like the rest of the title bar.
 	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(_tabs)
+
+	_reorder_marker = ColorRect.new()
+	_reorder_marker.color = REORDER_MARKER_COLOR
+	_reorder_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_reorder_marker.z_index = 10
+	_reorder_marker.visible = false
+	_tabs.add_child(_reorder_marker)
 
 	_attach_button = _make_button(ICON_ATTACH, func():
 		if floating:
@@ -198,6 +232,10 @@ func _update_attach_tooltip() -> void:
 
 func _on_title_bar_input(event: InputEvent) -> void:
 	var mb := event as InputEventMouseButton
+	if mb and mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+		_show_context_menu(_active)
+		title_bar.accept_event()
+		return
 	if mb == null or mb.button_index != MOUSE_BUTTON_LEFT or not mb.pressed:
 		return
 	if mb.double_click:
@@ -255,6 +293,7 @@ func set_devices(devs: Array) -> void:
 		if not keep.has(dev):
 			_dispose_page(dev)
 			_elsewhere.erase(dev)
+			_unwatch_enabled(dev)
 	_devices = keep
 	var previous := _active
 	if _active == null or not _devices.has(_active):
@@ -278,13 +317,54 @@ func _rebuild_tabs() -> void:
 	_syncing_tabs = true
 	_tabs.clear_tabs()
 	for dev in _devices:
-		_tabs.add_tab(dev.get_display_name())
+		_tabs.add_tab(dev.get_display_name(), _dot_texture(dev.enabled))
+		_watch_enabled(dev)
 	if _active:
 		_tabs.current_tab = _devices.find(_active)
 	_syncing_tabs = false
+	_bind_light()
 	# One device needs no tab strip (REQ-014); the title says what it is and takes its place.
 	_tabs.visible = _devices.size() > 1
 	_title_label.size_flags_horizontal = Control.SIZE_FILL if _tabs.visible else Control.SIZE_EXPAND_FILL
+
+
+## Point the title bar light at the selected device.
+func _bind_light() -> void:
+	_light.bind_to_device_instance(_active)
+	_light.visible = _active != null
+
+
+func _watch_enabled(dev: DeviceInstance) -> void:
+	if not _dot_watched.has(dev):
+		_dot_watched[dev] = true
+		dev.enabled_changed.connect(_on_device_enabled_changed)
+
+
+func _unwatch_enabled(dev: DeviceInstance) -> void:
+	if _dot_watched.erase(dev) and is_instance_valid(dev) and dev.enabled_changed.is_connected(_on_device_enabled_changed):
+		dev.enabled_changed.disconnect(_on_device_enabled_changed)
+
+
+## Tab dots show which devices are enabled, so a bypassed one is visible without selecting it.
+func _on_device_enabled_changed(_enabled: bool) -> void:
+	for i in _devices.size():
+		_tabs.set_tab_icon(i, _dot_texture(_devices[i].enabled))
+
+
+static func _dot_texture(on: bool) -> Texture2D:
+	if _dot_textures.has(on):
+		return _dot_textures[on]
+	var color := TAB_DOT_ON if on else TAB_DOT_OFF
+	var img := Image.create(TAB_DOT_SIZE, TAB_DOT_SIZE, false, Image.FORMAT_RGBA8)
+	var c := TAB_DOT_SIZE * 0.5
+	for y in TAB_DOT_SIZE:
+		for x in TAB_DOT_SIZE:
+			var d := Vector2(x + 0.5 - c, y + 0.5 - c).length()
+			var a := clampf(c - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(color.r, color.g, color.b, a))
+	var tex := ImageTexture.create_from_image(img)
+	_dot_textures[on] = tex
+	return tex
 
 
 func select_device(dev: DeviceInstance) -> void:
@@ -298,6 +378,7 @@ func select_device(dev: DeviceInstance) -> void:
 		return
 	_active = dev
 	_sync_tab_to_active()
+	_bind_light()
 	_ensure_page(dev)
 	_queue_refresh()
 	_update_attach_tooltip()
@@ -318,7 +399,14 @@ func _on_tab_changed(index: int) -> void:
 
 
 func _on_tabs_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		_update_reorder_marker((event as InputEventMouseMotion).position)
+		return
 	var mb := event as InputEventMouseButton
+	if mb and mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+		var idx := _tabs.get_tab_idx_at_point(mb.position)
+		_show_context_menu(_devices[idx] if idx >= 0 and idx < _devices.size() else _active)
+		return
 	if mb == null or mb.button_index != MOUSE_BUTTON_LEFT:
 		return
 	if mb.pressed:
@@ -328,12 +416,17 @@ func _on_tabs_input(event: InputEvent) -> void:
 			_on_title_bar_input(mb)  # empty tab bar area: move or maximize the window
 		return
 	var tab := _press_tab
+	var target := _reorder_target_at(mb.position)
 	_press_tab = -1
+	_hide_reorder_marker()
 	if tab < 0 or tab >= _devices.size() or _devices.size() < 2:
 		return
 	# Only the two events' own positions: the window's idea of its screen position (and so
 	# get_local_mouse_position) can be off while a plugin GUI is embedded in it.
 	if mb.position.distance_to(_press_pos) < TEAR_OFF_MIN_DRAG:
+		return
+	if target >= 0:
+		tab_reorder_requested.emit(_devices[tab], _devices[target])
 		return
 	# Tab bar -> row -> title bar -> frame coordinates
 	var row := _tabs.get_parent() as Control
@@ -341,6 +434,82 @@ func _on_tabs_input(event: InputEvent) -> void:
 	var outside := Rect2(Vector2.ZERO, size).grow(TEAR_OFF_DISTANCE)
 	if not outside.has_point(release):
 		tab_torn_off.emit(_devices[tab], DisplayServer.mouse_get_position())
+
+
+## Tab a drag from the pressed tab would drop onto at `pos` (tab bar coordinates), or -1 when the
+## pointer is off the bar, the drag is too short, or this frame isn't a channel's tab group.
+func _reorder_target_at(pos: Vector2) -> int:
+	if channel == null or _press_tab < 0 or _devices.size() < 2:
+		return -1
+	if pos.distance_to(_press_pos) < TEAR_OFF_MIN_DRAG or not Rect2(Vector2.ZERO, _tabs.size).has_point(pos):
+		return -1
+	var idx := _tabs.get_tab_idx_at_point(pos)
+	if idx < 0:
+		idx = _tabs.tab_count - 1 if pos.x > _tabs.get_tab_rect(_tabs.tab_count - 1).end.x else 0
+	return idx if idx != _press_tab else -1
+
+
+## Show where the dragged tab would land: on the far side of the tab it is dragged onto.
+func _update_reorder_marker(pos: Vector2) -> void:
+	_reorder_target = _reorder_target_at(pos)
+	if _reorder_target < 0:
+		_hide_reorder_marker()
+		return
+	var rect := _tabs.get_tab_rect(_reorder_target)
+	var x := rect.position.x if _reorder_target < _press_tab else rect.end.x
+	_reorder_marker.position = Vector2(x - REORDER_MARKER_WIDTH * 0.5, rect.position.y)
+	_reorder_marker.size = Vector2(REORDER_MARKER_WIDTH, rect.size.y)
+	_reorder_marker.visible = true
+
+
+func _hide_reorder_marker() -> void:
+	_reorder_target = -1
+	_reorder_marker.visible = false
+
+
+## Remove, copy, paste and duplicate for `dev` (the same menu as the device panels).
+func _show_context_menu(dev: DeviceInstance) -> void:
+	if dev == null:
+		return
+	if _menu == null:
+		_menu = CONTEXT_MENU.instantiate()
+		# A native popup: an embedded one is drawn by Godot, under a plugin's own X window, and
+		# can't leave its parent window (a frame's title bar sits at the top of it).
+		_menu.hide()
+		_menu.force_native = true
+		add_child(_menu)
+	_menu.removes_drum_pad = false
+	_menu.targets = [dev]
+	_menu.bind_to_device(dev)
+	var menu_size := Vector2(_menu.get_contents_minimum_size())
+	var at: Vector2
+	var bounds: Rect2
+	if _menu.is_embedded():
+		at = get_global_mouse_position()
+		bounds = Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
+	else:
+		at = Vector2(DisplayServer.mouse_get_position())
+		var screen := DisplayServer.get_screen_from_rect(Rect2(at, Vector2.ONE))
+		bounds = Rect2(DisplayServer.screen_get_usable_rect(screen))
+	_menu.popup(Rect2(menu_rect_origin(at, menu_size, bounds), menu_size))
+
+
+## Top-left for a menu of `menu_size` opened at `at` inside `bounds`. A plugin's own window covers
+## whatever opens over the page below the title bar, so the menu opens upwards (its bottom edge at
+## the pointer). With no room above it opens downwards instead, on whichever side of the pointer
+## has more room horizontally (the left side when the right can't hold it).
+static func menu_rect_origin(at: Vector2, menu_size: Vector2, bounds: Rect2) -> Vector2:
+	var origin := at
+	if at.y - menu_size.y >= bounds.position.y:
+		origin.y = at.y - menu_size.y
+	else:
+		var right_room := bounds.end.x - at.x
+		var left_room := at.x - bounds.position.x
+		if right_room < menu_size.x and left_room > right_room:
+			origin.x = at.x - menu_size.x
+	origin.x = clampf(origin.x, bounds.position.x, maxf(bounds.position.x, bounds.end.x - menu_size.x))
+	origin.y = clampf(origin.y, bounds.position.y, maxf(bounds.position.y, bounds.end.y - menu_size.y))
+	return origin
 
 
 ## Mark `dev` as showing in another frame (torn off): its tab stays, selecting it raises the

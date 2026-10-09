@@ -70,6 +70,8 @@ func run_tests() -> void:
 	await _test_remembers_attach_mode()
 	await _test_per_channel()
 	await _test_chain_edits()
+	await _test_tab_reorder_and_light()
+	_test_menu_placement()
 	await _test_per_device()
 	await _test_nested_own_frame()
 	await _test_toggle_semantics()
@@ -330,6 +332,80 @@ func _test_chain_edits() -> void:
 	await process_frame
 	_assert(_manager.get_frames().is_empty(), "removing every device closes the frame")
 	await _close_all_frames()
+
+
+func _test_tab_reorder_and_light() -> void:
+	_set_grouping("Per channel")
+	var c := _channel_with_chain()
+	_manager.open(c.eq)
+	await process_frame
+	await process_frame
+	var frame: Object = _manager.get_frames()[0]
+	_assert(frame.get_devices() == [c.eq, c.spectrum], "tabs start in chain order")
+	# Drag the EQ tab onto the Spectrum tab.
+	var from_pos: Vector2 = frame._tabs.get_tab_rect(0).get_center()
+	var to_pos: Vector2 = frame._tabs.get_tab_rect(1).get_center()
+	frame._on_tabs_input(_tab_event(true, from_pos))
+	_assert(not frame._reorder_marker.visible, "no marker before the pointer moves")
+	var motion := InputEventMouseMotion.new()
+	motion.position = to_pos
+	frame._on_tabs_input(motion)
+	_assert(frame._reorder_marker.visible, "marker shows over the drop tab")
+	frame._on_tabs_input(_tab_event(false, to_pos))
+	_assert(not frame._reorder_marker.visible, "marker hides on release")
+	_assert(frame.get_devices() == [c.spectrum, c.eq], "dragging a tab reorders the chain (got %s)" % [_titles(frame)])
+	_assert(c.ch.devices.find(c.spectrum) < c.ch.devices.find(c.eq), "the channel chain follows")
+	# A click on the same tab, or a drag within it, changes nothing.
+	var here: Vector2 = frame._tabs.get_tab_rect(0).get_center()
+	frame._on_tabs_input(_tab_event(true, here))
+	frame._on_tabs_input(_tab_event(false, here + Vector2(30, 0)))
+	_assert(frame.get_devices() == [c.spectrum, c.eq], "dropping on the pressed tab is a no-op")
+
+	# The title bar light follows the selected device and bypasses it.
+	var shown: Object = frame.get_active_device()
+	_assert(frame._light.visible and frame._light.device_instance == shown, "light is bound to the selected tab's device")
+	var was: bool = shown.enabled
+	shown._on_enabled_received([0 if was else 1])  # the engine's answer to a light click
+	_assert(frame._light.enabled == (not was), "light reflects the device's enabled state")
+	frame.select_device(c.eq if shown == c.spectrum else c.spectrum)
+	_assert(frame._light.device_instance != shown, "selecting another tab rebinds the light")
+	shown._on_enabled_received([1 if was else 0])
+
+	# Right-clicking a tab opens the device menu for that tab's device; Duplicate adds a tab.
+	var registry: Object = root.get_node("AssetService").device_registry
+	for dev in [c.eq, c.spectrum]:
+		registry._devices[dev.device.device_id] = dev.device  # so copies can be rebuilt from JSON
+	var before: int = frame.get_devices().size()
+	var right := InputEventMouseButton.new()
+	right.button_index = MOUSE_BUTTON_RIGHT
+	right.pressed = true
+	right.position = frame._tabs.get_tab_rect(0).get_center()
+	frame._on_tabs_input(right)
+	_assert(frame._menu != null and frame._menu.device == frame.get_devices()[0], "tab right-click binds the menu to that tab's device")
+	_assert(frame._menu.duplicate_button.visible and frame._menu.copy_button.visible and frame._menu.remove.visible, "menu offers copy, duplicate and remove")
+	frame._menu.duplicate_button.pressed.emit()
+	await process_frame
+	_assert(frame.get_devices().size() == before + 1, "Duplicate adds a tab")
+	frame._menu.bind_to_device(frame.get_devices()[0])
+	frame._menu.remove.pressed.emit()
+	await process_frame
+	_assert(frame.get_devices().size() == before, "Remove drops the tab")
+	await _close_all_frames()
+
+
+func _test_menu_placement() -> void:
+	var win := Rect2(100, 50, 800, 600)
+	var m := Vector2(120, 140)
+	var o: Vector2 = _frame_script.menu_rect_origin(Vector2(400, 300), m, win)
+	_assert(o == Vector2(400, 160), "opens upwards when there is room (bottom at the pointer): %s" % o)
+	o = _frame_script.menu_rect_origin(Vector2(400, 100), m, win)
+	_assert(o == Vector2(400, 100), "no room above: opens downwards at the pointer: %s" % o)
+	o = _frame_script.menu_rect_origin(Vector2(850, 100), m, win)
+	_assert(o == Vector2(730, 100), "downwards near the right edge flips to the left side: %s" % o)
+	o = _frame_script.menu_rect_origin(Vector2(110, 100), m, win)
+	_assert(o == Vector2(110, 100), "downwards near the left edge stays on the right side: %s" % o)
+	o = _frame_script.menu_rect_origin(Vector2(890, 640), m, win)
+	_assert(o == Vector2(780, 500), "upwards near the right edge stays inside the window: %s" % o)
 
 
 func _test_per_device() -> void:

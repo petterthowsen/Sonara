@@ -13,6 +13,10 @@ var device: DeviceInstance = null
 var devices: Array[DeviceInstance] = []
 var preview: Control = null
 
+## Ctrl (Cmd on macOS) was held when the drag started: a drop inserts copies and leaves the
+## originals where they are.
+var copy: bool = false
+
 ## True after a drop changed something.
 var did_commit: bool = false
 
@@ -60,10 +64,13 @@ static func start(
 		for d in co_selected:
 			if d != null:
 				moving.append(d)
-	var ghost := make_preview(inst, moving.size() - 1)
+	var copying := Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)
+	var ghost := make_preview(inst, moving.size() - 1, copying)
 	var drag := DeviceDrag.new(source, inst, ghost, moving)
+	drag.copy = copying
 	source.set_drag_preview(ghost)
-	source.modulate.a = 0.5
+	if not copying:
+		source.modulate.a = 0.5
 	return drag
 
 
@@ -84,13 +91,21 @@ static func unwrap_all(data: Variant) -> Array[DeviceInstance]:
 	return out
 
 
-## Ghost label that follows the cursor. `extra` counts further devices moving with this one.
-static func make_preview(inst: DeviceInstance, extra := 0) -> Control:
+## True when `data` is a device drag that copies instead of moving.
+static func is_copy(data: Variant) -> bool:
+	return data is DeviceDrag and (data as DeviceDrag).copy
+
+
+## Ghost label that follows the cursor. `extra` counts further devices moving with this one;
+## `copying` marks a copy drag.
+static func make_preview(inst: DeviceInstance, extra := 0, copying := false) -> Control:
 	var ghost := PanelContainer.new()
 	var label_node := Label.new()
 	label_node.text = inst.get_display_name() if inst else "Device"
 	if extra > 0:
 		label_node.text += "  +%d" % extra
+	if copying:
+		label_node.text = "Copy: " + label_node.text
 	label_node.add_theme_font_size_override("font_size", 12)
 	ghost.add_child(label_node)
 	var style := StyleBoxFlat.new()

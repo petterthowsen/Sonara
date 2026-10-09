@@ -140,6 +140,17 @@ func close(dev: DeviceInstance) -> void:
 			return
 
 
+## Move `dev` to where `target` sits in their channel's chain (a tab dragged onto another tab).
+## The frame follows through the chain-changed signal; the move is one undo step.
+func reorder_tab(dev: DeviceInstance, target: DeviceInstance) -> void:
+	var ch := dev.get_channel() if dev else null
+	if ch == null or target == null or dev == target or target.get_channel() != ch:
+		return
+	if dev.get_parent_device() != null or target.get_parent_device() != null:
+		return
+	HistoryUtil.execute(DeviceMoveCommand.new(ch, dev.position, target.position, null))
+
+
 ## Close a frame and everything in it (REQ-004, REQ-023).
 func close_frame(frame: DeviceFrame) -> void:
 	if not _frames.has(frame):
@@ -296,6 +307,15 @@ func _channel_frame(ch: Channel) -> DeviceFrame:
 
 
 ## Top-level chain devices that have something to show, in chain order.
+## The device a channel-level "show device window" button drives: the first top-level device
+## of `ch` that has a window (its instrument, for instrument channels), or null.
+func primary_device(ch: Channel) -> DeviceInstance:
+	if ch == null:
+		return null
+	var devs := _chain_devices(ch)
+	return devs[0] if not devs.is_empty() else null
+
+
 func _chain_devices(ch: Channel) -> Array:
 	var out: Array = []
 	for dev in ch.devices:
@@ -330,6 +350,7 @@ func _create_frame(ch: Channel, owner: DeviceInstance, devs: Array, page: Contro
 	frame.attach_requested.connect(attach.bind(frame))
 	frame.detach_requested.connect(detach.bind(frame))
 	frame.tab_torn_off.connect(func(dev: DeviceInstance, pos: Vector2i): tear_off(frame, dev, pos))
+	frame.tab_reorder_requested.connect(reorder_tab)
 	frame.active_device_changed.connect(_on_active_device_changed.bind(frame))
 	frame.elsewhere_tab_selected.connect(func(dev: DeviceInstance):
 		var other := _own_frame(dev)

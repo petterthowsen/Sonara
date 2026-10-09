@@ -46,6 +46,8 @@ var _border_selected_cached := false
 @export var volumeter: Volumeter
 @export var label: SmartLineEdit
 @export var arm_toggle: Button
+## Shows or hides the window of the channel's primary device (DeviceWindowManager owns the state).
+@export var window_toggle: ToggleIconButton
 @export var solo_toggle: DragToggleButton
 @export var mute_toggle: DragToggleButton
 @export var automation_toggle: Button
@@ -101,6 +103,9 @@ func _ready():
 
 		if arm_toggle:
 			arm_toggle.toggled.connect(_on_arm_toggled)
+		if window_toggle:
+			window_toggle.toggled.connect(_on_window_toggled)
+			DeviceWindowManager.state_changed.connect(_on_device_window_state_changed)
 		if solo_toggle:
 			solo_toggle.toggled.connect(_on_solo_toggled)
 			solo_toggle.drag_region = self
@@ -393,8 +398,12 @@ func _bind_to_track_channel() -> void:
 			channel.color_changed.connect(_on_channel_color_changed)
 		channel.route_changed.connect(_on_channel_route_changed)
 		channel.hierarchy_changed.connect(_update_io_button)
+		channel.device_added.connect(_on_channel_devices_changed)
+		channel.device_removed.connect(_on_channel_devices_changed)
+		channel.device_moved.connect(_on_channel_devices_changed)
 		_update_volumeter_from_channel()
 		_update_io_button()
+		_update_window_toggle()
 		if arm_toggle:
 			arm_toggle.set_pressed_no_signal(channel.record_armed)
 		if volumeter:
@@ -410,6 +419,7 @@ func _bind_to_track_channel() -> void:
 	if volumeter:
 		volumeter.visible = false
 	_update_io_button()
+	_update_window_toggle()
 	# Unrouted: the track holds its own mute/solo (kept from its last strip).
 	if mute_toggle:
 		mute_toggle.set_pressed_no_signal(track.muted)
@@ -464,6 +474,9 @@ func _unbind_from_channel() -> void:
 		channel.route_changed.disconnect(_on_channel_route_changed)
 	if channel.hierarchy_changed.is_connected(_update_io_button):
 		channel.hierarchy_changed.disconnect(_update_io_button)
+	for sig: Signal in [channel.device_added, channel.device_removed, channel.device_moved]:
+		if sig.is_connected(_on_channel_devices_changed):
+			sig.disconnect(_on_channel_devices_changed)
 
 	channel = null
 	_set_route_target(null)
@@ -639,6 +652,40 @@ func _on_ancestor_changed(_value) -> void:
 func _on_arm_toggled(pressed: bool) -> void:
 	if track:
 		track.set_armed(pressed)
+
+func _on_window_toggled(pressed: bool) -> void:
+	var dev := _window_device()
+	if dev == null:
+		return
+	if pressed:
+		DeviceWindowManager.open(dev)
+	else:
+		DeviceWindowManager.close(dev)
+
+
+## The device whose window this row's toggle drives, or null.
+func _window_device() -> DeviceInstance:
+	return DeviceWindowManager.primary_device(channel)
+
+
+## A device window opened or closed anywhere (mixer, device panel, the window's own close button).
+func _on_device_window_state_changed(dev: DeviceInstance) -> void:
+	if dev == _window_device():
+		_update_window_toggle()
+
+
+func _on_channel_devices_changed(_a = null, _b = null) -> void:
+	_update_window_toggle()
+
+
+## Show the toggle only when the channel has a windowed device; mirror whether it is open.
+func _update_window_toggle() -> void:
+	if window_toggle == null:
+		return
+	var dev := _window_device()
+	window_toggle.visible = dev != null
+	window_toggle.set_state(dev != null and DeviceWindowManager.is_open(dev))
+
 
 func _on_solo_toggled(pressed: bool) -> void:
 	if track:

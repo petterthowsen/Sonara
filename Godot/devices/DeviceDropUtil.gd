@@ -57,13 +57,18 @@ static func device_fits_host(device: Device, host_parent: DeviceInstance) -> boo
 static func can_drop_instance_on_host(
 	channel: Channel,
 	inst: DeviceInstance,
-	host_parent: DeviceInstance
+	host_parent: DeviceInstance,
+	copying := false
 ) -> bool:
 	if channel == null or inst == null:
 		return false
 	if Multiband.is_band_chain(inst):
 		return false  # band positions are fixed (spec 016 D9)
-	if inst.channel_id != channel.id and not can_transfer_to_channel(inst, channel):
+	if copying:
+		# A copy leaves the original (and its aux returns) behind; it only has to fit.
+		if not device_fits_channel(inst.device, channel) or not copy_fits_host(inst, host_parent):
+			return false
+	elif inst.channel_id != channel.id and not can_transfer_to_channel(inst, channel):
 		return false
 	if NoteFx.contains_note_effect(inst):
 		if channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master:
@@ -79,6 +84,31 @@ static func can_drop_instance_on_host(
 	if inst.contains_device(host_parent):
 		return false
 	return true
+
+
+## Whether a copy of `inst` may be inserted straight into `host_parent`. Layers, Drum Machines and
+## Multiband FX hold slot or band chains, where a move reroutes the device; a copy only goes in
+## as a Chain.
+static func copy_fits_host(inst: DeviceInstance, host_parent: DeviceInstance) -> bool:
+	if host_parent == null:
+		return true
+	if SlotChain.is_slot_parent(host_parent) or Multiband.is_multiband(host_parent):
+		return SlotChain.is_chain(inst) and not Multiband.is_multiband(host_parent)
+	return true
+
+
+## Insert copies of `insts` (a drag's devices, same host) into `to_parent` at `to_position` as one
+## "Paste Devices" step. Returns true when at least one copy was added.
+static func copy_instances(
+	channel: Channel,
+	insts: Array,
+	to_parent: DeviceInstance,
+	to_position: int
+) -> bool:
+	var entries: Array[Dictionary] = []
+	for inst in DeviceActions.same_host(insts):
+		entries.append(inst.to_json())
+	return not DeviceActions.paste(channel, to_parent, to_position, entries).is_empty()
 
 
 ## Whether `inst` can move from its channel to `channel`. Devices that own aux return channels
@@ -507,15 +537,15 @@ static func audio_assets_for_sampler(inst: DeviceInstance, data: Variant) -> Arr
 
 
 ## Whether `data` can be dropped onto the device panel for `inst`: a child for a container, or a file to load.
-static func can_drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
-	data = DeviceDrag.unwrap(data)
+static func can_drop_on_device(inst: DeviceInstance, drag_data: Variant) -> bool:
+	var data = DeviceDrag.unwrap(drag_data)
 	if inst == null:
 		return false
 	if data is Array:
 		return not audio_assets_for_sampler(inst, data).is_empty()
 	if is_preset_for_device(inst, data):
 		return true
-	if inst.is_container() and can_drop_on_container(inst.get_channel(), inst, data):
+	if inst.is_container() and can_drop_on_container(inst.get_channel(), inst, drag_data):
 		return true
 	return data is Asset and can_drop_file_on_device(inst, data)
 
@@ -529,16 +559,16 @@ static func is_preset_for_device(inst: DeviceInstance, data: Variant) -> bool:
 
 
 ## Drop `data` onto the device panel for `inst`. Returns true when it was added into the container.
-static func drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
-	data = DeviceDrag.unwrap(data)
+static func drop_on_device(inst: DeviceInstance, drag_data: Variant) -> bool:
+	var data = DeviceDrag.unwrap(drag_data)
 	if inst == null:
 		return false
 	var channel := inst.get_channel()
 	if is_preset_for_device(inst, data):
 		load_preset_into(inst, (data as Asset).path)
 		return false
-	if inst.is_container() and can_drop_on_container(channel, inst, data):
-		drop_on_container(channel, inst, data)
+	if inst.is_container() and can_drop_on_container(channel, inst, drag_data):
+		drop_on_container(channel, inst, drag_data)
 		return true
 	var samples := audio_assets_for_sampler(inst, data)
 	if not samples.is_empty():
@@ -563,12 +593,12 @@ static func load_preset_into(inst: DeviceInstance, preset_path: String) -> Devic
 
 
 ## Drop onto a container device itself (append a child).
-static func can_drop_on_container(channel: Channel, container: DeviceInstance, data: Variant) -> bool:
-	data = DeviceDrag.unwrap(data)
+static func can_drop_on_container(channel: Channel, container: DeviceInstance, drag_data: Variant) -> bool:
+	var data = DeviceDrag.unwrap(drag_data)
 	if channel == null or container == null or not container.is_container():
 		return false
 	if data is DeviceInstance:
-		return can_drop_instance_on_host(channel, data, container)
+		return can_drop_instance_on_host(channel, data, container, DeviceDrag.is_copy(drag_data))
 	if data is Array:
 		return can_drop_samples_on_channel(channel, data)
 	if data is Asset:
@@ -584,13 +614,16 @@ static func can_drop_on_container(channel: Channel, container: DeviceInstance, d
 static func drop_on_container(
 	channel: Channel,
 	container: DeviceInstance,
-	data: Variant
+	drag_data: Variant
 ) -> void:
-	data = DeviceDrag.unwrap(data)
-	if not can_drop_on_container(channel, container, data):
+	if not can_drop_on_container(channel, container, drag_data):
 		return
+	var data = DeviceDrag.unwrap(drag_data)
 	if data is DeviceInstance:
-		drop_instance(channel, data, container, -1)
+		if DeviceDrag.is_copy(drag_data):
+			copy_instances(channel, (drag_data as DeviceDrag).devices, container, -1)
+		else:
+			drop_instance(channel, data, container, -1)
 		return
 	if data is Array:
 		drop_samples(channel, multi_audio_assets(data), -1, container)

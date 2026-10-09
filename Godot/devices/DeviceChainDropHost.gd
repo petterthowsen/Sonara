@@ -132,9 +132,15 @@ static func panel_body_rect(panel: Control) -> Rect2:
 ## Whether `data` (a DeviceDrag, DeviceInstance or Asset) can be inserted at `position` (-1 = append).
 ## Dropping a device back into its own slot is accepted; `is_noop` tells it apart.
 func can_drop(data: Variant, position: int = -1) -> bool:
+	var copying := DeviceDrag.is_copy(data)
 	data = DeviceDrag.unwrap(data)
 	if channel == null:
 		return false
+	if copying:
+		# Copies go into plain chains only: not onto drum pads or a drum pad return's pad lane.
+		if pad_note >= 0 or (slot_owner and parent == null) or (parent == null and PadLane.is_pad_lane(channel)):
+			return false
+		return data is DeviceInstance and DeviceDropUtil.can_drop_instance_on_host(channel, data, parent, true)
 	if pad_note >= 0:
 		return DeviceDropUtil.can_drop_on_drum_pad(data, null, channel, slot_owner)
 	if slot_owner and parent == null:
@@ -154,6 +160,8 @@ func can_drop(data: Variant, position: int = -1) -> bool:
 
 ## True when dropping `data` at `position` would leave everything where it is.
 func is_noop(data: Variant, position: int = -1) -> bool:
+	if DeviceDrag.is_copy(data):
+		return false
 	data = DeviceDrag.unwrap(data)
 	if not data is DeviceInstance:
 		return false
@@ -175,6 +183,8 @@ func drop(data: Variant, position: int = -1) -> bool:
 		return false
 	var drag: DeviceDrag = data if data is DeviceDrag else null
 	data = DeviceDrag.unwrap(data)
+	if drag != null and drag.copy:
+		return DeviceDropUtil.copy_instances(channel, drag.devices, parent, position)
 	if pad_note >= 0:
 		DeviceDropUtil.drop_on_drum_pad(channel, slot_owner, pad_note, data)
 	elif data is Array:

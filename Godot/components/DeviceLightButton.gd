@@ -119,12 +119,31 @@ var _loading_rotation := 0.0  # Rotation angle for loading animation
 func _get_minimum_size() -> Vector2:
 	return Vector2(diameter, diameter)
 
+## Follow `dev_inst` (or nothing for null). Rebinding drops the previous device's connections.
 func bind_to_device_instance(dev_inst : DeviceInstance):
+	if device_instance:
+		_disconnect_device(device_instance)
 	device_instance = dev_inst
-	device_instance.enabled_changed.connect(_on_device_enabled_changed)
-	device_instance.active_changed.connect(_on_device_active_changed)
-	device_instance.loading_state_changed.connect(_on_device_loading_state_changed)
-	device_instance.stats_changed.connect(_on_device_stats_changed)
+	if device_instance:
+		device_instance.enabled_changed.connect(_on_device_enabled_changed)
+		device_instance.active_changed.connect(_on_device_active_changed)
+		device_instance.loading_state_changed.connect(_on_device_loading_state_changed)
+		device_instance.stats_changed.connect(_on_device_stats_changed)
+	_struggling = _is_struggling()
+	queue_redraw()
+	_update_tooltip()
+
+
+func _disconnect_device(dev: DeviceInstance) -> void:
+	if dev.enabled_changed.is_connected(_on_device_enabled_changed):
+		dev.enabled_changed.disconnect(_on_device_enabled_changed)
+	if dev.active_changed.is_connected(_on_device_active_changed):
+		dev.active_changed.disconnect(_on_device_active_changed)
+	if dev.loading_state_changed.is_connected(_on_device_loading_state_changed):
+		dev.loading_state_changed.disconnect(_on_device_loading_state_changed)
+	if dev.stats_changed.is_connected(_on_device_stats_changed):
+		dev.stats_changed.disconnect(_on_device_stats_changed)
+
 
 func _on_device_enabled_changed(_enabled : bool):
 	queue_redraw()
@@ -230,7 +249,7 @@ func _on_mouse_exited():
 
 func _gui_input(event: InputEvent) -> void:
 	# Block input during loading
-	if loading_state == "loading":
+	if loading_state == "loading" or device_instance == null:
 		return
 	
 	if event is InputEventMouseButton:

@@ -11,6 +11,8 @@
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="9_yavxh"]
 [ext_resource type="Script" uid="uid://3jmrbwrbnxpg" path="res://components/CollapsingBoxContainer.gd" id="10_xkg54"]
 [ext_resource type="Script" uid="uid://cghgduhqvbyfn" path="res://components/CollapsingFlowContainer.gd" id="11_yavxh"]
+[ext_resource type="Texture2D" uid="uid://dwkn4khkbhv8u" path="res://assets/icons/panel-top.svg" id="win_closed"]
+[ext_resource type="Texture2D" uid="uid://d11snnk2qnjt7" path="res://assets/icons/panel-top-open.svg" id="win_open"]
 [ext_resource type="Script" uid="uid://dqv5jd1spvtcs" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
@@ -40,7 +42,7 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle", "io_button")]
+[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "window_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle", "io_button")]
 custom_minimum_size = Vector2(100, 24)
 offset_right = 233.0
 offset_bottom = 29.0
@@ -53,6 +55,7 @@ content_box = NodePath("VBoxContainer")
 volumeter = NodePath("VBoxContainer/HBox/Volumeter")
 label = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Label")
 arm_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/ArmToggle")
+window_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/WindowToggle")
 solo_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/SoloToggle")
 mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/MuteToggle")
 automation_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/AutomationToggle")
@@ -143,6 +146,20 @@ separation = 2
 alignment = 2
 min_visible_children = 3
 metadata/_custom_type_script = "uid://3jmrbwrbnxpg"
+
+[node name="WindowToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer" unique_id=1423907711]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+tooltip_text = "Show device window"
+focus_mode = 0
+toggle_mode = true
+icon = ExtResource("win_closed")
+icon_alignment = 1
+expand_icon = true
+script = ExtResource("5_mscrg")
+icon_default = ExtResource("win_closed")
+icon_pressed = ExtResource("win_open")
+metadata/collapse_priority = -1
 
 [node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer" unique_id=888555712]
 custom_minimum_size = Vector2(24, 24)

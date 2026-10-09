@@ -34,6 +34,7 @@ func run_tests() -> void:
 	_drop_util = load("res://devices/DeviceDropUtil.gd")
 	await _test_move_to_other_channel()
 	await _test_devices_that_stay_on_their_channel()
+	await _test_copy_drag()
 	await _test_master_takes_effects()
 	await _test_container_body_takes_drops()
 	await _test_lists_drop_panels_of_moved_devices()
@@ -136,6 +137,42 @@ func _test_move_to_other_channel() -> void:
 	var bus_list := await _list(bus, 600)
 	_assert(bus_list.drop_host.drop(_device_drag.new(null, b, null)), "bus host takes B")
 	_assert(_names(bus.devices) == ["b"], "B moved to the bus")
+
+
+func _test_copy_drag() -> void:
+	_fresh_project()
+	var one: Object = _project.create_instrument_track("One").channel
+	var two: Object = _project.create_instrument_track("Two").channel
+	var a := _fx(one, "a")
+	var b := _fx(one, "b")
+	var c := _fx(two, "c")
+	var list_two := await _list(two)
+
+	var drag: Object = _device_drag.new(null, a, null)
+	drag.copy = true
+	# Copying inside the same chain, right after the original, isn't a no-op.
+	var one_host: Object = load("res://devices/DeviceChainDropHost.gd").new()
+	one_host.bind(one)
+	_assert(not one_host.is_noop(drag, 1), "a copy next to its original is not a no-op")
+	_assert(one_host.drop(drag, 2), "copy drops at the end of its own chain")
+	_assert(_names(one.devices) == ["a", "b", "a"], "originals stay, copy appended: %s" % str(_names(one.devices)))
+	_assert(one.devices[2] != a and one.devices[2].id != a.id, "the copy is a new instance")
+
+	# Into another channel's list; devices that can't move there (aux returns) can still be copied.
+	var multi := _fx(one, "multiout")
+	multi.return_channel_ids.assign([42])
+	var mdrag: Object = _device_drag.new(null, multi, null)
+	mdrag.copy = true
+	_assert(list_two.drop_host.can_drop(mdrag, 0), "a device with returns can be copied to another channel")
+	_assert(list_two.drop_host.drop(drag, 0), "copy into Two")
+	_assert(_names(two.devices) == ["a", "c"] and _names(one.devices).size() == 4, "Two has a copy, One keeps its devices")
+	_assert(a.get_channel() == one, "the original stays on One")
+
+	# Pad drops don't take copies.
+	var pad_host: Object = load("res://devices/DeviceChainDropHost.gd").new()
+	pad_host.bind(two)
+	pad_host.pad_note = 36
+	_assert(not pad_host.can_drop(drag), "copies don't land on drum pads")
 
 
 func _test_devices_that_stay_on_their_channel() -> void:
