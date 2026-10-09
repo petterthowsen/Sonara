@@ -1,4 +1,4 @@
-# Plugin Architecture: Subprocess-Based CLAP Hosting
+# Plugin Architecture: Subprocess-Based CLAP and VST3 Hosting
 
 ## Overview
 
@@ -6,6 +6,14 @@
 - Engine/device code talks to the subprocess through the reusable `audio/ipc` layer (command protocol + shared-memory ring buffers).
 - `SubprocessClapAdapter` integrates the subprocess host into the audio device graph without blocking the audio thread.
 - There is no in-process hosting: the old `ClapDeviceAdapter` (with its `SonaraHost` implementation) was never used and was removed in the engine cleanup (ADR 0001, `docs/engine-architecture-cleanup-plan.md` Phase 1). `OpenPluginGui`/`ClosePluginGui` on a device that isn't a subprocess CLAP plugin just log a warning.
+
+## VST3 (spec 028, ADR 0019)
+
+- A parallel path in `plugin_host/vst3/`, selected by `PluginFormat` on `Initialize`; the IPC layer, hosting modes and crash handling are shared. The event loop keeps `HostedInstance::{Clap, Vst3}` per instance and dispatches to `process_command` or `process_vst3_command`.
+- Files: `module.rs` (`dlopen`, `ModuleEntry`/`ModuleExit`), `instance.rs` (component + controller, buses, connection points), `host_context.rs` (`IHostApplication`, `IComponentHandler`, shared state), `commands.rs` (`Vst3State`, command handling), `processor.rs` (audio-thread `Vst3Processor`, block events to `IEventList` and parameter queues), `params.rs`, `state_blob.rs`, `stream.rs` (`IBStream`), `gui.rs` (`IPlugView`, `PlugFrame` = `IPlugFrame` + `Linux::IRunLoop`), `scan.rs`/`moduleinfo.rs` (discovery).
+- Identity is the class ID (32 hex chars) with the `.vst3` bundle path. Parameters use the controller's index as the engine id with normalized values. State is the `SVST3` blob (component + controller).
+- The GUI attaches to the engine's host window as `X11EmbedWindowID`; there is no floating mode. The run loop (timers, fds) is serviced by the host event loop while a GUI is open.
+- Not in v1: modulation, choke, CC, aux buses and multi-out, units/programs, DAWproject.
 
 ## Structure
 
