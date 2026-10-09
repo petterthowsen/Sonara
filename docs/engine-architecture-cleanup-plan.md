@@ -915,7 +915,7 @@ Phase 11 notes:
   filter, multiband, phaser, reverb, spectrum_analyzer, utility, `effect_conformance`), `devices/instruments/` (`polysynth/`, `drums/`,
   `sampler`, `sampler_zones`, `sfizz_device`, `sfizz_keys`, `drum_conformance`), `devices/containers/` (chain, container, layer,
   drum_machine), `note_fx/` and `clap_host/` unchanged. Each group has a `mod.rs` with the module list and its public re-exports.
-- `device.rs` (the former `mod.rs`, moved with `git mv`, 645 lines with the `AudioDevice` trait), `params.rs` (`ParamId`, `ParamValue`, `ParamType`,
+- `device.rs` (the former `mod.rs`, moved with `git mv`, 510 lines with the `AudioDevice` trait), `params.rs` (`ParamId`, `ParamValue`, `ParamType`,
   `ParamInfo`, the norm/real helpers and their `curve_tests`), `sleep.rs` (`DeviceSleepState`, `has_audio_signal`). `devices/mod.rs` re-exports all of
   them with `pub use device::*; pub use params::*; pub use sleep::*;`, plus every device type and the modules outside code reaches by path:
   `container`, `sampler_zones`, `sfizz_keys`, `compressor`, `effect`, `eq` (the last three kept public so their pub helpers stay library API).
