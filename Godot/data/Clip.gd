@@ -303,6 +303,15 @@ func get_notes_in_range(start_tick: int, end_tick: int) -> Array[MidiNoteData]:
 	return notes
 
 
+## Start tick of the first note at `pitch` that starts after `tick`, or -1 when there is none.
+func next_note_start_at_pitch(pitch: int, tick: int) -> int:
+	var best := -1
+	for n in midi_notes:
+		if n.note == pitch and n.start_tick > tick and (best < 0 or n.start_tick < best):
+			best = n.start_tick
+	return best
+
+
 func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tick: int, allocate_note_id: Callable, exclude_note_id: int = -1) -> Array[MidiNoteData]:
 	"""
 	Cut/trim existing notes at the given pitch that overlap with the new note range.

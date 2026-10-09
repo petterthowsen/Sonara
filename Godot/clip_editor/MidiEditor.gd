@@ -2096,9 +2096,24 @@ func _audition_visual_note(vn: VisualNote) -> void:
 	_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)
 
 
-## While dragging with audition on, replay the note whenever its pitch changes.
+## Minimum time between audition retriggers during a drag (about twice per second).
+const AUDITION_THROTTLE_MSEC := 500
+var _last_throttled_audition_msec := -AUDITION_THROTTLE_MSEC
+
+
+## True, and starts a new interval, when a drag-driven audition may sound now. A refused
+## retrigger is not remembered, so the next mouse move tries again with the then-current value.
+func audition_throttle_ready() -> bool:
+	var now := Time.get_ticks_msec()
+	if now - _last_throttled_audition_msec < AUDITION_THROTTLE_MSEC:
+		return false
+	_last_throttled_audition_msec = now
+	return true
+
+
+## While dragging with audition on, replay the note whenever its pitch changes (throttled).
 func _retrigger_audition_on_pitch_change(vn: VisualNote) -> void:
 	if not audition_enabled or _preview_note < 0 or vn == null or vn.midi_note_data == null:
 		return
-	if vn.midi_note_data.note != _preview_note:
+	if vn.midi_note_data.note != _preview_note and audition_throttle_ready():
 		_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)

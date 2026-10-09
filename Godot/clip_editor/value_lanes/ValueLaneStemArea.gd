@@ -492,7 +492,7 @@ func _audition(nd: MidiNoteData) -> void:
 	if descriptor.key != "vel" or not midi_editor.audition_enabled or _touched.size() != 1:
 		return
 	var v7 := MidiNoteData.to_midi_velocity(nd.velocity)
-	if v7 == _last_audition_velocity:
+	if v7 == _last_audition_velocity or not midi_editor.audition_throttle_ready():
 		return
 	_last_audition_velocity = v7
 	midi_editor._start_preview_note(nd.note, nd.velocity)

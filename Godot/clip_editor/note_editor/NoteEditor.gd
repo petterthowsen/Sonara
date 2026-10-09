@@ -452,6 +452,12 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 			return null
 		target_clip = clip
 
+	# Clamp to the free space before the next note on this pitch instead of cutting it.
+	var next_start := target_clip.next_note_start_at_pitch(midi_note_num, tick_position)
+	if next_start >= 0 and next_start < end_tick:
+		new_note_length = next_start - tick_position
+		end_tick = next_start
+
 	_history_begin_clips([target_clip])
 	# Cut overlapping notes
 	var affected_notes = target_clip.cut_overlapping_notes_at_pitch(midi_note_num, tick_position, end_tick, target_clip.allocate_note_id)
