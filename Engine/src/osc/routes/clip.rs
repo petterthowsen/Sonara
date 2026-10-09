@@ -32,6 +32,14 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             cx.commands
                 .send(AudioCommand::RemoveClip { id: id.to_string() })?;
         }
+        ["clip", id_str, "set_tempo"] => {
+            let bpm = a.float_or_int(0)?;
+            info!("Set clip {} tempo: {}", id_str, bpm);
+            cx.commands.send(AudioCommand::SetClipTempo {
+                clip_id: id_str.to_string(),
+                bpm,
+            })?;
+        }
         ["clip", id_str, "add_note"] => {
             if let Some(n) = parse_clip_note_args(cx.addr, args) {
                 info!(

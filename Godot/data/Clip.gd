@@ -44,7 +44,10 @@ var midi_events: Array[MidiEvent] = []  # CC, program change, etc.
 
 # Audio data (for audio clips)
 var audio_file_path: String = ""
-var recorded_bpm: float = 120.0  # BPM this audio clip was originally recorded at
+## Tempo of the audio material in BPM. The clip's length in ticks and its playback speed both
+## follow it: one beat of this tempo is 60 / recorded_bpm seconds of the file. Change it with
+## `set_recorded_bpm` so the engine hears about it.
+var recorded_bpm: float = 120.0
 
 ## Decoded audio metadata and peak data (shared ingest with Sampler devices).
 var audio_source: AudioSourceInfo = AudioSourceInfo.new()
@@ -112,10 +115,13 @@ func set_audio_metadata(sample_rate: int, channels: int, frames: int, duration_s
 	audio_source.set_audio_metadata(sample_rate, channels, frames, duration_seconds)
 
 
-func update_content_length_from_metadata(project_tempo: float, project_ppq: int) -> void:
+## Derive the content length from the decoded duration and the clip's own tempo (not the
+## project tempo, so a project reloaded at another tempo keeps the same length).
+## `fallback_tempo` is used only when the clip has no valid tempo.
+func update_content_length_from_metadata(fallback_tempo: float, project_ppq: int) -> void:
 	if audio_frames <= 0 or audio_sample_rate <= 0:
 		return
-	var tempo: float = max(1.0, project_tempo)
+	var tempo: float = recorded_bpm if recorded_bpm > 0.0 else maxf(1.0, fallback_tempo)
 	var ppq_value: int = max(1, project_ppq)
 	var duration_seconds := audio_duration_seconds
 	if duration_seconds <= 0.0:
@@ -457,6 +463,24 @@ static func uniqueness_base(clip_name: String) -> String:
 		if tail.is_valid_int():
 			s = s.substr(0, idx).strip_edges()
 	return s if not s.is_empty() else "Clip"
+
+
+## Set the tempo of the audio material and tell the engine. Does not rescale the length or
+## the instances.
+func set_recorded_bpm(bpm: float) -> void:
+	if bpm <= 0.0 or is_equal_approx(recorded_bpm, bpm):
+		return
+	recorded_bpm = bpm
+	modified_date = Time.get_unix_time_from_system()
+	if _synced_to_engine and type == ClipType.AUDIO:
+		sync_tempo_to_engine()
+	clip_modified.emit()
+
+
+## Send the tempo of an audio clip to the engine (the engine defaults to 120).
+func sync_tempo_to_engine() -> void:
+	if type == ClipType.AUDIO and recorded_bpm > 0.0:
+		AudioEngineOSC.send("/clip/%s/set_tempo" % id, [recorded_bpm])
 
 
 ## Set stored content length in ticks.

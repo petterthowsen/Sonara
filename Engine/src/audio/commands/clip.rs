@@ -232,7 +232,6 @@ pub(super) fn load_audio_clip(
 
         // Move rather than clone: decoded files can be hundreds of MB, and this runs
         // with the state lock held
-        let total_samples = samples.len();
         effects.discard(std::mem::replace(&mut clip.audio_samples, samples));
         clip.audio_sample_rate = sample_rate;
         clip.audio_channels = channels;
@@ -242,17 +241,10 @@ pub(super) fn load_audio_clip(
             req_id: req_id.clone(),
         };
 
-        // Calculate content length in ticks
-        if channels > 0 && sample_rate > 0 {
-            let sample_count = total_samples / channels;
-            let duration_seconds = sample_count as f32 / sample_rate as f32;
-            // Assuming 120 BPM = 2 beats per second, PPQ = 960 ticks per beat
-            let beats = duration_seconds * 2.0;
-            clip.content_length_ticks = (beats * 960.0) as i64;
-        } else {
-            clip.content_length_ticks = 0;
-        }
-
+        // The content length is not derived here: it depends on the clip tempo, which Godot
+        // owns. Godot computes it from the decoded duration and the clip tempo and sends it
+        // with the instance positions. `audio_sample_rate` is the rate of the decoded PCM, which
+        // the AudioFileService has already resampled to the project rate.
         return Some(EngineStatus::ClipLoadStateChanged {
             clip_id,
             state: clip.load_state.clone(),
@@ -513,6 +505,28 @@ pub(super) fn update_clip_instance_loop(
     } else {
         warn!("Track not found for update instance loop: {}", track_id);
     }
+}
+
+/// Set an audio clip's tempo (BPM of the material) and re-seat its playing instances, since
+/// their stored source positions were computed with the old tempo.
+pub(super) fn set_clip_tempo(state: &mut EngineState, clip_id: ClipId, bpm: f32) {
+    if !(bpm.is_finite() && bpm > 0.0) {
+        warn!("Ignoring invalid clip tempo {} for clip {}", bpm, clip_id);
+        return;
+    }
+    let Some(clip) = state.clips.get_mut(&clip_id) else {
+        warn!("Clip not found for set tempo: {}", clip_id);
+        return;
+    };
+    clip.recorded_bpm = bpm;
+    for track in state.tracks.values_mut() {
+        for instance in track.clip_instances.iter_mut() {
+            if instance.clip_id == clip_id {
+                instance.playback_position = None;
+            }
+        }
+    }
+    info!("Clip {} tempo set to {} BPM", clip_id, bpm);
 }
 
 /// Play a clip instance backwards or forwards.

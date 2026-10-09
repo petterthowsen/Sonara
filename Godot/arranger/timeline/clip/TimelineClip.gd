@@ -240,7 +240,7 @@ func _unbind_grid_helper() -> void:
 
 
 ## Point the WaveformView at the clip's peak data and map timeline ticks to source frames.
-## Matches the engine's constant stretch (AudioPlayback::calculate_stretch_factor): one tick
+## Matches the engine's playback rate (AudioPlayback::clip_advance_per_frame): one tick
 ## covers 60 / (recorded_bpm × ppq) seconds of the source file.
 func _update_waveform() -> void:
 	_update_loop_overlay()

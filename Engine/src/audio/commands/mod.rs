@@ -299,6 +299,11 @@ pub enum AudioCommand {
         instance_id: ClipInstanceId,
         reverse: bool,
     },
+    /// Set an audio clip's tempo (BPM of the material) and re-seat its instances.
+    SetClipTempo {
+        clip_id: ClipId,
+        bpm: f32,
+    },
 
     // Device management
     AddDeviceToChannel {
@@ -968,6 +973,7 @@ fn dispatch(
             instance_id,
             reverse,
         } => clip::update_clip_instance_reverse(state, track_id, instance_id, reverse),
+        AudioCommand::SetClipTempo { clip_id, bpm } => clip::set_clip_tempo(state, clip_id, bpm),
         AudioCommand::MoveDevice {
             channel_id,
             parent_path,

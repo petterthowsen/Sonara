@@ -207,6 +207,8 @@ Audio clips automatically time-stretch and pitch-shift based on project BPM:
 - `ClipInstance` playback position is tracked per-instance in `Track.audio_playback_positions: HashMap<ClipInstanceId, f64>`
 - Stretch factor calculated as: `stretch = project_bpm / clip.recorded_bpm`
 - Example: Audio recorded at 120 BPM playing in a 200 BPM project → stretch = 1.667x (faster + pitched up)
+- Godot owns `recorded_bpm` and sends it with `/clip/{id}/set_tempo` (the engine default of 120 only applies until it arrives). The engine does not guess a content length when the PCM loads; Godot computes it from the clip tempo and sends it with the instance positions. `clip.audio_sample_rate` is the rate of the decoded PCM, which the AudioFileService has already resampled to the project rate.
+- Each instance renders into its own `(l, r)` pair, scaled by `ClipInstance.gain_linear` (refreshed once per buffer), then adds to the track sum, so overlapping instances and mono clips never affect each other.
 
 **Implementation details:**
 - Audio playback position advances per-frame with fractional sample tracking (not per-tick) to maintain smoothness

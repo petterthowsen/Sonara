@@ -309,7 +309,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 		drop_ticks = timeline.grid_helper.snap_ticks(drop_ticks)
 
 	# Create clip from asset
-	var clip = project.create_clip_from_asset(asset, track.color)
+	var clip = project.create_clip_from_asset(asset, track.color, drop_ticks)
 
 	# create_clip_from_asset already adds to the pool; only the instance is undoable here
 	var instance_duration = clip.content_length_ticks

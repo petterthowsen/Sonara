@@ -614,6 +614,8 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 				note.release
 			])
 	else:
+		# The engine plays the clip at this tempo, so it must arrive before the instances
+		clip.sync_tempo_to_engine()
 		# Sync audio data (if audio clip)
 		if not clip.audio_file_path.is_empty():
 			_request_clip_audio(clip)
@@ -994,8 +996,9 @@ func get_clip(clip_id: String) -> Clip:
 	return clips.get(clip_id, null)
 
 
-func create_clip_from_asset(asset: Asset, default_color: Color = Color.WHITE) -> Clip:
-	"""Create a clip (audio or MIDI) from an Asset."""
+func create_clip_from_asset(asset: Asset, default_color: Color = Color.WHITE, drop_tick: int = 0) -> Clip:
+	"""Create a clip (audio or MIDI) from an Asset. An audio clip takes the project tempo at
+	`drop_tick` as its tempo, so it plays at its natural speed there."""
 	var clip_type = Clip.ClipType.AUDIO if asset.is_audio() else Clip.ClipType.MIDI
 	var clip = create_clip(asset.get_display_name(), clip_type)
 	clip.color = default_color.lightened(0.2)
@@ -1010,6 +1013,7 @@ func create_clip_from_asset(asset: Asset, default_color: Color = Color.WHITE) ->
 		clip.waveform_cache_key = ""
 		clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
 		clip.load_progress = 0.0
+		clip.set_recorded_bpm(tempo_map.get_bpm_at_tick(float(drop_tick), tempo))
 		clip.content_length_ticks = ppq * 4  # Placeholder until engine provides length
 	else:
 		# TODO: Load MIDI notes from asset.path when MIDI parser is available

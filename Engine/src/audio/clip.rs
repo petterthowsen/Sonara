@@ -85,6 +85,9 @@ pub struct ClipInstance {
     pub clip_offset: Tick,    // Offset into clip content (allows trimming from left edge)
     pub transpose: i8,        // Semitones (-12 to +12)
     pub gain_offset: f32,     // dB offset
+    /// `gain_offset` as a linear factor, refreshed once per buffer by the audio clip render so
+    /// the per-frame mix needs no `powf`.
+    pub gain_linear: f32,
     pub muted: bool,
     pub loop_enabled: bool,
     pub loop_start_ticks: Tick, // Loop region start, in clip content ticks (includes `clip_offset`)
@@ -111,6 +114,7 @@ impl ClipInstance {
             clip_offset: 0,
             transpose: 0,
             gain_offset: 0.0,
+            gain_linear: 1.0,
             muted: false,
             loop_enabled: false,
             loop_start_ticks: 0,

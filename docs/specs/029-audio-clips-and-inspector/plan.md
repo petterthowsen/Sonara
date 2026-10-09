@@ -9,7 +9,7 @@ something that builds, passes tests and can be checked by hand. Commit at the en
 
 ## Checklist
 
-- [ ] Phase 0: Fix audio clip playback speed and per-instance gain mixing
+- [x?] Phase 0: Fix audio clip playback speed and per-instance gain mixing
 - [ ] Phase 1: Inspector framework and `ClipInspector`
 - [ ] Phase 2: Clip gain
 - [ ] Phase 3: Stretch modes Raw and Repitch, clip tempo and `AudioClipInspector`
@@ -131,26 +131,26 @@ Goal: an imported file plays at the right speed and pitch at any project tempo, 
 waveform match the audio. This phase uses the existing Repitch behaviour only.
 
 Engine:
-- [ ] Add `/clip/{id}/set_tempo f:bpm` → `AudioCommand::SetClipTempo`. It sets
+- [x?] Add `/clip/{id}/set_tempo f:bpm` → `AudioCommand::SetClipTempo`. It sets
   `Clip.recorded_bpm` and resets the playback positions of that clip's instances. (Phase 3
   extends it to `set_timing` with a mode argument. Name it now so the message doesn't change
   twice. You can also add the `mode` argument now and accept only `repitch`.)
-- [ ] Remove the 120-BPM content-length guess from `commands/clip.rs`. Godot owns the length and
+- [x?] Remove the 120-BPM content-length guess from `commands/clip.rs`. Godot owns the length and
   already sends it with the instance positions.
-- [ ] `mix_instance_frame`: render the instance into a local `(l, r)` pair, apply gain, then add
+- [x?] `mix_instance_frame`: render the instance into a local `(l, r)` pair, apply gain, then add
   it to the track sum. Mono copies the instance's own left sample. Compute `db_to_gain` once per
   instance per buffer, not per frame.
-- [ ] Tests:
+- [x?] Tests:
   - two overlapping instances with different gains sum correctly
   - a mono clip doesn't leak into the right channel of another instance
   - after `SetClipTempo`, the 960-tick seek lands on the expected frame
 
 Godot:
-- [ ] Sync `Clip.recorded_bpm` in `sync_to_engine()` and through a setter `Clip.set_recorded_bpm()`.
-- [ ] On import, set `recorded_bpm = project tempo at the drop tick`.
+- [x?] Sync `Clip.recorded_bpm` in `sync_to_engine()` and through a setter `Clip.set_recorded_bpm()`.
+- [x?] On import, set `recorded_bpm = project tempo at the drop tick`.
   `update_content_length_from_metadata` uses `recorded_bpm`, not the project tempo, so the
   length doesn't change when a project reloads at another tempo.
-- [ ] Test (headless): import metadata at a project tempo of 140 gives a length of
+- [x?] Test (headless): import metadata at a project tempo of 140 gives a length of
   `duration × 140/60 × 960`, and the clip's tempo is 140.
 
 Verify by hand: set the project to 90 BPM, drop a file, and check that it sounds like it does in

@@ -43,6 +43,13 @@ pub(super) fn render_audio_clips(
     tick_rates: &[f64],
     span: BufferSpan,
 ) {
+    // One db -> linear conversion per instance per buffer, not per frame
+    for track in tracks.values_mut() {
+        for instance in track.clip_instances.iter_mut() {
+            instance.gain_linear = db_to_gain(instance.gain_offset);
+        }
+    }
+
     let mut render_tick = span.start_tick;
     let mut render_acc = span.start_acc;
     for frame_idx in 0..span.frames {
@@ -108,8 +115,8 @@ pub(super) fn render_audio_clips(
     }
 }
 
-/// Add one frame of an audio clip instance to the track's running `sample_left`/`sample_right`
-/// and advance the instance's playback position (looping it if enabled).
+/// Add one frame of an audio clip instance, scaled by its own gain, to the track's running
+/// `sample_left`/`sample_right` and advance the instance's playback position (looping it if enabled).
 ///
 /// An instance outside its playback range at `current_tick` drops its position instead.
 fn mix_instance_frame(
@@ -173,6 +180,10 @@ fn mix_instance_frame(
             *playback_pos
         };
 
+        // Render this instance alone, so its gain never scales other instances on the track
+        let mut inst_left = 0.0f32;
+        let mut inst_right = 0.0f32;
+
         // Get the current interpolated sample
         let sample_idx = read_pos.floor() as usize;
         let frac = (read_pos.fract()) as f32;
@@ -196,7 +207,7 @@ fn mix_instance_frame(
                 } else {
                     s0_left
                 };
-                *sample_left += s0_left + frac * (s1_left - s0_left);
+                inst_left = s0_left + frac * (s1_left - s0_left);
             }
 
             // Linear interpolation for right channel
@@ -209,16 +220,14 @@ fn mix_instance_frame(
                 } else {
                     s0_right
                 };
-                *sample_right += s0_right + frac * (s1_right - s0_right);
+                inst_right = s0_right + frac * (s1_right - s0_right);
             } else if clip.audio_channels == 1 {
-                // Mono: duplicate the interpolated left sample for right
-                *sample_right += *sample_left;
+                // Mono: duplicate this instance's own left sample
+                inst_right = inst_left;
             }
 
-            // Apply gain offset
-            let gain_linear = db_to_gain(instance.gain_offset);
-            *sample_left *= gain_linear;
-            *sample_right *= gain_linear;
+            *sample_left += inst_left * instance.gain_linear;
+            *sample_right += inst_right * instance.gain_linear;
         }
 
         // Advance playback position for next frame
@@ -344,5 +353,112 @@ mod tests {
                 .abs()
                 < 1e-12
         );
+    }
+
+    /// Add an audio clip with constant samples plus one instance of it to track 2.
+    fn add_const_clip(
+        state: &mut EngineState,
+        id: &str,
+        channels: usize,
+        frame: &[f32],
+        gain_db: f32,
+    ) {
+        let mut clip = Clip::new(id.to_string(), id.to_string(), ClipType::Audio);
+        clip.audio_samples = (0..200).flat_map(|_| frame.iter().copied()).collect();
+        clip.audio_channels = channels;
+        clip.audio_sample_rate = 48_000;
+        clip.recorded_bpm = 120.0;
+        clip.content_length_ticks = 960;
+        state.clips.insert(id.to_string(), clip);
+        let mut instance = ClipInstance::new(format!("i{id}"), id.to_string(), 0, 960);
+        instance.gain_offset = gain_db;
+        state
+            .tracks
+            .entry(2)
+            .or_insert_with(|| Track::new(2, 2))
+            .clip_instances
+            .push(instance);
+    }
+
+    fn render_track(state: &mut EngineState, start_tick: Tick) -> (Vec<f32>, Vec<f32>) {
+        state
+            .channels
+            .insert(2, Channel::new(2, "Audio".to_string(), 64, 48_000.0));
+        state.set_is_playing(true);
+        state.set_current_tick(start_tick);
+        state.set_fractional_tick_accumulator(0.0);
+        process_audio(state, 64, 48_000.0, Instant::now());
+        let ch = state.channels.get(&2).unwrap();
+        (ch.buffer_left.clone(), ch.buffer_right.clone())
+    }
+
+    #[test]
+    fn overlapping_instances_apply_their_own_gain() {
+        let mut state = EngineState::default();
+        add_const_clip(&mut state, "a", 2, &[1.0, 1.0], 0.0);
+        // -6.0206 dB is a factor of 0.5, so this instance contributes 0.25
+        add_const_clip(&mut state, "b", 2, &[0.5, 0.5], -6.0206);
+        let (l, r) = render_track(&mut state, 0);
+        for i in 0..64 {
+            assert!((l[i] - 1.25).abs() < 1e-3, "left {i}: {}", l[i]);
+            assert!((r[i] - 1.25).abs() < 1e-3, "right {i}: {}", r[i]);
+        }
+    }
+
+    #[test]
+    fn mono_instance_does_not_leak_into_another_instances_right_channel() {
+        let mut state = EngineState::default();
+        // Stereo instance with a silent right channel, then a mono instance
+        add_const_clip(&mut state, "s", 2, &[1.0, 0.0], 0.0);
+        add_const_clip(&mut state, "m", 1, &[0.5], 0.0);
+        let (l, r) = render_track(&mut state, 0);
+        for i in 0..64 {
+            assert!((l[i] - 1.5).abs() < 1e-6);
+            assert!((r[i] - 0.5).abs() < 1e-6, "right {i}: {}", r[i]);
+        }
+    }
+
+    #[test]
+    fn set_clip_tempo_moves_the_one_beat_seek() {
+        use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
+        let mut state = EngineState::default();
+        let mut clip = Clip::new("c".to_string(), "Ramp".to_string(), ClipType::Audio);
+        clip.audio_samples = (0..100_000).map(|i| i as f32).collect();
+        clip.audio_channels = 1;
+        clip.audio_sample_rate = 48_000;
+        clip.content_length_ticks = 1920;
+        state.clips.insert("c".to_string(), clip);
+        let mut track = Track::new(2, 2);
+        track
+            .clip_instances
+            .push(ClipInstance::new("i".to_string(), "c".to_string(), 0, 1920));
+        state.tracks.insert(2, track);
+
+        let mut effects = CommandEffects::default();
+        process_command(
+            &mut state,
+            AudioCommand::SetClipTempo {
+                clip_id: "c".to_string(),
+                bpm: 60.0,
+            },
+            64,
+            &mut effects,
+        );
+        // One beat at 60 BPM is one second of source: frame 48 000
+        let (l, _) = render_track(&mut state, 960);
+        assert!((l[0] - 48_000.0).abs() < 1.0, "got {}", l[0]);
+
+        // Back to 120 BPM re-seats the instance: one beat is half a second, frame 24 000
+        process_command(
+            &mut state,
+            AudioCommand::SetClipTempo {
+                clip_id: "c".to_string(),
+                bpm: 120.0,
+            },
+            64,
+            &mut effects,
+        );
+        let (l, _) = render_track(&mut state, 960);
+        assert!((l[0] - 24_000.0).abs() < 1.0, "got {}", l[0]);
     }
 }
