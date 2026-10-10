@@ -27,6 +27,13 @@ pub const LFO_PHASE: ParamId = 40;
 /// LFO Retrigger choices; index 1 is "Note".
 pub const LFO_RETRIGGERS: &[&str] = &["Free", "Note"];
 
+// === MIDI CC parameter IDs ===
+
+/// The controller number (0–119; 120–127 are channel-mode messages, excluded as in spec 030).
+pub const CC_NUMBER: ParamId = 0;
+/// One-pole lag time on the CC value; 0 (the default) snaps the change in this step.
+pub const CC_SMOOTH: ParamId = 10;
+
 // === Envelope parameter IDs ===
 
 pub const ENV_ATTACK: ParamId = 0;
@@ -80,6 +87,18 @@ const AD_SPECS: [ParamSpec; 2] = [
 const AD_SLOTS: [u8; 20] = slot_table(&AD_SPECS);
 static AD_TABLE: ParamTable = ParamTable::new(&AD_SPECS, &AD_SLOTS);
 
+/// A controller number, linear 0–119. 120–127 are channel-mode messages and stay out of reach.
+const CC_NUMBER_RANGE: Kind = linear(0.0, 119.0);
+/// One-pole lag: 0 (off) to 500 ms, skewed so small times get knob travel (it must reach 0).
+const CC_SMOOTH_TIME: Kind = skewed(0.0, 0.5, 4.0);
+
+const CC_SPECS: [ParamSpec; 2] = [
+    spec(CC_NUMBER, "CC Number", "MIDI CC", "", CC_NUMBER_RANGE, 0.0),
+    spec(CC_SMOOTH, "Smooth", "MIDI CC", "s", CC_SMOOTH_TIME, 0.0),
+];
+const CC_SLOTS: [u8; 20] = slot_table(&CC_SPECS);
+static CC_TABLE: ParamTable = ParamTable::new(&CC_SPECS, &CC_SLOTS);
+
 /// Velocity, release, keytrack and random have no settings.
 static EMPTY_TABLE: ParamTable = ParamTable::new(&[], &[]);
 
@@ -94,10 +113,13 @@ pub enum ModulatorKind {
     Random,
     /// The note-off's release velocity: `DEFAULT_RELEASE` until the note is released.
     Release,
+    /// A MIDI controller value, latched from the channel's CC stream (spec 032). Channel-level,
+    /// so it is evaluated on the mono path only (`is_mono_only`).
+    MidiCc,
 }
 
 impl ModulatorKind {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
     pub const ALL: [ModulatorKind; Self::COUNT] = [
         ModulatorKind::Lfo,
         ModulatorKind::Adsr,
@@ -106,6 +128,7 @@ impl ModulatorKind {
         ModulatorKind::Keytrack,
         ModulatorKind::Random,
         ModulatorKind::Release,
+        ModulatorKind::MidiCc,
     ];
 
     /// Stable id used over OSC and in saved projects.
@@ -118,6 +141,7 @@ impl ModulatorKind {
             ModulatorKind::Keytrack => "keytrack",
             ModulatorKind::Random => "random",
             ModulatorKind::Release => "release",
+            ModulatorKind::MidiCc => "cc",
         }
     }
 
@@ -130,6 +154,7 @@ impl ModulatorKind {
             ModulatorKind::Keytrack => "Keytrack",
             ModulatorKind::Random => "Random",
             ModulatorKind::Release => "Release",
+            ModulatorKind::MidiCc => "MIDI CC",
         }
     }
 
@@ -160,12 +185,20 @@ impl ModulatorKind {
             | ModulatorKind::Keytrack
             | ModulatorKind::Random
             | ModulatorKind::Release => &EMPTY_TABLE,
+            ModulatorKind::MidiCc => &CC_TABLE,
         }
     }
 
     /// True for the note-driven envelopes (they retrigger and release with the note stream).
     pub fn is_envelope(self) -> bool {
         matches!(self, ModulatorKind::Adsr | ModulatorKind::Ad)
+    }
+
+    /// True when the kind is channel-level and must never be evaluated per voice: it is
+    /// excluded from the `VoiceModSpec` and applied on the mono path even for a
+    /// voice-modulating device (the `cc` kind; spec 032).
+    pub fn is_mono_only(self) -> bool {
+        matches!(self, ModulatorKind::MidiCc)
     }
 }
 
@@ -238,6 +271,33 @@ mod tests {
             .map(|k| k.id())
             .collect();
         assert_eq!(bipolar, ["lfo", "keytrack", "random"]);
+    }
+
+    #[test]
+    fn cc_kind_round_trips_and_keeps_old_indices() {
+        // Appending must not shift the existing kinds' positions (saved projects index by slot).
+        for (i, kind) in ModulatorKind::ALL.iter().enumerate() {
+            assert_eq!(kind.index(), i);
+        }
+        let cc = ModulatorKind::from_id("cc").expect("cc kind");
+        assert_eq!(cc, ModulatorKind::MidiCc);
+        assert_eq!(cc.index(), ModulatorKind::COUNT - 1);
+        assert!(!cc.bipolar(), "a normalized CC is unipolar");
+        assert!(!cc.is_envelope());
+        assert!(cc.is_mono_only());
+        assert!(!ModulatorKind::Release.is_mono_only());
+
+        let params = ModParams::new(cc);
+        assert_eq!(params.table().len(), 2);
+        assert_eq!(params.real(CC_NUMBER), Some(0.0));
+        assert_eq!(params.real(CC_SMOOTH), Some(0.0));
+        // Real range 0–119: norm 1.0 is controller 119, not 127.
+        let spec = &cc.table().specs[cc.table().slot(CC_NUMBER).unwrap()];
+        assert_eq!(spec.to_real(1.0), 119.0);
+        assert_eq!(spec.to_norm(119.0), 1.0);
+        // Smooth tops out at 500 ms.
+        let spec = &cc.table().specs[cc.table().slot(CC_SMOOTH).unwrap()];
+        assert_eq!(spec.to_real(1.0), 0.5);
     }
 
     #[test]

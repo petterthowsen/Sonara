@@ -13,8 +13,8 @@
 
 use super::envelope::AdsrEnvelope;
 use super::kinds::{
-    ModParams, ModulatorKind, ENV_ATTACK, ENV_DECAY, ENV_RELEASE, ENV_SUSTAIN, LFO_PHASE, LFO_RATE,
-    LFO_RETRIGGER, LFO_SHAPE, LFO_SYNC,
+    ModParams, ModulatorKind, CC_NUMBER, CC_SMOOTH, ENV_ATTACK, ENV_DECAY, ENV_RELEASE,
+    ENV_SUSTAIN, LFO_PHASE, LFO_RATE, LFO_RETRIGGER, LFO_SHAPE, LFO_SYNC,
 };
 use super::lfo::{Lfo, LfoShape};
 use crate::audio::devices::ParamId;
@@ -47,6 +47,10 @@ pub struct ModulatorState {
     random: f32,
     /// xorshift state; never zero.
     rng: u32,
+    /// Last latched normalized CC value for the configured controller (`cc` kind).
+    cc_target: f32,
+    /// Smoothed CC output (`cc` kind).
+    cc_value: f32,
 }
 
 impl ModulatorState {
@@ -64,6 +68,8 @@ impl ModulatorState {
             release: DEFAULT_RELEASE,
             random: 0.0,
             rng: (kind.index() as u32 + 1).wrapping_mul(0x9E37_79B9) | 1,
+            cc_target: 0.0,
+            cc_value: 0.0,
         };
         state.apply_params();
         state
@@ -138,6 +144,8 @@ impl ModulatorState {
             ModulatorKind::Keytrack => self.last_note = note as f32,
             ModulatorKind::Random => self.random = self.next_noise(),
             ModulatorKind::Release => self.release = DEFAULT_RELEASE,
+            // Channel-level: the note stream is irrelevant (see `set_cc`).
+            ModulatorKind::MidiCc => {}
         }
     }
 
@@ -183,6 +191,24 @@ impl ModulatorState {
             ModulatorKind::Velocity => self.velocity = velocity,
             ModulatorKind::Keytrack => self.last_note = note as f32,
             _ => {}
+        }
+    }
+
+    /// Latch a controller value (normalized 0–1) into a `cc` modulator whose `CC_NUMBER` is
+    /// `cc`. Other kinds (and other controllers) ignore it. With smoothing off (`CC_SMOOTH` 0)
+    /// the change lands on this control step; otherwise the one-pole in `advance` catches up.
+    /// Audio-thread safe: fixed-capacity, no locks.
+    pub fn set_cc(&mut self, cc: u8, unit_value: f32) {
+        if self.kind != ModulatorKind::MidiCc {
+            return;
+        }
+        let configured = self.params.real(CC_NUMBER).unwrap_or(0.0).round() as u8;
+        if configured != cc {
+            return;
+        }
+        self.cc_target = unit_value.clamp(0.0, 1.0);
+        if self.params.real(CC_SMOOTH).unwrap_or(0.0) <= 0.0 {
+            self.cc_value = self.cc_target;
         }
     }
 
@@ -251,6 +277,15 @@ impl ModulatorState {
             ModulatorKind::Keytrack => self.keytrack(),
             ModulatorKind::Random => self.random,
             ModulatorKind::Release => self.release,
+            ModulatorKind::MidiCc => {
+                // One-pole lag toward the latched target over this step; 0 snaps.
+                let lag = self.params.real(CC_SMOOTH).unwrap_or(0.0);
+                if lag > 0.0 {
+                    let alpha = 1.0 - (-(frames as f32) / (lag * self.sample_rate)).exp();
+                    self.cc_value += (self.cc_target - self.cc_value) * alpha;
+                }
+                self.cc_value
+            }
         }
     }
 
@@ -267,6 +302,7 @@ impl ModulatorState {
             ModulatorKind::Keytrack => self.keytrack(),
             ModulatorKind::Random => self.random,
             ModulatorKind::Release => self.release,
+            ModulatorKind::MidiCc => self.cc_value,
         }
     }
 
@@ -284,6 +320,8 @@ impl ModulatorState {
         self.lfo = Lfo::default();
         self.synced_cycle = f64::NAN;
         self.env.reset();
+        self.cc_target = 0.0;
+        self.cc_value = 0.0;
     }
 
     #[inline]
@@ -533,5 +571,58 @@ mod tests {
             "{} bytes",
             std::mem::size_of::<ModulatorState>()
         );
+    }
+
+    #[test]
+    fn cc_latches_only_the_configured_controller_and_snaps_without_smoothing() {
+        let t = transport(120.0, false, 0.0);
+        let mut cc = ModulatorState::new(ModulatorKind::MidiCc, SR);
+        set_real(&mut cc, CC_NUMBER, 7.0);
+        cc.set_cc(1, 0.5);
+        assert_eq!(cc.value(), 0.0, "wrong controller is ignored");
+
+        cc.set_cc(7, 8192.0_f32 / 16383.0);
+        assert!(cc.advance(64, &t) > 0.4, "snaps with smoothing off");
+        cc.advance(64, &t);
+        assert!((cc.value() - 8192.0 / 16383.0).abs() < 1e-6);
+
+        // Other kinds ignore `set_cc`.
+        let mut lfo = ModulatorState::new(ModulatorKind::Lfo, SR);
+        lfo.set_cc(7, 1.0);
+        assert_eq!(lfo.value(), 0.0);
+
+        cc.reset();
+        assert_eq!(cc.value(), 0.0, "reset zeroes the latched CC");
+        // Note stream is irrelevant.
+        cc.set_cc(7, 0.25);
+        cc.note_on(60, 1.0, 0);
+        cc.note_off(60, DEFAULT_RELEASE, 0);
+        assert_eq!(cc.value(), 0.25, "note events left the latch alone");
+    }
+
+    #[test]
+    fn cc_smoothing_converges_over_steps() {
+        let t = transport(120.0, false, 0.0);
+        let target = 8192.0_f32 / 16383.0;
+        let mut cc = ModulatorState::new(ModulatorKind::MidiCc, SR);
+        set_real(&mut cc, CC_NUMBER, 1.0);
+        set_real(&mut cc, CC_SMOOTH, 0.05); // 50 ms
+        cc.set_cc(1, target);
+
+        let first = cc.advance(64, &t);
+        assert!(
+            first > 0.0 && first < target * 0.5,
+            "first step moved part way: {first}"
+        );
+        let mut previous = first;
+        for step in 1..400 {
+            let value = cc.advance(64, &t);
+            assert!(
+                (value - target).abs() < (previous - target).abs(),
+                "not converging at step {step}: {previous} -> {value}"
+            );
+            previous = value;
+        }
+        assert!((previous - target).abs() < 1e-3, "converged to {previous}");
     }
 }

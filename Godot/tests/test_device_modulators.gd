@@ -22,6 +22,7 @@ func run_tests() -> void:
 	_project_script = load("res://data/Project.gd")
 	_setup_kinds()
 	_test_kinds_parsed()
+	_test_cc_kind()
 	_test_defaults_applied_on_create_not_load()
 	_test_add_remove_set_and_osc()
 	_test_echoes_are_swallowed()
@@ -39,10 +40,11 @@ func _setup_kinds() -> void:
 	_registry._on_modulator_kind_received(_lfo_kind_args())
 	_registry._on_modulator_kind_received(_adsr_kind_args())
 	_registry._on_modulator_kind_received(["velocity", "Velocity", 0, 0])
+	_registry._on_modulator_kind_received(_cc_kind_args())
 	# DeviceInstance reads kinds through AssetService (it must not name the class at compile
 	# time, or the test would depend on the autoloads before they exist).
 	var asset_registry: Object = root.get_node("AssetService").device_registry
-	for kind_id in ["lfo", "adsr", "velocity"]:
+	for kind_id in ["lfo", "adsr", "velocity", "cc"]:
 		asset_registry.modulator_kinds[kind_id] = _registry.get_modulator_kind(kind_id)
 	# Built-in devices: a synth with a default modulator, and an empty container.
 	_registry._on_builtin_info_received([
@@ -89,6 +91,13 @@ func _adsr_kind_args() -> Array:
 	return args
 
 
+func _cc_kind_args() -> Array:
+	var args: Array = ["cc", "MIDI CC", 0, 2]
+	args.append_array(_float_param(0, "CC Number", "", 0.0, 119.0, 0.0, false))
+	args.append_array(_float_param(10, "Smooth", "ms", 0.0, 500.0, 0.0, false))
+	return args
+
+
 func _synth() -> Object:
 	return root.get_node("AssetService").device_registry.get_device(SYNTH_ID)
 
@@ -121,7 +130,28 @@ func _test_kinds_parsed() -> void:
 	_assert(lfo["params"][1].id == 10 and lfo["params"][1].is_logarithmic, "lfo Rate is logarithmic")
 	var adsr: Dictionary = _registry.get_modulator_kind("adsr")
 	_assert(adsr.get("bipolar") == false and adsr["params"].size() == 4, "adsr kind parsed unipolar")
-	_assert(_registry.get_modulator_kinds().size() == 3, "three kinds advertised")
+	_assert(_registry.get_modulator_kinds().size() == 4, "four kinds advertised")
+
+
+func _test_cc_kind() -> void:
+	var cc: Dictionary = _registry.get_modulator_kind("cc")
+	_assert(cc.get("name") == "MIDI CC" and cc.get("bipolar") == false, "cc kind parsed unipolar")
+	_assert(cc["params"].size() == 2 and cc["params"][0].id == 0 and cc["params"][1].id == 10,
+		"cc has CC_NUMBER slot 0 and CC_SMOOTH slot 10")
+
+	var inst := _instance()
+	inst.modulators.clear()
+	var mod = inst.add_modulator("cc")
+	_assert(mod != null and mod.kind == "cc", "add_modulator(\"cc\") works")
+	_assert(is_equal_approx(mod.get_param(0), 0.0), "CC Number default 0")
+
+	inst.set_modulator_param(mod.mod_id, 10, 0.25)
+	var data: Dictionary = JSON.parse_string(JSON.stringify(inst.to_json()))
+	var entry: Dictionary = data["modulators"][0]
+	_assert(entry["kind"] == "cc", "JSON round-trip preserves kind cc")
+	var loaded = _inst_script.from_json(data)
+	_assert(loaded.modulators.size() == 1 and loaded.modulators[0].kind == "cc" and
+		is_equal_approx(loaded.modulators[0].get_param(10), 0.25), "cc params survive JSON")
 
 
 func _test_defaults_applied_on_create_not_load() -> void:

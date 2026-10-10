@@ -24,8 +24,8 @@ use crate::audio::devices::container::{
     copy_interleaved, device_at_path_mut, insert_device, remove_device,
 };
 use crate::audio::devices::{AudioDevice, DeviceContainer, DevicePath, ParamId};
-use crate::audio::midi_types::NoteEvent;
-use crate::audio::modulation::kinds::LFO_RETRIGGER;
+use crate::audio::midi_types::{cc14_to_unit, NoteEvent};
+use crate::audio::modulation::kinds::{CC_NUMBER, LFO_RETRIGGER};
 use crate::audio::transport::Transport;
 use tracing::warn;
 
@@ -302,12 +302,19 @@ impl ModulatedDevice {
         let mut poly_len = 0;
         if self.voice_mod {
             for route in self.routes.routes() {
-                if let ModTarget::Own(param_id) = self.targets[route.slot] {
-                    let known = poly_ids[..poly_len].iter().any(|id| *id == param_id);
-                    if !known && poly_len < poly_ids.len() {
-                        poly_ids[poly_len] = param_id;
-                        poly_len += 1;
-                    }
+                if self.mods[route.mod_slot]
+                    .as_ref()
+                    .is_some_and(|state| state.kind().is_mono_only())
+                {
+                    continue;
+                }
+                let ModTarget::Own(param_id) = self.targets[route.slot] else {
+                    continue;
+                };
+                let known = poly_ids[..poly_len].iter().any(|id| *id == param_id);
+                if !known && poly_len < poly_ids.len() {
+                    poly_ids[poly_len] = param_id;
+                    poly_len += 1;
                 }
             }
         }
@@ -368,6 +375,10 @@ impl ModulatedDevice {
         let mut spec = VoiceModSpec::empty();
         for (slot, state) in self.mods.iter().enumerate() {
             if let Some(state) = state {
+                // Mono-only kinds (the `cc` kind) stay on the wrapper's mono pass.
+                if state.kind().is_mono_only() {
+                    continue;
+                }
                 spec.kinds[slot] = Some(state.kind());
                 spec.params[slot] = *state.params();
             }
@@ -376,6 +387,12 @@ impl ModulatedDevice {
             let ModTarget::Own(param_id) = self.targets[route.slot] else {
                 continue;
             };
+            if self.mods[route.mod_slot]
+                .as_ref()
+                .is_some_and(|state| state.kind().is_mono_only())
+            {
+                continue;
+            }
             if spec.route_len == MAX_ROUTES {
                 break;
             }
@@ -403,6 +420,20 @@ impl ModulatedDevice {
         let mut acc = [0.0f32; MAX_ROUTES];
         self.routes.accumulate(&self.values, &mut acc);
 
+        // Mono-only modulators (the `cc` kind) ride the mono pass even for a voice-modulating
+        // inner: their contributions are excluded from the voice spec, so sum them separately.
+        let mut mono_acc = [0.0f32; MAX_ROUTES];
+        let mut mono_has = [false; MAX_ROUTES];
+        for route in self.routes.routes() {
+            if self.mods[route.mod_slot]
+                .as_ref()
+                .is_some_and(|state| state.kind().is_mono_only())
+            {
+                mono_acc[route.slot] += self.values[route.mod_slot] * route.amount;
+                mono_has[route.slot] = true;
+            }
+        }
+
         let mut dests = [0usize; MAX_ROUTES];
         let dest_len = self.routes.dests().len();
         dests[..dest_len].copy_from_slice(self.routes.dests());
@@ -416,10 +447,16 @@ impl ModulatedDevice {
             let target = self.targets[slot];
             match target {
                 // A voice-modulating inner device owns these routes; it got them in the voice
-                // spec. Only an enclosing wrapper's external offset still rides the mono path.
-                ModTarget::Own(_) if self.voice_mod => {}
+                // spec. Only an enclosing wrapper's external offset still rides the mono path
+                // — and a mono-only modulator's contribution (a `cc` kind), which the spec
+                // excludes.
+                ModTarget::Own(_) if self.voice_mod && !mono_has[slot] => {}
                 ModTarget::Own(param_id) => {
-                    let off = acc[slot];
+                    let off = if self.voice_mod {
+                        mono_acc[slot]
+                    } else {
+                        acc[slot]
+                    };
                     plan[plan_len] = (target, off + self.external_offset(param_id));
                     plan_len += 1;
                     self.own[self.own_len] = (param_id, off);
@@ -668,6 +705,9 @@ fn parse_child_path(text: &str) -> Result<DevicePath, String> {
 fn is_note_driven(state: &ModulatorState) -> bool {
     match state.kind() {
         ModulatorKind::Lfo => state.get_param(LFO_RETRIGGER).unwrap_or(0.0) >= 0.5,
+        // A `cc` modulator follows the controller stream: it must not consume the MIDI queue
+        // or retrigger per note (spec 032).
+        ModulatorKind::MidiCc => false,
         _ => true,
     }
 }
@@ -924,6 +964,27 @@ impl AudioDevice for ModulatedDevice {
                 );
             }
         }
+    }
+
+    /// Latch the controller into every matching `cc` modulator before forwarding the raw CC to
+    /// the wrapped device. A matched modulator wakes the device (mark_activity), because CC
+    /// routing elsewhere wakes only note-accepting devices and a sleeping device would skip the
+    /// control step the offset applies in (spec 032).
+    fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        let unit = cc14_to_unit(value14);
+        let mut matched = false;
+        for state in self.mods.iter_mut().flatten() {
+            if state.kind() == ModulatorKind::MidiCc
+                && state.params().real(CC_NUMBER).unwrap_or(0.0).round() as u8 == cc
+            {
+                state.set_cc(cc, unit);
+                matched = true;
+            }
+        }
+        if matched {
+            self.dev_mut().mark_activity();
+        }
+        self.dev_mut().send_cc(cc, value14, frame_offset);
     }
 
     fn is_note_effect(&self) -> bool {
@@ -1212,7 +1273,9 @@ mod tests {
         ParamInfo,
     };
     use crate::audio::dsp::test_util::{render, stereo, white_noise};
-    use crate::audio::modulation::kinds::{ENV_ATTACK, ENV_RELEASE, LFO_RATE};
+    use crate::audio::modulation::kinds::{
+        CC_NUMBER, CC_SMOOTH, ENV_ATTACK, ENV_RELEASE, LFO_RATE,
+    };
     use std::any::Any;
     use std::time::Duration;
 
@@ -1641,6 +1704,146 @@ mod tests {
             inner.mono.iter().all(|(id, _)| *id != 0),
             "the mono path also pushed the voice route: {:?}",
             inner.mono
+        );
+    }
+
+    #[test]
+    fn a_cc_modulator_stays_out_of_the_voice_spec_and_applies_mono() {
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(VoiceyInner::default())];
+        wrap(&mut devices);
+        {
+            let m = devices[0].as_modulated_mut().unwrap();
+            m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+            m.set_modulator_route(0, "param/0", 0.7).expect("lfo route");
+            m.add_modulator(1, ModulatorKind::MidiCc).unwrap();
+            m.set_modulator_param(1, CC_NUMBER, 2.0 / 119.0)
+                .expect("number");
+            m.set_modulator_route(1, "param/0", 0.5).expect("cc route");
+        }
+        {
+            let inner = devices[0]
+                .as_any_mut()
+                .downcast_mut::<VoiceyInner>()
+                .expect("voicey");
+            let spec = inner.spec.expect("spec");
+            assert_eq!(spec.kind(0), Some(ModulatorKind::Lfo));
+            assert_eq!(spec.kind(1), None, "the cc kind stays out of the spec");
+            assert_eq!(spec.routes().len(), 1, "the cc route is not in the spec");
+            assert_eq!(spec.routes()[0].mod_slot, 0);
+        }
+
+        let unit = cc14_to_unit(8192);
+        devices[0].send_cc(2, 8192, 0);
+        let input = vec![0.0f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+        devices[0].process_block(&input, &mut output, 64);
+        let inner = devices[0]
+            .as_any_mut()
+            .downcast_mut::<VoiceyInner>()
+            .expect("voicey");
+        assert_eq!(
+            inner.mono,
+            vec![(0, unit * 0.5)],
+            "the cc route applied mono-side, the LFO route stayed per-voice"
+        );
+    }
+
+    #[test]
+    fn a_latched_cc_moves_a_delay_mix_route_and_wakes_the_device() {
+        let mut sleepy = Box::new(Sleepy::new(false));
+        sleepy.update_sleep_state(false);
+        assert!(sleepy.is_sleeping(), "setup: the device should sleep");
+
+        let mut m = ModulatedDevice::new(sleepy, SR);
+        m.add_modulator(0, ModulatorKind::MidiCc).unwrap();
+        m.set_modulator_param(0, CC_NUMBER, 1.0 / 119.0)
+            .expect("number");
+        m.set_modulator_route(0, "param/0", 0.7).expect("route");
+
+        // An unmatched controller neither latches nor wakes.
+        m.send_cc(9, 8192, 0);
+        assert!(m.dev().is_sleeping(), "an unmatched CC woke the device");
+
+        m.send_cc(1, 8192, 0);
+        assert!(
+            !m.dev().is_sleeping(),
+            "the matched CC did not wake the wrapped device"
+        );
+        m.control_step(CONTROL_STEP);
+        let expected = cc14_to_unit(8192) * 0.7;
+        assert_eq!(m.values[0], cc14_to_unit(8192), "smooth 0 snapped");
+        let applied = m
+            .applied
+            .iter()
+            .find(|(target, _)| *target == ModTarget::Own(0))
+            .map(|(_, off)| *off);
+        assert!(
+            applied.is_some_and(|off| (off - expected).abs() < 1e-6),
+            "applied {applied:?}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn a_latched_cc_moves_a_wrapped_delay_output() {
+        let input = stereo(&white_noise(4_800, 0.5, 3));
+        let mut plain = delay();
+        let reference = render(plain.as_mut(), &input, &[512]);
+
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![delay()];
+        wrap(&mut devices);
+        {
+            let m = devices[0].as_modulated_mut().unwrap();
+            m.add_modulator(0, ModulatorKind::MidiCc).unwrap();
+            m.set_modulator_param(0, CC_NUMBER, 1.0 / 119.0)
+                .expect("number");
+            m.set_modulator_route(0, "param/41", 0.7).expect("route");
+        }
+        devices[0].send_cc(1, 8192, 0);
+        let modulated = render(devices[0].as_mut(), &input, &[512]);
+        assert_ne!(modulated, reference, "the latched CC did not move the mix");
+
+        let base = devices[0].get_parameter(DELAY_MIX).unwrap();
+        assert!((base - 0.3).abs() < 1e-6, "base moved to {base}");
+    }
+
+    #[test]
+    fn cc_smoothing_converges_across_control_steps_at_the_wrapper() {
+        let unit = cc14_to_unit(8192);
+
+        // Smooth 0: the value snaps on the first step.
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::MidiCc).unwrap();
+        m.set_modulator_param(0, CC_NUMBER, 1.0 / 119.0)
+            .expect("number");
+        m.send_cc(1, 8192, 0);
+        m.control_step(CONTROL_STEP);
+        assert!((m.values[0] - unit).abs() < 1e-6);
+
+        // 50 ms lag: the first step is partial, later steps converge.
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::MidiCc).unwrap();
+        m.set_modulator_param(0, CC_NUMBER, 1.0 / 119.0)
+            .expect("number");
+        let smooth = ModulatorKind::MidiCc
+            .table()
+            .spec(CC_SMOOTH)
+            .unwrap()
+            .to_norm(0.05); // 50 ms
+        m.set_modulator_param(0, CC_SMOOTH, smooth).expect("smooth");
+        m.send_cc(1, 8192, 0);
+        m.control_step(CONTROL_STEP);
+        let first = m.values[0];
+        assert!(
+            first > 0.0 && first < unit * 0.9,
+            "the first step was not partial: {first}"
+        );
+        for _ in 1..300 {
+            m.control_step(CONTROL_STEP);
+        }
+        assert!(
+            (m.values[0] - unit).abs() < 1e-3,
+            "did not converge: {}",
+            m.values[0]
         );
     }
 

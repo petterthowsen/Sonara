@@ -58,8 +58,8 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 
 ## Modulation
 
-- **Modulator** — a signal source that belongs to one device *instance* (an LFO, envelope, velocity, keytrack or random). It has a stable `mod_id` within the device, its kind's parameters, and a list of routes. Saved with the instance; a device supplies only its *default modulators* (ADR-0014).
-- **Modulator kind** — what a modulator is (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`). It defines the modulator's parameter table and its polarity: LFO, keytrack and random are bipolar (−1..1); envelopes and velocity are unipolar (0..1).
+- **Modulator** — a signal source that belongs to one device *instance* (an LFO, envelope, velocity, keytrack, random, release or CC). It has a stable `mod_id` within the device, its kind's parameters, and a list of routes. Saved with the instance; a device supplies only its *default modulators* (ADR-0014).
+- **Modulator kind** — what a modulator is (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`). It defines the modulator's parameter table and its polarity: LFO, keytrack and random are bipolar (−1..1); envelopes, velocity, release and cc are unipolar (0..1). The `cc` kind reads the channel's MIDI controller stream (CC Number 0–119, optional one-pole smoothing) and is evaluated on the mono path only (spec 032).
 - **Route** — a link from one modulator to one modulatable parameter: on its own device, on a device nested inside it, or on another modulator of the same device. Device state, sent as `{device}/modulator/{mod_id}/route/set`, not a parameter (ADR-0011, ADR-0014).
 - **Amount** — a route's strength, −1..1 in normalized parameter units per unit of modulator. Amount 0 removes the route.
 - **Modulation offset** — the summed `amount × modulator value` that the engine (mono) or a poly-capable device (poly) adds to a parameter *next to* its base value: `effective = clamp(base_or_automation + Σ offset, 0, 1)`. The base is never written back and the modulated value is never echoed or saved (ADR-0010, ADR-0014).

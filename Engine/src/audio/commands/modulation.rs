@@ -337,7 +337,7 @@ mod tests {
         let infos = modulator_kind_infos();
         assert!(matches!(
             infos.first(),
-            Some(EngineStatus::ModulatorKindsInfo { count: 7 })
+            Some(EngineStatus::ModulatorKindsInfo { count: 8 })
         ));
         let release = infos.iter().find_map(|info| match info {
             EngineStatus::ModulatorKindInfo {

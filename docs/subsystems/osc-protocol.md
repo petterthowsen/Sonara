@@ -189,7 +189,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/move_device` | `i:from_position, i:to_position` | Reorder top-level devices |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{path}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter |
-| `/channel/{id}/device/{path}/modulator/add` | `i:mod_id, s:kind` | Add a modulator with its kind's default parameters (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`). Wraps the device if it has none (see Modulators) |
+| `/channel/{id}/device/{path}/modulator/add` | `i:mod_id, s:kind` | Add a modulator with its kind's default parameters (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`). Wraps the device if it has none (see Modulators) |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/remove` | - | Remove a modulator and its routes; the last one unwraps the device |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/param/{id}/value` | `f:normalized` | Set a modulator parameter (floats clamp, enums and bools snap; the echo carries the canonical value) |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/route/set` | `s:target, f:amount` | Add, update or (amount 0) remove a route to `param/{id}`, `child/{i.j…}/param/{id}` or `mod/{mod_id}/param/{id}`; amount is clamped to −1..1 |
@@ -225,7 +225,7 @@ Status echoes use the same path as the command (`/active`, `/enabled`, `/loading
 
 **Modulators** (`{device}/modulator/...`). A modulator belongs to one device instance and drives
 parameters of that device, of a device nested inside it, or (later) of another modulator. Its
-kind is one of `lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`; each kind has its own
+kind is one of `lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`; each kind has
 parameter table (advertised in the `/builtin/modulator_*` batch). `modulator/add` wraps the
 device in a transparent `ModulatedDevice` the first time and `modulator/remove` (or
 `modulator/clear`) unwraps it again, so a device without modulators costs nothing. Routes are
@@ -237,6 +237,15 @@ canonical normalized value), `modulator/{id}/route/set` (target, clamped amount)
 and echoed with amount 0, so the UI drops it. Godot swallows the echoes of its own edits like
 parameter echoes, and re-sends `modulator/clear` plus every modulator, parameter and route from
 `DeviceInstance.sync_to_engine()`, so the project is authoritative.
+
+**The `cc` kind** (spec 032) latches the channel's MIDI controller stream. Its parameters are
+`CC Number` (slot 0, controller 0–119; channel-mode controllers 120–127 are excluded as in spec
+030) and `CC Smooth` (slot 10, a one-pole lag of 0–500 ms; 0 snaps). Live CC and
+`channel/cc/{n}` automation lane values both arrive through `Channel::send_cc_to_devices`, so
+the modulator follows a lane identically to a knob (a lane owns the *controller*, not the
+modulator). The value applies on the control step (64 frames). `cc` is evaluated on the mono
+path only (`is_mono_only`): a wrapper hands its poly-capable inner device a `VoiceModSpec` that
+excludes `cc` slots and routes, and applies those routes itself.
 
 **Loading States** (`{device}/loading_state [s:state]`, sent on every transition):
 - **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)
@@ -408,10 +417,11 @@ repeat kind_count times:
   ]
 /builtin/modulator_complete [i:kind_count]
 ```
-`bipolar` 1 means the kind runs −1..1 (LFO, keytrack, random), else 0..1 (the envelopes and
-velocity). The kinds are engine-global, not per device. Godot stores each kind's parameters as
-ordinary `DeviceParameter`s, so the Modulators pane builds its controls from the same component
-set as a device.
+`bipolar` 1 means the kind runs −1..1 (LFO, keytrack, random), else 0..1 (the envelopes,
+velocity, release and cc). The kinds are engine-global, not per device. Godot stores each
+kind's parameters as ordinary `DeviceParameter`s, so the Modulators pane builds its controls
+from the same component set as a device. The `cc` kind's parameters (`CC Number` slot 0,
+`CC Smooth` slot 10) arrive like any other table and need no special Godot handling.
 
 #### Plugins (CLAP and VST3)
 
