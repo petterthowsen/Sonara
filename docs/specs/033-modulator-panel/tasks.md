@@ -224,7 +224,7 @@ phases 1–2 (T-008…T-011 don't depend on any Godot task). Godot test commands
 
 ## Phase 6 — Live verification
 
-- [ ] **T-019** [REQ-all] Verify live with the engine and Godot running.
+- [x] **T-019** [REQ-all] Verify live with the engine and Godot running.
   - _Files_: —
   - _Output_: GitHub issue for spec 033 commented with results and ticked `[x]`; `STATUS.md`
     notes anything unchecked
