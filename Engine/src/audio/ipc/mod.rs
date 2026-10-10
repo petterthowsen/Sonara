@@ -25,7 +25,7 @@ pub use process::{
 pub use protocol::{
     log_file_name, BlockControl, BlockEvent, BlockTransport, Doorbell, HostMessage, HostRequest,
     InstanceId, LogLevel, PluginCommand, PluginEvent, PluginFormat, PluginParameterInfo,
-    PluginResponse, RequestId, SharedMemoryLayout, EVENT_NOTE_CHOKE, EVENT_NOTE_OFF, EVENT_NOTE_ON,
-    EVENT_PARAM, EVENT_PARAM_MOD, MAX_BLOCK_EVENTS, MAX_PLUGIN_CHANNELS, NO_REPLY,
+    PluginResponse, RequestId, SharedMemoryLayout, EVENT_MIDI_CC, EVENT_NOTE_CHOKE, EVENT_NOTE_OFF,
+    EVENT_NOTE_ON, EVENT_PARAM, EVENT_PARAM_MOD, MAX_BLOCK_EVENTS, MAX_PLUGIN_CHANNELS, NO_REPLY,
 };
 pub use shared_memory::{HostSharedMemory, SharedMemory};

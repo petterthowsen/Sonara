@@ -12,6 +12,7 @@
 //! one host process (hosting modes, `hosting.rs`). `Shutdown` is the only command that addresses
 //! the whole process.
 
+use crate::audio::midi_types::cc14_to_unit;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -397,6 +398,10 @@ pub const EVENT_PARAM_MOD: u16 = 4;
 /// Choke every sounding note (Drum Machine choke targets). The host turns it into a CLAP
 /// `NOTE_CHOKE` with a wildcard Pckn; `note`, `value` and `id` are unused.
 pub const EVENT_NOTE_CHOKE: u16 = 5;
+/// A MIDI controller change inside a block's event array (spec 030 REQ-003). The host turns
+/// it into a CLAP MIDI event (`B0 cc msb`); `note` is the controller number, `id` the full
+/// 14-bit value and `value` its normalized 0–1 form.
+pub const EVENT_MIDI_CC: u16 = 6;
 
 /// One event in a block's input or output event array.
 ///
@@ -471,6 +476,19 @@ impl BlockEvent {
             _reserved: 0,
             value: offset_norm,
             id: param_id,
+        }
+    }
+
+    /// A MIDI controller change at `sample_offset`: `note` is the controller number, `id`
+    /// the full 14-bit value and `value` its normalized form (spec 030 REQ-003).
+    pub fn cc(sample_offset: u32, cc: u8, value14: u16) -> Self {
+        Self {
+            sample_offset,
+            kind: EVENT_MIDI_CC,
+            note: cc,
+            _reserved: 0,
+            value: cc14_to_unit(value14),
+            id: value14 as u32,
         }
     }
 }
@@ -591,6 +609,12 @@ mod tests {
         assert_eq!(
             (off.sample_offset, off.kind, off.note, off.value, off.id),
             (40, EVENT_NOTE_OFF, 60, 0.25, 4321)
+        );
+        // CC1 at full 14-bit mid value: cc in `note`, value14 in `id`.
+        let cc = BlockEvent::cc(7, 1, 8192);
+        assert_eq!(
+            (cc.sample_offset, cc.kind, cc.note, cc.value, cc.id),
+            (7, EVENT_MIDI_CC, 1, 8192.0 / 16383.0, 8192)
         );
         // The layout the plugin host reads is unchanged.
         assert_eq!(std::mem::size_of::<BlockEvent>(), 16);

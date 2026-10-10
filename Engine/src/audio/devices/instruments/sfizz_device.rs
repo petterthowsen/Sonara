@@ -11,7 +11,7 @@ use crate::audio::devices::{
     AudioDevice, DeviceCategory, DevicePath, DeviceVariant, FileLoadingSupport, MidiPort, ParamId,
     ParamInfo, ParamType, ParamValue, PortFlow,
 };
-use crate::audio::midi_types::{to_u7, NoteEvent};
+use crate::audio::midi_types::{cc14_from_unit, cc14_to_unit, to_u7, NoteEvent};
 use crossbeam::channel::Sender;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -34,6 +34,9 @@ const STANDARD_CC_CONTROLS: &[(u8, &str)] = &[
 /// Unity gain for the sfizz synth output. Sfizz defaults to -7.35 dB; in a DAW
 /// the channel fader is the right place for level.
 const SFIZZ_OUTPUT_GAIN_DB: f32 = 0.0;
+
+/// Capacity of the per-block queued MIDI: far more than live input produces in one block.
+const QUEUED_MIDI_CAPACITY: usize = 256;
 
 /// Device-panel P tab: labeled SFZ parameters (including sfizz's GM Volume/Pan/Expression).
 const GROUP_PARAM: &str = "param";
@@ -69,6 +72,48 @@ fn render_stereo(synth: &mut sfizz::Synth, left: &mut [f32], right: &mut [f32]) 
     }
 }
 unsafe impl Send for SendSynth {}
+
+/// A MIDI event queued for sample-accurate delivery in the next block (spec 030 REQ-003).
+/// CC keeps its full 14-bit value; notes keep the normalized velocity/release the sfizz
+/// binding quantizes to 7 bits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum QueuedMidi {
+    NoteOn {
+        offset: usize,
+        key: u8,
+        velocity: f32,
+    },
+    NoteOff {
+        offset: usize,
+        key: u8,
+        release: f32,
+    },
+    CC {
+        offset: usize,
+        cc: u8,
+        value14: u16,
+    },
+}
+
+impl QueuedMidi {
+    fn offset(&self) -> usize {
+        match *self {
+            QueuedMidi::NoteOn { offset, .. }
+            | QueuedMidi::NoteOff { offset, .. }
+            | QueuedMidi::CC { offset, .. } => offset,
+        }
+    }
+
+    /// Order at the same offset: note-off first (so a retrigger isn't killed by a later
+    /// off), then CC, then note-on.
+    fn rank(&self) -> u8 {
+        match self {
+            QueuedMidi::NoteOff { .. } => 0,
+            QueuedMidi::CC { .. } => 1,
+            QueuedMidi::NoteOn { .. } => 2,
+        }
+    }
+}
 
 /// Loading state for async SFZ file loading
 #[derive(Clone)]
@@ -120,8 +165,10 @@ pub struct SfizzDevice {
     device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
 
-    // Queued notes (frame-accurate within next block): (offset, key, velocity or release, is_on)
-    queued_midi: Vec<(usize, u8, f32, bool)>,
+    // Queued MIDI (frame-accurate within next block)
+    queued_midi: Vec<QueuedMidi>,
+    // MIDI events dropped because the queue was full
+    dropped_midi: usize,
 
     // Pending parameter changes (queued when try_lock fails)
     pending_param_changes: Vec<(u8, f32)>,
@@ -246,7 +293,8 @@ impl SfizzDevice {
             channel_id,
             device_path,
             status_tx,
-            queued_midi: Vec::with_capacity(256),
+            queued_midi: Vec::with_capacity(QUEUED_MIDI_CAPACITY),
+            dropped_midi: 0,
             pending_param_changes: Vec::new(),
         }
     }
@@ -283,6 +331,16 @@ impl SfizzDevice {
 
     pub fn key_info(&self) -> Vec<KeyInfo> {
         self.key_info.lock().unwrap().clone()
+    }
+
+    /// Queue a MIDI event for the next block. A full queue drops the event and counts the
+    /// drop (the queue holds far more than one block of live input can produce).
+    fn queue_midi(&mut self, event: QueuedMidi) {
+        if self.queued_midi.len() >= QUEUED_MIDI_CAPACITY {
+            self.dropped_midi += 1;
+            return;
+        }
+        self.queued_midi.push(event);
     }
 
     /// Queue a parameter change for later (when try_lock fails)
@@ -593,14 +651,13 @@ impl AudioDevice for SfizzDevice {
         self.right_buffer[..sample_count].fill(0.0);
 
         // Sort in place and clear afterwards so the queue keeps its preallocated capacity.
-        // Same-frame events: note-off before note-on so a retrigger isn't killed by a later off.
         self.queued_midi
-            .sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.3.cmp(&b.3)));
+            .sort_unstable_by(|a, b| a.offset().cmp(&b.offset()).then(a.rank().cmp(&b.rank())));
 
         let mut cursor = 0usize;
         for i in 0..self.queued_midi.len() {
-            let (offset, note, value, is_on) = self.queued_midi[i];
-            let clamped_offset = std::cmp::min(offset, sample_count);
+            let event = self.queued_midi[i];
+            let clamped_offset = std::cmp::min(event.offset(), sample_count);
             if clamped_offset > cursor {
                 render_stereo(
                     &mut synth_guard.0,
@@ -610,12 +667,23 @@ impl AudioDevice for SfizzDevice {
                 cursor = clamped_offset;
             }
 
-            // Apply event exactly at this frame. The binding takes 7-bit values.
-            let value = binding_value(value, is_on);
-            if is_on {
-                synth_guard.0.note_on(note, value);
-            } else {
-                synth_guard.0.note_off(note, value);
+            // Apply the event exactly at this frame. Notes are quantized to 7 bits at the
+            // binding; CC goes through at full 14-bit resolution (spec 030 REQ-004).
+            match event {
+                QueuedMidi::NoteOn { key, velocity, .. } => {
+                    synth_guard.0.note_on(key, binding_value(velocity, true));
+                }
+                QueuedMidi::NoteOff { key, release, .. } => {
+                    synth_guard.0.note_off(key, binding_value(release, false));
+                }
+                QueuedMidi::CC { cc, value14, .. } => unsafe {
+                    sfizz::sfizz_send_hdcc(
+                        synth_guard.0.as_raw(),
+                        0,
+                        cc as i32,
+                        cc14_to_unit(value14),
+                    );
+                },
             }
         }
         self.queued_midi.clear();
@@ -645,14 +713,35 @@ impl AudioDevice for SfizzDevice {
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         // Queue event for sample-accurate application in next process_block
         match *event {
-            NoteEvent::On { key, velocity, .. } => {
-                self.queued_midi.push((frame_offset, key, velocity, true))
-            }
-            NoteEvent::Off { key, release, .. } => {
-                self.queued_midi.push((frame_offset, key, release, false))
-            }
+            NoteEvent::On { key, velocity, .. } => self.queue_midi(QueuedMidi::NoteOn {
+                offset: frame_offset,
+                key,
+                velocity,
+            }),
+            NoteEvent::Off { key, release, .. } => self.queue_midi(QueuedMidi::NoteOff {
+                offset: frame_offset,
+                key,
+                release,
+            }),
             NoteEvent::Expression { .. } => {}
         }
+    }
+
+    /// Queue a 14-bit CC for sample-accurate application in the next block (spec 030 REQ-004).
+    fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        self.queue_midi(QueuedMidi::CC {
+            offset: frame_offset,
+            cc,
+            value14,
+        });
+    }
+
+    /// The current 14-bit value of a controller knob, read on the audio thread when an
+    /// automation lane takes over. A contended lock returns `None` (read is retried or the
+    /// lane falls back, per the trait contract).
+    fn cc_value(&self, cc: u8) -> Option<u16> {
+        let cc_values = self.cc_values.try_lock().ok()?;
+        cc_values.get(&cc).map(|&value| cc14_from_unit(value))
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -936,7 +1025,18 @@ mod tests {
         );
         assert_eq!(
             device.queued_midi,
-            vec![(4, 60, 0.5039, true), (9, 60, 0.2, false)]
+            vec![
+                QueuedMidi::NoteOn {
+                    offset: 4,
+                    key: 60,
+                    velocity: 0.5039
+                },
+                QueuedMidi::NoteOff {
+                    offset: 9,
+                    key: 60,
+                    release: 0.2
+                }
+            ]
         );
         // Quantized at the binding: 0.5039 → 64, release 0.2 → 25 and 0.9 → 114.
         assert_eq!(binding_value(0.5039, true), 64);
@@ -1028,5 +1128,90 @@ mod tests {
         assert_eq!(by_cc[&10].default, 0.5);
         assert_eq!(by_cc[&11].default, 1.0);
         assert_eq!(by_cc[&64].default, 0.0);
+    }
+
+    /// A `SfizzDevice` with a synchronously loaded `*sine` SFZ, ready to render. `name`
+    /// keeps parallel tests out of each other's temp dirs.
+    fn sine_device(name: &str, sfz_body: &str) -> (SfizzDevice, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("sonara_sfz_cc_test_{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cc_test.sfz");
+        std::fs::write(&path, sfz_body).unwrap();
+        let device = SfizzDevice::new_for_metadata(48_000.0);
+        let mut synth = sfizz::Synth::new().unwrap();
+        synth.load_sfz(&path).unwrap();
+        synth.set_sample_rate(48_000.0);
+        *device.loading_state.lock().unwrap() =
+            LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
+        (device, dir)
+    }
+
+    /// Render one block of 256 frames and return its summed stereo energy.
+    fn block_energy(device: &mut SfizzDevice) -> f32 {
+        let mut outputs = vec![0.0f32; 256 * 2];
+        device.process_block(&[], &mut outputs, 256);
+        outputs.chunks(2).map(|s| s[0] * s[0] + s[1] * s[1]).sum()
+    }
+
+    #[test]
+    fn sfizz_cc_reaches_synth_at_full_resolution() {
+        // CC1 modulates volume over a 24 dB range; one 14-bit step must be audible.
+        let path = {
+            let (_, dir) = sine_device("res", "<region> sample=*sine volume_oncc1=24\n");
+            dir.join("cc_test.sfz")
+        };
+        // A fresh device per value keeps the oscillator phase aligned between blocks, so
+        // the only difference left is the CC one step apart.
+        let measure = |value14: u16| -> f32 {
+            let mut device = SfizzDevice::new_for_metadata(48_000.0);
+            let mut synth = sfizz::Synth::new().unwrap();
+            synth.load_sfz(&path).unwrap();
+            synth.set_sample_rate(48_000.0);
+            *device.loading_state.lock().unwrap() =
+                LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
+            device.send_note_event(
+                &NoteEvent::On {
+                    note_id: 1,
+                    key: 60,
+                    velocity: 1.0,
+                },
+                0,
+            );
+            device.send_cc(1, value14, 0);
+            block_energy(&mut device)
+        };
+        let low = measure(8191);
+        let high = measure(8192);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+
+        assert!(low > 0.0, "no audio rendered");
+        // One 14-bit step apart: different levels, the higher value louder.
+        assert!(high > low, "8191 -> {low}, 8192 -> {high}");
+    }
+
+    #[test]
+    fn sfizz_cc_value_reports_knob_value() {
+        let (device, dir) = sine_device("knob", "<region> sample=*sine\n");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(device.cc_value(1), None);
+        device.cc_values.lock().unwrap().insert(1, 0.5);
+        // 0.5 normalized is 14-bit 8192.
+        assert_eq!(device.cc_value(1), Some(8192));
+        device.cc_values.lock().unwrap().insert(7, 1.0);
+        assert_eq!(device.cc_value(7), Some(16383));
+    }
+
+    #[test]
+    fn full_queue_drops_and_counts() {
+        let (mut device, dir) = sine_device("queue", "<region> sample=*sine\n");
+        std::fs::remove_dir_all(&dir).ok();
+        for i in 0..QUEUED_MIDI_CAPACITY {
+            device.send_cc(1, i as u16, 0);
+        }
+        assert_eq!(device.queued_midi.len(), QUEUED_MIDI_CAPACITY);
+        device.send_cc(1, 1, 0);
+        device.send_cc(1, 2, 0);
+        assert_eq!(device.queued_midi.len(), QUEUED_MIDI_CAPACITY);
+        assert_eq!(device.dropped_midi, 2);
     }
 }

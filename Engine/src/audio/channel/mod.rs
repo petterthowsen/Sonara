@@ -41,6 +41,10 @@ pub struct Channel {
     /// swaps the sides. Not automatable.
     pub pan_width: f32,
     pub pan_mode: PanMode, // Pan mode (combined, dual, balance, mono)
+    /// One bit per controller (bit = CC number, 0..=119) that a CC automation lane currently
+    /// drives. While a bit is set, live CC on that controller is suppressed. Written on the
+    /// audio callback by the automation pass, cleared by `release_lane` (spec 030).
+    pub cc_lane_mask: u128,
     pub mute: bool,
     pub solo: bool,
     pub output_channel_id: Option<ChannelId>, // None for master/no output
@@ -121,6 +125,7 @@ impl Channel {
             pan_right: 0.0,
             pan_width: 1.0,
             pan_mode: PanMode::default(),
+            cc_lane_mask: 0,
             mute: false,
             solo: false,
             output_channel_id: Some(1), // Default to master (ID 1)

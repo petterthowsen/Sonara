@@ -1036,42 +1036,53 @@ func _import_points(node: DawXml.El, scope: Dictionary) -> void:
 	var scope_name := ""
 	if track_state != null and track_state["json"] != null:
 		scope_name = track_state["json"]["name"]
-	if target_el.has_attr("expression"):
-		_report.add(TransferReport.EXPRESSION_AUTOMATION, scope_name, target_el.get_attr("expression"))
-		return
-	var target: Variant = _targets.get(target_el.get_attr("parameter"))
-	if target == null or target["kind"] in ["tempo", "signature"]:
-		return
-	var kind: String = target["kind"]
-	var chan: Dictionary = target["chan"]
-	var subject: String = chan["json"]["name"]
-	if UNSUPPORTED_KINDS.has(kind):
-		_report.add(TransferReport.UNSUPPORTED_AUTOMATION, subject, UNSUPPORTED_KINDS[kind])
-		return
-	var track_json: Variant = chan["track"]
-	if track_json == null:
-		_report.add(TransferReport.UNSUPPORTED_AUTOMATION, subject, "automation on a bus")
-		return
 	var sonara_target := ""
 	var map: Callable
-	match kind:
-		"volume", "send":
-			sonara_target = "channel/volume" if kind == "volume" else "channel/send/%d" % target["index"]
-			if node.get_attr("unit", "linear") == "decibel":
-				map = func(v: float) -> float: return AutomationTarget.db_to_normalized(v)
-			else:
-				map = func(v: float) -> float: return AutomationTarget.db_to_normalized(DawUnits.linear_to_db(v))
-		"pan":
-			sonara_target = "channel/pan"
+	var track_json: Variant = track_state["json"] if track_state != null else null
+	if target_el.has_attr("expression"):
+		var expression: String = target_el.get_attr("expression")
+		if expression == "channelController":
+			# A MIDI CC lane (spec 030): RealPoint values are already normalized 0..1.
+			var cc: int = clampi(int(target_el.get_attr("controller", "0")), 0, Midi.CC_LANE_MAX)
+			sonara_target = "channel/cc/%d" % cc
 			map = func(v: float) -> float: return clampf(v, 0.0, 1.0)
-		"device_param":
-			sonara_target = "device/%d/param/%d" % [target["position"], target["param_id"]]
-			var param: Object = target["device"].get_parameter(target["param_id"]) if target["device"] != null else null
-			var lo: float = target["min"]
-			var hi: float = target["max"]
-			map = func(v: float) -> float: return DawUnits.real_to_param(param, v, lo, hi)
-		_:
+		else:
+			_report.add(TransferReport.EXPRESSION_AUTOMATION, scope_name, expression)
 			return
+	else:
+		var target: Variant = _targets.get(target_el.get_attr("parameter"))
+		if target == null or target["kind"] in ["tempo", "signature"]:
+			return
+		var kind: String = target["kind"]
+		var chan: Dictionary = target["chan"]
+		var subject: String = chan["json"]["name"]
+		if UNSUPPORTED_KINDS.has(kind):
+			_report.add(TransferReport.UNSUPPORTED_AUTOMATION, subject, UNSUPPORTED_KINDS[kind])
+			return
+		if track_json == null:
+			_report.add(TransferReport.UNSUPPORTED_AUTOMATION, subject, "automation on a bus")
+			return
+		match kind:
+			"volume", "send":
+				sonara_target = "channel/volume" if kind == "volume" else "channel/send/%d" % target["index"]
+				if node.get_attr("unit", "linear") == "decibel":
+					map = func(v: float) -> float: return AutomationTarget.db_to_normalized(v)
+				else:
+					map = func(v: float) -> float: return AutomationTarget.db_to_normalized(DawUnits.linear_to_db(v))
+			"pan":
+				sonara_target = "channel/pan"
+				map = func(v: float) -> float: return clampf(v, 0.0, 1.0)
+			"device_param":
+				sonara_target = "device/%d/param/%d" % [target["position"], target["param_id"]]
+				var param: Object = target["device"].get_parameter(target["param_id"]) if target["device"] != null else null
+				var lo: float = target["min"]
+				var hi: float = target["max"]
+				map = func(v: float) -> float: return DawUnits.real_to_param(param, v, lo, hi)
+			_:
+				return
+		scope_name = subject
+	if track_json == null:
+		return
 	var unit := node.get_attr("timeUnit", scope["unit"])
 	var source: Array = []
 	for rp in node.children_named("RealPoint"):

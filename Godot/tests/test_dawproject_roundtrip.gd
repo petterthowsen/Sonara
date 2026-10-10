@@ -205,6 +205,12 @@ func _test_round_trip() -> void:
 	send.add_point(0, 0.2)
 	send.add_point(3840, 0.8)
 	lead.track.add_automation_lane(send)
+	# MIDI CC lane (spec 030): three points, ramp across the range.
+	var cc: Object = _lane_script.new("lane_cc", _target_script.midi_cc(1))
+	cc.add_point(0, 0.0)
+	cc.add_point(1920, 0.5)
+	cc.add_point(3840, 1.0)
+	lead.track.add_automation_lane(cc)
 
 	# Devices: CLAP with state, polysynth -> delay, drum machine with two sampler pads.
 	var clap: Object = _instance(perc.channel, clap_dev)
@@ -322,6 +328,13 @@ func _test_round_trip() -> void:
 		_assert(absf(_lane_value_at(g_pan, 1920) - 0.75) < 0.005, "pan lane midpoint")
 	if g_send != null:
 		_assert(absf(_lane_value_at(g_send, 1920) - 0.5) < 0.02, "send lane midpoint")
+	var g_cc: Object = _lane_of(g_lead, AutomationTarget.Kind.MIDI_CC)
+	_assert(g_cc != null, "the CC1 lane comes back")
+	if g_cc != null:
+		_assert(str(g_cc.target) == "channel/cc/1", "the CC lane target is channel/cc/1, got %s" % str(g_cc.target))
+		for tick in [0, 960, 1920, 2880, 3840]:
+			_assert(absf(_lane_value_at(g_cc, tick) - _lane_value_at(cc, tick)) < 0.02,
+				"CC lane at tick %d within tolerance (%f vs %f)" % [tick, _lane_value_at(cc, tick), _lane_value_at(g_cc, tick)])
 	var g_perc: Object = _by_name(got.tracks, "Perc")
 	var g_dev_lane: Object = _lane_of(g_perc, dev_lane.target.kind)
 	_assert(g_dev_lane != null and g_dev_lane.target.param_id == 3, "device parameter lane targets param 3")

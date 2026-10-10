@@ -22,6 +22,7 @@ func run_tests() -> void:
 	_track_script = load("res://data/Track.gd")
 	_test_target_roundtrip()
 	_test_target_rejects_bad_strings()
+	_test_midi_cc_target()
 	_test_lane_json_roundtrip()
 	_test_track_missing_lanes_key_loads_zero()
 	_test_stub_era_curve_names_load_as_linear()
@@ -49,10 +50,59 @@ func _test_target_roundtrip() -> void:
 func _test_target_rejects_bad_strings() -> void:
 	var bad := [
 		"", "channel", "channel/gain", "channel/send/x",
+		"channel/cc", "channel/cc/x", "channel/cc/120", "channel/cc/127", "channel/cc/-1",
 		"device/param/7", "device/0/param", "device/0/param/x", "device/0/1/7",
 	]
 	for text in bad:
 		_assert(AutomationTarget.parse(text) == null, "%s should not parse" % text)
+
+
+func _test_midi_cc_target() -> void:
+	_assert(AutomationTarget.Kind.MIDI_CC == 5, "MIDI_CC is appended as kind 5: %d" % AutomationTarget.Kind.MIDI_CC)
+	_assert(str(AutomationTarget.midi_cc(74)) == "channel/cc/74", "midi_cc spells channel/cc/74, got %s" % str(AutomationTarget.midi_cc(74)))
+	var parsed: AutomationTarget = AutomationTarget.parse("channel/cc/74")
+	_assert(parsed != null and parsed.kind == AutomationTarget.Kind.MIDI_CC and parsed.cc == 74,
+		"channel/cc/74 parses to a MIDI_CC target with cc 74")
+
+	# Labels: an SFZ-supplied name wins, standard names fill the rest (REQ-017).
+	var sfz: Object = _make_sfizz_instance()
+	var ch := FakeChannel.new()
+	ch.devices = [sfz]
+	_assert(parsed.is_resolvable(ch), "a CC target is resolvable")
+	_assert(parsed.display_name(ch) == "CC74 Bright", "SFZ label wins: %s" % parsed.display_name(ch))
+	_assert(AutomationTarget.midi_cc(72).display_name(ch) == "CC72 Release", "second SFZ label")
+	_assert(AutomationTarget.midi_cc(1).display_name(ch) == "CC1 Mod Wheel", "unlabelled CC1 falls back to the standard name: %s" % AutomationTarget.midi_cc(1).display_name(ch))
+	_assert(AutomationTarget.midi_cc(3).display_name(ch) == "CC3 CC3", "unassigned CC3 falls back to CC-style naming: %s" % AutomationTarget.midi_cc(3).display_name(ch))
+
+	# One lane per controller (REQ-011): get_automation_lane_for finds the lane so a second
+	# create is refused.
+	var track: Object = _track_script.new(1)
+	var lane: Object = _lane_script.new("lane0", AutomationTarget.midi_cc(1))
+	track.add_automation_lane(lane)
+	_assert(track.get_automation_lane_for(AutomationTarget.midi_cc(1)) == lane,
+		"get_automation_lane_for finds the CC1 lane")
+	_assert(track.get_automation_lane_for(AutomationTarget.midi_cc(11)) == null,
+		"a different controller still has no lane")
+
+	# Persistence: the CC target string round-trips through lane JSON.
+	lane.add_point(0, 0.2)
+	var loaded: Object = _lane_script.from_json(lane.to_json())
+	_assert(str(loaded.target) == "channel/cc/1", "CC lane target round-trips, got %s" % str(loaded.target))
+	_assert(loaded.points.size() == 1 and loaded.points[0].tick == 0, "CC lane points round-trip")
+
+
+func _make_sfizz_instance() -> Object:
+	var sfz_dev: Object = load("res://data/Device.gd").new("sonara.builtin.sfizz", "sfizz", DawEnums.CATEGORY_INSTRUMENT, DawEnums.DEVICE_BUILTIN)
+	var instance: Object = load("res://data/DeviceInstance.gd").new(sfz_dev, 0, 0)
+	for spec in [[73, "Attack"], [72, "Release"], [74, "Bright"]]:
+		var param: Object = load("res://data/DeviceParameter.gd").new(spec[0], spec[1])
+		instance.parameters.append(param)
+	return instance
+
+
+## Minimal stand-in for a Channel: `cc_label` only walks `devices`.
+class FakeChannel extends RefCounted:
+	var devices: Array = []
 
 
 func _test_lane_json_roundtrip() -> void:

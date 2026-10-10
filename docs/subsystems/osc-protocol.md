@@ -140,7 +140,7 @@ Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
 - `target` is relative to the track's channel (`AutomationTarget::parse` in `audio/automation.rs`):
   - `channel/volume`
   - `channel/pan`
-  - `channel/send/{index}`: index into the channel's sends, not the target channel ID
+  - `channel/cc/{n}`: MIDI controller `n` on the channel (spec 030); `n` is an integer 0–119 — 120–127 and non-integers are rejected. Same `/track/{id}/automation/create` address as other targets.
   - `device/{i0}[/{i1}…]/param/{param_id}`: device path indices, then the parameter
 
 ### Clip Management (Godot -> Rust)

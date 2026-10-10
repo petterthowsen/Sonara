@@ -53,6 +53,14 @@ pub(super) fn create_automation_lane(
         );
         return None;
     }
+    if let Some(existing) = track.automation_lanes.iter().find(|l| l.target == target) {
+        // One lane per target per track (REQ-011): two lanes would fight over it.
+        warn!(
+            "Automation lane for {} already exists on track {} as lane {} - refusing create",
+            target, track_id, existing.id
+        );
+        return None;
+    }
     info!(
         "Automation lane {} created on track {} targeting {}",
         lane_id, track_id, target

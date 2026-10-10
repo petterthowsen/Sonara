@@ -106,6 +106,15 @@ impl AudioDevice for ChainDevice {
         route_note(&mut self.children, event, frame_offset);
     }
 
+    fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        crate::audio::devices::note_fx::routing::route_cc(
+            &mut self.children,
+            cc,
+            value14,
+            frame_offset,
+        );
+    }
+
     fn choke(&mut self, frame_offset: usize) {
         for child in &mut self.children {
             child.choke(frame_offset);
@@ -340,6 +349,19 @@ mod tests {
             })
             .collect();
         assert_eq!(hits, vec![1, 1]);
+    }
+
+    #[test]
+    fn chain_cc_reaches_every_child() {
+        use crate::audio::devices::note_fx::routing::test_devices::CcRecorder;
+        let mut chain = ChainDevice::new(8);
+        let (a, log_a, _) = CcRecorder::new(true);
+        let (b, log_b, _) = CcRecorder::new(true);
+        chain.insert_child(0, Box::new(a));
+        chain.insert_child(1, Box::new(b));
+        chain.send_cc(1, 8256, 3);
+        assert_eq!(*log_a.lock().unwrap(), vec![(1, 8256, 3)]);
+        assert_eq!(*log_b.lock().unwrap(), vec![(1, 8256, 3)]);
     }
 
     #[test]

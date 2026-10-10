@@ -136,6 +136,9 @@ static func frequency_text(frequency: float, short := true) -> String:
 # CC NAMES
 # ============================================================================
 
+## Highest automatable controller number; 120-127 are channel-mode messages (spec 030).
+const CC_LANE_MAX: int = 119
+
 ## Standard MIDI CC (Control Change) names, keyed by controller number (REQ-016).
 const CC_NAMES: Dictionary = {
 	1: "Mod Wheel",

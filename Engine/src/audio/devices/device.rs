@@ -159,6 +159,18 @@ pub trait AudioDevice: Send {
     /// effects ignore notes altogether (the default).
     fn send_note_event(&mut self, _event: &NoteEvent, _frame_offset: usize) {}
 
+    /// A MIDI controller value taking effect `frame_offset` samples into the coming block.
+    /// `value14` is the full 14-bit value (0–16383); a device that only understands 7 bits
+    /// takes the MSB with [`cc14_msb`](crate::audio::midi_types::cc14_msb). Default: ignored.
+    fn send_cc(&mut self, _cc: u8, _value14: u16, _frame_offset: usize) {}
+
+    /// The current 14-bit value of controller `cc` this device would report, or `None` when
+    /// it has none. Read on the audio thread when an automation lane takes over a controller
+    /// (its base value), so it must be cheap — a busy lock returns `None`.
+    fn cc_value(&self, _cc: u8) -> Option<u16> {
+        None
+    }
+
     // === Note effects (spec 027) ===
 
     /// True for a note effect: notes routed through a chain stop here, and the chain's note

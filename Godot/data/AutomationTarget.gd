@@ -5,10 +5,11 @@ class_name AutomationTarget extends RefCounted
 ## match the engine's `Display` / `AutomationTarget::parse` spelling byte-for-byte, since the
 ## string is what travels over OSC and is persisted in the project file.
 
-enum Kind { CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM, DEVICE_MODULATOR_PARAM }
+enum Kind { CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM, DEVICE_MODULATOR_PARAM, MIDI_CC }
 
 var kind: Kind = Kind.CHANNEL_VOLUME
 var send_index: int = -1          # SEND_AMOUNT only
+var cc: int = -1                  # MIDI_CC only: controller number 0..=119
 var device_path: Array = []       # DEVICE_PARAM / DEVICE_MODULATOR_PARAM: indices into channel.devices / .children
 var param_id: int = -1            # DEVICE_PARAM / DEVICE_MODULATOR_PARAM only
 var mod_id: int = -1              # DEVICE_MODULATOR_PARAM only
@@ -30,6 +31,16 @@ static func send_amount(index: int) -> AutomationTarget:
 	var t := AutomationTarget.new()
 	t.kind = Kind.SEND_AMOUNT
 	t.send_index = index
+	return t
+
+
+## Controller `cc` (0..=119) on the track's linked channel (spec 030). Not tied to one device:
+## the lane drives the whole chain, and live input on the same controller is suppressed while
+## the lane is active.
+static func midi_cc(cc: int) -> AutomationTarget:
+	var t := AutomationTarget.new()
+	t.kind = Kind.MIDI_CC
+	t.cc = clampi(cc, 0, Midi.CC_LANE_MAX)
 	return t
 
 
@@ -65,6 +76,8 @@ func _to_string() -> String:
 			return "device/%s/param/%d" % [_path_string(), param_id]
 		Kind.DEVICE_MODULATOR_PARAM:
 			return "device/%s/mod/%d/param/%d" % [_path_string(), mod_id, param_id]
+		Kind.MIDI_CC:
+			return "channel/cc/%d" % cc
 	return ""
 
 
@@ -88,6 +101,14 @@ static func parse(s: String) -> AutomationTarget:
 		return AutomationTarget.channel_volume()
 	if parts.size() == 2 and parts[0] == "channel" and parts[1] == "pan":
 		return AutomationTarget.channel_pan()
+	if parts.size() == 3 and parts[0] == "channel" and parts[1] == "cc":
+		# 0..=119: 120-127 are channel-mode messages, not controllers (REQ-002).
+		if not (parts[2] as String).is_valid_int():
+			return null
+		var cc_value := int(parts[2])
+		if cc_value < 0 or cc_value > Midi.CC_LANE_MAX:
+			return null
+		return AutomationTarget.midi_cc(cc_value)
 	if parts.size() == 3 and parts[0] == "channel" and parts[1] == "send":
 		if not (parts[2] as String).is_valid_int():
 			return null
@@ -145,7 +166,7 @@ func is_resolvable(channel: Object) -> bool:
 	if channel == null:
 		return false
 	match kind:
-		Kind.CHANNEL_VOLUME, Kind.CHANNEL_PAN:
+		Kind.CHANNEL_VOLUME, Kind.CHANNEL_PAN, Kind.MIDI_CC:
 			return true
 		Kind.SEND_AMOUNT:
 			return send_index >= 0 and send_index < channel.send_channels.size()
@@ -192,7 +213,35 @@ func display_name(channel: Object) -> String:
 			var param: Object = modulator.get_parameter(param_id)
 			var param_name: String = param.name if param else "Param %d" % param_id
 			return "%s / %s / %s" % [instance.name, modulator.name, param_name]
+		Kind.MIDI_CC:
+			return cc_label(channel, cc)
 	return "Unknown"
+
+
+## Label for controller `cc`: the SFZ-supplied name (the instrument's label wins, REQ-017) via
+## `Midi.cc_display_name`, so an unlabelled controller falls back to `CC3 CC3`-style naming.
+func cc_label(channel: Object, cc_number: int) -> String:
+	var supplied := ""
+	if channel != null:
+		for instance in _devices_recursive(channel.devices):
+			for param in instance.get_parameters():
+				if param.id == cc_number and instance.is_controller_parameter(param) and param.name != "":
+					supplied = param.name
+					break
+			if supplied != "":
+				break
+	return Midi.cc_display_name(cc_number, supplied)
+
+
+## Depth-first walk of a device chain, containers included.
+static func _devices_recursive(devices: Array) -> Array:
+	var out: Array = []
+	for instance in devices:
+		if instance == null:
+			continue
+		out.append(instance)
+		out.append_array(_devices_recursive(instance.children))
+	return out
 
 
 ## Menu/lane label for `param` on `instance`. CC entries go through `Midi.cc_display_name`. A
@@ -257,6 +306,15 @@ func current_normalized_value(channel: Object) -> float:
 			var modulator = instance.get_modulator(mod_id) if instance != null else null
 			if modulator:
 				return clampf(modulator.get_parameter_normalized(param_id), 0.0, 1.0)
+			return 0.5
+		Kind.MIDI_CC:
+			# Seed from the device's own controller value (an SFZ knob) so creating a lane
+			# doesn't jump the controller; 0.5 when nothing reports one.
+			if channel != null:
+				for instance in _devices_recursive(channel.devices):
+					for param in instance.get_parameters():
+						if param.id == cc and instance.is_controller_parameter(param):
+							return clampf(instance.get_parameter_normalized(param.id), 0.0, 1.0)
 			return 0.5
 	return 0.5
 

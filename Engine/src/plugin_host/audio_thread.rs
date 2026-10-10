@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use clack_extensions::params::PluginParams;
 use clack_host::events::event_types::{
-    NoteChokeEvent, NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent,
-    TransportFlags,
+    MidiEvent, NoteChokeEvent, NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent,
+    TransportEvent, TransportFlags,
 };
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::{EventFlags, EventHeader, Pckn, UnknownEvent};
@@ -31,9 +31,10 @@ use tracing::{info, warn};
 
 use crate::audio::ipc::protocol::TRANSPORT_FLAG_PLAYING;
 use crate::audio::ipc::{
-    futex, BlockEvent, BlockTransport, HostSharedMemory, InstanceId, SharedMemory,
+    futex, BlockEvent, BlockTransport, HostSharedMemory, InstanceId, SharedMemory, EVENT_MIDI_CC,
     EVENT_NOTE_CHOKE, EVENT_NOTE_OFF, EVENT_NOTE_ON, EVENT_PARAM, EVENT_PARAM_MOD,
 };
+use crate::audio::midi_types::cc14_msb;
 use crate::plugin_host::host::SubprocessHost;
 use crate::plugin_host::state::{ParamEntry, ParamMap};
 use crate::plugin_host::vst3::{Vst3ParamMap, Vst3Processor};
@@ -262,6 +263,7 @@ enum OwnedEvent {
     NoteOn(u32, NoteOnEvent),
     NoteOff(u32, NoteOffEvent),
     NoteChoke(u32, NoteChokeEvent),
+    Midi(u32, MidiEvent),
     Param(u32, ParamValueEvent),
     ParamMod(u32, ParamModEvent),
 }
@@ -272,6 +274,7 @@ impl OwnedEvent {
             OwnedEvent::NoteOn(time, _)
             | OwnedEvent::NoteOff(time, _)
             | OwnedEvent::NoteChoke(time, _)
+            | OwnedEvent::Midi(time, _)
             | OwnedEvent::Param(time, _)
             | OwnedEvent::ParamMod(time, _) => *time,
         }
@@ -282,10 +285,18 @@ impl OwnedEvent {
             OwnedEvent::NoteOn(_, event) => event.as_unknown(),
             OwnedEvent::NoteOff(_, event) => event.as_unknown(),
             OwnedEvent::NoteChoke(_, event) => event.as_unknown(),
+            OwnedEvent::Midi(_, event) => event.as_unknown(),
             OwnedEvent::Param(_, event) => event.as_unknown(),
             OwnedEvent::ParamMod(_, event) => event.as_unknown(),
         }
     }
+}
+
+/// Turn a block `EVENT_MIDI_CC` into a CLAP MIDI event: bytes `B0 cc msb`, control change on
+/// channel 0. The full 14-bit value rides in the IPC event's `id`; the CLAP event keeps only
+/// the MSB (spec 030 REQ-003).
+fn midi_cc_event(sample_offset: u32, cc: u8, value14: u16) -> MidiEvent {
+    MidiEvent::new(sample_offset, 0, [0xB0, cc, cc14_msb(value14)])
 }
 
 /// Turn a block `PARAM_MOD` offset into a CLAP event (spec 018 Phase 5). `amount_norm` is in the
@@ -739,6 +750,10 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
                         ));
                     }
                 }
+                EVENT_MIDI_CC => scratch.events.push(OwnedEvent::Midi(
+                    event.sample_offset,
+                    midi_cc_event(event.sample_offset, event.note, event.id as u16),
+                )),
                 _ => {}
             }
         }
@@ -882,6 +897,21 @@ pub fn spawn(doorbell: Arc<HostSharedMemory>) -> std::io::Result<AudioThreadHand
             info!("Plugin audio thread exiting");
         })?;
     Ok(handle)
+}
+
+#[cfg(test)]
+mod midi_cc_tests {
+    use super::*;
+
+    #[test]
+    fn a_block_cc_becomes_the_clap_midi_bytes_b0_cc_msb() {
+        // 8192 on CC1: the MSB of the 14-bit value is 0x40.
+        let event = midi_cc_event(21, 1, 8192);
+        assert_eq!(event.data(), [0xB0, 0x01, 0x40]);
+        assert_eq!(event.header().time(), 21);
+        // Full-range value keeps MSB 127.
+        assert_eq!(midi_cc_event(0, 11, 16383).data(), [0xB0, 11, 127]);
+    }
 }
 
 #[cfg(test)]

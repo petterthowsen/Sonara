@@ -163,6 +163,9 @@ func _resolve_lane_target(lane: Object, ch: Object, info: Dictionary, track: Obj
 		4:
 			_report.add(TransferReport.UNSUPPORTED_AUTOMATION, track.name, "modulator parameter")
 			return {}
+		5:
+			# MIDI CC lane (spec 030): a channelController expression target, values normalized.
+			return {"kind": "cc", "unit": "normalized", "cc": target.cc}
 	return {}
 
 
@@ -616,20 +619,28 @@ func _write_warps(clip: Object, audio: Dictionary, content_id: String) -> void:
 func _write_points(lane: Object, target: Dictionary) -> void:
 	var map: Callable
 	var tolerance: float
+	var target_attrs: Dictionary
 	match target["kind"]:
 		"volume", "send":
 			map = func(n: float) -> float: return DawUnits.volume_db_to_linear(AutomationTarget.normalized_to_db(n))
 			tolerance = 0.01 * float(target["max"])
+			target_attrs = {"parameter": target["parameter"]}
 		"pan":
 			map = func(n: float) -> float: return n
 			tolerance = 0.01
+			target_attrs = {"parameter": target["parameter"]}
+		"cc":
+			map = func(n: float) -> float: return clampf(n, 0.0, 1.0)
+			tolerance = 0.01
+			target_attrs = {"expression": "channelController", "channel": 0, "controller": target["cc"]}
 		_:
 			var param: Object = target["instance"].get_parameter(target["param_id"])
 			map = func(n: float) -> float: return DawUnits.param_to_real(param, n)
 			tolerance = 0.01 * (absf(param.max_value - param.min_value) if param != null else 1.0)
+			target_attrs = {"parameter": target["parameter"]}
 	var points := DawUnits.resample(DawUnits.points_from_lane(lane), map, tolerance)
 	_w.open("Points", {"unit": target["unit"], "id": _new_id()})
-	_w.leaf("Target", {"parameter": target["parameter"]})
+	_w.leaf("Target", target_attrs)
 	for p in points:
 		_w.leaf("RealPoint", {"time": DawUnits.ticks_to_beats(p["tick"]), "value": float(p["value"]), "interpolation": "hold" if p["step"] else "linear"})
 	_w.close()

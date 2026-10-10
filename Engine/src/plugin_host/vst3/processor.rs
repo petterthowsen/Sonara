@@ -21,8 +21,8 @@ use super::param_changes::ParameterChanges;
 use super::params::Vst3ParamMap;
 use crate::audio::ipc::protocol::TRANSPORT_FLAG_PLAYING;
 use crate::audio::ipc::{
-    BlockEvent, BlockTransport, SharedMemory, EVENT_NOTE_OFF, EVENT_NOTE_ON, EVENT_PARAM,
-    MAX_BLOCK_EVENTS,
+    BlockEvent, BlockTransport, SharedMemory, EVENT_MIDI_CC, EVENT_NOTE_OFF, EVENT_NOTE_ON,
+    EVENT_PARAM, MAX_BLOCK_EVENTS,
 };
 
 /// Parameters that may change in one block, and points per parameter. More are dropped.
@@ -95,6 +95,9 @@ pub fn translate_events(
                     dropped.overflow += 1;
                 }
             }
+            // MIDI CC has no VST3 equivalent in this spec (spec 030 REQ-004): counted as
+            // unsupported instead of falling into the catch-all.
+            EVENT_MIDI_CC => dropped.unsupported += 1,
             _ => dropped.unsupported += 1,
         }
     }
@@ -480,6 +483,22 @@ mod tests {
             }
         );
         assert_eq!(list.len(), 1);
+        assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn midi_cc_is_counted_as_unsupported_and_nothing_else() {
+        let (list, changes) = lists();
+        let events = [BlockEvent::cc(0, 1, 8192)];
+        let dropped = translate_events(&events, 64, &map(), &list, &changes);
+        assert_eq!(
+            dropped,
+            Dropped {
+                unsupported: 1,
+                overflow: 0
+            }
+        );
+        assert!(list.is_empty());
         assert!(changes.is_empty());
     }
 

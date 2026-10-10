@@ -30,6 +30,7 @@
 - Rendering loops over the sample count, writes planar data via `render_block`, and interleaves into the provided stereo buffer.
 - On bypass (`set_enabled(false)`) or inactive state the device outputs silence because it has no audio input to pass through.
 - `reset()` calls `sfizz::Synth::all_sound_off()` when the synth is ready to guarantee note kills on transport stop/seek.
+- **MIDI CC (spec 030).** `send_cc(cc, value14, frame_offset)` queues the controller change into the preallocated `QueuedMidi` queue (`QUEUED_MIDI_CAPACITY` = 256; a full queue drops the event and counts it in `dropped_midi` instead of blocking). `process_block` sorts the queue by offset, renders up to each offset, and delivers CCs at full 14-bit resolution via `sfizz_send_hdcc(cc, cc14_to_unit(value14))`. `cc_value(cc)` reads the knob value through `try_lock()` on the `cc_values` map and returns `None` when contended. Automation CC lanes therefore never call `set_parameter` on the audio thread (which blocks on the synth mutex).
 
 ## SFZ CC Parameters
 - After an SFZ loads, the device merges the CCs the SFZ uses or labels (`read_cc_labels`, via sfizz `/cc/slots` + `/ccN/label`; never the binding's `cc_labels()`, which reads freed memory) with a host-standard set (Mod Wheel, Volume, Pan, Expression, Sustain) so unlabeled dynamics (often CC1) stay controllable.

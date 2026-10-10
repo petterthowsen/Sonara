@@ -420,6 +420,17 @@ func has_cc_parameters() -> bool:
 	return not get_parameters_in_group("cc").is_empty()
 
 
+## True when `param` is really a MIDI controller on this device, not a sound parameter: any
+## `"cc"`-grouped parameter, or any parameter of the SFZ sampler, whose parameter ids are the
+## controller numbers themselves (spec 030). CC automation targets these through
+## `channel/cc/{n}` lanes instead of device parameters.
+func is_controller_parameter(param: DeviceParameter) -> bool:
+	if param == null:
+		return false
+	var param_group: String = param.group if param.group != "" else "param"
+	return param_group == "cc" or (device != null and device.device_id == "sonara.builtin.sfizz")
+
+
 ## Set a parameter value (normalized 0.0-1.0)
 ## This is called from UI controls: it updates the local value, syncs it to the engine and emits
 ## `parameter_changed` so every view of this device (device view, parameter list) updates. The

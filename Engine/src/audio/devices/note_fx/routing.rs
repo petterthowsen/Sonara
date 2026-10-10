@@ -29,6 +29,19 @@ pub fn route_note(
     true
 }
 
+/// Deliver a MIDI controller value to every device in `devices` in chain order. CC is not
+/// stopped by note effects: it is a channel-level message, and every device in the chain may
+/// react to it. Only a device that accepts note input is woken, so a sleeping effect stays
+/// asleep (ADR-0014).
+pub fn route_cc(devices: &mut [Box<dyn AudioDevice>], cc: u8, value14: u16, frame_offset: usize) {
+    for device in devices.iter_mut() {
+        if device.accepts_note_input() {
+            device.mark_activity();
+        }
+        device.send_cc(cc, value14, frame_offset);
+    }
+}
+
 /// Route a note effect's output into the devices after it; notes falling off the end go to
 /// `sink` (a note branch's collected output) or are dropped.
 fn route_output(
@@ -95,6 +108,7 @@ pub mod test_devices {
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
     };
     use crate::audio::midi_types::NoteEvent;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     /// Records every note it receives, as `(frame, event)`.
@@ -235,13 +249,76 @@ pub mod test_devices {
             .map(|(_, e)| e.key())
             .collect()
     }
+
+    /// Records every CC it receives as `(cc, value14, frame_offset)`, and how often it was
+    /// woken. Set `accepts_note_input` to false for a sleeping-effect variant.
+    pub struct CcRecorder {
+        pub log: Arc<Mutex<Vec<(u8, u16, usize)>>>,
+        pub wakes: Arc<AtomicUsize>,
+        pub accepts: bool,
+    }
+
+    impl CcRecorder {
+        pub fn new(accepts: bool) -> (Self, Arc<Mutex<Vec<(u8, u16, usize)>>>, Arc<AtomicUsize>) {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let wakes = Arc::new(AtomicUsize::new(0));
+            (
+                Self {
+                    log: log.clone(),
+                    wakes: wakes.clone(),
+                    accepts,
+                },
+                log,
+                wakes,
+            )
+        }
+    }
+
+    impl AudioDevice for CcRecorder {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            crate::audio::devices::container::copy_interleaved(inputs, outputs, sample_count);
+        }
+        fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+            self.log.lock().unwrap().push((cc, value14, frame_offset));
+        }
+        fn mark_activity(&mut self) {
+            self.wakes.fetch_add(1, Ordering::Relaxed);
+        }
+        fn accepts_note_input(&self) -> bool {
+            self.accepts
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.cc.recorder"
+        }
+        fn device_name(&self) -> &str {
+            "CC Recorder"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::test_devices::{on_keys, Recorder, Shift};
+    use super::test_devices::{on_keys, CcRecorder, Recorder, Shift};
     use super::*;
     use crate::audio::midi_types::NoteEvent;
+    use std::sync::atomic::Ordering;
 
     fn on(key: u8) -> NoteEvent {
         NoteEvent::On {
@@ -306,5 +383,52 @@ mod tests {
         assert!(route_note(&mut devices, &on(60), 0));
         assert_eq!(on_keys(&log_a), vec![60]);
         assert_eq!(on_keys(&log_b), vec![60]);
+    }
+
+    /// CC is delivered to every device in order with its frame offset, woken instruments and
+    /// left sleeping effects alone, and a note effect does not stop it (spec 030 REQ-003).
+    #[test]
+    fn route_cc_reaches_every_device() {
+        let (a, log_a, wakes_a) = CcRecorder::new(true);
+        let (b, log_b, wakes_b) = CcRecorder::new(true);
+        // A note effect in the middle must not stop the CC.
+        let (c, log_c, wakes_c) = CcRecorder::new(true);
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![
+            Box::new(a),
+            Box::new(Shift::new(12)),
+            Box::new(b),
+            Box::new(c),
+        ];
+
+        route_cc(&mut devices, 1, 8256, 5);
+        for (log, wakes) in [(&log_a, &wakes_a), (&log_b, &wakes_b), (&log_c, &wakes_c)] {
+            assert_eq!(
+                *log.lock().unwrap(),
+                vec![(1, 8256, 5)],
+                "every device sees the CC"
+            );
+            assert_eq!(wakes.load(Ordering::Relaxed), 1, "the instrument is woken");
+        }
+    }
+
+    /// A device that does not accept note input is not woken by a CC (a sleeping effect stays
+    /// asleep), but still receives the value, and a device with no `send_cc` override receives
+    /// nothing and nothing fails.
+    #[test]
+    fn route_cc_wakes_only_instruments() {
+        let (effect, log_effect, wakes_effect) = CcRecorder::new(false);
+        let (_recorder, log_recorder, wakes_recorder) = CcRecorder::new(true);
+        let mut devices: Vec<Box<dyn AudioDevice>> =
+            vec![Box::new(effect), Box::new(Recorder::new().0)];
+
+        route_cc(&mut devices, 74, 4096, 0);
+        assert_eq!(*log_effect.lock().unwrap(), vec![(74, 4096, 0)]);
+        assert_eq!(
+            wakes_effect.load(Ordering::Relaxed),
+            0,
+            "a sleeping effect stays asleep"
+        );
+        assert_eq!(wakes_recorder.load(Ordering::Relaxed), 0);
+        assert!(log_recorder.lock().unwrap().is_empty());
     }
 }

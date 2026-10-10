@@ -58,7 +58,7 @@ like *Open*. Export reads the live `Project` and never changes it.
 | Pooled clip | first instance `id`, later ones `reference` |
 | MIDI clip | `Notes` (channel 0) |
 | Audio clip | `Warps` (seconds content) around `Audio`, two `Warp`s from `recorded_bpm` |
-| Automation lane | `Points` targeting the channel/send/device parameter id; STEP ↔ `hold` |
+| Automation lane | `Points` targeting the channel/send/device parameter id; STEP ↔ `hold`. MIDI CC lanes (spec 030, `AutomationTarget.Kind.MIDI_CC`, kind 5) map to a target `expression="channelController" channel="0" controller="N"` ↔ `channel/cc/N` |
 | Song marker | `Markers/Marker` (start only) |
 | CLAP device | `ClapPlugin` + `State` (`.clap-preset`) + `Parameters` for automated params |
 | Sonara built-in | `BuiltinDevice deviceID="sonara.<device id>"` |

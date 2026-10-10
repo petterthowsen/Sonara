@@ -1911,6 +1911,7 @@ static func from_json(data: Dictionary) -> Project:
 
 	_relink_folder_buses(project)
 	_migrate_slot_automation(project)
+	_migrate_cc_automation(project)
 	project._rebuild_channel_child_ids_from_parents()
 	# Before ensure_all, so pad returns re-syncing their names see an already unique namespace.
 	project.dedupe_names()
@@ -1936,6 +1937,49 @@ static func _migrate_slot_automation(project: Project) -> void:
 					break
 	for ch in project.channels:
 		ch.migrated_slot_paths.clear()
+
+
+## Rewrite saved lanes that drove an SFZ sampler's controller parameter (`device/…/param/N`,
+## any depth) into `channel/cc/N` lanes (spec 030). Points, curves, colour and bypass state are
+## untouched; only the target changes. A lane that would collide with another lane already
+## driving the same controller is dropped with a warning (REQ-011: one lane per controller).
+static func _migrate_cc_automation(project: Project) -> void:
+	for track in project.tracks:
+		if track == null:
+			continue
+		var ch: Channel = track.get_linked_channel() if track else null
+		if ch == null:
+			continue
+		var owned: Dictionary = {}
+		for lane in track.automation_lanes:
+			if lane.target != null and lane.target.kind == AutomationTarget.Kind.MIDI_CC:
+				owned[lane.target.cc] = true
+		var drop: Array = []
+		for lane in track.automation_lanes:
+			var target: AutomationTarget = lane.target
+			if target == null or target.kind != AutomationTarget.Kind.DEVICE_PARAM:
+				continue
+			var instance: Object = target.resolve(ch)
+			if instance == null or not _is_sfz_sampler(instance):
+				continue
+			var param: Object = instance.get_parameter(target.param_id)
+			if param == null or not instance.is_controller_parameter(param):
+				continue
+			if owned.has(target.param_id):
+				push_warning("[Project] Dropping duplicate CC%d automation lane %s on track '%s'" % [
+					target.param_id, lane.id, track.name])
+				drop.append(lane)
+				continue
+			owned[target.param_id] = true
+			lane.target = AutomationTarget.midi_cc(target.param_id)
+			logger.info("[Project] Migrated lane %s on '%s' from device param %d to channel/cc/%d" % [
+				lane.id, track.name, target.param_id, target.param_id])
+		for lane in drop:
+			track.automation_lanes.erase(lane)
+
+
+static func _is_sfz_sampler(instance: Object) -> bool:
+	return instance.device != null and instance.device.device_id == "sonara.builtin.sfizz"
 
 
 ## Re-bind folder and group tracks to their mixer channels after load.

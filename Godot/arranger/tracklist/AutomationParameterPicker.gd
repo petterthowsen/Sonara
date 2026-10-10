@@ -1,8 +1,8 @@
 # AutomationParameterPicker.gd
 # The "what should this lane drive?" dropdown (REQ-015, REQ-016). Built from the track's linked
-# Channel: channel volume, pan, one entry per send, then one submenu per device in
-# `channel.devices` order carrying that device's `"param"` group, its `"cc"` group and, per
-# modulator (spec 018), its parameters, as separate groups.
+# Channel: channel volume, pan, a top-level MIDI CC submenu (spec 030), one entry per send, then
+# one submenu per device in `channel.devices` order carrying that device's `"param"` group and,
+# per modulator (spec 018), its parameters, as separate groups.
 #
 # Two kinds of entry are left out: a parameter whose `is_automation_safe` is false (the device
 # says driving it from the audio thread is unsafe), and a parameter that already has a lane on
@@ -61,6 +61,8 @@ func _rebuild() -> void:
 	if not _has_lane(AutomationTarget.channel_pan()):
 		add_item("Pan", ID_PAN)
 
+	_add_cc_menu()
+
 	var send_items := 0
 	for i in range(channel.send_channels.size()):
 		var target := AutomationTarget.send_amount(i)
@@ -73,6 +75,50 @@ func _rebuild() -> void:
 
 	for i in range(channel.devices.size()):
 		_add_device(channel.devices[i], [i])
+
+
+## The top-level `MIDI CC` submenu (spec 030): instrument-labelled controllers first (an SFZ
+## sampler contributes labels through its controller parameters), then CC0-CC119 named by
+## `Midi.cc_display_name`. Searchable like the device submenus; controllers that already have a
+## lane on this track are omitted, and labelled ones don't repeat in the generic list.
+func _add_cc_menu() -> void:
+	var labelled: Array = []
+	var labelled_ids: Dictionary = {}
+	for instance in AutomationTarget._devices_recursive(channel.devices):
+		for param in instance.get_parameters():
+			if param.id < 0 or param.id > Midi.CC_LANE_MAX or not param.is_automation_safe:
+				continue
+			if not instance.is_controller_parameter(param) or param.name == "":
+				continue
+			if labelled_ids.has(param.id):
+				continue
+			var target := AutomationTarget.midi_cc(param.id)
+			if _has_lane(target):
+				continue
+			labelled.append({"cc": param.id, "label": Midi.cc_display_name(param.id, param.name), "target": target})
+			labelled_ids[param.id] = true
+	labelled.sort_custom(func(a, b): return a["cc"] < b["cc"])
+
+	var generic: Array = []
+	for cc in range(Midi.CC_LANE_MAX + 1):
+		if labelled_ids.has(cc) or _has_lane(AutomationTarget.midi_cc(cc)):
+			continue
+		generic.append({"cc": cc, "label": Midi.cc_display_name(cc), "target": AutomationTarget.midi_cc(cc)})
+
+	var entries: int = labelled.size() + generic.size()
+	if entries == 0:
+		return
+	var submenu := PopupMenu.new()
+	submenu.theme_type_variation = &"ContextMenuList"
+	submenu.set_search_bar_enabled(true)
+	for entry in labelled:
+		_add_target_item(submenu, entry["label"], entry["target"])
+	if not labelled.is_empty() and not generic.is_empty():
+		submenu.add_separator()
+	for entry in generic:
+		_add_target_item(submenu, entry["label"], entry["target"])
+	submenu.id_pressed.connect(_on_device_id_pressed.bind(submenu))
+	add_submenu_node_item("MIDI CC", submenu)
 
 
 ## Add one submenu for `instance` (and, recursively, for its children so rack/drum-machine slots
@@ -89,7 +135,6 @@ func _add_device(instance: DeviceInstance, path: Array) -> void:
 	var entries := 0
 
 	entries += _add_param_group(submenu, instance, path, "param", "")
-	entries += _add_param_group(submenu, instance, path, "cc", "CC")
 	for mod in instance.modulators:
 		entries += _add_modulator_group(submenu, instance, path, mod)
 
@@ -106,13 +151,13 @@ func _add_device(instance: DeviceInstance, path: Array) -> void:
 
 
 ## Append `instance`'s parameters in `group` to `submenu`, skipping unsafe and already-automated
-## ones. Returns how many were added. CC entries are named through `Midi.cc_display_name` so an
-## unlabelled CC still reads as `CC1 Mod Wheel` rather than a bare number (REQ-016).
+## ones. Controller parameters never appear here: they live in the top-level MIDI CC submenu
+## (spec 030).
 func _add_param_group(submenu: PopupMenu, instance: DeviceInstance, path: Array,
 		group: String, separator_label: String) -> int:
 	var added := 0
 	for param in instance.get_parameters_in_group(group):
-		if not param.is_automation_safe:
+		if not param.is_automation_safe or instance.is_controller_parameter(param):
 			continue
 		var target := AutomationTarget.device_param(path, param.id)
 		if _has_lane(target):

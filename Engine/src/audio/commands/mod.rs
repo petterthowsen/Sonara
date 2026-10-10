@@ -1369,4 +1369,52 @@ mod tests {
         assert_eq!(effects.trash.len(), before + 1);
         assert_eq!(state.clips["c"].audio_samples, vec![0.5; 8]);
     }
+
+    /// One lane per target per track (REQ-011): a second `channel/cc/1` lane is refused and
+    /// the first lane is untouched, while two different CCs coexist.
+    #[test]
+    fn create_automation_lane_refuses_a_duplicate_target() {
+        use crate::audio::track::Track;
+
+        let mut state = EngineState::default();
+        state.tracks.insert(1, Track::new(1, 2));
+        let cc1 = AutomationTarget::MidiCc { cc: 1 };
+        let cc11 = AutomationTarget::MidiCc { cc: 11 };
+
+        assert!(
+            track::create_automation_lane(&mut state, 1, "cc1".to_string(), cc1.clone()).is_none()
+        );
+        // A different lane id for the same target is refused; the first lane is untouched.
+        assert!(
+            track::create_automation_lane(&mut state, 1, "cc1-again".to_string(), cc1.clone())
+                .is_none()
+        );
+        assert_eq!(state.tracks[&1].automation_lanes.len(), 1);
+        assert_eq!(state.tracks[&1].automation_lanes[0].id, "cc1");
+        assert_eq!(state.tracks[&1].automation_lanes[0].target, cc1);
+
+        // A different controller gets its own lane.
+        assert!(
+            track::create_automation_lane(&mut state, 1, "cc11".to_string(), cc11.clone())
+                .is_none()
+        );
+        assert_eq!(state.tracks[&1].automation_lanes.len(), 2);
+        assert_eq!(state.tracks[&1].automation_lanes[1].target, cc11);
+
+        // The rule is generic on the target, not CC-specific: a second device-param lane for
+        // the same target is refused too.
+        let param = AutomationTarget::DeviceParam {
+            device_path: DevicePath::root(0),
+            param_id: 5,
+        };
+        assert!(
+            track::create_automation_lane(&mut state, 1, "param".to_string(), param.clone())
+                .is_none()
+        );
+        assert!(
+            track::create_automation_lane(&mut state, 1, "param-again".to_string(), param)
+                .is_none()
+        );
+        assert_eq!(state.tracks[&1].automation_lanes.len(), 3);
+    }
 }

@@ -348,6 +348,12 @@ impl AudioDevice for LayerDevice {
         }
     }
 
+    fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        for slot in &mut self.slots {
+            slot.device.send_cc(cc, value14, frame_offset);
+        }
+    }
+
     fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
 
     fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
@@ -641,6 +647,19 @@ mod tests {
         assert_eq!(events(&a), vec![(on(1, 36, 0.7), 17)]);
         assert_eq!(events(&b), vec![(on(1, 49, 0.7), 17)]);
         assert!(events(&c).is_empty());
+    }
+
+    #[test]
+    fn layer_cc_reaches_every_slot() {
+        use crate::audio::devices::note_fx::routing::test_devices::CcRecorder;
+        let mut layer = LayerDevice::new(8);
+        let (a, log_a, _) = CcRecorder::new(true);
+        let (b, log_b, _) = CcRecorder::new(true);
+        layer.insert_child(0, Box::new(a));
+        layer.insert_child(1, Box::new(b));
+        layer.send_cc(74, 4096, 2);
+        assert_eq!(*log_a.lock().unwrap(), vec![(74, 4096, 2)]);
+        assert_eq!(*log_b.lock().unwrap(), vec![(74, 4096, 2)]);
     }
 
     #[test]

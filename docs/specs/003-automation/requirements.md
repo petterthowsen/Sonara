@@ -185,6 +185,9 @@ parameters already carrying a lane on that track.
 - **Example:** with `polysynth` at position 0 and `delay` at position 1, the polysynth's
   parameters are listed first. An SFZ device offers `Cutoff` under its device parameters and
   `CC1 Mod Wheel` under its CC parameters.
+- **Note:** spec 030 (MIDI CC automation) generalizes this to per-channel controller targets
+  (`channel/cc/{n}`, parsed and offered as `AutomationTarget::MIDI_CC`); see
+  `docs/specs/030-midi-cc-automation/`.
 
 ### REQ-016 — MIDI CC parameters are named from a shared lookup
 
@@ -209,6 +212,9 @@ and a delete control that removes the entire lane.
   the parameter name; bypass mutes it; delete removes the row and the data.
 - **Example:** a lane on the `Filter` device's `Freq` parameter reads `Filter / Freq`; a lane on
   an SFZ device's CC1 reads `Piano / CC1 Mod Wheel`, named through REQ-016.
+- **Note:** spec 030 (MIDI CC automation) adds channel-controller lanes (`channel/cc/{n}`);
+  the header still names the controller through the same REQ-016 lookup — see
+  `docs/specs/030-midi-cc-automation/`.
 
 ### REQ-018 — Points are created, moved and deleted by direct manipulation
 

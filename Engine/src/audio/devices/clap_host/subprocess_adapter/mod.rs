@@ -526,6 +526,18 @@ impl AudioDevice for SubprocessClapAdapter {
             .push(BlockEvent::choke(frame_offset as u32));
     }
 
+    /// Audio thread: queue a MIDI controller change for the upcoming block at its sample
+    /// offset (spec 030 REQ-003). Full 14-bit resolution travels; the host quantizes to the
+    /// 7-bit CLAP MIDI bytes.
+    fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        if self.input_events.len() >= MAX_BLOCK_EVENTS {
+            self.stats.event_drops += 1;
+            return;
+        }
+        self.input_events
+            .push(BlockEvent::cc(frame_offset as u32, cc, value14));
+    }
+
     /// Audio thread: queue a modulation offset for the upcoming block at its start (spec 018
     /// Phase 5). The base value is untouched; `PARAM_MOD` only moves the plugin's own modulation.
     fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
@@ -1546,6 +1558,47 @@ mod tests {
             !adapter.take_state_save_due(),
             "the interval restarts after a save"
         );
+    }
+
+    /// A live CC reaches the host as EVENT_MIDI_CC with its sample offset.
+    #[test]
+    fn cc_reaches_the_host_with_its_sample_offset() {
+        let (load, memory, doorbell) = ready_block("sonara_test_cc", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let host = spawn_fake_host(
+            Arc::clone(&memory),
+            doorbell,
+            Arc::clone(&stop),
+            Arc::new(AtomicBool::new(true)),
+            Some(Arc::clone(&observed)),
+        );
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        clock.publish(Instant::now(), Duration::from_secs(1));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+
+        adapter.send_cc(1, 8192, 21);
+        let input = vec![0.0f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+        adapter.process_block(&input, &mut output, 64);
+
+        let events = observed.lock().unwrap();
+        assert_eq!(events.len(), 1, "the host saw the CC event");
+        assert_eq!(events[0].kind, crate::audio::ipc::EVENT_MIDI_CC);
+        assert_eq!(events[0].note, 1);
+        assert_eq!(events[0].id, 8192);
+        assert!((events[0].value - 8192.0 / 16383.0).abs() < 1e-6);
+        assert_eq!(events[0].sample_offset, 21);
+        drop(events);
+
+        // Events belong to one block only.
+        let mut output = vec![0.0f32; 64 * 2];
+        adapter.process_block(&input, &mut output, 64);
+        assert_eq!(observed.lock().unwrap().len(), 1, "not replayed next block");
+        assert_eq!(adapter.take_stats().event_drops, 0);
+
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
     }
 
     #[test]

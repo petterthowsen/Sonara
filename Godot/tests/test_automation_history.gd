@@ -42,6 +42,7 @@ func run_tests() -> void:
 	_test_remove_points_id_stable_across_undo()
 	_test_transform_merges_continuous_drag()
 	_test_transform_restores_curve_and_tension()
+	_test_cc_lane_create_edit_undo_redo()
 
 
 func _make_track() -> Object:
@@ -227,3 +228,46 @@ func _test_transform_restores_curve_and_tension() -> void:
 	_assert(is_equal_approx(_point_by_id(lane, point_id).tension, 0.3), "undo restores tension explicitly")
 	hist.redo()
 	_assert(_point_by_id(lane, point_id).tick == 200, "redo reapplies moved tick")
+
+
+## A CC lane (spec 030) behaves like any other lane through the history commands: create, edit,
+## delete — undo and redo restore every step.
+func _test_cc_lane_create_edit_undo_redo() -> void:
+	var track := _make_track()
+	var lane: Object = _lane_script.new("lane0", AutomationTarget.midi_cc(1))
+	var hist: Object = _history_script.new()
+	hist.execute(_lane_create_cmd.new("Create Lane", track, lane))
+	_assert(track.automation_lanes.has(lane), "CC lane created")
+	_assert(str(lane.target) == "channel/cc/1", "the lane targets channel/cc/1")
+
+	# Edit: two points, then move the first one.
+	var ids: Array = []
+	for spec in [[0, 0.2], [960, 0.9]]:
+		ids.append(lane.add_point(spec[0], spec[1]).id)
+	var before: Dictionary = _actions_script.capture_point_states([_point_by_id(lane, ids[0])])
+	var p: Object = _point_by_id(lane, ids[0])
+	lane.update_point(ids[0], 480, 0.5)
+	var moved: Object = _point_by_id(lane, ids[0])
+	var after := {ids[0]: {"tick": moved.tick, "value": moved.value, "curve": moved.curve, "tension": moved.tension}}
+	hist.execute(_points_transform_cmd.new("Move Point", lane, [ids[0]], before, after))
+	_assert(_point_by_id(lane, ids[0]).tick == 480, "edit applies")
+
+	hist.undo()
+	_assert(_point_by_id(lane, ids[0]).tick == 0 and is_equal_approx(_point_by_id(lane, ids[0]).value, 0.2),
+		"undo restores the point edit")
+	_assert(_point_by_id(lane, ids[1]).tick == 960, "undo leaves the second point")
+
+	hist.undo()  # undoes the create
+	_assert(not track.automation_lanes.has(lane), "undo removes the CC lane")
+	_assert(lane.points.size() == 2, "the points survive the create undo")
+
+	hist.redo()
+	_assert(track.automation_lanes.has(lane), "redo re-attaches the CC lane")
+	hist.redo()
+	_assert(_point_by_id(lane, ids[0]).tick == 480, "redo reapplies the point edit")
+
+	# Delete: undo restores the lane with its points.
+	hist.execute(_lane_delete_cmd.new("Delete Lane", track, lane))
+	_assert(not track.automation_lanes.has(lane), "delete removes the CC lane")
+	hist.undo()
+	_assert(track.automation_lanes.has(lane) and lane.points.size() == 2, "undo restores the deleted CC lane with its points")

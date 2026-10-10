@@ -5,7 +5,7 @@ use crate::audio::active_notes::NoteSource;
 use crate::audio::devices::container::{ChainCursor, ChainStep};
 use crate::audio::devices::AudioDevice;
 use crate::audio::dsp::interleave::{deinterleave_stereo, interleave_stereo};
-use crate::audio::midi_types::{NoteEvent, DEFAULT_RELEASE};
+use crate::audio::midi_types::{cc14_from_cc7, NoteEvent, DEFAULT_RELEASE};
 use crate::audio::render_scratch::ClipNoteEvent;
 
 /// Send a note event through `devices` in chain order, waking those that take note input. It
@@ -38,6 +38,15 @@ impl Channel {
                 (MidiMessageType::NoteOn, 0) => Some(DEFAULT_RELEASE),
                 (MidiMessageType::NoteOn, _) => None,
                 (MidiMessageType::NoteOff, _) => Some(value),
+                (MidiMessageType::ControlChange, _) => {
+                    // A live CC on a controller an automation lane owns is suppressed (spec 030
+                    // REQ-014); otherwise it reaches the devices at the scheduled offset.
+                    let cc = event.note;
+                    if self.cc_lane_mask & (1u128 << cc) == 0 {
+                        self.send_cc_to_devices(cc, cc14_from_cc7(event.velocity), frame_offset);
+                    }
+                    continue;
+                }
                 _ => continue,
             };
             match ends_with {
@@ -315,6 +324,18 @@ impl Channel {
     pub fn send_note_event_to_devices(&mut self, event: &NoteEvent, frame_offset: usize) {
         send_note_event_to(&mut self.devices, event, frame_offset);
     }
+
+    /// Send a MIDI controller value to every top-level device with a frame offset, like
+    /// scheduled notes. CC is not stopped by note effects (spec 030); only devices that
+    /// accept note input are woken.
+    pub fn send_cc_to_devices(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        crate::audio::devices::note_fx::routing::route_cc(
+            &mut self.devices,
+            cc,
+            value14,
+            frame_offset,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -381,6 +402,101 @@ mod tests {
         channel.dispatch_scheduled_midi();
         let received = events.lock().unwrap().clone();
         received
+    }
+
+    /// Device that records every CC it receives (cc, value14, frame_offset).
+    struct CcProbe {
+        events: Arc<Mutex<Vec<(u8, u16, usize)>>>,
+    }
+
+    impl AudioDevice for CcProbe {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn send_note_event(&mut self, _event: &NoteEvent, _frame_offset: usize) {}
+        fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+            self.events
+                .lock()
+                .unwrap()
+                .push((cc, value14, frame_offset));
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.cc_probe"
+        }
+        fn device_name(&self) -> &str {
+            "CC Probe"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Dispatch a single live CC event and return what the probe received.
+    fn dispatch_cc(cc: u8, velocity: u8, frame_offset: usize) -> Vec<(u8, u16, usize)> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut channel = Channel::new(2, "Probe".to_string(), 64, 48_000.0);
+        channel.devices.push(Box::new(CcProbe {
+            events: events.clone(),
+        }));
+        channel.scheduled_midi_events.push(MidiEvent {
+            message_type: MidiMessageType::ControlChange,
+            midi_channel: 0,
+            note: cc,
+            velocity,
+            received_at: Instant::now(),
+            frame_offset,
+        });
+        channel.dispatch_scheduled_midi();
+        let received = events.lock().unwrap().clone();
+        received
+    }
+
+    #[test]
+    fn live_cc_reaches_device_with_frame_offset() {
+        let received = dispatch_cc(1, 64, 37);
+        assert_eq!(received, vec![(1, 8256, 37)]);
+    }
+
+    #[test]
+    fn live_cc_is_suppressed_while_a_lane_owns_the_controller() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut channel = Channel::new(2, "Probe".to_string(), 64, 48_000.0);
+        channel.devices.push(Box::new(CcProbe {
+            events: events.clone(),
+        }));
+        let push = |channel: &mut Channel, frame_offset: usize| {
+            channel.scheduled_midi_events.push(MidiEvent {
+                message_type: MidiMessageType::ControlChange,
+                midi_channel: 0,
+                note: 1,
+                velocity: 64,
+                received_at: Instant::now(),
+                frame_offset,
+            });
+        };
+        // While a lane owns CC1 the live message is dropped.
+        channel.cc_lane_mask |= 1u128 << 1;
+        push(&mut channel, 5);
+        channel.dispatch_scheduled_midi();
+        channel.scheduled_midi_events.clear();
+        assert!(events.lock().unwrap().is_empty());
+        // The lane is bypassed (release_lane cleared the mask bit): CC is delivered again.
+        channel.cc_lane_mask &= !(1u128 << 1);
+        push(&mut channel, 6);
+        channel.dispatch_scheduled_midi();
+        assert_eq!(events.lock().unwrap().clone(), vec![(1, 8256, 6)]);
     }
 
     #[test]

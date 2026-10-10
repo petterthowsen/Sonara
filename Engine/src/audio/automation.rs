@@ -16,6 +16,7 @@ use tracing::warn;
 
 use super::channel::Channel;
 use super::devices::DevicePath;
+use super::midi_types::{cc14_from_unit, cc14_to_unit};
 use super::state::EngineState;
 use super::track::Track;
 use super::types::{ChannelId, Tick, TrackId};
@@ -149,6 +150,9 @@ pub enum AutomationTarget {
         mod_id: u8,
         param_id: u32,
     },
+    /// One MIDI controller on the channel (`channel/cc/{n}`, n in 0..=119). Appended for
+    /// saved-project compatibility (spec 030).
+    MidiCc { cc: u8 },
 }
 
 impl AutomationTarget {
@@ -165,6 +169,13 @@ impl AutomationTarget {
                 .parse::<usize>()
                 .ok()
                 .map(|index| AutomationTarget::SendAmount { index }),
+            ["channel", "cc", cc] => {
+                // Controllers 120–127 are channel-mode messages, never lanes (REQ-002).
+                match cc.parse::<u8>() {
+                    Ok(cc) if cc <= 119 => Some(AutomationTarget::MidiCc { cc }),
+                    _ => None,
+                }
+            }
             ["device", rest @ ..] => {
                 // rest = i0 [i1 …] "param" param_id
                 //     or i0 [i1 …] "mod" mod_id "param" param_id
@@ -211,6 +222,7 @@ impl fmt::Display for AutomationTarget {
             AutomationTarget::ChannelVolume => write!(f, "channel/volume"),
             AutomationTarget::ChannelPan => write!(f, "channel/pan"),
             AutomationTarget::SendAmount { index } => write!(f, "channel/send/{}", index),
+            AutomationTarget::MidiCc { cc } => write!(f, "channel/cc/{}", cc),
             AutomationTarget::DeviceParam {
                 device_path,
                 param_id,
@@ -241,6 +253,8 @@ pub struct AutomationLane {
     cursor: usize,
     /// Last value actually applied, so an unchanged value is not re-applied (REQ-011).
     pub last_applied: Option<f32>,
+    /// Last 14-bit controller value applied, for a CC lane's dedup (spec 030).
+    pub last_applied_cc14: Option<u16>,
     /// The target's pre-automation value, captured the first time this lane drives it and written
     /// back when the lane stops driving it (bypass, delete, or an unresolvable target).
     pub captured_base: Option<f32>,
@@ -257,6 +271,7 @@ impl AutomationLane {
             bypassed: false,
             cursor: 0,
             last_applied: None,
+            last_applied_cc14: None,
             captured_base: None,
             warned_unresolvable: false,
         }
@@ -426,6 +441,18 @@ fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32
         }
     }
 
+    // A CC lane dedups at 14 bits: a sub-step change (below 1/16383 of the range) must not
+    // wake the chain, even when it passes the f32 epsilon above (REQ-011).
+    let cc14 = match lane.target {
+        AutomationTarget::MidiCc { cc } => Some((cc, cc14_from_unit(value))),
+        _ => None,
+    };
+    if let Some((_, value14)) = cc14 {
+        if lane.last_applied_cc14 == Some(value14) {
+            return true;
+        }
+    }
+
     // Split the borrow so the target can be read while the lane's own fields are written.
     let AutomationLane {
         target,
@@ -490,10 +517,26 @@ fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32
             }
             device.mark_activity();
         }
+        AutomationTarget::MidiCc { cc } => {
+            let value14 = cc14.expect("cc14 computed for a MidiCc target").1;
+            // The base is the first controller value any device in the chain reports (the SFZ
+            // sampler answers from its knob values); a chain with none has no base to restore.
+            if captured_base.is_none() {
+                *captured_base = channel
+                    .devices
+                    .iter()
+                    .find_map(|device| device.cc_value(*cc))
+                    .map(cc14_to_unit);
+            }
+            // The lane owns the controller, so live CC on it is suppressed while this bit is set.
+            channel.cc_lane_mask |= 1u128 << *cc;
+            channel.send_cc_to_devices(*cc, value14, 0);
+        }
     }
 
     *warned_unresolvable = false;
     *last_applied = Some(value);
+    lane.last_applied_cc14 = cc14.map(|(_, value14)| value14);
     true
 }
 
@@ -507,6 +550,7 @@ pub fn release_lane(lane: &mut AutomationLane, channel: &mut Channel) {
         target,
         captured_base,
         last_applied,
+        last_applied_cc14,
         ..
     } = lane;
 
@@ -551,9 +595,18 @@ pub fn release_lane(lane: &mut AutomationLane, channel: &mut Channel) {
                 }
             }
         }
+        AutomationTarget::MidiCc { cc } => {
+            // Restore the controller's pre-automation value; a lane that never found a base
+            // sends nothing (REQ-006). Either way the controller goes back to live CC.
+            if let Some(base) = captured_base.take() {
+                channel.send_cc_to_devices(*cc, cc14_from_unit(base), 0);
+            }
+            channel.cc_lane_mask &= !(1u128 << *cc);
+        }
     }
 
     *last_applied = None;
+    *last_applied_cc14 = None;
 }
 
 /// Release the lane with `lane_id` on `track_id`, if both exist. For the command thread, which
@@ -628,6 +681,7 @@ mod tests {
     use crate::audio::track::Track;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::Mutex;
 
     const BUFFER_SIZE: usize = 128;
     const SAMPLE_RATE: f32 = 48_000.0;
@@ -742,6 +796,7 @@ mod tests {
             ("channel/volume", AutomationTarget::ChannelVolume),
             ("channel/pan", AutomationTarget::ChannelPan),
             ("channel/send/2", AutomationTarget::SendAmount { index: 2 }),
+            ("channel/cc/74", AutomationTarget::MidiCc { cc: 74 }),
             (
                 "device/0/param/7",
                 AutomationTarget::DeviceParam {
@@ -793,6 +848,10 @@ mod tests {
             "channel",
             "channel/gain",
             "channel/send/x",
+            "channel/cc/120",
+            "channel/cc/127",
+            "channel/cc/x",
+            "channel/cc/-1",
             "device/param/7",
             "device/0/param",
             "device/0/param/x",
@@ -1355,5 +1414,213 @@ mod tests {
             Some(0.3)
         );
         assert_eq!(sets.load(Ordering::Relaxed), 0);
+    }
+
+    /// A device that accepts CC values and reports its knob value for `cc` (an SFZ sampler
+    /// stand-in). Records every CC it receives as `(cc, value14, frame_offset)`.
+    struct CcDevice {
+        cc: u8,
+        knob: u16,
+        received: Arc<Mutex<Vec<(u8, u16, usize)>>>,
+    }
+
+    impl AudioDevice for CcDevice {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+            self.received
+                .lock()
+                .unwrap()
+                .push((cc, value14, frame_offset));
+        }
+        fn cc_value(&self, cc: u8) -> Option<u16> {
+            if cc == self.cc {
+                Some(self.knob)
+            } else {
+                None
+            }
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.cc.device"
+        }
+        fn device_name(&self) -> &str {
+            "CC Device"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Add a CC-capable device to the state's channel 2; returns the received CC log.
+    fn add_cc_device(
+        state: &mut EngineState,
+        cc: u8,
+        knob: u16,
+    ) -> Arc<Mutex<Vec<(u8, u16, usize)>>> {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        state
+            .channels
+            .get_mut(&2)
+            .expect("channel 2")
+            .devices
+            .push(Box::new(CcDevice {
+                cc,
+                knob,
+                received: received.clone(),
+            }));
+        received
+    }
+
+    #[test]
+    fn automation_cc_lane_delivers_value14() {
+        let (mut state, _sets, _wakes) = state_with_track();
+        let received = add_cc_device(&mut state, 74, 0);
+        add_lane(
+            &mut state,
+            "cc",
+            AutomationTarget::MidiCc { cc: 74 },
+            &[(0, 0.0), (960, 1.0)],
+        );
+
+        // Halfway through the ramp the lane has resolved 0.5, delivered as 14 bits.
+        apply_automation(&mut state.tracks, &mut state.channels, 480);
+        assert_eq!(*received.lock().unwrap(), vec![(74, 8192, 0)]);
+        // The lane owns the controller while it drives it.
+        assert_ne!(state.channels[&2].cc_lane_mask & (1u128 << 74), 0);
+    }
+
+    #[test]
+    fn automation_cc_lane_dedups_at_14_bits() {
+        let (mut state, _sets, _wakes) = state_with_track();
+        let received = add_cc_device(&mut state, 1, 0);
+        add_lane(
+            &mut state,
+            "cc",
+            AutomationTarget::MidiCc { cc: 1 },
+            &[(0, 0.5), (96_000, 0.5)],
+        );
+
+        for buffer in 0..100 {
+            apply_automation(&mut state.tracks, &mut state.channels, buffer * 64);
+        }
+        assert_eq!(
+            received.lock().unwrap().len(),
+            1,
+            "a flat lane delivers once"
+        );
+    }
+
+    #[test]
+    fn automation_cc_lane_ignored_by_device_without_cc() {
+        // A device without a `send_cc` override gets nothing: the lane must not fall back to
+        // `set_parameter` (spec 030).
+        let (mut state, sets, wakes) = state_with_track();
+        add_lane(
+            &mut state,
+            "cc",
+            AutomationTarget::MidiCc { cc: 74 },
+            &[(0, 0.0), (960, 1.0)],
+        );
+
+        for tick in [0, 480, 960] {
+            apply_automation(&mut state.tracks, &mut state.channels, tick);
+        }
+        assert_eq!(sets.load(Ordering::Relaxed), 0);
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn automation_cc_lane_applies_while_stopped() {
+        let (mut state, _sets, _wakes) = state_with_track();
+        let received = add_cc_device(&mut state, 74, 0);
+        assert!(!state.get_is_playing());
+        add_lane(
+            &mut state,
+            "cc",
+            AutomationTarget::MidiCc { cc: 74 },
+            &[(0, 0.2), (9600, 0.8)],
+        );
+
+        apply_automation(&mut state.tracks, &mut state.channels, 9600);
+        assert_eq!(
+            *received.lock().unwrap().last().expect("a CC was delivered"),
+            (74, 13106, 0),
+            "0.8 quantizes to 13106"
+        );
+    }
+
+    #[test]
+    fn automation_cc_lane_restores_known_base_on_bypass() {
+        for release_by_bypass in [true, false] {
+            let (mut state, _sets, _wakes) = state_with_track();
+            let received = add_cc_device(&mut state, 74, 4096); // knob at 0.25
+            add_lane(
+                &mut state,
+                "cc",
+                AutomationTarget::MidiCc { cc: 74 },
+                &[(0, 0.9), (960, 0.9)],
+            );
+
+            apply_automation(&mut state.tracks, &mut state.channels, 0);
+            assert_eq!(received.lock().unwrap().len(), 1);
+            assert_ne!(state.channels[&2].cc_lane_mask & (1u128 << 74), 0);
+
+            if release_by_bypass {
+                state.tracks.get_mut(&1).unwrap().automation_lanes[0].bypassed = true;
+                apply_automation(&mut state.tracks, &mut state.channels, 0);
+            } else {
+                release_track_lane(&mut state, 1, "cc");
+            }
+
+            let log = received.lock().unwrap();
+            assert_eq!(log.len(), 2, "exactly the restore was sent after the drive");
+            assert_eq!(log[1], (74, 4096, 0), "the knob value 0.25 came back");
+            drop(log);
+            assert_eq!(state.channels[&2].cc_lane_mask & (1u128 << 74), 0);
+            assert_eq!(
+                state.tracks[&1].automation_lanes[0].captured_base, None,
+                "the base was handed back"
+            );
+        }
+    }
+
+    #[test]
+    fn automation_cc_lane_without_base_sends_nothing() {
+        let (mut state, _sets, _wakes) = state_with_track();
+        // A CC device that reports no knob value: the chain has no base to restore.
+        let received = add_cc_device(&mut state, 74, 0);
+        add_lane(
+            &mut state,
+            "cc",
+            AutomationTarget::MidiCc { cc: 73 },
+            &[(0, 0.9), (960, 0.9)],
+        );
+
+        apply_automation(&mut state.tracks, &mut state.channels, 0);
+        assert_eq!(
+            state.tracks[&1].automation_lanes[0].captured_base, None,
+            "CC73 has no responder, so no base"
+        );
+
+        // Drive then bypass: no restore is sent (REQ-006 allows this).
+        release_track_lane(&mut state, 1, "cc");
+        let log = received.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0], (73, 14745, 0), "0.9 quantizes to 14745");
+        drop(log);
+        assert_eq!(state.channels[&2].cc_lane_mask & (1u128 << 73), 0);
     }
 }

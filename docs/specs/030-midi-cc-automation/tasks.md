@@ -9,14 +9,14 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
 
 ## Phase 1 — engine foundation
 
-- [ ] **T-001** [REQ-004] 14-bit helpers.
+- [x] **T-001** [REQ-004] 14-bit helpers.
   - _Files_: `Engine/src/audio/midi_types.rs`
   - _Output_: `CC_MAX`, `cc14_from_unit`, `cc14_to_unit`, `cc14_from_cc7`, `cc14_msb`, with tests
   - _Verify_: `cargo test cc14` — 0.5 → 8192, 1.0 → 16383, clamps outside 0–1, cc7 127 → 16383,
     cc7 64 → 8256, msb of 8192 → 64
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-003, REQ-004] Device entry point and chain routing.
+- [x] **T-002** [REQ-003, REQ-004] Device entry point and chain routing.
   - _Files_: `Engine/src/audio/devices/device.rs`, `Engine/src/audio/devices/note_fx/routing.rs`,
     `Engine/src/audio/devices/containers/chain.rs`, `Engine/src/audio/devices/containers/layer.rs`,
     `Engine/src/audio/channel/chain.rs`
@@ -27,7 +27,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     nothing fails; a sleeping instrument is woken, a sleeping effect is not
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-001, REQ-002, REQ-003, REQ-012] The CC lane target.
+- [x] **T-003** [REQ-001, REQ-002, REQ-003, REQ-012] The CC lane target.
   - _Files_: `Engine/src/audio/automation.rs`, `Engine/src/audio/channel/mod.rs`
   - _Output_: `AutomationTarget::MidiCc { cc }` (`parse` 0–119, `Display` `channel/cc/{n}`),
     `Channel.cc_lane_mask`, `apply_lane_value` arm with the 14-bit dedup
@@ -38,7 +38,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     `automation_cc_lane_ignored_by_device_without_cc`
   - _Depends on_: T-002
 
-- [ ] **T-004** [REQ-005, REQ-006] Seek while stopped, base capture and release.
+- [x] **T-004** [REQ-005, REQ-006] Seek while stopped, base capture and release.
   - _Files_: `Engine/src/audio/automation.rs`
   - _Output_: base captured from the first `cc_value` in the chain on first drive; `release_lane`
     restores it, or sends nothing when there was none; the lane's `cc_lane_mask` bit is cleared
@@ -47,7 +47,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     `…_without_base_sends_nothing`, delete behaves like bypass
   - _Depends on_: T-003
 
-- [ ] **T-005** [REQ-011] One lane per controller per track.
+- [x] **T-005** [REQ-011] One lane per controller per track.
   - _Files_: `Engine/src/audio/commands/track.rs`
   - _Output_: `create_automation_lane` refuses a lane whose target equals an existing lane's on
     that track, with a warning
@@ -57,7 +57,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
 
 ## Phase 2 — device delivery and live input
 
-- [ ] **T-006** [REQ-013, REQ-014] Live CC reaches the chain.
+- [x] **T-006** [REQ-013, REQ-014] Live CC reaches the chain.
   - _Files_: `Engine/src/audio/channel/chain.rs`
   - _Output_: `dispatch_scheduled_midi` handles `ControlChange`: 7→14 bit, `route_cc` at the
     scheduled frame offset, skipped while the controller's `cc_lane_mask` bit is set
@@ -66,7 +66,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     `live_cc_is_suppressed_while_a_lane_owns_the_controller` and delivered again after bypass
   - _Depends on_: T-003
 
-- [ ] **T-007** [REQ-003, REQ-004] SFZ sampler delivery.
+- [x] **T-007** [REQ-003, REQ-004] SFZ sampler delivery.
   - _Files_: `Engine/src/audio/devices/instruments/sfizz_device.rs`
   - _Output_: `queued_midi` entries become a `Copy` enum of note and CC; `send_cc` queues
     (preallocated, a full queue drops and counts); `process_block` renders up to the CC's offset
@@ -77,7 +77,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     `sfizz_cc_value_reports_knob_value`, and the earlier sfizz tests still pass
   - _Depends on_: T-002
 
-- [ ] **T-008** [REQ-003, REQ-004] CLAP plugin delivery; VST3 counted as unsupported.
+- [x] **T-008** [REQ-003, REQ-004] CLAP plugin delivery; VST3 counted as unsupported.
   - _Files_: `Engine/src/audio/ipc/protocol.rs`,
     `Engine/src/audio/devices/clap_host/subprocess_adapter/mod.rs`,
     `Engine/src/plugin_host/audio_thread.rs`, `Engine/src/plugin_host/vst3/processor.rs`
@@ -90,7 +90,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
 
 ## Phase 3 — Godot
 
-- [ ] **T-009** [REQ-001, REQ-002, REQ-010, REQ-011] The target in Godot.
+- [x] **T-009** [REQ-001, REQ-002, REQ-010, REQ-011] The target in Godot.
   - _Files_: `Godot/data/AutomationTarget.gd`, `Godot/tests/test_automation_model.gd`
   - _Output_: `Kind.MIDI_CC = 5`, `midi_cc(cc)`, `channel/cc/{n}` spelling and `parse` (0–119),
     `is_resolvable` true, `display_name` using the instrument's label else `Midi.cc_display_name`
@@ -100,7 +100,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     finds the lane so a second create is refused
   - _Depends on_: —
 
-- [ ] **T-010** [REQ-007] Migrate saved SFZ-parameter lanes.
+- [x] **T-010** [REQ-007] Migrate saved SFZ-parameter lanes.
   - _Files_: `Godot/data/DeviceInstance.gd`, `Godot/data/Project.gd`,
     `Godot/tests/test_cc_automation_migration.gd` (new)
   - _Output_: `DeviceInstance.is_controller_parameter(param)`; `_migrate_cc_automation(project)`
@@ -111,7 +111,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     CC1 leave one
   - _Depends on_: T-009
 
-- [ ] **T-011** [REQ-001, REQ-002, REQ-008, REQ-009] The picker.
+- [x] **T-011** [REQ-001, REQ-002, REQ-008, REQ-009] The picker.
   - _Files_: `Godot/arranger/tracklist/AutomationParameterPicker.gd`,
     `Godot/tests/test_automation_lane_menu.gd`
   - _Output_: a top-level `MIDI CC` submenu (instrument-labelled controllers first, then
@@ -123,14 +123,14 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
     no longer offers CC1
   - _Depends on_: T-009, T-010
 
-- [ ] **T-012** [REQ-015] Persistence and undo.
+- [x] **T-012** [REQ-015] Persistence and undo.
   - _Files_: `Godot/tests/test_automation_history.gd`, `Godot/tests/test_automation_model.gd`
   - _Output_: CC lane cases added to the existing suites
   - _Verify_: `Godot/tests/run_all.sh automation` — create, edit, save, reload; undo and redo
     restore every step
   - _Depends on_: T-011
 
-- [ ] **T-013** [REQ-016] DAWproject export and import.
+- [x] **T-013** [REQ-016] DAWproject export and import.
   - _Files_: `Godot/dawproject/DawProjectExporter.gd`, `Godot/dawproject/DawProjectImporter.gd`,
     `Godot/tests/test_dawproject_roundtrip.gd`
   - _Output_: kind 5 exported as `Target expression="channelController" channel="0"
@@ -142,7 +142,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
 
 ## Phase 4 — docs
 
-- [ ] **T-014** [REQ-all] Documentation.
+- [x] **T-014** [REQ-all] Documentation.
   - _Files_: `docs/subsystems/osc-protocol.md`, `docs/subsystems/engine-plugin-architecture.md`,
     `docs/subsystems/engine-sfz-sampler.md`, `docs/subsystems/dawproject.md`,
     `docs/specs/003-automation/requirements.md`
@@ -154,7 +154,7 @@ Engine tests run from `Engine/` (`cargo test <name> -- --nocapture`, `cargo fmt`
 
 ## Phase 5 — gates and live verification
 
-- [ ] **T-015** [REQ-all] Run the gates.
+- [x] **T-015** [REQ-all] Run the gates.
   - _Files_: —
   - _Output_: clean `cargo fmt`, full `cargo test`, full `Godot/tests/run_all.sh`
   - _Verify_: `cd Engine && cargo fmt --check && cargo test`; `Godot/tests/run_all.sh` — no
