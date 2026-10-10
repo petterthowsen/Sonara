@@ -300,10 +300,15 @@ separate, pre-existing debt and out of scope — see amendment A1.
 - New `Godot/devices/modulators/ModulatorDisplay.gd` — a `_draw()` `Control` bound to
   `(device, mod_id)`; redraws on `modulator_states_changed` for its device and on
   `modulator_changed(mod_id)` (shape params). The dot is white; the line uses the
-  theme's primary accent (REQ-009).
+  theme's primary accent (REQ-009). While live states flow, the dot interpolates: each
+  frame it blends the live phase from the previous sample towards the latest one over the
+  observed payload interval (~50 ms), so it glides at frame rate instead of stepping at
+  ~20 Hz; stage changes and stream gaps snap.
   - **LFO**: one cycle of the `LFO_SHAPE` param's wave (Sine/Triangle/Saw/Square drawn
     analytically; **S&H** drawn as a fixed staircase glyph, since its values are random).
-    Dot at `(x = phase, y = value)`, y mapped from −1..1.
+    Only the phase is live: the dot rides the *drawn curve* at the interpolated phase
+    (wrapped modulo one cycle, so it re-enters from the left edge), never an interpolated
+    value — lerping across a square wave's cycle end looked wrong.
   - **`adsr` / `ad`**: the curve from the base params (same `ENV_STAGE_PARAM` mapping as
     the pane), time-proportional segments with a fixed-width sustain segment for `adsr`.
     Dot x derived from `(stage, level)`: attack → `level` along the attack segment;
@@ -313,8 +318,8 @@ separate, pre-existing debt and out of scope — see amendment A1.
   - **Generic** (`velocity`, `keytrack`, `random`, `release`, `cc`, unknown): a ~2 s ring
     buffer (40 samples at 20 Hz) of `value` drawn as a trace, dot at the newest point,
     y-range by the kind's `bipolar` flag (REQ-010). An unknown kind never errors.
-  - The dot moves at the stream rate (~20 Hz); fast LFOs step visibly. Phase
-    extrapolation between payloads is a possible follow-up, not in scope.
+  - The dot interpolates between payloads (see above), so it moves at frame rate; the
+    ring-buffer trace itself still advances at the stream rate (~20 Hz).
 - Missing state (old engine, before first payload): static shape, no dot.
 
 ## Modulator→modulator assign (Godot)

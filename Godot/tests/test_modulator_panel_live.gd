@@ -364,8 +364,8 @@ func _test_lfo_dot_moves() -> void:
 	await process_frame
 	_assert(display.has_dot(), "a live state draws the dot")
 	var dot: Vector2 = display.dot_position()
-	var expected := Vector2(3.0 + 0.25 * (display.size.x - 6.0), 3.0 + (0.5 - 0.25) * (display.size.y - 6.0))
-	_assert(dot.distance_to(expected) < 1.0, "the LFO dot sits at (phase, value) (%s vs %s)" % [dot, expected])
+	var expected := Vector2(3.0 + 0.25 * (display.size.x - 6.0), 3.0 + (0.5 - 0.5 * 1.0) * (display.size.y - 6.0))
+	_assert(dot.distance_to(expected) < 1.0, "the LFO dot rides the sine curve at the phase, value 1.0 at 0.25 (%s vs %s)" % [dot, expected])
 	var k2b := PackedByteArray()
 	_kind2(k2b, mod.mod_id, 0, 0.75, -0.5)
 	_emit(inst.osc_path(), [], [k2b])

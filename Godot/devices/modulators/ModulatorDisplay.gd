@@ -2,7 +2,8 @@
 ## with a white dot at the engine-reported live position.
 ##
 ## Bound to `(device, mod_id)` through `setup`. It redraws on `ModLive.modulator_states_changed`
-## for its device (no polling) and on `modulator_changed` (shape parameters), never on a timer.
+## for its device and on `modulator_changed` (shape parameters); while live states flow it also
+## redraws per frame, interpolating the dot between the last two samples (see INTERP_* above).
 ## Shapes: an LFO draws one cycle of its wave (S&H a fixed staircase glyph); an envelope draws
 ## its time-proportional curve; every other kind draws a ~2 s ring-buffer trace of recent values,
 ## with the dot at the newest point. Missing state (old engine, before the first payload) leaves
@@ -27,6 +28,12 @@ const ENV_STAGE_PARAM := {
 const LFO_SHAPE_PARAM := 0
 const LFO_SUSTAIN_FIXED := 0.25
 
+## Live payloads arrive with the status stream (~20 Hz), which would step the dot. The display
+## interpolates instead: each frame blends from the previous sample towards the latest one over
+## one payload interval, so the dot glides at frame rate (about one interval behind).
+const INTERP_MIN_INTERVAL := 0.02
+const INTERP_MAX_INTERVAL := 0.2
+
 ## Trace history: 40 samples at ~20 Hz is about 2 s.
 const TRACE_SAMPLES := 40
 
@@ -35,6 +42,14 @@ var mod_id := -1
 
 ## Newest live values for the generic trace, oldest first.
 var _trace: PackedFloat32Array = PackedFloat32Array()
+
+## Interpolation: the previous and latest payload snapshots with timestamps. `_interval`
+## tracks the observed payload cadence so the blend finishes just as the next sample lands.
+var _prev_state: Dictionary = {}
+var _last_state: Dictionary = {}
+var _last_stage := -1
+var _last_time := 0.0
+var _interval := 0.05
 
 
 func setup(p_device, p_mod_id: int) -> void:
@@ -69,7 +84,73 @@ func _on_states_changed(p_device) -> void:
 		_trace.append(float(state["value"]))
 		while _trace.size() > TRACE_SAMPLES:
 			_trace.remove_at(0)
+	_remember_state(state)
 	queue_redraw()
+
+## Keep the numeric snapshot pair the dot interpolates between. Stage changes (envelope
+## retriggers, idle) snap; a fresh stream after a gap starts with no previous sample.
+func _remember_state(state: Dictionary) -> void:
+	var now := _now()
+	if state.is_empty():
+		_prev_state = {}
+		_last_state = {}
+		_last_stage = -1
+		set_process(false)
+		return
+	if not _last_state.is_empty():
+		var raw := now - _last_time
+		if raw > 0.01:
+			_interval = clampf(lerpf(_interval, raw, 0.3), INTERP_MIN_INTERVAL, INTERP_MAX_INTERVAL)
+	_prev_state = _last_state
+	_last_state = {
+		"x": clampf(float(state.get("x", 0.0)), 0.0, 1.0),
+		"value": clampf(float(state["value"]), -1.0, 1.0),
+		"stage": int(state.get("stage", -1)),
+	}
+	_last_stage = int(state.get("stage", -1))
+	_last_time = now
+	set_process(true)
+
+## Blend the previous snapshot into the latest one as the next payload approaches.
+func _live_state() -> Dictionary:
+	if _last_state.is_empty():
+		return {}
+	if _prev_state.is_empty() or int(_prev_state.get("stage", -1)) != _last_stage:
+		return _last_state
+	var t := clampf((_now() - _last_time) / _interval, 0.0, 1.0)
+	var out := {
+		"x": _last_state["x"],
+		"value": lerpf(float(_prev_state["value"]), float(_last_state["value"]), t),
+		"stage": _last_stage,
+	}
+	if _is_lfo():
+		# Unwrap the phase across cycle boundaries, then wrap modulo one cycle: the dot runs
+		# forward and re-enters from the left edge instead of clamping at the right edge.
+		var px := float(_prev_state["x"])
+		var lx := float(_last_state["x"])
+		if lx - px < -0.5:
+			px -= 1.0
+		elif lx - px > 0.5:
+			px += 1.0
+		var phase := fmod(lerpf(px, lx, t), 1.0)
+		out["x"] = phase if phase >= 0.0 else phase + 1.0
+		# The dot rides the drawn curve at the interpolated phase; the value is not
+		# interpolated (lerping a square wave's end-of-cycle value looked wrong).
+		out["value"] = _last_state["value"]
+	return out
+
+func _now() -> float:
+	return Time.get_ticks_usec() / 1000000.0
+
+func _process(_delta: float) -> void:
+	if _last_state.is_empty() or not is_visible_in_tree():
+		set_process(false)
+		return
+	queue_redraw()
+	# Once the blend has reached the latest sample, coast until the next payload
+	# re-enables processing (a stopped stream leaves the dot parked at the sample).
+	if _now() - _last_time > _interval * 1.25:
+		set_process(false)
 
 
 func _on_modulator_changed(changed_mod_id: int) -> void:
@@ -208,20 +289,22 @@ func has_dot() -> bool:
 
 
 func _dot(mod: Modulator, rect: Rect2) -> Variant:
-	var state := ModLive.modulator_state(device, mod_id)
+	var state := _live_state()
 	if state.is_empty():
 		return null
 	if _is_lfo():
+		# Only the phase is live; the dot sits on the drawn curve at that phase, so it never
+		# leaves the wave (and never lerps a discontinuity like a square wave's cycle end).
 		var phase: float = clampf(float(state["x"]), 0.0, 1.0)
-		var value: float = clampf(float(state["value"]), -1.0, 1.0)
+		var value: float = _lfo_wave(mod, phase)
 		return rect.position + Vector2(phase * rect.size.x, (0.5 - 0.5 * value) * rect.size.y)
 	if _is_envelope():
 		return _envelope_dot(mod, rect, state)
-	# Generic kinds: the dot rides the newest trace point.
+	# Generic kinds: the dot rides the newest trace value, interpolated like the rest.
 	if _trace.is_empty():
 		return null
 	var lo := -1.0 if _bipolar() else 0.0
-	var y := (1.0 - (clampf(float(_trace[_trace.size() - 1]), lo, 1.0) - lo)) * rect.size.y
+	var y := (1.0 - (clampf(float(state["value"]), lo, 1.0) - lo)) * rect.size.y
 	return rect.position + Vector2(rect.size.x, y)
 
 
