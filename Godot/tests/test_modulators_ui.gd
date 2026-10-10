@@ -29,6 +29,10 @@ func run_tests() -> void:
 	_setup()
 	await _test_pane_tiles_and_add()
 	await _test_context_menu_routes()
+	await _test_column_major_grid()
+	await _test_square_sizing()
+	await _test_placeholder_add_and_max()
+	await _test_panel_selection_and_wire()
 	await _test_assign_reaches_child_not_sibling()
 	await _test_control_shows_only_focused_source()
 	await _test_esc_exits_assign()
@@ -43,8 +47,9 @@ func _setup() -> void:
 	_registry = load("res://data/DeviceRegistry.gd").new()
 	_registry._on_modulator_kind_received(_lfo_kind_args())
 	_registry._on_modulator_kind_received(_adsr_kind_args())
+	_registry._on_modulator_kind_received(["velocity", "Velocity", 0, 0])
 	var asset_registry: Object = root.get_node("AssetService").device_registry
-	for kind_id in ["lfo", "adsr"]:
+	for kind_id in ["lfo", "adsr", "velocity"]:
 		asset_registry.modulator_kinds[kind_id] = _registry.get_modulator_kind(kind_id)
 	_registry._on_builtin_info_received([
 		SYNTH_ID, "Synth", "instrument", "", 1, 0, 2, 0, "", 0,
@@ -117,6 +122,20 @@ func _kind_index(popup: PopupMenu, kind_id: String) -> int:
 			return i
 	return -1
 
+## A minimal `modulation` payload: no kind 0/1 records, one kind 2 display-state record
+## (mod id, stage, x, value) in the trailing ext block, as the engine writes it.
+func _modulation_payload(mod_id: int, x: float, value: float) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.append_array([0, 0])          # u16 record count = 0
+	b.append_array([1, 0])          # u16 ext count = 1
+	b.append(2)                    # kind 2
+	b.append(10)                    # record length
+	b.append(mod_id)
+	b.append(0)                     # stage
+	b.append_array(PackedFloat32Array([x]).to_byte_array())
+	b.append_array(PackedFloat32Array([value]).to_byte_array())
+	return b
+
 
 ## Container with two synth children plus a top-level sibling on a project channel.
 ## Returns `[container, a, b, lfo_mod, sibling]`.
@@ -145,8 +164,8 @@ func _test_pane_tiles_and_add() -> void:
 	await process_frame
 	_assert(pane._tiles.size() == 1 and pane._tiles[0].modulator == mod, "the pane builds a tile per modulator")
 
-	var popup: PopupMenu = pane._add_button.get_popup()
-	_assert(popup.item_count == 2, "the + menu lists the advertised kinds")
+	var popup: PopupMenu = pane._kind_menu
+	_assert(popup.item_count == 3, "the + menu lists the advertised kinds")
 	var index := _kind_index(popup, "adsr")
 	_assert(index >= 0, "the envelope kind is in the menu")
 	pane._on_add_kind(index)
@@ -175,6 +194,138 @@ func _test_context_menu_routes() -> void:
 	_assert(route_index >= 0, "the context menu lists the route")
 	tile._on_menu_id(route_index)
 	_assert(inst.get_modulator(mod.mod_id).routes.is_empty(), "the route entry disconnects it")
+	pane.queue_free()
+
+
+## A pane bound to a fresh synth instance with `n` modulators, laid out at `pane_size`.
+func _pane_bound(n: int, pane_size := Vector2(420, 330)) -> Array:
+	var inst = _instance()
+	var pane = _pane_script.new()
+	root.add_child(pane)
+	pane.size = pane_size
+	for i in range(n):
+		inst.add_modulator("lfo" if i == 0 else "velocity")
+	await pane.bind_to_device(inst)
+	await process_frame
+	await process_frame
+	return [pane, inst]
+
+
+## Column-major: panels fill column 0 top to bottom, placeholders trail.
+func _test_column_major_grid() -> void:
+	var s := await _pane_bound(0)
+	var pane = s[0]
+	var inst = s[1]
+	_assert(pane._grid.get_child_count() == 1, "an empty device shows one column")
+	var empty_column: VBoxContainer = pane._grid.get_child(0)
+	_assert(empty_column.get_child_count() == 3, "with three placeholder cells")
+	_assert(empty_column.get_child(0) is Button, "empty cells are placeholder buttons")
+
+	for i in range(3):
+		inst.add_modulator("velocity")
+		await process_frame
+	await process_frame
+	_assert(pane._grid.get_child_count() == 2, "three modulators grow a second column: %d" % pane._grid.get_child_count())
+	var column0: VBoxContainer = pane._grid.get_child(0)
+	for cell in column0.get_children():
+		_assert(cell is ModulatorPanel, "the first column holds the panels")
+	for cell in pane._grid.get_child(1).get_children():
+		_assert(cell is Button, "the second column holds only placeholders")
+
+	inst.add_modulator("velocity")
+	await process_frame
+	await process_frame
+	var column1: VBoxContainer = pane._grid.get_child(1)
+	_assert(pane._grid.get_child_count() == 2, "four modulators still fit two columns")
+	_assert(column1.get_child(0) is ModulatorPanel and column1.get_child(0).modulator == inst.modulators[3],
+		"panel 3 sits at column 1, row 0")
+	_assert(column1.get_child(1) is Button and column1.get_child(2) is Button, "with two trailing placeholders")
+
+	inst.remove_modulator(inst.modulators[3].mod_id)
+	await process_frame
+	await process_frame
+	_assert(pane._grid.get_child_count() == 2, "deleting 4 → 3 keeps two columns")
+	inst.remove_modulator(inst.modulators[2].mod_id)
+	await process_frame
+	await process_frame
+	_assert(pane._grid.get_child_count() == 1, "deleting 3 → 2 shrinks to one column")
+	pane.queue_free()
+
+
+## Square cells sized from the pane height, applied only when the side changes.
+func _test_square_sizing() -> void:
+	var s := await _pane_bound(4)
+	var pane = s[0]
+	var side: int = pane._side
+	_assert(side >= 56 and side <= 110, "the side is clamped to 56..110 (%d)" % side)
+	_assert(pane._layout_count > 0, "the layout ran")
+	var count_before: int = pane._layout_count
+	pane._layout_panel_size()
+	pane._layout_panel_size()
+	_assert(pane._layout_count == count_before, "the same height doesn't re-trigger a layout")
+	for column in pane._grid.get_children():
+		for cell in column.get_children():
+			_assert(cell.custom_minimum_size.x == side and cell.custom_minimum_size.y == side,
+				"every cell is %d × %d" % [side, side])
+			_assert(absf(cell.size.x - cell.size.y) <= 1.0, "and laid out square")
+	var column0: VBoxContainer = pane._grid.get_child(0)
+	var a: Control = column0.get_child(0)
+	var b: Control = column0.get_child(1)
+	_assert(absf(b.position.y - (a.position.y + a.size.y) - pane.SEP) <= 1.0, "vertical neighbours are 2 px apart")
+	var col1: VBoxContainer = pane._grid.get_child(1)
+	_assert(absf(col1.position.x - (column0.position.x + column0.size.x) - pane.SEP) <= 1.0, "columns are 2 px apart")
+	pane.queue_free()
+
+
+## Placeholders add through the shared kind menu; the grid caps at MAX_MODULATORS.
+func _test_placeholder_add_and_max() -> void:
+	var s := await _pane_bound(0)
+	var pane = s[0]
+	var inst = s[1]
+	for placeholder in pane._placeholders:
+		_assert(not placeholder.disabled and placeholder.tooltip_text == "Add modulator",
+			"placeholders offer the + menu")
+	var index := _kind_index(pane._kind_menu, "lfo")
+	_assert(index >= 0, "the placeholder menu lists every registry kind")
+	_assert(_kind_index(pane._kind_menu, "adsr") >= 0, "including the envelope kind")
+	pane._on_add_kind(index)
+	await process_frame
+	await process_frame
+	_assert(inst.modulators.size() == 1, "picking a kind appends the modulator")
+	_assert(pane._selected_mod_id == inst.modulators[0].mod_id, "and selects it")
+	_assert(pane._detail_title != null and pane._detail_title.text == inst.modulators[0].name,
+		"the detail column shows the new modulator")
+
+	for i in range(7):
+		inst.add_modulator("velocity")
+	await process_frame
+	await process_frame
+	_assert(pane._placeholders.size() == 1, "at 8 modulators exactly one placeholder remains")
+	_assert(pane._placeholders[0].disabled, "and it is disabled")
+	_assert(pane._placeholders[0].tooltip_text == "Maximum of 8 modulators", "with the capacity tooltip")
+	pane._on_add_kind(index)
+	_assert(inst.modulators.size() == 8, "the disabled menu still can't exceed the maximum")
+	pane.queue_free()
+
+
+## Selection swaps the DeviceCard variation; the wire button is centered at the bottom.
+func _test_panel_selection_and_wire() -> void:
+	var s := await _pane_bound(1)
+	var pane = s[0]
+	var inst = s[1]
+	var tile: ModulatorPanel = pane._tiles[0]
+	pane._select(-1)
+	await process_frame
+	_assert(tile.theme_type_variation == &"DeviceCard", "an unselected panel is a DeviceCard")
+	pane._select(inst.modulators[0].mod_id)
+	_assert(tile.theme_type_variation == &"DeviceCardSelected", "the selected panel is DeviceCardSelected")
+	_assert(tile.get_theme_stylebox("panel") != null, "the variation provides a style")
+	pane._select(-1)
+	_assert(tile.theme_type_variation == &"DeviceCard", "deselecting restores DeviceCard")
+	var wire_rect: Rect2 = tile._wire.get_global_rect()
+	var panel_rect: Rect2 = tile.get_global_rect()
+	_assert(absf(wire_rect.get_center().x - panel_rect.get_center().x) <= 1.0, "the wire button is centered")
+	_assert(wire_rect.end.y <= panel_rect.end.y + 0.5, "and sits at the bottom")
 	pane.queue_free()
 
 
@@ -274,7 +425,7 @@ func _test_panel_tab_and_dot() -> void:
 	root.add_child(panel)
 	await process_frame
 	var inst = _instance()
-	inst.add_modulator("lfo")
+	var mod = inst.add_modulator("lfo")
 	await panel.bind_to_device(inst)
 	await process_frame
 	_assert(panel.modulators_button.visible, "the Modulators tab is available")
@@ -282,6 +433,20 @@ func _test_panel_tab_and_dot() -> void:
 	panel._update_tab_panes()
 	_assert(panel.modulators_pane.visible, "pressing the tab shows the pane")
 	_assert(panel.modulators._tiles.size() == 1, "the pane built a tile")
+	for i in 10:
+		await process_frame
+	# The pane was built hidden; the reveal settles its height. The display must be sized
+	# from the SETTLED height (it was sized from a transient one and drew nothing at
+	# zero height until a click resized the pane).
+	var tile: ModulatorPanel = panel.modulators._tiles[0]
+	_assert(tile._display.size.y > 0.0,
+		"revealing the tab sizes the display (got %s)" % str(tile._display.size))
+	# A stream payload lights the display's dot without any further interaction.
+	ModLive.view_shown(inst)
+	ModLive.holder()._on_data(inst.osc_path(), "modulation", _modulation_payload(mod.mod_id, 0.25, 0.5))
+	await process_frame
+	_assert(tile._display.has_dot(), "the display has its live dot after a payload")
+	ModLive.view_hidden(inst)
 	panel._set_collapsed(true)
 	_assert(panel._mod_dot.visible, "the collapsed header marks a device with modulators")
 	panel.free()

@@ -1,5 +1,7 @@
-## The Modulators pane of the DevicePanel (spec 018): a grid of `ModulatorTile`s with a **+**
-## button on the left, and the selected modulator's settings on the right.
+## The Modulators pane of the DevicePanel (spec 018, rebuilt in 033): a column-major grid of square
+## modulator panels with trailing `+` placeholder cells, and the selected modulator's settings on
+## the right. The device lane's horizontal scroll is the only scrolling surface — the pane widens
+## one column per growth step.
 ##
 ## The detail column builds its controls from the modulator kind's parameter descriptors with the
 ## existing component set: `EnvelopeControl` for `adsr` and `ad`, normalized knobs and enum
@@ -15,19 +17,32 @@ const ENV_STAGE_PARAM := {
 }
 ## LFO parameter display order: Rate, Sync, Shape, Retrigger, Phase.
 const LFO_ORDER := [10, 20, 0, 30, 40]
-const TILE_COLUMNS := 2
+
+## Grid geometry: `ROWS`-cell columns of square cells (`SEP` apart), sized from the pane's height.
+const ROWS := 3
+const SEP := 2
+const PANEL_MIN_SIDE := 56
+const PANEL_MAX_SIDE := 110
 
 ## Selected modulator per device instance id, remembered while the session lives.
 static var _remembered: Dictionary = {}
 
 var device: DeviceInstance = null
 
-var _grid: GridContainer = null
-var _grid_scroll: ChevronScrollContainer = null
-var _add_button: MenuButton = null
+var _header: HBoxContainer = null
+var _grid: HBoxContainer = null
+var _kind_menu: PopupMenu = null
 var _detail: VBoxContainer = null
 var _detail_scroll: ScrollContainer = null
-var _tiles: Array[ModulatorTile] = []
+var _tiles: Array[ModulatorPanel] = []
+var _placeholders: Array[Button] = []
+## Square cell side applied to every cell; 0 until the first layout.
+var _side := 0
+## Times `_layout_panel_size` actually applied a side (stays put when the height didn't change).
+var _layout_count := 0
+## Swap drag in progress (started by a panel, resolved and committed here in `_input`).
+var _drag: ModulatorDrag = null
+var _indicator: DropIndicator = null
 var _selected_mod_id := -1
 ## Detail controls by parameter id (knobs, dropdowns, toggles), refreshed from the model.
 var _controls: Dictionary = {}
@@ -58,9 +73,10 @@ func bind_to_device(dev) -> void:
 	device.modulator_added.connect(_on_modulator_added)
 	device.modulator_removed.connect(_on_modulator_removed)
 	device.modulator_changed.connect(_on_modulator_changed)
+	device.modulators_reordered.connect(_on_modulators_reordered)
 	device.route_changed.connect(_on_route_changed)
 	device.name_changed.connect(_on_device_name_changed)
-	_rebuild_tiles()
+	_rebuild_grid()
 
 
 func unbind() -> void:
@@ -74,12 +90,14 @@ func unbind() -> void:
 		device.modulator_removed.disconnect(_on_modulator_removed)
 	if device.modulator_changed.is_connected(_on_modulator_changed):
 		device.modulator_changed.disconnect(_on_modulator_changed)
+	if device.modulators_reordered.is_connected(_on_modulators_reordered):
+		device.modulators_reordered.disconnect(_on_modulators_reordered)
 	if device.route_changed.is_connected(_on_route_changed):
 		device.route_changed.disconnect(_on_route_changed)
 	if device.name_changed.is_connected(_on_device_name_changed):
 		device.name_changed.disconnect(_on_device_name_changed)
 	device = null
-	_clear_tiles()
+	_clear_grid()
 	_clear_detail()
 
 
@@ -94,36 +112,28 @@ func _build_structure() -> void:
 	var left := VBoxContainer.new()
 	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	left.custom_minimum_size.x = 180
+	left.add_theme_constant_override("separation", SEP)
 	add_child(left)
 
-	var header := HBoxContainer.new()
+	_header = HBoxContainer.new()
 	var title := Label.new()
 	title.text = "Modulators"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-	_add_button = MenuButton.new()
-	_add_button.text = "+"
-	_add_button.flat = true
-	_add_button.focus_mode = Control.FOCUS_NONE
-	_add_button.tooltip_text = "Add a modulator"
-	_add_button.get_popup().id_pressed.connect(_on_add_kind)
-	header.add_child(_add_button)
-	left.add_child(header)
+	_header.add_child(title)
+	left.add_child(_header)
 
-	# The tile list pages with chevron buttons (as the mixer's sends do); the selected modulator's
-	# settings stay a separate panel to the right.
-	_grid_scroll = ChevronScrollContainer.new()
-	_grid_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_grid_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_grid_scroll.follow_focus = true
-	_grid_scroll.snap_to_items = true
-	_grid_scroll.reserve_button_space = true
-	_grid_scroll.fade_hidden_items = true
-	_grid = GridContainer.new()
-	_grid.columns = TILE_COLUMNS
+	# Column-major grid: an HBox of 3-cell columns, so cell `i` sits in column `i / 3`, row `i % 3`.
+	# No scrolling here — the device lane scrolls the pane horizontally.
+	_grid = HBoxContainer.new()
+	_grid.add_theme_constant_override("separation", SEP)
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_grid_scroll.add_child(_grid)
-	left.add_child(_grid_scroll)
+	left.add_child(_grid)
+
+	# The shared `+` menu: every placeholder opens it filled with the registry's kinds.
+	_kind_menu = PopupMenu.new()
+	_kind_menu.theme_type_variation = &"ContextMenuList"
+	_kind_menu.id_pressed.connect(_on_add_kind)
+	add_child(_kind_menu)
 
 	_detail_scroll = ScrollContainer.new()
 	var detail_scroll := _detail_scroll
@@ -141,18 +151,23 @@ func _build_structure() -> void:
 	detail_scroll.add_child(_detail)
 	add_child(detail_scroll)
 
+	# The pane's own `resized` fires before its children are re-fitted, so reading the grid's
+	# parent height there sees the previous layout and the final size is never observed (the
+	# pane settles and never resizes again — blank displays after a reveal until something
+	# else resizes it). The parent's `resized` fires once its height is final.
+	left.resized.connect(_layout_panel_size)
 
-## Advertised kinds in the + menu (and again when the registry re-announces them).
+
+## Advertised kinds in the placeholder's `+` menu (refreshed when the registry re-announces them).
 func _refresh_kinds() -> void:
-	if _add_button == null:
+	if _kind_menu == null:
 		return
-	var popup := _add_button.get_popup()
-	popup.clear()
+	_kind_menu.clear()
 	var registry = _registry()
 	var kinds: Array = registry.get_modulator_kinds() if registry != null else []
 	for kind in kinds:
-		popup.add_item(String(kind.get("name", kind.get("id", ""))), popup.item_count)
-		popup.set_item_metadata(popup.item_count - 1, String(kind.get("id", "")))
+		_kind_menu.add_item(String(kind.get("name", kind.get("id", ""))), _kind_menu.item_count)
+		_kind_menu.set_item_metadata(_kind_menu.item_count - 1, String(kind.get("id", "")))
 
 
 func _registry():
@@ -164,28 +179,114 @@ func _registry():
 
 
 # ============================================================================
-# TILES
+# GRID (panels and placeholder cells)
 # ============================================================================
 
-func _rebuild_tiles() -> void:
-	_clear_tiles()
+## Rebuild the column-major grid: `C = max(1, n / 3 + 1)` columns of `ROWS` cells, panels first in
+## array order, then `3·C − n` placeholder cells (1–3). Cheap at ≤ 8 entries. Rebuilt on
+## add/remove/reorder; the selection is kept by `mod_id`.
+func _rebuild_grid() -> void:
+	_clear_grid()
 	if device == null:
 		return
-	for mod in device.modulators:
-		var tile := ModulatorTile.new()
-		_grid.add_child(tile)
-		tile.setup(mod)
-		tile.selected.connect(_on_tile_clicked)
-		_tiles.append(tile)
+	var n := device.modulators.size()
+	var columns := maxi(1, n / ROWS + 1)
+	for c in columns:
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", SEP)
+		_grid.add_child(column)
+		for r in ROWS:
+			var i: int = c * ROWS + r
+			if i < n:
+				_add_panel(column, device.modulators[i])
+			else:
+				_add_placeholder(column)
+	if _side > 0:
+		_apply_side()
+	else:
+		# First layout: the parent's height isn't final yet (a `resized` may have fired before the
+		# structure existed), so size the cells after this frame's layout pass.
+		_layout_panel_size.call_deferred()
+	# At the capacity limit the last placeholder (always one at 8) is disabled: REQ-002 keeps
+	# placeholders non-zero without offering an add `add_modulator` would refuse.
+	var full := n >= device.MAX_MODULATORS
+	for placeholder in _placeholders:
+		placeholder.disabled = full
+		placeholder.tooltip_text = "Maximum of 8 modulators" if full else "Add modulator"
 	if _selected_mod_id < 0 or device.get_modulator(_selected_mod_id) == null:
 		_selected_mod_id = int(_remembered.get(device.id, device.modulators[0].mod_id if not device.modulators.is_empty() else -1))
 	_refresh_selection()
 
 
-func _clear_tiles() -> void:
-	for tile in _tiles:
-		tile.queue_free()
+func _add_panel(column: VBoxContainer, mod: Modulator) -> void:
+	var panel := ModulatorPanel.new()
+	column.add_child(panel)
+	panel.setup(mod)
+	panel.selected.connect(_on_panel_clicked)
+	panel.drag_started.connect(_on_panel_drag_started)
+	_tiles.append(panel)
+
+
+## Flat `+` cell: opens the shared kind menu. Sizing (icon at ~40 % of the side) happens in
+## `_apply_side`; placement always trails the panels, so an add lands in the first free cell.
+func _add_placeholder(column: VBoxContainer) -> void:
+	var button := Button.new()
+	button.theme_type_variation = &"DeviceCard"
+	button.focus_mode = Control.FOCUS_NONE
+	var plus := TextureRect.new()
+	plus.texture = load("res://assets/icons/plus.svg")
+	plus.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	plus.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	plus.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(plus)
+	button.pressed.connect(_on_placeholder_pressed.bind(button))
+	_placeholders.append(button)
+	column.add_child(button)
+
+
+func _clear_grid() -> void:
+	# Detach before queue_free so the grid's child count is correct immediately (queued deletions
+	# land at the end of the frame, but a rebuild can happen several times within one). Freeing a
+	# column frees its cells; the panel/placeholder lists are tracked separately.
+	for column in _grid.get_children():
+		_grid.remove_child(column)
+		column.queue_free()
 	_tiles.clear()
+	_placeholders.clear()
+
+
+## Square sizing: the side is a function of the pane's height only (the device lane's height is
+## fixed), so cells stay square and 3·side + 2·SEP ≤ avail_h holds by construction — setting the
+## minimum size can't grow the pane and re-fire `resized`.
+func _layout_panel_size() -> void:
+	if _grid == null:
+		return
+	var parent := _grid.get_parent() as Control
+	var avail := parent.size.y - _header.get_combined_minimum_size().y - SEP
+	var side := clampi(int(floor((avail - 2.0 * SEP) / ROWS)), PANEL_MIN_SIDE, PANEL_MAX_SIDE)
+	if side == _side:
+		return
+	_side = side
+	_layout_count += 1
+	_apply_side()
+
+
+## Apply the current side to every cell (panels and placeholders), plus the `+` icon at ~40 %.
+func _apply_side() -> void:
+	var cell := Vector2(_side, _side)
+	for tile in _tiles:
+		tile.custom_minimum_size = cell
+		tile.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		tile.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	for placeholder in _placeholders:
+		placeholder.custom_minimum_size = cell
+		placeholder.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		placeholder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		if placeholder.get_child_count() > 0:
+			var plus: Control = placeholder.get_child(0)
+			var icon := float(_side) * 0.4
+			plus.custom_minimum_size = Vector2.ONE * icon
+			plus.position = (Vector2.ONE * float(_side) - Vector2.ONE * icon) * 0.5
 
 
 func _refresh_selection() -> void:
@@ -196,8 +297,8 @@ func _refresh_selection() -> void:
 	_refresh_detail()
 
 
-## A tile click: selects it, or deselects it when it already was (which hides the settings).
-func _on_tile_clicked(mod_id: int) -> void:
+## A panel click: selects it, or deselects it when it already was (which hides the settings).
+func _on_panel_clicked(mod_id: int) -> void:
 	_select(-1 if mod_id == _selected_mod_id else mod_id)
 
 
@@ -208,19 +309,25 @@ func _select(mod_id: int) -> void:
 	_refresh_selection()
 
 
+func _on_placeholder_pressed(button: Button) -> void:
+	if device == null or button.disabled:
+		return
+	_kind_menu.position = Vector2i(button.get_screen_position() + Vector2(0, button.size.y))
+	_kind_menu.popup()
+
+
 func _on_add_kind(id: int) -> void:
 	if device == null:
 		return
-	var popup := _add_button.get_popup()
-	if id < 0 or id >= popup.item_count:
+	if id < 0 or id >= _kind_menu.item_count:
 		return
-	var mod = device.add_modulator(String(popup.get_item_metadata(id)))
+	var mod = device.add_modulator(String(_kind_menu.get_item_metadata(id)))
 	if mod != null:
 		_select(mod.mod_id)
 
 
 func _on_modulator_added(mod: Modulator) -> void:
-	_rebuild_tiles()
+	_rebuild_grid()
 	_select(mod.mod_id)
 
 
@@ -231,7 +338,14 @@ func _on_modulator_removed(mod_id: int) -> void:
 		_selected_mod_id = -1
 		if device != null:
 			_remembered.erase(device.id)
-	_rebuild_tiles()
+	_rebuild_grid()
+
+
+## A reorder: rebuild (array order is display order) and recolour every modulated knob on the
+## device — arcs take their colour from the array index.
+func _on_modulators_reordered() -> void:
+	_rebuild_grid()
+	ModAssign.notify_changed()
 
 
 func _on_modulator_changed(mod_id: int) -> void:
@@ -253,6 +367,48 @@ func _on_device_name_changed(_new_name: String) -> void:
 
 
 # ============================================================================
+# SWAP DRAG
+# ============================================================================
+
+## A panel crossed the drag threshold: own the drag, follow the mouse, commit on release.
+func _on_panel_drag_started(mod: Modulator) -> void:
+	if device == null or _drag != null:
+		return
+	_drag = ModulatorDrag.start(self, mod)
+	if _drag != null:
+		_indicator = DropIndicator.place(self, _indicator, Rect2(), true)
+		DropIndicator.hide_indicator(_indicator)
+
+
+func _input(event: InputEvent) -> void:
+	if _drag == null:
+		return
+	if event is InputEventMouseMotion:
+		_drag.preview.global_position = event.global_position + Vector2(-12, -12)
+		var target := ModulatorDrag.resolve(self, _drag, event.global_position)
+		if target.is_valid():
+			DropIndicator.place(self, _indicator, target.indicator_rect, true)
+		else:
+			DropIndicator.hide_indicator(_indicator)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		var target := ModulatorDrag.resolve(self, _drag, event.global_position)
+		target.commit(_drag)
+		_end_drag()
+
+
+## Drop or cancel: free the ghost, hide the indicator. Nothing needs undoing — nothing moved.
+func _end_drag() -> void:
+	if _drag != null:
+		_drag.preview.queue_free()
+		_drag = null
+	DropIndicator.hide_indicator(_indicator)
+
+
+func _exit_tree() -> void:
+	_end_drag()
+
+
+# ============================================================================
 # DETAIL
 # ============================================================================
 
@@ -271,8 +427,8 @@ func _clear_detail() -> void:
 
 
 ## Push the model's values into the existing controls. Rebuilding here would free the control
-## being dragged (every edit echoes back as `modulator_changed`), so only rebuild when the
-## detail isn't showing the selected modulator.
+## being dragged (every edit echoes back as `modulator_changed`), so only rebuild when the detail
+## isn't showing the selected modulator.
 func _sync_detail() -> void:
 	var mod := device.get_modulator(_selected_mod_id) if device != null else null
 	if mod == null or _detail_mod_id != mod.mod_id:
@@ -366,6 +522,7 @@ func _build_param_control(mod: Modulator, param: DeviceParameter) -> void:
 		knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		knob.value_text_callback = func(v: float) -> String: return SimpleUnits.format(param, v, "")
 		knob.value_changed.connect(func(v: float): mod.set_param(param.id, v))
+		ModAssign.attach_modulator(knob, mod.owner(), mod.mod_id, param.id)
 		_controls[param.id] = knob
 		column.add_child(knob)
 	_param_boxes.append(column)

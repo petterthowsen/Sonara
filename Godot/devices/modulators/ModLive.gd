@@ -21,6 +21,9 @@ class_name ModLive extends RefCounted
 ## The engine data type this feed subscribes to.
 const DATA_TYPE := "modulation"
 
+## A payload with a trailing ext block arrived for `device` (its kind 2 states were replaced).
+signal modulator_states_changed(device)
+
 static var _instance: ModLive
 
 static func holder() -> ModLive:
@@ -42,6 +45,9 @@ var _controls := {}
 var _targets := {}
 ## Control key -> reporting DeviceInstance id -> record ({kind, values} or {kind, offset}).
 var _live := {}
+## DeviceInstance id -> {modulator id -> {stage, x, value}}: the latest `kind 2` states,
+## replaced wholesale per payload (spec 033).
+var _mod_states := {}
 
 var _osc: Node = null
 var _data_connected := false
@@ -64,7 +70,29 @@ static func attach(node: Control, device, param_id: int) -> void:
 		return
 	list.append(node)
 	h._controls[key] = list
-	h._targets[key] = {"device": device, "param": param_id}
+	h._targets[key] = {"device": device, "param": param_id, "mod_id": -1}
+	node.tree_exiting.connect(func() -> void: detach(node), CONNECT_ONE_SHOT)
+	h._apply(key)
+
+
+## Register `node` (a modulator detail knob) for live values of parameter `param_id` of the
+## modulator `mod_id` on `device` (spec 033). The base value comes from the modulator, and
+## `kind 3` records of the stream land on the control's key. Idempotent.
+static func attach_modulator(node: Control, device, mod_id: int, param_id: int) -> void:
+	if node == null or device == null or not is_instance_valid(device):
+		return
+	var mod = device.get_modulator(mod_id)
+	if mod == null:
+		return
+	var h := holder()
+	h._ensure_osc()
+	var key := "%d:mod%d:%d" % [device.get_instance_id(), mod_id, param_id]
+	var list: Array = h._controls.get(key, [])
+	if list.has(node):
+		return
+	list.append(node)
+	h._controls[key] = list
+	h._targets[key] = {"device": device, "param": param_id, "mod_id": mod_id}
 	node.tree_exiting.connect(func() -> void: detach(node), CONNECT_ONE_SHOT)
 	h._apply(key)
 
@@ -169,6 +197,8 @@ func _on_modulator_removed(_mod_id: int, dev) -> void:
 ## affected controls.
 func _clear_reporter(device) -> void:
 	var reporter_id: int = device.get_instance_id()
+	_mod_states.erase(reporter_id)
+	modulator_states_changed.emit(device)
 	var affected := {}
 	for key in _live.keys():
 		if _live[key].has(reporter_id):
@@ -265,6 +295,23 @@ func _on_data(osc_path: String, data_type: String, blob: PackedByteArray) -> voi
 			_live[target] = {}
 		_live[target][reporter_id] = record
 		affected[target] = true
+	var ext: Variant = _decode_ext(blob)
+	if ext != null:
+		# `kind 2` states are replaced wholesale per payload; `kind 3` offsets land on
+		# modulator-param control keys ("{device id}:mod{mod}:{param}").
+		var states := {}
+		for record in ext:
+			if record["kind"] == 2:
+				states[int(record["mod_id"])] = {"stage": int(record["stage"]),
+					"x": float(record["x"]), "value": float(record["value"])}
+			else:
+				var key := "%d:mod%d:%d" % [reporter_id, int(record["mod_id"]), int(record["param"])]
+				if not _live.has(key):
+					_live[key] = {}
+				_live[key][reporter_id] = {"kind": 0, "offset": float(record["offset"])}
+				affected[key] = true
+		_mod_states[reporter_id] = states
+		modulator_states_changed.emit(device)
 	for key in affected:
 		_apply(key)
 
@@ -304,9 +351,58 @@ static func _decode(blob: PackedByteArray) -> Array:
 		at += n * 4
 		if kind == 1:
 			out.append({"kind": 1, "path": path, "param": param, "values": values})
-		else:
+		elif kind == 0:
 			out.append({"kind": 0, "path": path, "param": param,
 				"offset": values[0] if n > 0 else 0.0})
+		# Neither 0 nor 1: a newer record kind — skip it rather than misread it as offsets.
+	return out
+
+
+## Decode the trailing ext block: `u16 ext_count`, then `{u8 kind, u8 len, bytes}` records.
+## Returns null when there is no block (an old-format payload), else the decoded records —
+## `kind 2`: `{kind, mod_id, stage, x, value}`; `kind 3`: `{kind, mod_id, param, offset}`;
+## unknown kinds are skipped by their length byte.
+static func _decode_ext(blob: PackedByteArray) -> Variant:
+	if blob.size() < 2:
+		return null
+	var count := blob.decode_u16(0)
+	var at := 2
+	for _i in count:
+		if at + 6 > blob.size():
+			return null
+		var kind := blob.decode_u8(at)
+		var depth := blob.decode_u8(at + 1)
+		at += 2
+		at += depth * 2
+		if at + 5 > blob.size():
+			return null
+		at += 4
+		var n := blob.decode_u8(at)
+		at += 1
+		if at + n * 4 > blob.size():
+			return null
+		at += n * 4
+	if at + 2 > blob.size():
+		return null
+	var ext_count := blob.decode_u16(at)
+	at += 2
+	var out: Array = []
+	for _i in ext_count:
+		if at + 2 > blob.size():
+			break
+		var kind := blob.decode_u8(at)
+		var len := blob.decode_u8(at + 1)
+		at += 2
+		if at + len > blob.size():
+			break
+		if kind == 2 and len >= 10:
+			out.append({"kind": 2, "mod_id": blob.decode_u8(at),
+				"stage": blob.decode_u8(at + 1),
+				"x": blob.decode_float(at + 2), "value": blob.decode_float(at + 6)})
+		elif kind == 3 and len >= 9:
+			out.append({"kind": 3, "mod_id": blob.decode_u8(at),
+				"param": blob.decode_u32(at + 1), "offset": blob.decode_float(at + 5)})
+		at += len
 	return out
 
 
@@ -354,7 +450,13 @@ func _apply(key: String) -> void:
 			var device = target.get("device")
 			var base := 0.5
 			if device != null and is_instance_valid(device):
-				base = device.get_parameter_normalized(int(target.get("param", 0)))
+				var mod_id: int = int(target.get("mod_id", -1))
+				if mod_id >= 0:
+					var mod = device.get_modulator(mod_id)
+					if mod != null:
+						base = mod.get_param(int(target.get("param", 0)))
+				else:
+					base = device.get_parameter_normalized(int(target.get("param", 0)))
 			values = PackedFloat32Array([clampf(base + offset, 0.0, 1.0)])
 		if not values.is_empty():
 			live_value = values[values.size() - 1]
@@ -375,6 +477,15 @@ func _apply(key: String) -> void:
 ## Control key for parameter `param_id` of `device`.
 static func _key(device, param_id: int) -> String:
 	return "%d:%d" % [device.get_instance_id(), param_id]
+
+
+## The latest live state of modulator `mod_id` on `device`: `{stage, x, value}`, or `{}`
+## when no record arrived (old engine, or before the first payload).
+static func modulator_state(device, mod_id: int) -> Dictionary:
+	if device == null or not is_instance_valid(device):
+		return {}
+	var states: Dictionary = holder()._mod_states.get(device.get_instance_id(), {})
+	return states.get(mod_id, {})
 
 
 ## `device` and every ancestor, device first.
@@ -409,3 +520,4 @@ static func reset() -> void:
 	h._controls.clear()
 	h._targets.clear()
 	h._live.clear()
+	h._mod_states.clear()

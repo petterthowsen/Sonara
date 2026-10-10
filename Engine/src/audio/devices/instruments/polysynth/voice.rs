@@ -18,7 +18,7 @@ use crate::audio::modulation::envelope::AdsrEnvelope;
 use crate::audio::modulation::kinds::{ModParams, ModulatorKind, LFO_RETRIGGER};
 use crate::audio::modulation::state::ModulatorState;
 use crate::audio::modulation::voice::VoiceModSpec;
-use crate::audio::modulation::MAX_MODULATORS;
+use crate::audio::modulation::{MAX_KIND_PARAMS, MAX_MODULATORS};
 use crate::audio::transport::Transport;
 
 /// Pitch, oscillator frequencies, modulation and the glide advance once per this many frames.
@@ -80,6 +80,10 @@ pub struct RenderCtx<'a> {
     pub params: &'a SynthParams,
     /// The device's modulator definitions and self-targeting routes.
     pub spec: &'a VoiceModSpec,
+    /// Offsets a mono-only modulator's route (the `cc` kind) pushed onto a per-voice
+    /// modulator's parameter, per modulator slot and table slot; added to every voice
+    /// (spec 033).
+    pub mod_offsets: &'a [[f32; MAX_KIND_PARAMS]; MAX_MODULATORS],
     /// Smoothed oscillator levels per frame.
     pub levels: [&'a [f32]; 2],
     pub noise_level: &'a [f32],
@@ -206,6 +210,9 @@ pub struct Voice {
     pub amp_env: AdsrEnvelope,
     /// This voice's modulators, one per device modulator slot (spec 018 Phase 6).
     pub mods: [Option<ModulatorState>; MAX_MODULATORS],
+    /// Per modulator slot, a bitmask of the parameter-table slots whose mod→mod offset this
+    /// voice last applied, so a route that drops out is zeroed (spec 033).
+    mod_touched: [u8; MAX_MODULATORS],
     /// Left and right. The right one only runs when the voice is actually stereo.
     filters: [Svf; 2],
     /// Current pitch in (fractional) MIDI notes, before oscillator transpose.
@@ -239,6 +246,7 @@ impl Voice {
             oscs: std::array::from_fn(|_| std::array::from_fn(|_| Oscillator::new())),
             amp_env: AdsrEnvelope::new(sample_rate),
             mods: std::array::from_fn(|_| None),
+            mod_touched: [0; MAX_MODULATORS],
             filters: [Svf::new(); 2],
             pitch: 60.0,
             target_pitch: 60.0,
@@ -267,6 +275,7 @@ impl Voice {
     /// Match this voice's modulators to the device spec. A slot whose kind is unchanged keeps
     /// its runtime (phase, envelope stage) and is only re-parameterized.
     pub fn configure_mods(&mut self, spec: &VoiceModSpec, sample_rate: f32) {
+        self.mod_touched = [0; MAX_MODULATORS];
         for slot in 0..MAX_MODULATORS {
             match spec.kind(slot) {
                 Some(kind) => {
@@ -536,6 +545,64 @@ impl Voice {
                     acc[slot] += route.amount * state.value();
                 }
             }
+        }
+        // Mod→mod offsets (spec 033): the mono path's one-step delay, per voice. Sources are
+        // the pre-advance values of the voice's own modulators; a mono-only source's offset
+        // (a `cc` kind, handed in by the wrapper) is added to every voice.
+        let mod_routes = ctx.spec.mod_routes();
+        let mut mod_sums = [[0.0f32; MAX_KIND_PARAMS]; MAX_MODULATORS];
+        let mut touched = [false; MAX_MODULATORS * MAX_KIND_PARAMS];
+        for route in mod_routes {
+            let Some(source) = self.mods.get(route.mod_slot).and_then(|s| s.as_ref()) else {
+                continue;
+            };
+            let Some(target_params) = ctx.spec.params(route.target_slot) else {
+                continue;
+            };
+            let Some(table_slot) = target_params.table().slot(route.param_id) else {
+                continue;
+            };
+            mod_sums[route.target_slot][table_slot] += route.amount * source.value();
+            touched[route.target_slot * MAX_KIND_PARAMS + table_slot] = true;
+        }
+        for (slot, offsets) in ctx.mod_offsets.iter().enumerate() {
+            for (table_slot, offset) in offsets.iter().enumerate() {
+                if *offset == 0.0 {
+                    continue;
+                }
+                mod_sums[slot][table_slot] += *offset;
+                touched[slot * MAX_KIND_PARAMS + table_slot] = true;
+            }
+        }
+        for slot in 0..MAX_MODULATORS {
+            let Some(state) = self.mods[slot].as_mut() else {
+                continue;
+            };
+            let Some(target_params) = ctx.spec.params(slot) else {
+                continue;
+            };
+            let mut now = 0u8;
+            for table_slot in 0..MAX_KIND_PARAMS {
+                if !touched[slot * MAX_KIND_PARAMS + table_slot] {
+                    continue;
+                }
+                if let Some(spec) = target_params.table().specs.get(table_slot) {
+                    state.set_mod_offset(spec.id, mod_sums[slot][table_slot]);
+                    now |= 1 << table_slot;
+                }
+            }
+            // Zero the parameter offsets whose routes dropped out since the last chunk.
+            let stale = self.mod_touched[slot] & !now;
+            if stale != 0 {
+                for table_slot in 0..MAX_KIND_PARAMS {
+                    if stale >> table_slot & 1 == 1 {
+                        if let Some(spec) = target_params.table().specs.get(table_slot) {
+                            state.set_mod_offset(spec.id, 0.0);
+                        }
+                    }
+                }
+            }
+            self.mod_touched[slot] = now;
         }
         // Modulators keep running even with no routes, so their state is ready the moment one
         // appears (and a free LFO stays in phase).

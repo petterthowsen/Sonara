@@ -18,7 +18,8 @@
 //! (`mod/{mod_id}/param/{id}`, stored but not evaluated until Phase 9).
 
 use super::matrix::ModMatrix;
-use super::voice::{VoiceModSpec, VoiceRoute};
+use super::state::OFFSET_EPSILON;
+use super::voice::{VoiceModRoute, VoiceModSpec, VoiceRoute};
 use super::{ModulatorKind, ModulatorState, MAX_MODULATORS, MAX_ROUTES};
 use crate::audio::devices::container::{
     copy_interleaved, device_at_path_mut, insert_device, remove_device,
@@ -40,10 +41,6 @@ pub const CONTROL_STEP: usize = 64;
 
 /// Notes the wrapper holds between a `send_note_event` and the block that consumes them.
 const MIDI_QUEUE: usize = 256;
-
-/// Smallest offset change worth pushing to a device (below it the parameter ramp would just be
-/// restarted for nothing).
-const OFFSET_EPSILON: f32 = 1e-7;
 
 /// A queued note event, with the frame offset it was sent with.
 #[derive(Clone, Copy)]
@@ -162,6 +159,13 @@ pub struct ModulatedDevice {
     /// is reported by the wrapper that owns that route.
     contrib: [(ModTarget, f32); MAX_ROUTES],
     contrib_len: usize,
+    /// This step's mod→mod offsets per target `(mod_id, param_id)`, for the kind 3 stream
+    /// records (spec 033).
+    mod_contrib: [((u8, ParamId), f32); MAX_ROUTES],
+    mod_contrib_len: usize,
+    /// Mod→mod offsets applied last step, so a dropped route zeroes the offset it fed.
+    mod_applied: [((u8, ParamId), f32); MAX_ROUTES],
+    mod_applied_len: usize,
     /// `modulation` data stream state: subscribed, frames since the last payload, and the
     /// send interval. The stream always sends at that rate while subscribed, even with no
     /// records, so the UI can drop stale entries.
@@ -195,6 +199,10 @@ impl ModulatedDevice {
             values: [0.0; MAX_MODULATORS],
             contrib: [(NO_TARGET, 0.0); MAX_ROUTES],
             contrib_len: 0,
+            mod_contrib: [((0, 0), 0.0); MAX_ROUTES],
+            mod_contrib_len: 0,
+            mod_applied: [((0, 0), 0.0); MAX_ROUTES],
+            mod_applied_len: 0,
             stream_subscribed: false,
             stream_frames: 0,
             stream_interval: mod_interval(sample_rate),
@@ -320,7 +328,14 @@ impl ModulatedDevice {
         }
         let contrib = self.contrib;
         let contrib_len = self.contrib_len;
-        let mut bytes = Vec::with_capacity(2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4));
+        let mod_contrib = self.mod_contrib;
+        let mod_contrib_len = self.mod_contrib_len;
+        // Fixed maximum: kind 0/1 records + the trailing block (2 header bytes, 8 × kind 2 at
+        // 12 bytes, MAX_ROUTES × kind 3 at 11 bytes), so the audio-thread payload never
+        // reallocates.
+        let mut bytes = Vec::with_capacity(
+            2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4) + 2 + MAX_MODULATORS * 12 + MAX_ROUTES * 11,
+        );
         bytes.extend_from_slice(&((contrib_len + poly_len) as u16).to_le_bytes());
         for i in 0..contrib_len {
             let (target, offset) = contrib[i];
@@ -349,6 +364,29 @@ impl ModulatedDevice {
             for value in values.iter().take(count) {
                 bytes.extend_from_slice(value.to_le_bytes().as_slice());
             }
+        }
+        // Trailing block (spec 033): `u16 ext_count`, then `{u8 kind, u8 len, bytes}` records.
+        // Old decoders stop before it; unknown kinds are skippable via `len`.
+        let occupied = self.mods.iter().filter(|m| m.is_some()).count();
+        bytes.extend_from_slice(&((occupied + mod_contrib_len) as u16).to_le_bytes());
+        // kind 2 — modulator display state (12 bytes): mod id, stage, x, value.
+        for (mod_id, state) in self.mods.iter().enumerate() {
+            let Some(state) = state else { continue };
+            let (stage, x, value) = state.display_state();
+            bytes.push(2);
+            bytes.push(10);
+            bytes.push(mod_id as u8);
+            bytes.push(stage);
+            bytes.extend_from_slice(&x.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        // kind 3 — mod→mod parameter offset (11 bytes): mod id, param id, offset.
+        for &((mod_id, param_id), offset) in &mod_contrib[..mod_contrib_len] {
+            bytes.push(3);
+            bytes.push(9);
+            bytes.push(mod_id);
+            bytes.extend_from_slice(&param_id.to_le_bytes());
+            bytes.extend_from_slice(&offset.to_le_bytes());
         }
         bytes
     }
@@ -403,6 +441,32 @@ impl ModulatedDevice {
             };
             spec.route_len += 1;
         }
+        // Mod→mod routes whose source and target both exist per voice (spec 033 D1); a
+        // mono-only kind on either end rides the mono pass instead.
+        for route in self.routes.routes() {
+            let ModTarget::Modulator(target_id, param_id) = self.targets[route.slot] else {
+                continue;
+            };
+            let target_slot = target_id as usize;
+            let (Some(source), Some(target)) =
+                (&self.mods[route.mod_slot], &self.mods[target_slot])
+            else {
+                continue;
+            };
+            if source.kind().is_mono_only() || target.kind().is_mono_only() {
+                continue;
+            }
+            if spec.mod_route_len == MAX_ROUTES {
+                break;
+            }
+            spec.mod_routes[spec.mod_route_len] = VoiceModRoute {
+                mod_slot: route.mod_slot,
+                target_slot,
+                param_id,
+                amount: route.amount,
+            };
+            spec.mod_route_len += 1;
+        }
         self.dev_mut().set_voice_modulation(&spec);
     }
 
@@ -415,6 +479,71 @@ impl ModulatedDevice {
     /// offsets as frame-stamped events (an async inner: a CLAP plugin keeps whole blocks) instead
     /// of the plain `set_param_mod`.
     fn control_step_impl(&mut self, frames: usize, base: usize, stamped: bool) {
+        // Mod→mod routes sum from the previous step's values and are applied before the
+        // advance (spec 033): the one-step delay makes evaluation independent of slot and
+        // array order, and cycles bounded delayed feedback.
+        let mut sums = [(0u8, 0u32, 0.0f32); MAX_ROUTES];
+        let mut sums_len = 0;
+        for route in self.routes.routes() {
+            let ModTarget::Modulator(mod_id, param_id) = self.targets[route.slot] else {
+                continue;
+            };
+            let contribution = route.amount * self.values[route.mod_slot];
+            if let Some(entry) = sums[..sums_len]
+                .iter_mut()
+                .find(|(m, p, _)| *m == mod_id && *p == param_id)
+            {
+                entry.2 += contribution;
+            } else if sums_len < MAX_ROUTES {
+                sums[sums_len] = (mod_id, param_id, contribution);
+                sums_len += 1;
+            }
+        }
+        // Zero the offsets whose routes dropped out (a route removal is a zero amount).
+        let old_mods = self.mod_applied;
+        let old_mods_len = self.mod_applied_len;
+        for &((target_mod, target_param), _) in &old_mods[..old_mods_len] {
+            if !sums[..sums_len]
+                .iter()
+                .any(|(m, p, _)| (*m, *p) == (target_mod, target_param))
+            {
+                if let Some(state) = self.mods[target_mod as usize].as_mut() {
+                    state.set_mod_offset(target_param, 0.0);
+                }
+            }
+        }
+        self.mod_applied_len = 0;
+        self.mod_contrib_len = 0;
+        for &(mod_id, param_id, sum) in &sums[..sums_len] {
+            if let Some(state) = self.mods[mod_id as usize].as_mut() {
+                state.set_mod_offset(param_id, sum);
+            }
+            self.mod_applied[self.mod_applied_len] = ((mod_id, param_id), sum);
+            self.mod_applied_len += 1;
+            self.mod_contrib[self.mod_contrib_len] = ((mod_id, param_id), sum);
+            self.mod_contrib_len += 1;
+            // A mono-only source (the `cc` kind) has no per-voice state: hand its offset to a
+            // voice-modulating inner device, which adds it to every voice (spec 033 D1).
+            if self.voice_mod {
+                let mut push_voice = false;
+                for route in self.routes.routes() {
+                    if self.targets[route.slot] == ModTarget::Modulator(mod_id, param_id) {
+                        push_voice = self.mods[route.mod_slot]
+                            .as_ref()
+                            .is_some_and(|state| state.kind().is_mono_only())
+                            && self.mods[mod_id as usize]
+                                .as_ref()
+                                .is_some_and(|state| !state.kind().is_mono_only());
+                        break;
+                    }
+                }
+                if push_voice {
+                    self.dev_mut()
+                        .set_voice_mod_param_offset(mod_id as usize, param_id, sum);
+                }
+            }
+        }
+
         self.advance(frames);
 
         let mut acc = [0.0f32; MAX_ROUTES];
@@ -745,6 +874,15 @@ impl Modulated for ModulatedDevice {
                 count += 1;
             }
         }
+        // Drop every route into it as well (spec 033): a modulator added later that reuses
+        // the id must not inherit the dangling routes.
+        for (i, route) in self.routes.routes().iter().enumerate() {
+            if matches!(self.targets[route.slot], ModTarget::Modulator(m, _) if m as usize == slot)
+            {
+                to_clear[count] = i;
+                count += 1;
+            }
+        }
         for i in (0..count).rev() {
             let route = self.routes.routes()[to_clear[i]];
             let _ = self
@@ -759,6 +897,8 @@ impl Modulated for ModulatedDevice {
         self.reset_offsets();
         self.mods = [None; MAX_MODULATORS];
         self.routes.clear();
+        self.mod_applied_len = 0;
+        self.mod_contrib_len = 0;
         self.push_voice_mod_spec();
     }
 
@@ -1073,6 +1213,13 @@ impl AudioDevice for ModulatedDevice {
         self.dev_mut().set_voice_modulation(spec);
     }
 
+    /// A mono-only modulator's (the `cc` kind) offset onto a per-voice modulator's parameter,
+    /// handed to the inner device so it reaches every voice (spec 033).
+    fn set_voice_mod_param_offset(&mut self, mod_slot: usize, param_id: ParamId, offset: f32) {
+        self.dev_mut()
+            .set_voice_mod_param_offset(mod_slot, param_id, offset);
+    }
+
     fn parameter_group(&self, param_id: ParamId) -> &'static str {
         self.dev().parameter_group(param_id)
     }
@@ -1273,9 +1420,7 @@ mod tests {
         ParamInfo,
     };
     use crate::audio::dsp::test_util::{render, stereo, white_noise};
-    use crate::audio::modulation::kinds::{
-        CC_NUMBER, CC_SMOOTH, ENV_ATTACK, ENV_RELEASE, LFO_RATE,
-    };
+    use crate::audio::modulation::kinds::{CC_NUMBER, CC_SMOOTH, ENV_RELEASE, LFO_RATE};
     use std::any::Any;
     use std::time::Duration;
 
@@ -1459,16 +1604,15 @@ mod tests {
     }
 
     #[test]
-    fn modulator_to_modulator_routes_are_stored_but_not_evaluated() {
+    fn a_mod_to_mod_route_changes_its_target_one_control_step_later() {
+        // Modulator 0 (an LFO) is routed to modulator 1's rate; modulator 1 (an LFO) drives
+        // the delay mix (spec 033: mod-to-mod routes are evaluated, one step of delay).
         let input = stereo(&white_noise(2_400, 0.5, 4));
 
-        // Modulator 0 (an envelope) is routed to modulator 1's rate; modulator 1 (an LFO) drives
-        // the delay mix. If the mod-to-mod route were evaluated, the delay output would change.
         let mut reference_devices: Vec<Box<dyn AudioDevice>> = vec![delay()];
         wrap(&mut reference_devices);
         {
             let m = reference_devices[0].as_modulated_mut().unwrap();
-            m.add_modulator(0, ModulatorKind::Adsr).unwrap();
             m.add_modulator(1, ModulatorKind::Lfo).unwrap();
             m.set_modulator_route(1, "param/41", 0.5).unwrap();
         }
@@ -1478,7 +1622,7 @@ mod tests {
         wrap(&mut devices);
         {
             let m = devices[0].as_modulated_mut().unwrap();
-            m.add_modulator(0, ModulatorKind::Adsr).unwrap();
+            m.add_modulator(0, ModulatorKind::Lfo).unwrap();
             m.add_modulator(1, ModulatorKind::Lfo).unwrap();
             m.set_modulator_route(1, "param/41", 0.5).unwrap();
             let amount = m.set_modulator_route(0, "mod/1/param/10", 0.5).unwrap();
@@ -1486,13 +1630,99 @@ mod tests {
             assert!(m
                 .modulator_routes()
                 .contains(&(0, "mod/1/param/10".to_string(), 0.5)));
-            assert!(m.get_modulator_param(1, ENV_ATTACK).is_some());
+            assert!(m.get_modulator_param(1, LFO_RATE).is_some());
         }
         let modulated = render(devices[0].as_mut(), &input, &[512]);
-        assert_eq!(
+        assert_ne!(
             modulated, reference,
-            "a modulator-to-modulator route was evaluated before Phase 9"
+            "the modulator-to-modulator route had no effect"
         );
+
+        // The one-step delay: the first step sums the previous (zero) values, the second
+        // carries A's contribution.
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+        m.add_modulator(1, ModulatorKind::Lfo).unwrap();
+        m.set_modulator_route(0, "mod/1/param/10", 0.5).unwrap();
+        m.control_step(CONTROL_STEP);
+        assert!(
+            m.mod_contrib[..m.mod_contrib_len]
+                .iter()
+                .all(|(_, off)| *off == 0.0),
+            "the first step used stale values"
+        );
+        m.control_step(CONTROL_STEP);
+        assert!(
+            m.mod_contrib[..m.mod_contrib_len]
+                .iter()
+                .any(|(_, off)| off.abs() > 1e-3),
+            "A's contribution never arrived"
+        );
+        // The target's base is untouched.
+        assert!(m.get_modulator_param(1, LFO_RATE).is_some());
+    }
+
+    #[test]
+    fn a_mod_to_mod_cycle_stays_bounded() {
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+        m.add_modulator(1, ModulatorKind::Lfo).unwrap();
+        m.set_modulator_route(0, "mod/1/param/10", 0.5).unwrap();
+        m.set_modulator_route(1, "mod/0/param/10", 0.5).unwrap();
+        let steps = (10.0 * SR) as usize / CONTROL_STEP;
+        for step in 0..steps {
+            m.control_step(CONTROL_STEP);
+            for value in m.values.iter() {
+                assert!(
+                    value.is_finite() && value.abs() <= 1.0 + 1e-3,
+                    "step {step}: unbounded value {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn swapping_modulator_slots_gives_identical_output() {
+        let input = stereo(&white_noise(4_800, 0.5, 4));
+        let build = |a_slot: usize, b_slot: usize| {
+            let mut devices: Vec<Box<dyn AudioDevice>> = vec![delay()];
+            wrap(&mut devices);
+            let m = devices[0].as_modulated_mut().unwrap();
+            m.add_modulator(a_slot as u8, ModulatorKind::Lfo).unwrap();
+            m.add_modulator(b_slot as u8, ModulatorKind::Lfo).unwrap();
+            m.set_modulator_param(a_slot as u8, LFO_RATE, 1.0).unwrap();
+            m.set_modulator_param(b_slot as u8, LFO_RATE, 1.0).unwrap();
+            m.set_modulator_route(a_slot as u8, &format!("mod/{b_slot}/param/10"), 0.5)
+                .unwrap();
+            m.set_modulator_route(b_slot as u8, "param/41", 0.5)
+                .unwrap();
+            devices
+        };
+        let ab = render(build(0, 1)[0].as_mut(), &input, &[512]);
+        let ba = render(build(1, 0)[0].as_mut(), &input, &[512]);
+        assert_eq!(ab, ba, "the output depended on the slot order");
+    }
+
+    #[test]
+    fn removing_a_modulator_clears_the_routes_into_it() {
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+        m.add_modulator(1, ModulatorKind::Lfo).unwrap();
+        m.set_modulator_route(0, "mod/1/param/10", 0.5).unwrap();
+        m.remove_modulator(1).unwrap();
+        assert!(
+            m.modulator_routes()
+                .iter()
+                .all(|(_, target, _)| !target.starts_with("mod/1/")),
+            "routes into the removed modulator survived: {:?}",
+            m.modulator_routes()
+        );
+        // A modulator reusing the id starts unmodulated.
+        m.add_modulator(1, ModulatorKind::Lfo).unwrap();
+        m.control_step(CONTROL_STEP);
+        assert!(m.mod_contrib[..m.mod_contrib_len]
+            .iter()
+            .all(|(_, off)| *off == 0.0));
     }
 
     // === Note routing / waking ===
@@ -2210,6 +2440,99 @@ mod tests {
         assert!(
             records[0].3.is_empty(),
             "values reported after release: {records:?}"
+        );
+    }
+
+    /// Read past the kind 0/1 counted list and decode the trailing block: the `ext_count`
+    /// header and `(kind, len, raw bytes)` per record.
+    fn decode_trailing(bytes: &[u8]) -> (u16, Vec<(u8, u8, Vec<u8>)>) {
+        let count = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
+        let mut at = 2;
+        for _ in 0..count {
+            let depth = bytes[at + 1] as usize;
+            at += 2 + depth * 2 + 4;
+            let n = bytes[at] as usize;
+            at += 1 + n * 4;
+        }
+        let ext_count = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        at += 2;
+        let mut records = Vec::new();
+        while at < bytes.len() {
+            let kind = bytes[at];
+            let len = bytes[at + 1];
+            records.push((kind, len, bytes[at + 2..at + 2 + len as usize].to_vec()));
+            at += 2 + len as usize;
+        }
+        (ext_count, records)
+    }
+
+    #[test]
+    fn the_payload_carries_display_state_and_mod_offsets() {
+        let input = stereo(&white_noise(4_800, 0.5, 5));
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![delay()];
+        wrap(&mut devices);
+        {
+            let m = devices[0].as_modulated_mut().unwrap();
+            m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+            m.add_modulator(1, ModulatorKind::Adsr).unwrap();
+            m.set_modulator_route(0, "param/41", 0.5).unwrap();
+            m.set_modulator_route(0, "mod/1/param/10", 0.5).unwrap();
+        }
+        devices[0].subscribe_data("modulation").expect("subscribe");
+        devices[0].send_note_event(&NoteEvent::test_on(60, 100), 0);
+        render(devices[0].as_mut(), &input, &[512]);
+        let (_, bytes) = devices[0].poll_device_data().expect("payload");
+        let (ext_count, records) = decode_trailing(&bytes);
+        assert_eq!(ext_count, 3, "two display states + one mod offset");
+
+        // One kind 2 per occupied slot; the LFO's x is its phase, the envelope is running.
+        let states: Vec<_> = records.iter().filter(|(k, _, _)| *k == 2).collect();
+        assert_eq!(states.len(), 2, "records: {records:?}");
+        for (_, len, raw) in &states {
+            assert_eq!(*len, 10, "a kind 2 record is 10 bytes");
+            let x = f32::from_le_bytes(raw[2..6].try_into().unwrap());
+            let value = f32::from_le_bytes(raw[6..10].try_into().unwrap());
+            assert!(
+                (0.0..1.0).contains(&x) && (-1.0..=1.0).contains(&value),
+                "kind 2 state out of range: x {x}, value {value}"
+            );
+        }
+        // Records are in slot order (slot 0 the LFO, slot 1 the envelope).
+        let env_stage = states[1].2[1];
+        assert!(env_stage >= 1, "the envelope did not run under the note");
+
+        // One kind 3 with A's contribution to B's rate.
+        let offsets: Vec<_> = records.iter().filter(|(k, _, _)| *k == 3).collect();
+        assert_eq!(offsets.len(), 1, "records: {records:?}");
+        let (_, len, raw) = offsets[0];
+        assert_eq!(*len, 9, "a kind 3 record is 9 bytes");
+        assert_eq!(raw[0], 1, "the target modulator");
+        assert_eq!(u32::from_le_bytes(raw[1..5].try_into().unwrap()), LFO_RATE);
+        let offset = f32::from_le_bytes(raw[5..9].try_into().unwrap());
+        assert!(offset != 0.0, "A's contribution was zero");
+    }
+
+    #[test]
+    fn the_payload_capacity_covers_the_maximal_trailing_block() {
+        let mut m = ModulatedDevice::new(delay(), SR);
+        for id in 0..8u8 {
+            m.add_modulator(id, ModulatorKind::Lfo).unwrap();
+        }
+        // A route into every modulator parameter that exists (self-routes included), so every
+        // kind 3 record the device could report is populated.
+        for target in 0..8u8 {
+            for spec in ModulatorKind::Lfo.table().specs {
+                let _ = m.set_modulator_route(0, &format!("mod/{target}/param/{}", spec.id), 0.1);
+            }
+        }
+        m.control_step(CONTROL_STEP);
+        let bytes = m.modulation_payload();
+        let expected =
+            2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4) + 2 + MAX_MODULATORS * 12 + MAX_ROUTES * 11;
+        assert_eq!(
+            bytes.capacity(),
+            expected,
+            "the audio-thread payload reallocated"
         );
     }
 }

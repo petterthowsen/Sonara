@@ -308,6 +308,14 @@ pub trait AudioDevice: Send {
         0
     }
 
+    /// A mono-only modulator's (the `cc` kind) offset onto the parameter of another
+    /// modulator (spec 033): the source has no per-voice state, so an enclosing
+    /// [`ModulatedDevice`](crate::audio::modulation::ModulatedDevice) hands the summed offset
+    /// in here once per control step and a voice-modulating device adds it to every voice's
+    /// evaluation of that parameter. `mod_slot` indexes the device's modulator slots.
+    /// Default: no-op (like `set_param_mod`).
+    fn set_voice_mod_param_offset(&mut self, _mod_slot: usize, _param_id: ParamId, _offset: f32) {}
+
     /// Modulators a fresh instance starts with (the device's default patch, advertised in
     /// `/builtin/info`). Default: none.
     fn default_modulators(&self) -> Vec<DefaultModulator> {

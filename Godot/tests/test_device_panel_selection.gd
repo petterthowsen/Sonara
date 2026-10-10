@@ -301,10 +301,9 @@ func _test_modulators_toggle_and_scroll() -> void:
 	var mod: Control = pa.modulators
 	_assert(mod != null and mod.get_parent() == pa.modulators_pane,
 		"the modulators pane hosts the ModulatorsPane directly")
-	_assert(mod._grid_scroll.get_script() == load("res://components/ChevronScrollContainer.gd"),
-		"the modulator list scrolls with chevrons: %s" % mod._grid_scroll.get_class())
-	_assert(mod._grid_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
-		"the list pages vertically only")
+	_assert(mod._grid is HBoxContainer and mod._grid.get_child_count() > 0
+			and mod._grid.get_child(0) is VBoxContainer,
+		"the modulator grid is a column-major HBox of cell columns: %s" % mod._grid.get_class())
 	_assert(mod._detail_scroll != null and mod._detail_scroll.get_parent() == mod,
 		"the options panel sits beside the list, not inside its scroll")
 

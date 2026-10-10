@@ -23,6 +23,19 @@ pub struct VoiceRoute {
     pub amount: f32,
 }
 
+/// One modulator→modulator route (spec 033): a voice evaluates `mod_slot`'s value, scaled by
+/// `amount`, as a parameter offset on the modulator in `target_slot`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoiceModRoute {
+    /// The source modulator slot.
+    pub mod_slot: usize,
+    /// The target modulator slot.
+    pub target_slot: usize,
+    pub param_id: ParamId,
+    /// −1..1, in normalized units per unit of modulator value.
+    pub amount: f32,
+}
+
 /// A copy of the wrapper's modulator definitions and self-targeting routes.
 #[derive(Clone, Copy, Debug)]
 pub struct VoiceModSpec {
@@ -32,6 +45,9 @@ pub struct VoiceModSpec {
     pub params: [ModParams; MAX_MODULATORS],
     pub routes: [VoiceRoute; MAX_ROUTES],
     pub route_len: usize,
+    /// Mod→mod routes between per-voice modulators (spec 033).
+    pub mod_routes: [VoiceModRoute; MAX_ROUTES],
+    pub mod_route_len: usize,
 }
 
 impl VoiceModSpec {
@@ -46,6 +62,13 @@ impl VoiceModSpec {
                 amount: 0.0,
             }; MAX_ROUTES],
             route_len: 0,
+            mod_routes: [VoiceModRoute {
+                mod_slot: 0,
+                target_slot: 0,
+                param_id: 0,
+                amount: 0.0,
+            }; MAX_ROUTES],
+            mod_route_len: 0,
         }
     }
 
@@ -59,6 +82,11 @@ impl VoiceModSpec {
 
     pub fn routes(&self) -> &[VoiceRoute] {
         &self.routes[..self.route_len]
+    }
+
+    /// The mod→mod routes between per-voice modulators.
+    pub fn mod_routes(&self) -> &[VoiceModRoute] {
+        &self.mod_routes[..self.mod_route_len]
     }
 
     /// True when the modulator kinds and parameters match `other`, so only routes changed. A

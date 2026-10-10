@@ -190,9 +190,9 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{path}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter |
 | `/channel/{id}/device/{path}/modulator/add` | `i:mod_id, s:kind` | Add a modulator with its kind's default parameters (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`). Wraps the device if it has none (see Modulators) |
-| `/channel/{id}/device/{path}/modulator/{mod_id}/remove` | - | Remove a modulator and its routes; the last one unwraps the device |
+| `/channel/{id}/device/{path}/modulator/{mod_id}/remove` | - | Remove a modulator, its routes and every route into the removed slot; the last one unwraps the device |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/param/{id}/value` | `f:normalized` | Set a modulator parameter (floats clamp, enums and bools snap; the echo carries the canonical value) |
-| `/channel/{id}/device/{path}/modulator/{mod_id}/route/set` | `s:target, f:amount` | Add, update or (amount 0) remove a route to `param/{id}`, `child/{i.j…}/param/{id}` or `mod/{mod_id}/param/{id}`; amount is clamped to −1..1 |
+| `/channel/{id}/device/{path}/modulator/{mod_id}/route/set` | `s:target, f:amount` | Add, update or (amount 0) remove a route to `param/{id}`, `child/{i.j…}/param/{id}` or `mod/{mod_id}/param/{id}`; amount is clamped to −1..1. A `mod/{mod_id}/param/{id}` target (another modulator's parameter, spec 033) is evaluated, not just stored: it lands one control step (64 frames, ≈1.3 ms) later, which keeps evaluation independent of slot order and bounds mod→mod cycles to delayed feedback |
 | `/channel/{id}/device/{path}/modulator/clear` | - | Remove every modulator and route |
 | `/channel/{id}/device/{path}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
 | `/channel/{id}/device/{path}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
@@ -224,8 +224,10 @@ Status echoes use the same path as the command (`/active`, `/enabled`, `/loading
 `/param/{id}/value`, `/modulator/...`, `/data`).
 
 **Modulators** (`{device}/modulator/...`). A modulator belongs to one device instance and drives
-parameters of that device, of a device nested inside it, or (later) of another modulator. Its
-kind is one of `lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`; each kind has
+parameters of that device, of a device nested inside it, or of another modulator (spec 033:
+a `mod/{mod_id}/param/{id}` route target is evaluated with one control step of delay — see
+`modulator/{id}/route/set` above). Its kind is one of `lfo`, `adsr`, `ad`, `velocity`,
+`keytrack`, `random`, `release`, `cc`; each kind has
 parameter table (advertised in the `/builtin/modulator_*` batch). `modulator/add` wraps the
 device in a transparent `ModulatedDevice` the first time and `modulator/remove` (or
 `modulator/clear`) unwraps it again, so a device without modulators costs nothing. Routes are
@@ -727,6 +729,31 @@ after subscribing.
     a voice-modulating device (PolySynth), newest voice last; `value_count` 0 means no voice
     is sounding. These already include the base and every enclosing wrapper's offset, so
     the UI uses them as-is and ignores `offset` records for the same parameter.
+
+  Spec 033 appends a trailing block after the counted list (spec 033 T-018): the payload
+  is built on the audio callback (sent at ~20 Hz while subscribed) into a fixed-capacity
+  `Vec`, so it never reallocates or allocates at all.
+
+  ```
+  u16 ext_count            (record_count of kind 2/3 records; 0 when nothing to report)
+  ext_count × record:
+    u8  kind
+    u8  len                (payload length in bytes; unknown kinds are skipped by len)
+    len bytes
+  ```
+
+  - `modulator state` (kind 2, len 10): `u8 mod_id, u8 stage, f32 x, f32 value`, one per
+    occupied modulator slot. `stage` is 0 for every non-envelope kind (an LFO reports
+    `x` = its phase 0–1); an envelope (`adsr`, `ad`) reports its ADSR stage — 0 idle,
+    1 attack, 2 decay, 3 sustain, 4 release — with `x` 0 and `value` the envelope level
+    (every other kind reports `x` 0 and its current value).
+  - `modulator-param offset` (kind 3, len 9): `u8 mod_id, u32 param_id, f32 offset`, one
+    per evaluated mod→mod route target (`mod/{mod_id}/param/{param_id}`), the summed
+    normalized offset currently applied to that modulator parameter.
+
+  Old decoders stop after the counted kind 0/1 list and never read the trailing block;
+  the block is purely additive, and decoders that walk it skip any kind they don't know
+  via `len`.
 
 **Example Usage:**
 ```gdscript

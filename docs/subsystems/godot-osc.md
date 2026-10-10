@@ -27,6 +27,12 @@ controls registered by `ModAssign.attach`. The arc returns to the knob's set val
 the stream reports nothing for the parameter. Views don't subscribe this stream themselves;
 `DeviceView.show_view`/`hide_view` drive it. Only device views (Simple View and the custom panel
 and window views) do today; the Parameters/CCs lists and the compact panels don't subscribe yet.
+The decoder (`ModLive._decode`) walks the counted
+kind 0/1 records and, for spec 033 payloads, then reads the trailing block: a `u16 ext_count`
+followed by `{u8 kind, u8 len, len bytes}` records — kind 2 is a modulator's display state
+(mod id, envelope stage 0 idle/1 attack/2 decay/3 sustain/4 release with 0 for non-envelope
+kinds, x, value) and kind 3 a mod→mod parameter offset (mod id, param id, offset). Unknown
+kinds are skipped by `len`, so old decoders survive new record types.
 
 ### Engine Log Relay
 - The audio engine forwards WARN/ERROR records via `/log` with `[String level, String message]`; level is `"warn"` or `"error"`.

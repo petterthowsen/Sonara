@@ -44,6 +44,8 @@ signal modulator_removed(mod_id: int)
 signal modulator_changed(mod_id: int)
 ## One route was added, changed or removed (amount 0): `mod_id` → `target`.
 signal route_changed(mod_id: int, target: String, amount: float)
+## Two modulators swapped positions in the array (kept ids; display and save order follow it).
+signal modulators_reordered()
 
 
 ## ============================================================================
@@ -704,11 +706,19 @@ func duplicate_modulator(mod_id: int) -> Modulator:
 	return mod
 
 
-## Remove `mod_id` and its routes.
+## Remove `mod_id` and its routes. Routes of the other modulators into its parameters
+## (`mod/{B}/…`) dangle once it is gone, so they are erased here too (spec 033).
 func remove_modulator(mod_id: int) -> void:
 	var index := _modulator_index(mod_id)
 	if index < 0:
 		return
+	for other in modulators:
+		if other.mod_id == mod_id:
+			continue
+		for target in other.routes.keys():
+			if String(target).begins_with("mod/%d/" % mod_id):
+				other.routes.erase(target)
+				route_changed.emit(other.mod_id, String(target), 0.0)
 	modulators.remove_at(index)
 	_expect_mod_echo("remove:%d" % mod_id)
 	AudioEngineOSC.send(osc_addr("modulator/%d/remove" % mod_id), [])
@@ -720,6 +730,22 @@ func _modulator_index(mod_id: int) -> int:
 		if modulators[i].mod_id == mod_id:
 			return i
 	return -1
+
+
+## Swap two modulators' positions in the array. Both keep their `mod_id` (routes name ids, not
+## positions). No OSC: the engine keys modulators by slot id and never by array order, so a
+## reorder is pure UI/persistence state.
+func swap_modulators(a_mod_id: int, b_mod_id: int) -> void:
+	if a_mod_id == b_mod_id:
+		return
+	var a := _modulator_index(a_mod_id)
+	var b := _modulator_index(b_mod_id)
+	if a < 0 or b < 0:
+		return
+	var swap = modulators[a]
+	modulators[a] = modulators[b]
+	modulators[b] = swap
+	modulators_reordered.emit()
 
 
 ## Rename a modulator (kept unique among this device's modulators).
@@ -810,8 +836,11 @@ func get_routes_into(target: String) -> Array[Dictionary]:
 	return out
 
 
-## Re-send this device's modulators: clear, then one add per modulator, its parameters and its
-## routes. The device-tree walk calls this again after the children are added, since routes into
+## Re-send this device's modulators: clear, then every `add` + parameters (first pass), then every
+## route (second pass). The split is order-safe: a route `mod/{B}/…` sent while still adding would
+## fail in the engine's target parse when B comes later in the array, because the engine resolves
+## targets against the modulators added so far.
+## The device-tree walk calls this again after the children are added, since routes into
 ## a child only resolve once it exists.
 func sync_modulators_to_engine() -> void:
 	if not has_modulation():
@@ -824,6 +853,7 @@ func sync_modulators_to_engine() -> void:
 		for param_id in mod.params:
 			_expect_mod_echo("param:%d:%d" % [mod.mod_id, param_id])
 			_send_modulator_param(mod, param_id, mod.params[param_id])
+	for mod in modulators:
 		for target in mod.routes:
 			_expect_mod_echo("route:%d:%s" % [mod.mod_id, target])
 			AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % mod.mod_id), [target, mod.routes[target]])
@@ -2400,8 +2430,9 @@ func to_json() -> Dictionary:
 	return data
 
 
-## `[{mod_id, kind, name, params: {id: norm}, routes: [{target, amount}]}]`, sorted so saves
-## are stable. Parameter ids and mod_ids travel as strings/ints as JSON requires.
+## `[{mod_id, kind, name, params: {id: norm}, routes: [{target, amount}]}]`, in array order —
+## display order and save order are the same (spec 033; `from_json` appends in array order).
+## Parameter ids and mod_ids travel as strings/ints as JSON requires.
 func _modulators_to_json() -> Array:
 	var out: Array = []
 	for mod in modulators:
@@ -2419,7 +2450,6 @@ func _modulators_to_json() -> Array:
 			"params": params,
 			"routes": routes,
 		})
-	out.sort_custom(func(a, b): return int(a["mod_id"]) < int(b["mod_id"]))
 	return out
 
 

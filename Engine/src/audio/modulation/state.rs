@@ -14,7 +14,7 @@
 use super::envelope::AdsrEnvelope;
 use super::kinds::{
     ModParams, ModulatorKind, CC_NUMBER, CC_SMOOTH, ENV_ATTACK, ENV_DECAY, ENV_RELEASE,
-    ENV_SUSTAIN, LFO_PHASE, LFO_RATE, LFO_RETRIGGER, LFO_SHAPE, LFO_SYNC,
+    ENV_SUSTAIN, LFO_PHASE, LFO_RATE, LFO_RETRIGGER, LFO_SHAPE, LFO_SYNC, MAX_KIND_PARAMS,
 };
 use super::lfo::{Lfo, LfoShape};
 use crate::audio::devices::ParamId;
@@ -27,10 +27,17 @@ const KEYTRACK_RANGE: f32 = 60.0;
 /// Sample rate used until `prepare` supplies the real one (RT-safe default).
 const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
 
+/// Smallest modulator-parameter offset change worth applying (below it the parameter would
+/// just be re-applied for nothing). Shared with the wrapper's offset bookkeeping.
+pub const OFFSET_EPSILON: f32 = 1e-7;
+
 #[derive(Clone, Copy, Debug)]
 pub struct ModulatorState {
     kind: ModulatorKind,
     params: ModParams,
+    /// Offsets other modulators push onto this one's parameters, indexed by the kind's
+    /// parameter-table slot (spec 033 mod→mod, one control step of delay).
+    mod_offset: [f32; MAX_KIND_PARAMS],
     sample_rate: f32,
     /// LFO phase and sample-and-hold value.
     lfo: Lfo,
@@ -58,6 +65,7 @@ impl ModulatorState {
         let mut state = Self {
             kind,
             params: ModParams::new(kind),
+            mod_offset: [0.0; MAX_KIND_PARAMS],
             sample_rate: sample_rate.max(1.0),
             lfo: Lfo::default(),
             synced_cycle: f64::NAN,
@@ -87,6 +95,28 @@ impl ModulatorState {
         self.params.get(id)
     }
 
+    /// The effective normalized value of `id` for evaluation: the base plus the offset other
+    /// modulators pushed in, clamped to 0..1 (`get_param` still reports the base).
+    fn real_eff(&self, id: ParamId) -> Option<f32> {
+        let slot = self.params.table().slot(id)?;
+        let norm = (self.params.get(id)? + self.mod_offset[slot]).clamp(0.0, 1.0);
+        Some(self.params.table().specs[slot].to_real(norm))
+    }
+
+    /// Push a mod→mod offset (normalized units) onto `param_id`. The offset is stored per
+    /// table slot; `apply_params` re-runs (envelope times are cached) only when the offset
+    /// actually moved, so a held offset costs nothing per control step. Real-time safe.
+    pub fn set_mod_offset(&mut self, param_id: ParamId, offset: f32) {
+        let Some(slot) = self.params.table().slot(param_id) else {
+            return;
+        };
+        if (self.mod_offset[slot] - offset).abs() <= OFFSET_EPSILON {
+            return;
+        }
+        self.mod_offset[slot] = offset;
+        self.apply_params();
+    }
+
     /// Store a normalized parameter value and apply it to the runtime (envelope times). Returns
     /// the slot and real value, as `ParamValues::set` does, or None for an unknown ID.
     pub fn set_param(&mut self, id: ParamId, norm: f32) -> Option<(usize, f32)> {
@@ -107,12 +137,12 @@ impl ModulatorState {
         if !self.kind.is_envelope() {
             return;
         }
-        let attack = self.params.real(ENV_ATTACK).unwrap_or(0.005);
-        let decay = self.params.real(ENV_DECAY).unwrap_or(0.3);
+        let attack = self.real_eff(ENV_ATTACK).unwrap_or(0.005);
+        let decay = self.real_eff(ENV_DECAY).unwrap_or(0.3);
         let (sustain, release) = if self.kind == ModulatorKind::Adsr {
             (
-                self.params.real(ENV_SUSTAIN).unwrap_or(0.5),
-                self.params.real(ENV_RELEASE).unwrap_or(0.3),
+                self.real_eff(ENV_SUSTAIN).unwrap_or(0.5),
+                self.real_eff(ENV_RELEASE).unwrap_or(0.3),
             )
         } else {
             // `ad` is one-shot: sustain 0 so decay reaches silence, and note-off is ignored.
@@ -232,9 +262,8 @@ impl ModulatorState {
     pub fn advance(&mut self, frames: usize, transport: &Transport) -> f32 {
         match self.kind {
             ModulatorKind::Lfo => {
-                let shape =
-                    LfoShape::from_index(self.params.real(LFO_SHAPE).unwrap_or(0.0) as usize);
-                let sync = sync_beats(self.params.real(LFO_SYNC).unwrap_or(0.0) as usize);
+                let shape = LfoShape::from_index(self.real_eff(LFO_SHAPE).unwrap_or(0.0) as usize);
+                let sync = sync_beats(self.real_eff(LFO_SYNC).unwrap_or(0.0) as usize);
                 match sync {
                     Some(beats) if transport.playing => {
                         // `transport` is the position at the step's start; the value is the one
@@ -254,7 +283,7 @@ impl ModulatorState {
                     _ => {
                         let hz = match sync {
                             Some(beats) => transport.tempo / 60.0 / beats,
-                            None => self.params.real(LFO_RATE).unwrap_or(2.0) as f64,
+                            None => self.real_eff(LFO_RATE).unwrap_or(2.0) as f64,
                         };
                         if self
                             .lfo
@@ -279,7 +308,7 @@ impl ModulatorState {
             ModulatorKind::Release => self.release,
             ModulatorKind::MidiCc => {
                 // One-pole lag toward the latched target over this step; 0 snaps.
-                let lag = self.params.real(CC_SMOOTH).unwrap_or(0.0);
+                let lag = self.real_eff(CC_SMOOTH).unwrap_or(0.0);
                 if lag > 0.0 {
                     let alpha = 1.0 - (-(frames as f32) / (lag * self.sample_rate)).exp();
                     self.cc_value += (self.cc_target - self.cc_value) * alpha;
@@ -293,8 +322,7 @@ impl ModulatorState {
     pub fn value(&self) -> f32 {
         match self.kind {
             ModulatorKind::Lfo => {
-                let shape =
-                    LfoShape::from_index(self.params.real(LFO_SHAPE).unwrap_or(0.0) as usize);
+                let shape = LfoShape::from_index(self.real_eff(LFO_SHAPE).unwrap_or(0.0) as usize);
                 self.lfo.value(shape)
             }
             ModulatorKind::Adsr | ModulatorKind::Ad => self.env.value(),
@@ -310,6 +338,23 @@ impl ModulatorState {
         ((self.last_note - 60.0) / KEYTRACK_RANGE).clamp(-1.0, 1.0)
     }
 
+    /// The per-kind display state for the `modulation` data stream: `(stage, x, value)` —
+    /// an LFO reports its phase and value, an envelope its stage (0 idle, 1 attack, 2 decay,
+    /// 3 sustain, 4 release) and level, every other kind just its value. No new state: it is
+    /// read from what evaluation already maintains.
+    pub fn display_state(&self) -> (u8, f32, f32) {
+        match self.kind {
+            ModulatorKind::Lfo => {
+                let shape = LfoShape::from_index(self.real_eff(LFO_SHAPE).unwrap_or(0.0) as usize);
+                (0, self.lfo.phase as f32, self.lfo.value(shape))
+            }
+            ModulatorKind::Adsr | ModulatorKind::Ad => {
+                (self.env.state() as u8, 0.0, self.env.value())
+            }
+            _ => (0, 0.0, self.value()),
+        }
+    }
+
     /// Back to a fresh state (no notes held, envelopes idle, LFO at phase 0).
     pub fn reset(&mut self) {
         self.held = 0;
@@ -320,6 +365,7 @@ impl ModulatorState {
         self.lfo = Lfo::default();
         self.synced_cycle = f64::NAN;
         self.env.reset();
+        self.mod_offset = [0.0; MAX_KIND_PARAMS];
         self.cc_target = 0.0;
         self.cc_value = 0.0;
     }
@@ -624,5 +670,110 @@ mod tests {
             previous = value;
         }
         assert!((previous - target).abs() < 1e-3, "converged to {previous}");
+    }
+
+    #[test]
+    fn display_state_reports_lfo_phase_env_stages_and_values() {
+        let t = transport(120.0, false, 0.0);
+
+        // An LFO reports its phase as x; a saw's value maps to it.
+        let mut lfo = ModulatorState::new(ModulatorKind::Lfo, SR);
+        set_real(&mut lfo, LFO_SHAPE, 2.0 / 5.0); // Saw
+        assert_eq!(lfo.display_state().0, 0);
+        let x0 = lfo.display_state().1;
+        lfo.advance(12_000, &t); // 0.25 s at 2 Hz = half a cycle
+        let (stage, x, value) = lfo.display_state();
+        assert_eq!(stage, 0);
+        let expected = (x0 + 0.5).fract();
+        assert!(
+            (x - expected).abs() < 0.01 || (x - expected + 1.0).abs() < 0.01,
+            "x {x}, expected {expected}"
+        );
+        let saw = (x * 2.0 - 1.0).clamp(-1.0, 1.0);
+        assert!((value - saw).abs() < 0.05, "saw value {value} at x {x}");
+
+        // An envelope reports its stage and level; x stays 0.
+        let mut adsr = ModulatorState::new(ModulatorKind::Adsr, SR);
+        assert_eq!(adsr.display_state(), (0, 0.0, 0.0), "idle before a note");
+        set_real(&mut adsr, ENV_ATTACK, 0.01);
+        set_real(&mut adsr, ENV_DECAY, 0.01);
+        set_real(&mut adsr, ENV_SUSTAIN, 0.5);
+        set_real(&mut adsr, ENV_RELEASE, 0.01);
+        adsr.note_on(60, 1.0, 0);
+        adsr.advance(64, &t);
+        let (stage, x, value) = adsr.display_state();
+        assert_eq!((stage, x), (1, 0.0), "attack");
+        assert!(value > 0.0);
+        adsr.advance(SR as usize, &t);
+        let (stage, x, value) = adsr.display_state();
+        assert_eq!((stage, x), (3, 0.0), "sustain after attack + decay");
+        assert!((value - 0.5).abs() < 1e-3);
+        adsr.note_off(60, DEFAULT_RELEASE, 0);
+        adsr.advance(64, &t);
+        assert_eq!(adsr.display_state().0, 4, "release after the last note-off");
+
+        // Everything else just reports its value.
+        let mut vel = ModulatorState::new(ModulatorKind::Velocity, SR);
+        vel.note_on(60, 0.75, 0);
+        assert_eq!(vel.display_state(), (0, 0.0, 0.75));
+    }
+
+    #[test]
+    fn mod_offset_changes_evaluation_but_not_the_base() {
+        let t = transport(120.0, false, 0.0);
+
+        // Same parameters produce the same value until an offset lands.
+        let mut base = ModulatorState::new(ModulatorKind::Lfo, SR);
+        let mut modded = ModulatorState::new(ModulatorKind::Lfo, SR);
+        set_real(&mut modded, LFO_RATE, 2.0);
+        base.advance(12_000, &t);
+        modded.advance(12_000, &t);
+        assert_eq!(modded.value(), base.value(), "same params, same value");
+
+        modded.set_mod_offset(LFO_RATE, 0.5);
+        base.advance(1_200, &t);
+        modded.advance(1_200, &t);
+        assert_ne!(modded.value(), base.value(), "the offset changed the rate");
+
+        // get_param still reports the base.
+        assert_eq!(modded.get_param(LFO_RATE), base.get_param(LFO_RATE));
+
+        // The effective read is clamped to 0..1: a large negative offset pins the rate at
+        // its minimum.
+        modded.set_mod_offset(LFO_RATE, -5.0);
+        let before = modded.lfo_phase();
+        modded.advance(4_800, &t);
+        let after = modded.lfo_phase();
+        assert!(
+            after - before < 0.01,
+            "the rate was not clamped: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn a_modulated_envelope_time_re_applies_and_clamps() {
+        let t = transport(120.0, false, 0.0);
+        let mut env = ModulatorState::new(ModulatorKind::Adsr, SR);
+        set_real(&mut env, ENV_ATTACK, 0.01);
+        set_real(&mut env, ENV_DECAY, 0.01);
+        set_real(&mut env, ENV_SUSTAIN, 0.5);
+        set_real(&mut env, ENV_RELEASE, 0.01);
+        env.note_on(60, 1.0, 0);
+
+        // An offset that pins the attack at its minimum: the envelope skips to decay.
+        env.set_mod_offset(ENV_ATTACK, -1.0);
+        env.advance(256, &t); // 5.3 ms, past the 0.5 ms minimum attack
+        assert_eq!(env.display_state().0, 2, "a zeroed attack skips to decay");
+
+        // Below OFFSET_EPSILON nothing is stored; an id outside the kind's table is ignored
+        // (LFO_PHASE 40 is not an envelope parameter).
+        let mut other = ModulatorState::new(ModulatorKind::Adsr, SR);
+        other.set_mod_offset(ENV_ATTACK, OFFSET_EPSILON);
+        assert_eq!(
+            other.mod_offset[other.params.table().slot(ENV_ATTACK).unwrap()],
+            0.0
+        );
+        other.set_mod_offset(LFO_PHASE, 0.5);
+        assert!(other.mod_offset.iter().all(|off| *off == 0.0));
     }
 }

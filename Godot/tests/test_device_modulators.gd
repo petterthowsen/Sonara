@@ -29,6 +29,8 @@ func run_tests() -> void:
 	_test_sync_to_engine()
 	_test_json_round_trip()
 	_test_get_routes_into()
+	_test_swap_modulators()
+	_test_sync_order_adds_before_routes()
 	_test_child_move_rewrites_routes()
 	_test_child_removal_drops_or_reindexes_routes()
 
@@ -341,3 +343,63 @@ func _test_child_removal_drops_or_reindexes_routes() -> void:
 	_assert(container.get_modulator(mod.mod_id).get_route("child/0/param/31") == 0.0, "a route into the removed child is dropped")
 	_assert(is_equal_approx(container.get_modulator(mod.mod_id).get_route("child/1/param/31"), -0.4),
 		"a later route shifts down one index")
+
+
+## Reorder: swap keeps both ids, colour indexes follow the array, order is saved and loaded.
+func _test_swap_modulators() -> void:
+	var inst := _instance()
+	inst.modulators.clear()
+	var a = inst.add_modulator("lfo")
+	var b = inst.add_modulator("velocity")
+	inst.set_route_amount(a.mod_id, "param/31", 0.4)
+	var fired: Array = []
+	inst.modulators_reordered.connect(func(): fired.append(1))
+
+	inst.swap_modulators(a.mod_id, b.mod_id)
+	_assert(fired.size() == 1, "the swap emits modulators_reordered once")
+	_assert(inst.modulators[0].mod_id == b.mod_id and inst.modulators[1].mod_id == a.mod_id,
+		"the array entries swapped, both ids kept")
+	var routes: Array = inst.get_routes_into("param/31")
+	_assert(routes.size() == 1 and routes[0]["mod_id"] == a.mod_id and routes[0]["color_index"] == 1,
+		"the route's colour index follows the new array position")
+
+	var data: Dictionary = JSON.parse_string(JSON.stringify(inst.to_json()))
+	_assert(int(data["modulators"][0]["mod_id"]) == b.mod_id, "the swapped order is saved")
+	var loaded = _inst_script.from_json(data)
+	_assert(loaded.modulators[0].mod_id == b.mod_id and loaded.modulators[1].mod_id == a.mod_id,
+		"and restored as-is (no id sort)")
+
+	inst.swap_modulators(a.mod_id, a.mod_id)
+	inst.swap_modulators(a.mod_id, 7)
+	_assert(fired.size() == 1, "self-swaps and missing ids are no-ops")
+
+
+## Sync order: every modulator/add (+params) precedes every route/set, so a mod/{B}/… route on an
+## early modulator resolves even when B comes later in the array.
+func _test_sync_order_adds_before_routes() -> void:
+	var inst := _instance()
+	inst.modulators.clear()
+	var osc := _osc()
+	if osc == null:
+		return
+	osc._pending_sends.clear()
+	var a = inst.add_modulator("lfo")
+	var b = inst.add_modulator("velocity")
+	inst.set_route_amount(a.mod_id, "param/31", 0.3)
+	inst.set_route_amount(b.mod_id, "mod/%d/param/10" % a.mod_id, 0.5)
+
+	osc._pending_sends.clear()
+	inst.sync_modulators_to_engine()
+	var messages := _modulator_messages()
+	var last_add := -1
+	var first_route := -1
+	for i in messages.size():
+		var suffix := str(messages[i].address).get_file()
+		if suffix.begins_with("add") or suffix.contains("value"):
+			last_add = i
+		elif suffix.ends_with("set"):
+			first_route = i if first_route < 0 else first_route
+	_assert(last_add >= 0 and first_route > last_add,
+		"every add + param precedes every route/set (%d < %d)" % [last_add, first_route])
+	_assert(messages[last_add].args == [b.mod_id, "velocity"],
+		"the last pre-route message is the last modulator's add")

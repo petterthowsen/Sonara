@@ -25,7 +25,7 @@ use crate::audio::midi_types::NoteEvent;
 use crate::audio::modulation::kinds::{
     ModulatorKind, ENV_ATTACK, ENV_DECAY, ENV_RELEASE, ENV_SUSTAIN, LFO_RATE, LFO_RETRIGGER,
 };
-use crate::audio::modulation::{ModulatorState, VoiceModSpec, MAX_MODULATORS};
+use crate::audio::modulation::{ModulatorState, VoiceModSpec, MAX_KIND_PARAMS, MAX_MODULATORS};
 use crate::audio::transport::Transport;
 use params::{Changed, SynthParams, VoiceMode, CUTOFF, MAX_POLYPHONY};
 use voice::{PendingNote, RenderCtx, StartCtx, Voice};
@@ -94,6 +94,9 @@ pub struct PolySynthDevice {
     env_dirty: bool,
     /// The wrapper's modulator definitions and self-targeting routes.
     voice_spec: VoiceModSpec,
+    /// Offsets pushed in by the wrapper for a mono-only source's (a `cc` kind) mod→mod route:
+    /// per modulator slot and parameter-table slot, added to every voice (spec 033).
+    voice_mod_offsets: [[f32; MAX_KIND_PARAMS]; MAX_MODULATORS],
     /// Device-level free-running LFOs: one per modulator slot that is a Free LFO. A new voice
     /// seeds its own LFO from `free_phase`, so free LFOs stay phase-locked across voices.
     free_lfo: [Option<ModulatorState>; MAX_MODULATORS],
@@ -138,6 +141,7 @@ impl PolySynthDevice {
             held: NoteStack::new(),
             env_dirty: true,
             voice_spec: VoiceModSpec::empty(),
+            voice_mod_offsets: [[0.0; MAX_KIND_PARAMS]; MAX_MODULATORS],
             free_lfo: [None; MAX_MODULATORS],
             free_phase: [0.0; MAX_MODULATORS],
             transport: Transport::default(),
@@ -494,6 +498,7 @@ impl PolySynthDevice {
             let ctx = RenderCtx {
                 params: &self.params,
                 spec: &self.voice_spec,
+                mod_offsets: &self.voice_mod_offsets,
                 levels: [&self.level_buf[0], &self.level_buf[1]],
                 noise_level: &self.noise_buf,
                 cutoff: &self.cutoff_buf,
@@ -696,8 +701,27 @@ impl AudioDevice for PolySynthDevice {
         let definitions_changed = !self.voice_spec.same_definitions(spec);
         self.voice_spec = *spec;
         if definitions_changed {
+            // The per-voice mod→mod offsets drop with their routes; the pushed-in mono-source
+            // offsets are re-sent by the wrapper on its next control step.
+            self.voice_mod_offsets = [[0.0; MAX_KIND_PARAMS]; MAX_MODULATORS];
             self.rebuild_free_lfos();
             self.configure_voices();
+        }
+    }
+
+    fn set_voice_mod_param_offset(&mut self, mod_slot: usize, param_id: ParamId, offset: f32) {
+        let Some(table_slot) = self
+            .voice_spec
+            .params(mod_slot)
+            .and_then(|params| params.table().slot(param_id))
+        else {
+            return;
+        };
+        if self.voice_mod_offsets[mod_slot][table_slot] != offset {
+            self.voice_mod_offsets[mod_slot][table_slot] = offset;
+            if offset != 0.0 {
+                self.sleep_state.mark_activity();
+            }
         }
     }
 
@@ -790,6 +814,7 @@ impl AudioDevice for PolySynthDevice {
             state.reset();
         }
         self.free_phase = [0.0; MAX_MODULATORS];
+        self.voice_mod_offsets = [[0.0; MAX_KIND_PARAMS]; MAX_MODULATORS];
         self.held.clear();
         self.note_counter = 0;
         self.last_note = None;
@@ -874,7 +899,7 @@ mod tests {
 
     use crate::audio::dsp::tempo_sync::index_of;
     use crate::audio::modulation::kinds::{ModParams, LFO_SHAPE, LFO_SYNC};
-    use crate::audio::modulation::voice::VoiceRoute;
+    use crate::audio::modulation::voice::{VoiceModRoute, VoiceRoute};
 
     /// A modulator's normalized parameter block, from `(id, real value)` pairs.
     fn mod_params(kind: ModulatorKind, values: &[(ParamId, f32)]) -> ModParams {
@@ -1975,6 +2000,108 @@ mod tests {
 
         dev.send_note_event(&NoteEvent::test_on(67, 100), 0);
         assert!(peak(&render(&mut dev, 4)) > 0.01, "a later note plays");
+    }
+
+    /// A spec like `set_spec` builds, plus a mod→mod route (spec 033).
+    fn set_spec_with_mod_route(
+        dev: &mut PolySynthDevice,
+        mods: &[(usize, ModulatorKind, &[(ParamId, f32)])],
+        routes: &[(usize, ParamId, f32)],
+        mod_route: Option<(usize, usize, ParamId, f32)>,
+    ) {
+        let mut spec = VoiceModSpec::empty();
+        for &(slot, kind, values) in mods {
+            spec.kinds[slot] = Some(kind);
+            spec.params[slot] = mod_params(kind, values);
+        }
+        for &(mod_slot, param_id, amount) in routes {
+            spec.routes[spec.route_len] = VoiceRoute {
+                mod_slot,
+                param_id,
+                amount,
+            };
+            spec.route_len += 1;
+        }
+        if let Some((mod_slot, target_slot, param_id, amount)) = mod_route {
+            spec.mod_routes[0] = VoiceModRoute {
+                mod_slot,
+                target_slot,
+                param_id,
+                amount,
+            };
+            spec.mod_route_len = 1;
+        }
+        dev.set_voice_modulation(&spec);
+    }
+
+    #[test]
+    fn voice_mod_spec_stays_copy_and_bounded() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<VoiceModSpec>();
+        assert_copy::<crate::audio::modulation::voice::VoiceModRoute>();
+    }
+
+    #[test]
+    fn a_voice_lfo_b_rate_follows_lfo_a() {
+        let mods = [
+            (0usize, ModulatorKind::Lfo, &[(LFO_RATE, 8.0f32)][..]),
+            (1usize, ModulatorKind::Lfo, &[(LFO_RATE, 2.0f32)][..]),
+        ];
+        let routes = [(1usize, CUTOFF, 0.5f32)];
+
+        // Without the mod→mod route B runs at its own rate; with it, B's rate follows A's
+        // value every voice, so the sound (and B's phase) moves.
+        let mut plain = synth();
+        set_spec_with_mod_route(&mut plain, &mods, &routes, None);
+        let mut routed = synth();
+        set_spec_with_mod_route(&mut routed, &mods, &routes, Some((0, 1, LFO_RATE, 0.5)));
+        assert_eq!(routed.voice_spec.mod_route_len, 1);
+
+        for dev in [&mut plain, &mut routed] {
+            set_real(dev, CUTOFF, 200.0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+            dev.send_note_event(&NoteEvent::test_on(64, 100), 32);
+        }
+        let plain_out = render(&mut plain, 8);
+        let routed_out = render(&mut routed, 8);
+        assert_ne!(plain_out, routed_out, "the mod→mod route was inaudible");
+
+        // Both sounding voices' LFO B left the unmodulated trajectory.
+        for voice in 0..2 {
+            assert_ne!(
+                lfo_phase(&routed, voice, 1),
+                lfo_phase(&plain, voice, 1),
+                "voice {voice}: LFO B's rate did not follow LFO A"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mono_cc_offset_reaches_every_sounding_voice() {
+        let mods = [(0usize, ModulatorKind::Lfo, &[(LFO_RATE, 4.0f32)][..])];
+        let routes = [(0usize, CUTOFF, 0.5f32)];
+        let mut quiet = synth();
+        set_spec(&mut quiet, &mods, &routes);
+        let mut pushed = synth();
+        set_spec(&mut pushed, &mods, &routes);
+        for dev in [&mut quiet, &mut pushed] {
+            set_real(dev, CUTOFF, 200.0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+            dev.send_note_event(&NoteEvent::test_on(64, 100), 32);
+        }
+        // The wrapper would push this every control step for a mono-only source (`cc`).
+        pushed.set_voice_mod_param_offset(0, LFO_RATE, 0.5);
+
+        let quiet_out = render(&mut quiet, 8);
+        let pushed_out = render(&mut pushed, 8);
+        assert_ne!(quiet_out, pushed_out, "the pushed offset was inaudible");
+        for voice in 0..2 {
+            assert_ne!(
+                lfo_phase(&pushed, voice, 0),
+                lfo_phase(&quiet, voice, 0),
+                "voice {voice}: the pushed offset did not reach it"
+            );
+        }
     }
 }
 
