@@ -15,6 +15,14 @@ pub(super) fn is_silenced(channel: &Channel) -> bool {
     channel.mix.solo_role == SoloRole::Silent
 }
 
+/// True if this channel plays straight to a hardware output pair (1000+), not through another
+/// channel. It bypasses master, so soloing elsewhere must not silence it (a reference track).
+pub(super) fn is_direct_output(channel: &Channel) -> bool {
+    channel
+        .output_channel_id
+        .is_some_and(|id| id >= HARDWARE_OUTPUT_BASE)
+}
+
 /// True if this channel or anything it routes into is soloed.
 pub(super) fn output_reaches_soloed(
     channel_map: &HashMap<ChannelId, Channel>,
@@ -147,7 +155,11 @@ pub(super) fn assign_solo_roles(
         };
         let role = if channel.mute {
             SoloRole::Silent
-        } else if !has_solo || id == MASTER_CHANNEL_ID || channel.mix.solo_up {
+        } else if !has_solo
+            || id == MASTER_CHANNEL_ID
+            || channel.mix.solo_up
+            || is_direct_output(channel)
+        {
             SoloRole::Full
         } else if any_output(channel_map, channel, |t| t.mix.solo_down) {
             SoloRole::SendOnly

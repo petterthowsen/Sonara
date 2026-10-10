@@ -73,15 +73,15 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
 
 4. **Master Output & Metering**  
    - Channel buffers are mixed in place, so they already hold post-effect, post-pan audio for peak metering.  
-   - Clears the interleaved CPAL buffer (CPAL reuses it), then writes master (ID 1) to its output pair (1000 = outputs 1/2, 1001 = 3/4, …; a missing pair plays on 1/2).  
+   - Clears the interleaved CPAL buffer (CPAL reuses it), then writes every channel routed to a hardware output (master included) to its pair (1000 = outputs 1/2, 1001 = 3/4, …; channels on one pair accumulate, a missing pair plays on 1/2).
    - Peak detection still scans both channels, and status updates are throttled to ~20 Hz outside the callback.
 
 ## Channel Routing Model
 
 **Channel types**:
-- `INSTRUMENT`: Generates MIDI synth audio, routes to Bus or Master
-- `AUDIO`: Plays samples via Clips, routes to Bus or Master
-- `BUS`: Groups/submixes, receives routed audio, routes to other BUS or Master
+- `INSTRUMENT`: Generates MIDI synth audio, routes to Bus, Master, or a hardware output pair
+- `AUDIO`: Plays samples via Clips, routes to Bus, Master, or a hardware pair
+- `BUS`: Groups/submixes, receives routed audio, routes to other BUS, Master, or a hardware pair
 - Master (channel ID 1, not a separate type): Final mix, always routes to device outputs
 
 **ID allocation scheme**:

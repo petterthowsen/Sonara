@@ -26,7 +26,7 @@ The audio callback (`Engine/src/audio/processing/`, set up by `engine.rs`) proce
 4. Dispatch clip note on/off events to the owning channel with sample-accurate `frame_offset` values so instruments queue MIDI before rendering
 5. Render per-frame audio for each track (audio clips + channel device chains) into channel buffers
 6. Mix channels: apply gain/pan, route to output channels
-7. Output master channel (ID 1) to audio hardware via CPAL
+7. Write every channel routed to a hardware output (master included) to the audio hardware via CPAL
 8. Update peak meters for all channels
 9. Advance the transport sample counter (`EngineState::advance_sample_position`) and send periodic status updates (playhead, sample position, meters) at ~20 Hz
 
@@ -234,13 +234,13 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
    - Finishing any channel routes it onward (`route_channel`): output and post-fader sends read the buffer; pre-fader sends tap the pre-pass copy with pan reapplied. Only the destination fader gain is applied, never pan.
    - A routing cycle is broken at the first unfinished channel; already finished targets receive nothing.
 
-4. **Master Output**
-   - The CPAL buffer is cleared, then master (ID 1) is written to its output pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. A pair the device lacks plays on 1/2. Peaks are computed by the callback afterward.
+4. **Hardware Output**
+   - The CPAL buffer is cleared, then every channel routed to a hardware output (master included) is written to its pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. Channels on the same pair accumulate; a pair the device lacks plays on 1/2. A channel routed straight to a pair skips master's effects (reference track) and is never silenced by another channel's solo. Peaks are computed by the callback afterward.
 
 **Invariants:**
 - Never allocate during any pass; all temporary buffers are pre-sized at initialization.
 - Pan occurs once per audible channel in pass 2 and once per route target in pass 3.
-- Routes and sends ignore invalid targets (none, self, IDs ≥1000, missing channels). Master never routes onward and is never silenced by another channel's solo.
+- Routes and sends ignore invalid targets (none, self, missing channels; sends also ignore IDs ≥1000). Master never routes onward and is never silenced by another channel's solo; a channel routed straight to a hardware pair (1000+) is not silenced by solo either.
 
 ### Channel Routing and IO
 **Channel Types:** `INSTRUMENT`, `AUDIO`, `BUS` (Godot `Channel.ChannelType`); the master is channel ID 1 rather than a separate type
@@ -248,7 +248,7 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 **Routing Hierarchy:**
 - Tracks target channels via `Track.default_channel_id`.
 - Channels forward audio with `output_channel_id` (default = 1 = Master).  
-- Master channel (ID 1) routes to hardware outputs (ID ≥ 1000).  
+- Any channel may route straight to a hardware output (ID ≥ 1000), skipping master's effects.
 - ID allocation: 0 = null/no output, 1 = Master, 2-999 = user channels/buses, 1000+ = stereo output pairs on the selected output device (`HARDWARE_OUTPUT_BASE`).
 
 ### Output device, sample rate and buffer size (Phase 7)
@@ -262,7 +262,7 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 - Pre-fader taps run before fader smoothing; post-fader taps run after.  
 - Send returns respect the destination channel's gain so buses behave consistently with direct routes.
 
-**UI:** Mixer menus only list valid targets (Master + BUS for regular channels, hardware outputs for Master). Routing changes propagate via OSC + Godot signals.
+**UI:** Mixer menus list valid targets (Master + BUS + hardware outputs for regular channels; hardware outputs for Master). Routing changes propagate via OSC + Godot signals.
 
 ### Lock-Free Design
 The audio callback **never blocks**:

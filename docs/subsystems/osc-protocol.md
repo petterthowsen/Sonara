@@ -94,9 +94,10 @@ plugin and host (`Plugin Dragonfly Room Reverb (instance 3, host instance-3 (pid
 | `/channel/{id}/send/{target_id}/mute` | `i:0_or_1` | Mute/unmute send |
 
 **Hardware outputs.** IDs 1000 and up are stereo output pairs on the running device: 1000 is
-outputs 1/2, 1001 is 3/4, and so on (`/channel/1/route [1001]` puts master on outputs 3/4). A pair
-the device doesn't have plays on 1/2, and the engine logs a warning; the route is kept for a device
-that has it.
+outputs 1/2, 1001 is 3/4, and so on. Any channel may route there, not just master
+(`/channel/2/route [1001]` plays channel 2 straight on outputs 3/4, skipping master's effects —
+a reference track). Channels sharing a pair accumulate. A pair the device doesn't have plays on
+1/2, and the engine logs a warning; the route is kept for a device that has it.
 
 ### Channel Metering (Rust -> Godot)
 

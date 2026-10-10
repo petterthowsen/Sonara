@@ -476,8 +476,9 @@ func set_route(output_id: int) -> void:
 	"""Set output routing and sync to audio engine.
 
 	Routing rules:
-	- INSTRUMENT/AUDIO channels: route to Master (ID 1) or BUS channels
-	- BUS channels: route to Master (ID 1) or other BUS channels
+	- INSTRUMENT/AUDIO channels: route to Master (ID 1), BUS channels, or a hardware
+	  output pair (1000+, which skips Master's effects, e.g. a reference track)
+	- BUS channels: route to Master (ID 1), other BUS channels, or a hardware pair
 
 	This prevents invalid hierarchies like INSTRUMENT -> INSTRUMENT.
 	The UI filters available options; this is a safety check for edge cases.

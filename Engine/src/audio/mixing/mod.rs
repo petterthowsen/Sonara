@@ -63,8 +63,9 @@ fn forward_device_events(channel: &mut Channel, status_tx: &Sender<EngineStatus>
 /// Mix channels and output to the audio device.
 ///
 /// Passes: device pre-pass (channels nothing routes into), fader and pan, routing in dependency
-/// order (route targets run their devices and pan once, after all their inputs), master output.
-/// Uses only preallocated buffers.
+/// order (route targets run their devices and pan once, after all their inputs), hardware
+/// output (every channel routed to a hardware pair, master included). Uses only preallocated
+/// buffers.
 pub fn mix_and_output(
     state: &mut EngineState,
     data: &mut [f32],
@@ -111,7 +112,7 @@ pub fn mix_and_output(
 
     route_in_dependency_order(channel_map, channel_ids, parked, ready, frames, status_tx);
 
-    write_master_output(channel_map, data, channels);
+    write_hardware_outputs(channel_map, data, channels);
 }
 
 /// First pass: begin and finish the device chains of channels nothing routes into.
@@ -230,11 +231,15 @@ fn route_in_dependency_order(
     }
 }
 
-/// Write master (ID 1) to its hardware output pair: 1000 is outputs 1/2, 1001 is 3/4, …
-/// Master's fader was applied when channels mixed into it, so its buffer goes out as is. The
-/// buffer is cleared first: CPAL reuses it, and channels master doesn't write must be silent.
-/// A pair the device doesn't have plays on 1/2 (the command thread warns about it).
-fn write_master_output(
+/// Write every channel routed to a hardware output to its pair: 1000 is outputs 1/2, 1001 is
+/// 3/4, and so on. Any channel may route straight to a pair (a reference track that skips
+/// master's effects); channels routing into another channel mix there instead, as usual.
+///
+/// The audio is post-fader and post-pan (master's fader was applied while its inputs mixed in),
+/// and channels sharing a pair accumulate. The buffer is cleared first: CPAL reuses it, and
+/// pairs nothing writes must be silent. A pair the device doesn't have plays on 1/2 (the
+/// command thread warns about it).
+fn write_hardware_outputs(
     channel_map: &HashMap<ChannelId, Channel>,
     data: &mut [f32],
     channels: usize,
@@ -243,31 +248,32 @@ fn write_master_output(
     if channels == 0 {
         return;
     }
-    let Some(master) = channel_map.get(&MASTER_CHANNEL_ID) else {
-        return;
-    };
-    let Some(output_id) = master
-        .output_channel_id
-        .filter(|&id| id >= HARDWARE_OUTPUT_BASE)
-    else {
-        return;
-    };
     let pairs = (channels / 2).max(1);
-    let pair = output_id - HARDWARE_OUTPUT_BASE;
-    let first = if pair < pairs { pair * 2 } else { 0 };
+    let data_frames = data.len() / channels;
 
-    let frames = (data.len() / channels)
-        .min(master.buffer_left.len())
-        .min(master.buffer_right.len());
-    for frame_idx in 0..frames {
-        let left = master.buffer_left[frame_idx].clamp(-1.0, 1.0);
-        let right = master.buffer_right[frame_idx].clamp(-1.0, 1.0);
-        let base = frame_idx * channels;
-        if channels >= 2 {
-            data[base + first] = left;
-            data[base + first + 1] = right;
-        } else {
-            data[base] = (left + right) * 0.5; // Mono mix
+    for channel in channel_map.values() {
+        let Some(output_id) = channel
+            .output_channel_id
+            .filter(|&id| id >= HARDWARE_OUTPUT_BASE)
+        else {
+            continue;
+        };
+        let pair = output_id - HARDWARE_OUTPUT_BASE;
+        let first = if pair < pairs { pair * 2 } else { 0 };
+        let frames = data_frames
+            .min(channel.buffer_left.len())
+            .min(channel.buffer_right.len());
+        for frame_idx in 0..frames {
+            let left = channel.buffer_left[frame_idx].clamp(-1.0, 1.0);
+            let right = channel.buffer_right[frame_idx].clamp(-1.0, 1.0);
+            let base = frame_idx * channels;
+            if channels >= 2 {
+                data[base + first] = (data[base + first] + left).clamp(-1.0, 1.0);
+                data[base + first + 1] = (data[base + first + 1] + right).clamp(-1.0, 1.0);
+            } else {
+                data[base] = (data[base] + (left + right) * 0.5).clamp(-1.0, 1.0);
+                // Mono mix
+            }
         }
     }
 }
@@ -335,6 +341,50 @@ mod tests {
         assert!((output[1] - 0.25).abs() < 1e-4);
     }
 
+    #[test]
+    fn channel_routed_to_hardware_bypasses_master() {
+        // A reference track straight to outputs 3/4 while master's device colors 1/2.
+        let mut reference = test_channel(2, Some(1001), 0.0);
+        reference.buffer_left.fill(0.5);
+        reference.buffer_right.fill(0.25);
+        let mut master = test_channel(1, Some(1000), 0.0);
+        add_test_device(&mut master, 0.25);
+        let output = mix_to_device(&mut state_with(vec![master, reference]), 4);
+        for frame in output.chunks(4) {
+            // Master: silent input plus its device's level, on 1/2.
+            assert!((frame[0] - 0.25).abs() < 1e-4, "{:?}", frame);
+            assert!((frame[1] - 0.25).abs() < 1e-4, "{:?}", frame);
+            // Reference: untouched by master's device, on 3/4.
+            assert!((frame[2] - 0.5).abs() < 1e-4, "{:?}", frame);
+            assert!((frame[3] - 0.25).abs() < 1e-4, "{:?}", frame);
+        }
+    }
+
+    #[test]
+    fn channels_on_the_same_hardware_pair_accumulate() {
+        let mut first = test_channel(2, Some(1000), 0.0);
+        first.buffer_left.fill(0.25);
+        first.buffer_right.fill(0.25);
+        let mut second = test_channel(3, Some(1000), 0.0);
+        second.buffer_left.fill(0.5);
+        let output = mix_to_device(&mut state_with(vec![first, second]), 2);
+        assert!((output[0] - 0.75).abs() < 1e-4, "{:?}", output);
+        assert!((output[1] - 0.25).abs() < 1e-4, "{:?}", output);
+    }
+
+    #[test]
+    fn solo_elsewhere_leaves_a_direct_output_channel_playing() {
+        // A reference channel keeps playing when another channel is soloed: it does not
+        // reach master, so solo would otherwise silence it.
+        let mut reference = test_channel(2, Some(1000), 0.0);
+        reference.buffer_left.fill(0.5);
+        reference.buffer_right.fill(0.25);
+        let mut soloed = test_channel(3, Some(1), 0.0);
+        soloed.solo = true;
+        let master = test_channel(1, Some(1000), 0.0);
+        let output = mix_to_device(&mut state_with(vec![master, reference, soloed]), 2);
+        assert!((output[0] - 0.5).abs() < 1e-4, "{:?}", output);
+    }
     #[test]
     fn master_without_a_hardware_output_leaves_silence() {
         // CPAL reuses its buffer, so not writing it would replay old samples.
