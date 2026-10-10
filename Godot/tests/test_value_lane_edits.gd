@@ -21,11 +21,11 @@ func run_tests() -> void:
 	_test_maths()
 	_test_transforms()
 	await _test_paint()
+	await _test_paint_closest()
 	await _test_paint_selection_and_updates()
 	await _test_offset_scale_line()
 	await _test_reset_and_exact()
 	await _test_transform_dialog()
-
 
 func _near(a: float, b: float, eps := 0.0001) -> bool:
 	return absf(a - b) < eps
@@ -127,10 +127,37 @@ func _test_paint() -> void:
 	_assert(_near(chord.note(2).velocity, 0.3), "but not the next note")
 	await chord.cleanup()
 
+func _test_paint_closest() -> void:
+	# A press or drag anywhere acts on the closest stem.
+	var rig = Rig.new(self)
+	await rig.build([0, 960, 1920], [0.3, 0.3, 0.3])
+	var a = rig.area()
+	var x1: float = rig.stem_x_of(1)
+	var x2: float = rig.stem_x_of(2)
+	var mid: float = (x1 + x2) * 0.5 + 5.0
+	rig.drag(a, Vector2(mid, _y_of(rig, 0.8)), [Vector2(mid, _y_of(rig, 0.8))])
+	_assert(_near(rig.note(2).velocity, 0.8), "a press between stems paints the closest one (%s)" % rig.note(2).velocity)
+	_assert(_near(rig.note(0).velocity, 0.3) and _near(rig.note(1).velocity, 0.3), "and only that one")
+
+	# A press far from every stem grabs the nearest, and it follows the drag.
+	rig.history.clear()
+	var far: float = x2 + 100.0
+	rig.drag(a, Vector2(far, _y_of(rig, 0.5)), [Vector2(far, _y_of(rig, 0.7))])
+	_assert(_near(rig.note(2).velocity, 0.7), "a drag away from every stem moves the closest one (%s)" % rig.note(2).velocity)
+	_assert(_near(rig.note(0).velocity, 0.3) and _near(rig.note(1).velocity, 0.3), "and only that one")
+	_assert(rig.history.size() == 1, "one undo step")
+
+	# Alt-drag away from every stem offsets the closest stem.
+	rig.note(2).velocity = 0.4
+	rig.drag(a, Vector2(far, _y_of(rig, 0.5)), [Vector2(far, _y_of(rig, 0.7))], {"alt": true})
+	var span2: float = vel.max_value - vel.min_value
+	_assert(_near(rig.note(2).velocity, 0.4 + 0.2 * span2, 0.005), "alt-drag away from every stem offsets the closest one (%s)" % rig.note(2).velocity)
+	await rig.cleanup()
+
 
 func _test_paint_selection_and_updates() -> void:
 	var rig = Rig.new(self)
-	await rig.build([0, 960, 1920, 2880, 3840], [0.3, 0.3, 0.3, 0.3, 0.3])
+	await rig.build([0, 960, 1920, 2880, 3840], [0.3, 0.5, 0.3, 0.2, 0.3])
 	rig.select([1, 3])
 	rig.clear_osc()
 	var a = rig.area()
@@ -140,17 +167,44 @@ func _test_paint_selection_and_updates() -> void:
 	a._gui_input(rig.motion(Vector2(x, _y_of(rig, 0.7))))
 	_assert(rig.osc_updates() == 0, "still nothing while dragging")
 	a._gui_input(rig.mouse(Vector2(x, _y_of(rig, 0.7)), false))
-	_assert(_near(rig.note(1).velocity, 0.7) and _near(rig.note(3).velocity, 0.7), "with a selection, paint sets the selected notes")
-	_assert(_near(rig.note(0).velocity, 0.3) and _near(rig.note(4).velocity, 0.3), "and only those, wherever the pointer is")
+	_assert(_near(rig.note(1).velocity, 0.6) and _near(rig.note(3).velocity, 0.3),
+		"with a selection, paint moves the selected notes by the pointer's delta (0.5->0.6, 0.2->0.3): %s, %s"
+			% [rig.note(1).velocity, rig.note(3).velocity])
+	_assert(_near(rig.note(0).velocity, 0.3) and _near(rig.note(4).velocity, 0.3),
+		"and only those, wherever the pointer is")
 	_assert(rig.osc_updates() == 2, "two update_note sends after the release (%d)" % rig.osc_updates())
 	await rig.cleanup()
+
+	# Regression: the relative delta is measured from the PRESS. Dragging past the lane
+	# top saturates the values there; it must not snap them back to their pre-drag ones
+	# once value_at_y clamps the pointer into the lane (delta would fall to 0).
+	var sat = Rig.new(self)
+	await sat.build([0, 960, 1920], [0.3, 0.5, 0.3])
+	sat.select([1, 2])
+	sat.clear_osc()
+	sat.drag(sat.area(), Vector2(10, _y_of(sat, 0.4)), [Vector2(10, -40.0)])
+	_assert(sat.note(1).velocity == 1.0 and _near(sat.note(2).velocity, 0.9, 0.01),
+		"a drag past the lane top saturates at max instead of snapping back: %s, %s"
+			% [sat.note(1).velocity, sat.note(2).velocity])
+	_assert(sat.osc_updates() == 2, "and both changed notes are sent (%d)" % sat.osc_updates())
+	await sat.cleanup()
+
+	# A press without movement is a zero delta: selected notes keep their values.
+	var click = Rig.new(self)
+	await click.build([0, 960], [0.3, 0.8])
+	click.select([0, 1])
+	click.drag(click.area(), Vector2(10, _y_of(click, 0.4)), [])
+	_assert(_near(click.note(0).velocity, 0.3) and _near(click.note(1).velocity, 0.8),
+		"a click with a selection changes nothing (zero delta): %s, %s" % [click.note(0).velocity, click.note(1).velocity])
+	await click.cleanup()
 
 	var five = Rig.new(self)
 	await five.build([0, 960, 1920, 2880, 3840], [0.3, 0.3, 0.3, 0.3, 0.3])
 	five.select([0, 1, 2, 3, 4])
 	five.clear_osc()
-	five.drag(five.area(), Vector2(10, _y_of(five, 0.4)), [Vector2(12, _y_of(five, 0.4))])
+	five.drag(five.area(), Vector2(10, _y_of(five, 0.4)), [Vector2(12, _y_of(five, 0.5))])
 	_assert(five.osc_updates() == 5 and five.history.size() == 1, "five notes: five update_note sends, one history entry")
+	_assert(five.note(4).velocity > 0.3, "and each moved up")
 	await five.cleanup()
 
 

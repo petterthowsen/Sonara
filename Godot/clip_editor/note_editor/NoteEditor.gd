@@ -1801,6 +1801,7 @@ func _refresh_notes(visuals: Array[VisualNote]) -> void:
 	for vn in visuals:
 		if is_instance_valid(vn) and vn.midi_note_data:
 			refresh_note(vn.midi_note_data, _clip_for_visual_note(vn))
+	notes_refreshed.emit()
 
 
 ## The instance a visual shows its note through (track mode), or the bound one (clip mode).

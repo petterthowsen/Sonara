@@ -104,6 +104,7 @@ func bind(editor: MidiEditor) -> void:
 	_connect_once(editor.hovered_note_changed, _on_hover_changed)
 	for ne in editor.note_editors:
 		_connect_once(ne.notes_changed, queue_redraw)
+		_connect_once(ne.notes_refreshed, queue_redraw)
 		if ne.selection_manager:
 			_connect_once(ne.selection_manager.selection_changed, _on_selection_changed)
 	queue_redraw()
@@ -231,7 +232,8 @@ func targets_at(x: float) -> Array[MidiNoteData]:
 	return _chord_at(x, x)
 
 
-## Notes of the stems whose x lies within the tolerance of [x0, x1].
+## Notes of the stems whose x lies within the tolerance of [x0, x1]; with no stem there, the
+## note of the stem nearest their midpoint (a click anywhere acts on the closest stem).
 func _chord_at(x0: float, x1: float) -> Array[MidiNoteData]:
 	var lo := minf(x0, x1) - CHORD_TOLERANCE
 	var hi := maxf(x0, x1) + CHORD_TOLERANCE
@@ -240,11 +242,27 @@ func _chord_at(x0: float, x1: float) -> Array[MidiNoteData]:
 		var x := stem_x(stem)
 		if x >= lo and x <= hi and stem["note_data"] not in out:
 			out.append(stem["note_data"])
+	if out.is_empty():
+		var nearest := _nearest_stem_note((x0 + x1) * 0.5)
+		if nearest != null:
+			out.append(nearest)
 	return out
 
 
-## Note of the stem nearest `pos` x (within tolerance), or null. Of a chord's stems (the same
-## x), the one whose head is nearest `pos` y.
+## Note of the stem nearest `x` (ties go to the first stem), or null with no stems.
+func _nearest_stem_note(x: float) -> MidiNoteData:
+	var best: MidiNoteData = null
+	var best_d := INF
+	for stem in _current_stems():
+		var d := absf(stem_x(stem) - x)
+		if d < best_d:
+			best_d = d
+			best = stem["note_data"]
+	return best
+
+
+## Note of the stem nearest `pos` x (so hovering anywhere highlights the closest stem), or
+## null with no stems. Of a chord's stems (the same x), the one whose head is nearest `pos` y.
 func _note_near(pos: Vector2) -> MidiNoteData:
 	var stems := midi_editor.value_stems()
 	var best_d := CHORD_TOLERANCE + 0.001
@@ -396,9 +414,15 @@ func _unique_clips() -> Array:
 func _paint(from: Vector2, to: Vector2) -> void:
 	var selected := midi_editor.selected_note_data()
 	if not selected.is_empty():
-		var v := ValueLaneEdits.value_at_y(to.y, size.y, descriptor)
+		# Relative: every selected note moves by the value delta since the PRESS (not the last
+		# point — once the pointer leaves the lane, value_at_y clamps, and an incremental delta
+		# would fall to 0 and snap the notes back to their pre-drag values).
+		var delta := ValueLaneEdits.value_at_y(to.y, size.y, descriptor) \
+				- ValueLaneEdits.value_at_y(_press_pos.y, size.y, descriptor)
 		for nd in selected:
-			_write_value(nd, v)
+			if not _originals.has(nd):
+				_originals[nd] = descriptor.get_value(nd)
+			_write_value(nd, ValueLaneEdits.offset_value(_originals[nd], delta, descriptor))
 		return
 	# Every stem the pointer passed between the last and this position gets the value on the
 	# line between the two points, so a fast drag doesn't skip stems.
@@ -414,9 +438,14 @@ func _paint(from: Vector2, to: Vector2) -> void:
 			if is_nan(last_x) or absf(x - to.x) < absf(last_x - to.x):
 				last_x = x
 	# The stems crossed last (nearest the pointer) are held from now on, and the held ones
-	# follow the pointer even once it has left them.
+	# follow the pointer even once it has left them. A press that crossed nothing grabs the
+	# closest stem, so a click or drag anywhere acts on one.
 	if not is_nan(last_x):
 		_grabbed = _chord_at(last_x, last_x)
+	elif _grabbed.is_empty():
+		var nearest := _nearest_stem_note(to.x)
+		if nearest != null:
+			_grabbed = [nearest]
 	for nd in _grabbed:
 		_write_value(nd, p1.y)
 

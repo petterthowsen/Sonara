@@ -402,14 +402,18 @@ The selection is the union of `selected_notes` across `note_editors`.
 
 | Input | Effect |
 |---|---|
-| Left press/drag | Paint. The value comes from the pointer y. The target is the selection when one exists, otherwise all stems within ±3 px of the pointer x (a chord). Each stem the drag passes over is set once per pass. |
-| Alt + drag | Offset. The target is the selection, or the stems at the press x. The delta is in value units per pixel of lane height. |
+| Left press/drag | Paint. The value comes from the pointer y. The target is the selection when one exists (see below), otherwise all stems within ±3 px of the pointer x (a chord), or with no stem there, the closest stem — so a press or drag anywhere in the lane acts on one. Each stem the drag passes over is set once per pass. |
+| Alt + drag | Offset. The target is the selection, or the stems at the press x (falling back to the closest stem, as with paint). The delta is in value units per pixel of lane height. |
 | Ctrl + Alt + drag | Scale toward 0 by the factor `(h − Δy) / h`. |
 | Ctrl + drag (moved > 3 px) | Line preview. On release, stems inside the x span (selection only, if one exists) get `line_value`. |
 | Shift (any drag) | `FineDrag` 0.15×, with no jump when pressed or released mid-drag. |
 | Ctrl + click (no movement) | Reset to `default_value` (REQ-024 as amended). |
 | Double-click a stem | `FloatingValueEditor`: type an exact value in the display format. The target follows the paint rule (selection, else the chord at that x). |
 | Right-click | Lane context menu (Set…, Randomize…, Scale…). |
+
+- **Paint with a selection is relative** (REQ-021 as amended): every selected note moves by the
+  value delta between the press and the pointer, from its value at the press, so the notes keep
+  their offsets from each other. A click without movement is a zero delta and changes nothing.
 
 - **Undo:** each gesture snapshots the clips it touches first, using
   `ClipNotesStateCommand.capture_many(clips)` (extracted from `NoteEditor._history_begin_clips`).

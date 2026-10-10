@@ -232,12 +232,15 @@ settings, they shall show 0–100%.
 ##### REQ-021: Paint
 
 WHEN the user left-drags in a lane, every stem the pointer passes over shall take the value at
-the pointer's height. While notes are selected, only selected notes shall be painted. With no
-selection, every stem at the pointer's x shall be painted.
+the pointer's height. With no selection, every stem at the pointer's x shall be painted — or,
+with no stem at that x, the closest one, so a press or drag anywhere acts on a stem. While
+notes are selected, painting shall be relative: every selected note shall move by the value
+delta between the press and the pointer, from its value at the press, so the selection keeps
+its internal offsets. A click without movement shall change nothing.
 
 - **Acceptance:** Godot test drags across three single notes and a chord with nothing selected
-  (all stems take the pointer value), then repeats with one chord note selected (only that
-  note changes).
+  (all stems take the pointer value), presses between stems (the closest one changes), then
+  drags with a selection (each selected note moves by the same delta, others stay put).
 
 ##### REQ-022: Relative and scale drags
 

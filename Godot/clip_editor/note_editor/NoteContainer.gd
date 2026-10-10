@@ -27,6 +27,9 @@ signal notes_changed
 ## Something that sets how far right the content reaches changed (notes, instances). The
 ## owner (MidiEditor) recomputes one width for all its editors; see content_end_ticks().
 signal content_extent_changed
+## The data of notes behind the visuals changed mid-gesture (drag, resize) without a clip
+## signal yet. The value lanes listen to redraw their stems from the live data.
+signal notes_refreshed
 
 ## Shared pitch <-> row <-> Y math, handed down by MidiEditor. Defaults to its own
 ## chromatic layout so a standalone NoteEditor still positions notes.

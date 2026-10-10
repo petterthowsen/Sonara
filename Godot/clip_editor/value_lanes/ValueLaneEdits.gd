@@ -15,8 +15,13 @@ static func value_at_y(y: float, height: float, d: NoteValueDescriptor) -> float
 static func offset(values: Array, delta: float, d: NoteValueDescriptor) -> Array[float]:
 	var out: Array[float] = []
 	for v in values:
-		out.append(d.clamp_value(float(v) + delta))
+		out.append(offset_value(float(v), delta, d))
 	return out
+
+
+## One value moved by `delta`, clamped.
+static func offset_value(v: float, delta: float, d: NoteValueDescriptor) -> float:
+	return d.clamp_value(v + delta)
 
 
 ## Every value multiplied by `factor` (scaled toward 0), clamped.
