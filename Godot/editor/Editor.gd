@@ -326,26 +326,36 @@ func focus_track(track: Track, apply_record_arm: bool = true) -> void:
 		focus_channel(ch)
 
 
-## Record-arm only the active track when the follow-active setting is on.
-func _apply_record_arm_follows_active() -> void:
+## Record-arm only `track` when the given follow setting is on, disarming the
+## other tracks that can hold clips. Tracks without clips keep their arm state.
+func _apply_record_arm(track: Track, key: String) -> void:
 	if Settings == null:
 		return
-	if not Settings.get_value("arranger/record_arm_follows_active_track"):
+	if not Settings.get_value(key):
 		return
-	if project == null or focused_track == null:
+	if project == null or track == null:
 		return
-	if not focused_track.has_clips():
+	if not track.has_clips():
 		return
 	for t in project.tracks:
 		if not t.has_clips():
 			continue
-		t.set_armed(t == focused_track)
+		t.set_armed(t == track)
+
+
+## Record-arm only the active track when the follow-active setting is on.
+func _apply_record_arm_follows_active() -> void:
+	_apply_record_arm(focused_track, "arranger/record_arm_follows_active_track")
 
 
 ## React to live setting changes, applying record-arm follow immediately when enabled.
-func _on_setting_changed(key: String, _value) -> void:
+func _on_setting_changed(key: String, value) -> void:
 	if key == "arranger/record_arm_follows_active_track":
 		_apply_record_arm_follows_active()
+	elif key == "arranger/record_arm_follows_midi_editor_track":
+		# Turning the setting on arms the track the MIDI editor has selected right now.
+		if value and clip_editor and clip_editor.midi_editor and clip_editor.midi_editor.current_track:
+			_apply_record_arm(clip_editor.midi_editor.current_track, key)
 
 
 func _connect_audio_engine_signals():
@@ -1153,15 +1163,18 @@ func _clip_selection_selects_tracks() -> bool:
 	return Settings.get_value("selection/track_follows_clip_selection")
 
 
-## Handle a track pick in the MIDI editor's Track-Mode track list.
+## Handle a track pick in the MIDI editor (track list, note pick, edit toggles).
 func _on_clip_editor_track_mode_track_selected(track: Track) -> void:
-	if track == null or not Settings or not Settings.get_value("selection/track_follows_midi_editor_track_list"):
+	if track == null or not Settings:
 		return
-	_select_track_externally([track] as Array[Track], track)
+	if Settings.get_value("selection/track_follows_midi_editor_track"):
+		_select_track_externally([track] as Array[Track], track)
+	if Settings.get_value("arranger/record_arm_follows_midi_editor_track"):
+		_apply_record_arm(track, "arranger/record_arm_follows_midi_editor_track")
 
 
 ## Apply a track selection that originated outside the arranger track headers (clip selection,
-## MIDI editor track list), keeping TrackList's visuals and Editor's selection state in sync
+## MIDI editor track selection), keeping TrackList's visuals and Editor's selection state in sync
 ## without record-arming the track (mirrors _on_mixer_selection_changed).
 func _select_track_externally(tracks: Array[Track], active: Track) -> void:
 	if _syncing_selection:

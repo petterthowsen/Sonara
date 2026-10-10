@@ -773,9 +773,10 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	# Calculate the new scroll to keep the same content under the mouse
 	var scroll_offset = new_content_x - h_scroll_mouse_pos.x
 
-	# Stick to the origin when already within a beat of it (same rule as the
-	# arranger and _smooth_horizontal_zoom).
-	if old_scroll < old_pixels_per_beat:
+	# Stick to the origin when already within a beat of it and the cursor is in the
+	# left third of the view (same rule as the arranger and _smooth_horizontal_zoom):
+	# the mouse-anchored formula would otherwise creep the view away from the start.
+	if old_scroll < old_pixels_per_beat and h_scroll_mouse_pos.x <= h_scroll.size.x / 3.0:
 		scroll_offset = 0.0
 	# Snap to zero if we're close to the start (nice UX touch)
 	var snap_threshold = 30.0
@@ -802,9 +803,10 @@ func _smooth_horizontal_zoom(factor: float) -> void:
 	var mouse_x := clampf(h_scroll.get_local_mouse_position().x, 0.0, viewport_width)
 	var scroll := float(h_scroll.scroll_horizontal)
 	var origin_anchored := _zoom_anchor_active and _zoom_anchor_beat == 0.0 and _zoom_anchor_x == 0.0
-	# Stick to the origin when we're already within a beat of it (same rule as the arranger):
-	# the mouse-anchored formula would otherwise creep the view away from the start.
-	if scroll < grid_helper.pixels_per_beat and (not _zoom_anchor_active or origin_anchored):
+	# Stick to the origin only when the cursor is in the left third of the view; with the
+	# cursor further right the zoom anchors around the mouse even at scroll position 0.
+	var origin_stick := scroll < grid_helper.pixels_per_beat and mouse_x <= viewport_width / 3.0
+	if origin_stick and (not _zoom_anchor_active or origin_anchored):
 		_zoom_anchor_beat = 0.0
 		_zoom_anchor_x = 0.0
 	elif not _zoom_anchor_active or absf(_zoom_anchor_x - mouse_x) > 1.0:

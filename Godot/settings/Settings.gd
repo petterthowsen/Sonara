@@ -112,7 +112,9 @@ func _ready() -> void:
 
 
 ## Keys that were renamed: old -> new. Old values are copied once if the new key is unset.
-const _RENAMED_KEYS := {}
+const _RENAMED_KEYS := {
+	"selection/track_follows_midi_editor_track_list": "selection/track_follows_midi_editor_track",
+}
 
 
 func _migrate_renamed_keys() -> void:
@@ -240,6 +242,14 @@ func _register_all_settings() -> void:
 		"When enabled, changing the active track record-arms that track and disarms the others.",
 	)).sub("Arranger")
 	_register(Setting.new(
+		"arranger/record_arm_follows_midi_editor_track",
+		"Record Arm Follows MIDI Editor Track Selection",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, selecting a track in the MIDI editor (track list, or clicking another track's notes) record-arms that track and disarms the others.",
+	)).sub("Arranger")
+	_register(Setting.new(
 		"arranger/markers/rename_on_create",
 		"Rename New Markers",
 		Type.BOOL,
@@ -289,12 +299,12 @@ func _register_all_settings() -> void:
 		"When enabled, selecting a clip in the arranger also selects its track.",
 	)).sub("Selection")
 	_register(Setting.new(
-		"selection/track_follows_midi_editor_track_list",
-		"Track Selection Follows MIDI Editor Track List",
+		"selection/track_follows_midi_editor_track",
+		"Track Selection Follows MIDI Editor Track Selection",
 		Type.BOOL,
-		true,
+		false,
 		CATEGORY_BEHAVIOR,
-		"When enabled, selecting a track in the MIDI editor's track list (Track Mode) also selects that track in the arranger and mixer. Useful for quickly adjusting a track's devices via the device lane while in Track Mode.",
+		"When enabled, selecting a track in the MIDI editor (track list, or clicking another track's notes) also selects that track in the arranger and mixer. Useful for quickly adjusting a track's devices via the device lane while in Track Mode.",
 	)).sub("Selection")
 	_register(Setting.new(
 		"selection/range_select_selects_tracks",

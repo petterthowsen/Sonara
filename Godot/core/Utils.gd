@@ -379,3 +379,13 @@ static func _match_single_word(query: String, target: String) -> float:
 
 	var final_score = match_ratio + consecutive_bonus + start_bonus - length_penalty
 	return clamp(final_score, 0.0, 0.85)
+
+
+## Open `file_path` in the OS file manager, revealing and selecting the file
+## where the desktop supports it (org.freedesktop.FileManager1). Godot falls
+## back to opening the containing folder on desktops without that interface.
+## No-op on an empty path.
+static func reveal_in_file_manager(file_path: String) -> void:
+	if file_path.is_empty():
+		return
+	OS.shell_show_in_file_manager(file_path)

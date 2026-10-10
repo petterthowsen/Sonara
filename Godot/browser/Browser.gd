@@ -70,6 +70,11 @@ var _search_filter: String = ""
 # into a single deferred rebuild.
 var _refresh_pending: bool = false
 
+# Right-click menu on asset items ("Open in Containing Folder"); built lazily.
+const MENU_OPEN_FOLDER_ID := 1
+var _context_menu: PopupMenu = null
+var _context_menu_asset: Asset = null
+
 # Tabs whose ItemList/Tree contents are stale relative to `_audio_assets` etc.
 # (or the current `_search_filter`). Populated lazily when a tab becomes visible.
 var _dirty_tabs: Dictionary = {}
@@ -144,8 +149,7 @@ func _create_item_list(asset_type: Asset.TYPE) -> void:
 	var item_list = ItemList.new()
 	item_list.name = "ItemList_%s" % Asset.TYPE.keys()[asset_type]
 	# Connect with bind to pass asset_type as last parameter
-	item_list.item_clicked.connect(func(index: int, _at_position: Vector2, _mouse_button_index: int):
-		_on_asset_selected(index, asset_type))
+	item_list.item_clicked.connect(_on_item_clicked.bind(asset_type))
 	item_list.set_drag_forwarding(
 		Callable(self, "_get_drag_data"),
 		Callable(self, "_can_drop_data"),
@@ -157,6 +161,7 @@ func _create_item_list(asset_type: Asset.TYPE) -> void:
 	item_list.select_mode = ItemList.SELECT_MULTI
 	item_list.allow_reselect = true
 	item_list.allow_search = true
+	item_list.allow_rmb_select = true
 	item_list.auto_height = false  # Let parent ScrollContainer handle scrolling
 	item_list.max_text_lines = 1
 	item_list.max_columns = 2
@@ -197,6 +202,7 @@ func _create_tree(asset_type: Asset.TYPE) -> void:
 	# Connect signals
 	tree.item_selected.connect(func(): _on_tree_item_selected(asset_type))
 	tree.item_collapsed.connect(func(item: TreeItem): _on_tree_item_collapsed(item, asset_type))
+	tree.item_mouse_selected.connect(_on_tree_item_context_menu.bind(asset_type))
 	tree.set_drag_forwarding(
 		Callable(self, "_get_drag_data_tree"),
 		Callable(self, "_can_drop_data"),
@@ -1030,11 +1036,70 @@ func _on_tree_item_selected(asset_type: Asset.TYPE) -> void:
 	var selected = tree.get_selected()
 	if not selected:
 		return
-	
+
 	var asset = selected.get_metadata(0)
 	if asset is Asset:
 		asset_selected.emit(asset)
 		AssetService.mark_asset_used(asset.path)
+
+
+# ============================================================================
+# ASSET CONTEXT MENU
+# ============================================================================
+
+## Build (lazily) the right-click menu for `asset` and add its entry. Returns
+## false when there is nothing to show: built-in devices are not files, and
+## anything that isn't an Asset has no menu.
+func _prepare_asset_context_menu(asset: Asset) -> bool:
+	var state := asset.get_folder_menu_state() if asset is Asset else Asset.FolderMenu.Hidden
+	if state == Asset.FolderMenu.Hidden:
+		return false
+
+	if _context_menu == null:
+		_context_menu = PopupMenu.new()
+		_context_menu.theme_type_variation = &"ContextMenuList"
+		_context_menu.id_pressed.connect(_on_context_menu_id_pressed)
+		add_child(_context_menu)
+	_context_menu.clear()
+	_context_menu.add_item("Open in Containing Folder", MENU_OPEN_FOLDER_ID)
+	_context_menu.set_item_disabled(0, state == Asset.FolderMenu.Disabled)
+	_context_menu_asset = asset
+	return true
+
+
+## Right-click on an ItemList row: the context menu; any other button selects like before.
+func _on_item_clicked(index: int, _at_position: Vector2, button: int, asset_type: Asset.TYPE) -> void:
+	if button == MOUSE_BUTTON_RIGHT:
+		var asset = _item_lists[asset_type].get_item_metadata(index)
+		if _prepare_asset_context_menu(asset):
+			_context_menu.popup(Rect2(_item_lists[asset_type].get_global_mouse_position(), Vector2.ZERO))
+		return
+	_on_asset_selected(index, asset_type)
+
+
+## Right-click on a tree row (allow_rmb_select): the context menu for its asset.
+## Godot 4.7's `item_mouse_selected` carries (local mouse position, button
+## index) - not the clicked item - so resolve the row from the position.
+func _on_tree_item_context_menu(mouse_position: Vector2, id: int, asset_type: Asset.TYPE) -> void:
+	if id != MOUSE_BUTTON_RIGHT:
+		return
+	var tree: Tree = _trees[asset_type]
+	var item: TreeItem = tree.get_item_at_position(mouse_position)
+	if item == null:
+		return
+	var asset = item.get_metadata(0)
+	if _prepare_asset_context_menu(asset):
+		_context_menu.popup(Rect2(tree.get_global_mouse_position(), Vector2.ZERO))
+
+
+func _on_context_menu_id_pressed(id: int) -> void:
+	if id != MENU_OPEN_FOLDER_ID or _context_menu_asset == null:
+		return
+	var file_path := _context_menu_asset.get_file_path()
+	if file_path.is_empty():
+		return
+	logger.info("Revealing asset in file manager: %s" % file_path)
+	Utils.reveal_in_file_manager(file_path)
 
 
 # ============================================================================

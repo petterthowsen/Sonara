@@ -447,13 +447,16 @@ func _zoom_horizontally(is_scroll_up: bool, zoom_point_x: float) -> void:
 
 	# Check if scroll position is close to origin (within 1 beat worth of pixels)
 	var near_origin = h_scroll.scroll_horizontal < grid_helper.pixels_per_beat
+	# Stick to the origin only when the cursor is in the left third of the view; with the
+	# cursor further right the zoom anchors around the mouse even at scroll position 0.
+	var origin_stick := near_origin and zoom_point_x <= h_scroll.size.x / 3.0
 
 	# Calculate target zoom using zoom_sensitivity_h
 	var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
 	target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
 
 	var origin_anchored := _zoom_anchor_active and _zoom_anchor_beat == 0.0 and _zoom_anchor_x == 0.0
-	if near_origin and (not _zoom_anchor_active or origin_anchored):
+	if origin_stick and (not _zoom_anchor_active or origin_anchored):
 		# Lock to origin: anchor beat 0 at x 0 so the scroll stays at 0
 		_zoom_anchor_beat = 0.0
 		_zoom_anchor_x = 0.0

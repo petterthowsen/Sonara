@@ -10,6 +10,9 @@ var type : TYPE = TYPE.Audio
 var name : String = ""
 var path : String = ""  # Absolute file path
 
+## Right-click "Open in Containing Folder" state (see get_folder_menu_state).
+enum FolderMenu { Hidden, Enabled, Disabled }
+
 
 # ============================================================================
 # METADATA
@@ -78,6 +81,32 @@ func is_soundfont() -> bool:
 ## Check if this is a device preset
 func is_preset() -> bool:
 	return type == TYPE.Preset
+
+
+## Absolute file path backing this asset, or "" when the asset is not a file.
+## Device assets map to their plugin file (`Device.plugin_path`); built-in
+## devices (sonara.builtin.* ids) have no file and report "".
+func get_file_path() -> String:
+	if type == TYPE.Device:
+		var device = AssetService.get_device(path)
+		return device.plugin_path if device else ""
+	return path
+
+
+## Containing folder of `get_file_path()`, "" when the asset has no file.
+func containing_folder() -> String:
+	return get_file_path().get_base_dir()
+
+
+## Right-click "Open in Containing Folder" state: Hidden when the asset is not a
+## file (built-in devices), Enabled for file-backed assets, Disabled (grey) for
+## presets whose device isn't installed or when the path is missing.
+func get_folder_menu_state() -> FolderMenu:
+	if type == TYPE.Device:
+		return FolderMenu.Enabled if not get_file_path().is_empty() else FolderMenu.Hidden
+	if is_unavailable() or path.is_empty():
+		return FolderMenu.Disabled
+	return FolderMenu.Enabled
 
 
 ## True for a preset whose device isn't installed (a plugin that is missing). Other assets are never unavailable.
