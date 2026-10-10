@@ -155,7 +155,7 @@ func _register_all_settings() -> void:
 		0,
 		CATEGORY_BEHAVIOR,
 		"Transpose the virtual keyboard up or down.",
-	)).sub("Computer Keyboard").range(-24, 24, 1)
+	)).sub("Computer Keyboard").range(-36, 24, 1)
 	_register(Setting.new(
 		"midi/virtual_keyboard/velocity",
 		"Default Velocity",

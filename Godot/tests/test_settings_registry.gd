@@ -80,6 +80,10 @@ func _test_coerce_clamps() -> void:
 	var setting = _settings.get_setting("midi/virtual_keyboard/transpose")
 	var coerced = _settings._coerce(setting, 99)
 	_assert(coerced == 24, "transpose clamps 99 down to its max of 24")
+	_assert(_settings._coerce(setting, -36) == -36,
+		"transpose allows -36 so Z reaches octave 1 (C1 = MIDI 24 from C3 keys)")
+	_assert(_settings._coerce(setting, -99) == -36,
+		"transpose clamps -99 up to its min of -36")
 
 
 func _test_coerce_color() -> void:

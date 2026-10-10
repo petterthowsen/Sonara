@@ -912,11 +912,21 @@ func _get_track_list() -> TrackList:
 # FOLDING
 # ============================================================================
 
-## Show the fold button on folders and groups, pressed while children are shown.
+## The fold button only makes sense once the folder/group has child tracks to fold: an empty
+## container or a track whose mixer channel nests child channels (drum machine pad returns)
+## shows none.
+func _has_child_tracks() -> bool:
+	if not track.can_contain_tracks():
+		return false
+	if current_project:
+		return not current_project.get_track_children(track).is_empty()
+	return not track.child_track_ids.is_empty()
+
+
 func _update_foldout_toggle() -> void:
 	if foldout_toggle == null or track == null:
 		return
-	foldout_toggle.visible = track.can_contain_tracks()
+	foldout_toggle.visible = _has_child_tracks()
 	if foldout_toggle is ToggleIconButton:
 		(foldout_toggle as ToggleIconButton).set_state(track.is_folder_expanded)
 	else:
