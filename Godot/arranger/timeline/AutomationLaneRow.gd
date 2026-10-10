@@ -1,7 +1,9 @@
 # AutomationLaneRow.gd
 # The timeline-side row for one automation lane: draws the lane's curve and points (the Timeline
-# draws its fill, grid and border along with every other row's), and owns the direct-manipulation input - double-click to insert
-# (and keep dragging the new point), drag to move, shift-click / shift-drag to add or remove
+# draws its fill, grid and border along with every other row's), and owns the direct-manipulation
+# input - double-click to insert (at the lane's own value at that position, so the insert is
+# inaudible; the new point only starts following the cursor once the held drag passes
+# DRAG_THRESHOLD), drag to move, shift-click / shift-drag to add or remove
 # points, drag on empty space to box-select, ctrl-drag to select a grid-snapped time range,
 # right-click for the point menu, and drag the handle at a segment's midpoint to bend it (tension;
 # double-click the handle to straighten it) (REQ-013, REQ-018, REQ-019, REQ-020).
@@ -65,6 +67,10 @@ var _drag_anchor_tick: int = 0
 var _drag_anchor_value: float = 0.0
 var _drag_value_delta: float = 0.0         # accumulated so shift can slow the drag mid-gesture
 var _drag_last_y: float = 0.0
+## The point this gesture just inserted with a double-click, or -1. Its value starts at the
+## lane's own value at the insert position (not at the cursor), and only starts following the
+## cursor once the drag goes live past DRAG_THRESHOLD.
+var _drag_inserted_id: int = -1
 var _value_editor: FloatingValueEditor = null
 
 # --- tension handle state (the midpoint of a LINEAR segment; tension lives on its left point) ---
@@ -512,12 +518,14 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			return
 
 		if event.double_click:
-			# Empty space inserts a point and keeps it under the cursor for dragging; on a point it
-			# opens the value editor, so it can't stack two points on one spot.
+			# Empty space inserts a point at the lane's own value there and keeps it armed for
+			# dragging; on a point it opens the value editor, so it can't stack two points on
+			# one spot.
 			if hit == null:
 				hit = _insert_point_at(pos)
 				if hit != null:
 					_begin_point_drag(hit, pos)
+					_drag_inserted_id = hit.id
 			else:
 				_open_value_editor(hit)
 			accept_event()
@@ -581,6 +589,10 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if _drag_pending and pos.distance_to(_drag_start_pos) > DRAG_THRESHOLD:
 		_drag_pending = false
 		_drag_active = true
+		if _drag_point_id == _drag_inserted_id:
+			# The double-click-inserted point was placed at the lane's own value, not at the
+			# cursor; from here on it follows the cursor like any drag, so re-anchor it there.
+			_snap_inserted_drag_to_cursor(pos)
 	if _drag_active:
 		_apply_point_drag(pos, event.shift_pressed)
 		return
@@ -680,11 +692,16 @@ func _set_playhead_at(pos: Vector2) -> void:
 		Sonara.editor.set_playhead(maxi(0, _snap_tick(x_to_tick(pos.x))))
 
 
-## Double-click insert: snapped tick, value straight off the cursor (REQ-018). The new point
-## becomes the only selected one.
+## Double-click insert: snapped tick, and the lane's own value at that tick - interpolated
+## between the surrounding points, or the flat hold value - so inserting never changes what the
+## lane plays (REQ-018). With no points at all the cursor's value is used. The new point becomes
+## the only selected one and starts as a pending drag; it follows the cursor only once the drag
+## goes live (see _handle_mouse_motion).
 func _insert_point_at(pos: Vector2) -> AutomationPoint:
 	var tick := maxi(0, _snap_tick(x_to_tick(pos.x)))
-	var value := y_to_value(pos.y)
+	var value := AutomationActions.insert_value_at(lane, tick)
+	if is_nan(value):
+		value = y_to_value(pos.y)
 	var point: Object = AutomationActions.add_point(lane, tick, value)
 	if point and selection_manager:
 		selection_manager.select_only(lane, point.id)
@@ -704,6 +721,7 @@ func _begin_point_drag(point: AutomationPoint, pos: Vector2) -> void:
 	_drag_pending = true
 	_drag_active = false
 	_drag_point_id = point.id
+	_drag_inserted_id = -1
 	_drag_start_pos = pos
 	_drag_anchor_tick = point.tick
 	_drag_anchor_value = point.value
@@ -711,6 +729,23 @@ func _begin_point_drag(point: AutomationPoint, pos: Vector2) -> void:
 	_drag_last_y = pos.y
 	_drag_before = AutomationActions.capture_point_states(_dragged_points())
 	queue_redraw()
+	_refresh_tooltip()
+
+
+## A double-click-inserted point starts at the lane's own value, not at the cursor; once the drag
+## goes live it follows the cursor like any drag, so seed the accumulated value delta with the
+## offset between the two. The undo before-state stays at the insert value, so undoing the drag
+## lands back on the inaudible pre-insert curve.
+func _snap_inserted_drag_to_cursor(pos: Vector2) -> void:
+	var before: Dictionary = _drag_before.get(_drag_inserted_id, {})
+	var point := _find_point(_drag_inserted_id)
+	if point == null or before.is_empty():
+		return
+	var value := y_to_value(pos.y)
+	_drag_anchor_value = before["value"]
+	_drag_value_delta = clampf(value - _drag_anchor_value, -_drag_anchor_value, 1.0 - _drag_anchor_value)
+	_drag_last_y = pos.y
+	lane.update_point(point.id, point.tick, value)
 	_refresh_tooltip()
 
 
@@ -788,6 +823,7 @@ func _finish_point_drag() -> void:
 
 	_drag_before.clear()
 	_drag_point_id = -1
+	_drag_inserted_id = -1
 	queue_redraw()
 	_refresh_tooltip()
 
@@ -944,6 +980,7 @@ func _cancel_pending_drag() -> void:
 	_drag_active = false
 	_drag_before.clear()
 	_drag_point_id = -1
+	_drag_inserted_id = -1
 
 
 # ---------------------------------------------------------------------------
@@ -1058,12 +1095,23 @@ func _open_context_menu(pos: Vector2) -> void:
 		_context_menu = AutomationPointContextMenu.new()
 		add_child(_context_menu)
 		_context_menu.curve_requested.connect(_on_curve_requested)
+		_context_menu.neighbor_value_requested.connect(_on_neighbor_value_requested)
 		_context_menu.delete_requested.connect(_on_delete_requested)
-	_context_menu.open_for(target_points, get_global_mouse_position())
+	_context_menu.open_for(
+		target_points,
+		get_global_mouse_position(),
+		AutomationActions.neighbor_value_available(lane, target_points, false),
+		AutomationActions.neighbor_value_available(lane, target_points, true)
+	)
 
 
 func _on_curve_requested(points: Array, curve: int) -> void:
 	AutomationActions.set_curve(lane, points, curve)
+	queue_redraw()
+
+
+func _on_neighbor_value_requested(points: Array, next: bool) -> void:
+	AutomationActions.set_points_to_neighbor_value(lane, points, next)
 	queue_redraw()
 
 

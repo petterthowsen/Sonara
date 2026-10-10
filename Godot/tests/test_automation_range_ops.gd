@@ -2,7 +2,9 @@
 # Headless tests for the range-aware automation cut/copy/paste/duplicate (T-025, REQ-021):
 # the operand picked from range vs selection, the clipboard payload and its tick offsets, a
 # 1-bar segment pasted at bar 3 landing at shifted ticks with curves intact and overwriting
-# what sits under it, undo restoring, and the anchor/tick priority rules.
+# what sits under it, undo restoring, and the anchor/tick priority rules. It also covers the
+# clip-path range copy/paste/duplicate carrying the lane points inside the range (snapshot,
+# shifted paste, one shared undo step).
 #
 # Undo is exercised through a local CommandHistory driving the same commands
 # AutomationActions.paste_segment batches (HistoryUtil has no editor history in test mode).
@@ -42,6 +44,9 @@ func run_tests() -> void:
 	_test_paste_overwrites_inside_span()
 	_test_clear_range_half_open()
 	_test_paste_and_duplicate_tick_priority()
+	await _test_clip_range_copy_pastes_automation()
+	await _test_clip_range_duplicate_includes_automation()
+	await _test_clip_copy_without_range_carries_no_automation()
 
 
 func _make_lane() -> Object:
@@ -203,3 +208,170 @@ func _paste_through_history(hist: Object, lane: Object, specs: Array, label: Str
 	else:
 		hist.execute(_macro_cmd.new(label, cmds))
 	return add_cmd.points
+
+
+# ============================================================================
+# RANGE COPY/PASTE/DUPLICATE WITH CLIPS
+# ============================================================================
+# A time-range copy/duplicate of clips must carry the lane points inside the range: paste/dup
+# re-creates them shifted, overwrite what sits in the pasted span, and land in the same undoable
+# history entry as the clips. Driven through the real Timeline paths, undo/redo through the
+# editor stub's CommandHistory.
+
+var _timeline_script: GDScript
+var _timeline_track_script: GDScript
+var _project_script: GDScript
+var _clip_script: GDScript
+var _instance_script: GDScript
+var _selection_script: GDScript
+var _editor_stub: Object = null
+
+
+## A Timeline with one instrument track (id 2), one volume lane, and a 960-tick clip at tick 0.
+func _clip_rig() -> Dictionary:
+	if _editor_stub == null:
+		_timeline_script = load("res://arranger/timeline/Timeline.gd")
+		_timeline_track_script = load("res://arranger/timeline/TimelineTrack.gd")
+		_project_script = load("res://data/Project.gd")
+		_clip_script = load("res://data/Clip.gd")
+		_instance_script = load("res://data/ClipInstance.gd")
+		_selection_script = load("res://data/ClipSelection.gd")
+		# Editor.gd references autoloads, so it is only instantiated after the first frame; kept
+		# out of the tree so its scene-bound _ready never runs.
+		_editor_stub = load("res://editor/Editor.gd").new()
+		_editor_stub.project = _project_script.new()
+		get_root().get_node("Sonara").editor = _editor_stub
+	var timeline: Object = _timeline_script.new()
+	timeline.project = _editor_stub.project
+	var track: Object = _track_script.new(2)
+	track.type = _track_script.TrackType.INSTRUMENT
+	_editor_stub.project.tracks.append(track)
+	var lane: Object = _lane_script.new("lane1", AutomationTarget.channel_volume())
+	track.add_automation_lane(lane)
+	var row: Object = _timeline_track_script.new()
+	row.track = track
+	timeline.timeline_tracks.append(row)
+	var inst: Object = _instance_script.new()
+	inst.clip = _clip_script.new()
+	inst.start_ticks = 0
+	inst.duration_ticks = 960
+	track.add_clip_instance(inst)
+	var selection: Object = _selection_script.new()
+	var typed := Array([], TYPE_OBJECT, &"RefCounted", _instance_script)
+	typed.assign([inst])
+	selection.set_from(typed)
+	timeline.clip_selection_manager.selection = selection
+	return {"timeline": timeline, "track": track, "lane": lane, "selection": selection}
+
+
+func _set_visible_range(manager: Object, start: int, end: int) -> void:
+	manager.range_visible = true
+	manager.range_start_tick = start
+	manager.range_end_tick = end
+	manager.range_has_end = true
+
+
+## A range copy at bars 1-2 with points at 0 and 960 snapshots only those two (the point on the
+## range end tick is outside the half-open range); pasting at the bar-3 anchor re-creates them
+## shifted, with curve/tension intact, overwriting the points under the pasted span. One undo
+## step restores clips and points together.
+func _test_clip_range_copy_pastes_automation() -> void:
+	var rig := _clip_rig()
+	var lane: Object = rig["lane"]
+	lane.add_point(0, 0.1)
+	lane.add_point(960, 0.5, AutomationPoint.CurveType.STEP, 0.4)
+	lane.add_point(2 * BAR, 0.9)
+	lane.add_point(3 * BAR, 0.7)
+	var timeline: Object = rig["timeline"]
+	_set_visible_range(timeline.clip_selection_manager, 0, BAR)
+
+	timeline.copy_selection_to_clipboard()
+	var snapshot: Array = timeline.automation_clipboard
+	_assert(snapshot.size() == 1, "range copy snapshots one lane with points: %d" % snapshot.size())
+	var entries: Array = snapshot[0]["entries"]
+	_assert(entries.size() == 2, "the two in-range points are copied: %d" % entries.size())
+	_assert(int(entries[0]["offset"]) == 0 and int(entries[1]["offset"]) == 960, "entries are offset from the range start")
+	_assert(int(entries[1]["curve"]) == AutomationPoint.CurveType.STEP and is_equal_approx(float(entries[1]["tension"]), 0.4),
+		"curve and tension travel with the snapshot")
+
+	# Paste at the bar-3 anchor (2 * BAR) with the range hidden, so the paste tick is the anchor.
+	timeline.clip_selection_manager.hide_range()
+	timeline.clip_selection_manager.set_anchor(rig["track"], 2 * BAR)
+	timeline.paste_clipboard()
+	_assert(rig["track"].clip_instances.size() == 2, "paste adds the clip at the anchor")
+	_assert(rig["track"].clip_instances[1].start_ticks == 2 * BAR, "pasted clip lands on the anchor tick")
+	var p_0: Object = _point_at(lane, 0)
+	var p_960: Object = _point_at(lane, 960)
+	var p_2bars: Object = _point_at(lane, 2 * BAR)
+	var p_2bars_960: Object = _point_at(lane, 2 * BAR + 960)
+	var p_3bars: Object = _point_at(lane, 3 * BAR)
+	_assert(lane.points.size() == 5, "pasted points replaced the point under the pasted span: %d" % lane.points.size())
+	_assert(p_0 != null and p_960 != null and p_3bars != null and is_equal_approx(p_3bars.value, 0.7),
+		"originals outside the pasted span survive")
+	_assert(p_2bars != null and is_equal_approx(p_2bars.value, 0.1), "first point pasted at the anchor tick")
+	_assert(p_2bars_960 != null and is_equal_approx(p_2bars_960.value, 0.5)
+		and p_2bars_960.curve == AutomationPoint.CurveType.STEP and is_equal_approx(p_2bars_960.tension, 0.4),
+		"second point pasted shifted with curve and tension intact")
+
+	# One undo step restores the pre-paste lane and removes the pasted clip; redo reapplies.
+	var history: Object = _editor_stub.history
+	history.undo()
+	_assert(rig["track"].clip_instances.size() == 1, "undo removes the pasted clip")
+	_assert(lane.points.size() == 4 and is_equal_approx(_point_at(lane, 2 * BAR).value, 0.9)
+		and is_equal_approx(_point_at(lane, 3 * BAR).value, 0.7), "undo restores the overwritten point")
+	history.redo()
+	_assert(rig["track"].clip_instances.size() == 2 and lane.points.size() == 5
+		and is_equal_approx(_point_at(lane, 2 * BAR + 960).value, 0.5), "redo reapplies the paste")
+	_editor_stub.history.clear()
+	timeline.free()
+
+
+## Duplicating a range selection copies the clip and re-creates the lane points inside the range
+## shifted by the duplicate offset, in one undoable step; the pre-existing clipboard snapshot is
+## left untouched afterwards.
+func _test_clip_range_duplicate_includes_automation() -> void:
+	var rig := _clip_rig()
+	var lane: Object = rig["lane"]
+	lane.add_point(0, 0.1)
+	lane.add_point(960, 0.5, AutomationPoint.CurveType.STEP, 0.4)
+	var timeline: Object = rig["timeline"]
+	_set_visible_range(timeline.clip_selection_manager, 0, 2 * BAR)
+
+	timeline.duplicate_selection()
+	_assert(rig["track"].clip_instances.size() == 2, "duplicate adds the clip after the range")
+	_assert(rig["track"].clip_instances[1].start_ticks == 2 * BAR, "duplicate lands on the range end")
+	_assert(lane.points.size() == 4, "duplicate re-creates both in-range points: %d" % lane.points.size())
+	var p_shifted: Object = _point_at(lane, 2 * BAR)
+	var p_shifted_960: Object = _point_at(lane, 2 * BAR + 960)
+	_assert(p_shifted != null and is_equal_approx(p_shifted.value, 0.1), "duplicated point at the range end")
+	_assert(p_shifted_960 != null and is_equal_approx(p_shifted_960.value, 0.5)
+		and p_shifted_960.curve == AutomationPoint.CurveType.STEP and is_equal_approx(p_shifted_960.tension, 0.4),
+		"duplicated point shifted by the range length keeps its shape")
+	_assert(timeline.automation_clipboard.is_empty(), "duplicate leaves the clipboard snapshot untouched")
+
+	var history: Object = _editor_stub.history
+	history.undo()
+	_assert(rig["track"].clip_instances.size() == 1 and lane.points.size() == 2, "undo restores the pre-duplicate state")
+	history.redo()
+	_assert(rig["track"].clip_instances.size() == 2 and lane.points.size() == 4, "redo reapplies the duplicate")
+	_editor_stub.history.clear()
+	timeline.free()
+
+
+## A plain clip copy without a visible time range carries no automation: paste must not invent
+## lane points.
+func _test_clip_copy_without_range_carries_no_automation() -> void:
+	var rig := _clip_rig()
+	var lane: Object = rig["lane"]
+	lane.add_point(0, 0.1)
+	var timeline: Object = rig["timeline"]
+	timeline.clip_selection_manager.hide_range()
+	timeline.clip_selection_manager.set_anchor(rig["track"], 2 * BAR)
+
+	timeline.copy_selection_to_clipboard()
+	_assert(timeline.automation_clipboard.is_empty(), "copy without a visible range snapshots nothing")
+	timeline.paste_clipboard()
+	_assert(rig["track"].clip_instances.size() == 2, "the clip still pastes")
+	_assert(lane.points.size() == 1 and is_equal_approx(lane.points[0].value, 0.1), "no automation travels without a range")
+	_editor_stub.history.clear()
+	timeline.free()

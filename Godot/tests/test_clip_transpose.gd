@@ -31,6 +31,7 @@ func run_tests() -> void:
 	await _test_octave_down_two_clips()
 	await _test_shared_clip_transposes_once()
 	await _test_pitches_clamp_to_range()
+	await _test_arranger_clip_redraws()
 
 
 ## A clip holding one note per pitch (tick 480 apart so nothing overlaps).
@@ -173,4 +174,36 @@ func _test_pitches_clamp_to_range() -> void:
 	_press(menu, -12)
 	_assert(_pitches(clip) == [115, 5, 100],
 		"down an octave stops at 0, got %s" % [_pitches(clip)])
+	menu.free()
+
+
+## The arranger's MidiclipRenderer must hear the transpose: it subscribes to the clip's
+## clip_modified, invalidates its cached display pitch range and redraws. Observable headless
+## through the `draw` signal and the recomputed range (no pixels needed).
+func _test_arranger_clip_redraws() -> void:
+	var menu := await _open_menu()
+	var clip := _make_clip(CLIP_MIDI, [60, 64])
+	_bind(menu, [_make_instance(clip)])
+
+	var renderer_script: GDScript = load("res://arranger/timeline/clip/MidiclipRenderer.gd")
+	var renderer: Control = renderer_script.new()
+	root.add_child(renderer)
+	renderer.size = Vector2(100, 40)
+	renderer.clip_instance = _make_instance(clip)
+	var draws: Array = [0]
+	renderer.draw.connect(func() -> void: draws[0] += 1)
+	await process_frame
+	await process_frame
+	var before: int = draws[0]
+	var range_before: Vector2i = renderer._pitch_range
+
+	_press(menu, 12)
+	await process_frame
+	await process_frame
+
+	_assert(draws[0] > before, "the arranger clip redraws after a transpose (%d draws)" % draws[0])
+	_assert(renderer._pitch_range == range_before + Vector2i(12, 12),
+		"the display pitch range is recomputed from the new pitches, got %s (was %s)"
+			% [renderer._pitch_range, range_before])
+	renderer.free()
 	menu.free()

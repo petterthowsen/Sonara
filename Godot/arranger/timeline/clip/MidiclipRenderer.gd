@@ -92,6 +92,8 @@ func _draw_midi():
 	if clip.midi_notes.is_empty() or size.y <= 0.0:
 		return
 
+	# Register-relative preview: the window follows the notes themselves, so a whole-clip
+	# octave transpose redraws to the same picture (see _display_pitch_range).
 	if _pitch_range_dirty or _pitch_range_clip != clip:
 		_pitch_range = _display_pitch_range(clip.find_lowest_note(), clip.find_highest_note())
 		_pitch_range_dirty = false
@@ -138,6 +140,10 @@ func _draw_midi():
 
 
 ## Expand [lowest, highest] to at least one octave, centered, clamped to 0–127.
+##
+## The window is derived from the clip's own notes, so the preview is register-relative: a
+## whole-clip transpose (±1 oct) shifts the notes and the window together and redraws to the
+## same picture. That is intentional — partial edits (add/erase/nudge) still change the picture.
 func _display_pitch_range(lowest: int, highest: int) -> Vector2i:
 	var lo := mini(lowest, highest)
 	var hi := maxi(lowest, highest)

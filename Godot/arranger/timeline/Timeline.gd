@@ -91,6 +91,12 @@ var _drag_current_tick_delta: int = 0
 var _drag_current_track_delta: int = 0
 var clip_clipboard: ClipSelection = null
 
+## Automation snapshot captured alongside `clip_clipboard` by a copy/cut/duplicate that had a
+## visible time range (AutomationActions.snapshot_range payload). Consumed by paste/duplicate so
+## the lane points inside the range travel with the clips; empty when there was no range or no
+## points inside it.
+var automation_clipboard: Array = []
+
 @export var selection_boundary_color: Color = Color(0.4, 0.8, 1.0, 0.6)
 
 func _ready():
@@ -1347,10 +1353,12 @@ func copy_selection_to_clipboard() -> void:
 		return
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		clip_clipboard = null
+		automation_clipboard = []
 		logger.warn("Copy skipped - no clips selected")
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
 	_apply_time_range_to_clipboard(clip_clipboard)
+	_snapshot_range_automation(clip_clipboard.start_tick, clip_clipboard.end_tick)
 	logger.info("Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
 
 
@@ -1360,10 +1368,12 @@ func cut_selection_to_clipboard() -> void:
 		return
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		clip_clipboard = null
+		automation_clipboard = []
 		logger.warn("Cut skipped - no clips selected")
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
 	_apply_time_range_to_clipboard(clip_clipboard)
+	_snapshot_range_automation(clip_clipboard.start_tick, clip_clipboard.end_tick)
 	var selected = clip_selection_manager.get_selected_instances()
 	var cmds: Array[Command] = []
 	for inst in selected:
@@ -1392,7 +1402,7 @@ func paste_clipboard() -> void:
 	if _clipboard_placement_blocked(clip_clipboard, target_tick, target_track):
 		logger.warn("Paste skipped - no adequate space")
 		return
-	var new_instances = paste_clipboard_at(target_tick, null, true, "Paste", target_track)
+	var new_instances = paste_clipboard_at(target_tick, null, true, "Paste", target_track, false, automation_clipboard)
 	if new_instances.is_empty():
 		logger.warn("Paste skipped - clipboard empty")
 	else:
@@ -1401,7 +1411,7 @@ func paste_clipboard() -> void:
 
 ## Insert `source` (or the clipboard) at `target_tick`, with the topmost clip on `target_track`
 ## (null keeps each clip's own track). Returns [] when blocked or empty.
-func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste", target_track: Track = null, copy_automation: bool = false) -> Array[ClipInstance]:
+func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste", target_track: Track = null, copy_automation: bool = false, automation_snapshot: Array = []) -> Array[ClipInstance]:
 	if not Sonara.editor or not Sonara.editor.project:
 		push_warning("[Timeline] Cannot paste clips - no active project")
 		return []
@@ -1419,6 +1429,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	var new_instances: Array[ClipInstance] = []
 	var cmds: Array[Command] = []
 	var automation_copies: Array = []
+	var same_track: Array = []  # tracks whose clips stay on their own track (automation follows them)
 	var moved_to := {}  # new ClipInstance -> destination track, for copies landing on another track
 	for placement in _plan_placement(source, target_tick, target_track):
 		var original_inst: ClipInstance = placement.instance
@@ -1441,20 +1452,29 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 		cmd.name = "%s Clip" % action_name
 		cmds.append(cmd)
 		# A lane belongs to its track, so automation only travels with copies on the same track.
-		if copy_automation and dest_track == original_inst.track:
+		if copy_automation and dest_track == original_inst.track and automation_snapshot.is_empty():
 			automation_copies.append({
 				"track": dest_track,
 				"start": original_inst.start_ticks,
 				"end": original_inst.start_ticks + original_inst.duration_ticks,
 				"delta": new_start - original_inst.start_ticks,
 			})
+		# A range copy's snapshot replaces the per-clip "follows clips" copy: it already covers
+		# every lane point inside the range, so both paths would land the same points twice.
+		if dest_track == original_inst.track and not same_track.has(dest_track):
+			same_track.append(dest_track)
 
 	if new_instances.is_empty():
 		return []
 
 	if Settings.get_value("arranger/unique_clips_per_track"):
 		cmds.append_array(_per_track_copies(moved_to))
-	if not automation_copies.is_empty() and _automation_follows_enabled():
+	if not automation_snapshot.is_empty():
+		# Range copy: re-create the snapshotted lane points at the paste offset, scoped to the
+		# tracks whose clips stayed put, as part of the same undoable history entry.
+		cmds.append_array(AutomationActions.paste_snapshot_commands(
+			automation_snapshot, target_tick, same_track, "%s Automation" % action_name))
+	elif not automation_copies.is_empty() and _automation_follows_enabled():
 		cmds.append_array(AutomationActions.copy_track_automation_commands(automation_copies, "%s Automation" % action_name))
 
 	HistoryUtil.execute_many("%s Clips" % action_name, cmds)
@@ -1497,16 +1517,20 @@ func duplicate_selection() -> void:
 	if selection_clone.is_empty():
 		return
 	_apply_time_range_to_clipboard(selection_clone)
+	var previous_snapshot := automation_clipboard
+	_snapshot_range_automation(selection_clone.start_tick, selection_clone.end_tick)
 
 	var previous_clipboard = clip_clipboard
 	clip_clipboard = selection_clone
 	var target_tick := clip_selection_manager.get_duplicate_tick(selection_clone.end_tick)
 	if _clipboard_placement_blocked(selection_clone, target_tick):
 		clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
+		automation_clipboard = previous_snapshot
 		logger.warn("Duplicate skipped - no adequate space")
 		return
-	var new_instances = paste_clipboard_at(target_tick, selection_clone, true, "Duplicate", null, true)
+	var new_instances = paste_clipboard_at(target_tick, selection_clone, true, "Duplicate", null, true, automation_clipboard)
 	clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
+	automation_clipboard = previous_snapshot
 
 	if not new_instances.is_empty():
 		logger.info("Duplicated %d clips starting at %d" % [new_instances.size(), target_tick])
@@ -1681,6 +1705,20 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 	_refresh_tracks_for_instances(selected)
 	queue_redraw()
 	logger.info("Moved selection by %d track(s)" % allowed_delta)
+
+
+## Capture the automation under `[start_tick, end_tick)` into `automation_clipboard`, so a later
+## paste/duplicate re-creates those points at the paste offset. Nothing is captured without a
+## visible time range: a plain clip copy carries no automation.
+func _snapshot_range_automation(start_tick: int, end_tick: int) -> void:
+	automation_clipboard = []
+	if not clip_selection_manager or not clip_selection_manager.range_visible:
+		return
+	if project == null:
+		return
+	var tracks: Array = []
+	tracks.assign(project.tracks)
+	automation_clipboard = AutomationActions.snapshot_range(tracks, start_tick, end_tick)
 
 
 ## Stamp the visible time-range onto a clipboard so paste/duplicate keep empty lead-in.

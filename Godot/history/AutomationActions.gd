@@ -144,6 +144,75 @@ static func set_curve(lane: Object, points: Array, curve: int, tension: float = 
 	HistoryUtil.execute(cmd)
 
 
+## The value a point inserted at `tick` should take so the lane keeps playing exactly what it
+## played before the insert: the lane's own value there (interpolated between the surrounding
+## points, or the flat hold value before the first / after the last). NAN when the lane has no
+## points at all - the caller falls back to the cursor's value.
+static func insert_value_at(lane: Object, tick: int) -> float:
+	if lane == null:
+		return NAN
+	var value: float = lane.get_value_at_tick(tick)
+	return NAN if is_nan(value) else clampf(value, 0.0, 1.0)
+
+
+## The value of each point's time-order neighbour - the previous one, or the next one when
+## `next` - keyed by point id. Points without a neighbour in that direction are omitted, so an
+## empty result means the gesture has nothing to do.
+static func _neighbor_values(lane: Object, points: Array, next: bool) -> Dictionary:
+	var values: Dictionary = {}
+	if lane == null:
+		return values
+	for point in points:
+		var index: int = lane.points.find(point)
+		if index < 0:
+			continue
+		var neighbour_index := index + 1 if next else index - 1
+		if neighbour_index < 0 or neighbour_index >= lane.points.size():
+			continue
+		values[point.id] = lane.points[neighbour_index].value
+	return values
+
+
+## Whether "set to previous/next point value" can do anything for `points` right now; the context
+## menu greys its entry out when it can't.
+static func neighbor_value_available(lane: Object, points: Array, next: bool) -> bool:
+	return not _neighbor_values(lane, points, next).is_empty()
+
+
+## Set each of `points` to the value of its time-order neighbour (the previous one, or the next
+## one when `next`) as one undoable step. Points without a neighbour in that direction are left
+## alone. Every neighbour value is read before any point is written, so a selected point whose
+## neighbour is itself retargeted does not cascade.
+static func set_points_to_neighbor_value(lane: Object, points: Array, next: bool) -> void:
+	if lane == null or points.is_empty():
+		return
+	var values := _neighbor_values(lane, points, next)
+	if values.is_empty():
+		return
+	var ids: Array = []
+	var before: Dictionary = {}
+	var after: Dictionary = {}
+	for point in points:
+		if not values.has(point.id):
+			continue
+		ids.append(point.id)
+		before[point.id] = {
+			"tick": point.tick,
+			"value": point.value,
+			"curve": point.curve,
+			"tension": point.tension,
+		}
+		after[point.id] = {
+			"tick": point.tick,
+			"value": values[point.id],
+			"curve": point.curve,
+			"tension": point.tension,
+		}
+	var label := "Set to Next Point Value" if next else "Set to Previous Point Value"
+	var cmd: Object = _PointsTransformCommand.new(label, lane, ids, before, after)
+	HistoryUtil.execute(cmd)
+
+
 # ============================================================================
 # RANGE OPERATIONS (REQ-021)
 # ============================================================================
@@ -172,8 +241,20 @@ static func clear_range(lane: Object, start_tick: int, end_tick: int, label: Str
 ##
 ## Returns the created points.
 static func paste_segment(lane: Object, specs: Array, label: String = "Paste Points") -> Array:
-	if lane == null or specs.is_empty():
+	var cmds := _paste_commands(lane, specs, label)
+	if cmds.is_empty():
 		return []
+	HistoryUtil.execute_many(label, cmds)
+	return cmds[-1].points
+
+
+## The commands `paste_segment` would execute for `specs` in `lane` (remove-then-add so the paste
+## overwrites rather than interleaves), without applying anything: callers that fold the paste
+## into a larger history entry (e.g. a clip paste) build on this instead of executing here.
+static func _paste_commands(lane: Object, specs: Array, label: String) -> Array[Command]:
+	var cmds: Array[Command] = []
+	if lane == null or specs.is_empty():
+		return cmds
 
 	var start_tick: int = specs[0]["tick"]
 	var end_tick: int = start_tick
@@ -181,7 +262,6 @@ static func paste_segment(lane: Object, specs: Array, label: String = "Paste Poi
 		start_tick = mini(start_tick, int(spec["tick"]))
 		end_tick = maxi(end_tick, int(spec["tick"]))
 
-	# One undo step for the whole paste: the overwrite and the insert go into one MacroCommand.
 	# end_tick + 1 so a point sitting exactly on the last pasted tick is replaced, not doubled.
 	var doomed: Array = []
 	for point in lane.points:
@@ -189,12 +269,72 @@ static func paste_segment(lane: Object, specs: Array, label: String = "Paste Poi
 			doomed.append(point)
 
 	var add_cmd: Object = _PointsAddCommand.new(label, lane, specs)
-	var cmds: Array[Command] = []
 	if not doomed.is_empty():
 		cmds.append(_PointsRemoveCommand.new(label, lane, doomed))
 	cmds.append(add_cmd)
-	HistoryUtil.execute_many(label, cmds)
-	return add_cmd.points
+	return cmds
+
+
+# ============================================================================
+# RANGE COPY/PASTE WITH CLIPS
+# ============================================================================
+# When the arranger copies/duplicates a time range, the payload carries the lane points inside
+# the range so a paste/duplicate re-creates them shifted, in the same history entry as the clips.
+
+## Snapshot the lane points inside the half-open tick range `[start_tick, end_tick)` across the
+## automation lanes of `tracks`, as `{track, lane, entries}` with each entry
+## `{offset, value, curve, tension}` measured from the range start. Tracks or lanes with no
+## points inside the range contribute nothing.
+static func snapshot_range(tracks: Array, start_tick: int, end_tick: int) -> Array:
+	var snapshot: Array = []
+	if end_tick <= start_tick:
+		return snapshot
+	for track in tracks:
+		if track == null or track.automation_lanes.is_empty():
+			continue
+		for lane in track.automation_lanes:
+			var entries: Array = []
+			for point in lane.points:
+				if point.tick >= start_tick and point.tick < end_tick:
+					entries.append({
+						"offset": point.tick - start_tick,
+						"value": point.value,
+						"curve": point.curve,
+						"tension": point.tension,
+					})
+			if not entries.is_empty():
+				snapshot.append({"track": track, "lane": lane, "entries": entries})
+	return snapshot
+
+
+## Commands that paste a `snapshot_range` payload at `target_tick` (each offset is added to it),
+## restricted to `allowed_tracks` (the tracks whose clips stay on their own track, so automation
+## never lands on a track the clips left). Each lane's existing points inside the pasted span are
+## cleared first, exactly like `paste_segment`. Nothing is applied: the caller folds the returned
+## commands into its own history entry. An empty `allowed_tracks` pastes nothing.
+static func paste_snapshot_commands(
+	snapshot: Array,
+	target_tick: int,
+	allowed_tracks: Array,
+	label: String = "Paste Automation"
+) -> Array[Command]:
+	var cmds: Array[Command] = []
+	if snapshot.is_empty() or allowed_tracks.is_empty():
+		return cmds
+	for entry in snapshot:
+		var lane: Object = entry.get("lane")
+		if lane == null or not allowed_tracks.has(entry.get("track")):
+			continue
+		var specs: Array = []
+		for point_entry in entry["entries"]:
+			specs.append({
+				"tick": maxi(0, target_tick + int(point_entry["offset"])),
+				"value": point_entry["value"],
+				"curve": point_entry["curve"],
+				"tension": point_entry["tension"],
+			})
+		cmds.append_array(_paste_commands(lane, specs, label))
+	return cmds
 
 
 # ============================================================================
