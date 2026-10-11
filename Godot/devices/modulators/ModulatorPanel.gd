@@ -37,6 +37,7 @@ var modulator: Modulator = null
 ## The XY pad this tile represents, or null for a plain modulator.
 var pad: XYPad = null
 var _strip: ColorRect = null
+var _header: HBoxContainer = null
 var _name_label: Label = null
 var _rename: LineEdit = null
 var _display: Control = null
@@ -56,6 +57,8 @@ var _is_selected := false
 var _press_pos := Vector2.ZERO
 var _pressing := false
 var _dragging := false
+## Swallow the release after a double-click rename, so it doesn't toggle the selection.
+var _skip_release := false
 
 
 func setup(mod: Modulator) -> void:
@@ -90,26 +93,27 @@ func _build() -> void:
 	column.add_theme_constant_override("separation", 2)
 	add_child(column)
 
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 4)
-	column.add_child(header)
-
+	# The source colour as a horizontal strip along the tile's top edge.
 	_strip = ColorRect.new()
-	_strip.custom_minimum_size = Vector2(2, 0)
-	_strip.size_flags_vertical = Control.SIZE_FILL
+	_strip.custom_minimum_size = Vector2(0, 3)
 	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	header.add_child(_strip)
+	column.add_child(_strip)
+
+	_header = HBoxContainer.new()
+	_header.add_theme_constant_override("separation", 4)
+	column.add_child(_header)
 
 	var name_column := VBoxContainer.new()
 	name_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_column.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	header.add_child(name_column)
+	_header.add_child(name_column)
 
 	_name_label = Label.new()
 	_name_label.clip_text = true
 	_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_column.add_child(_name_label)
 
 	_rename = LineEdit.new()
@@ -117,6 +121,8 @@ func _build() -> void:
 	_rename.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_rename.text_submitted.connect(_on_rename_submitted)
 	_rename.focus_exited.connect(_commit_rename)
+	# Esc reverts without committing; Enter (or losing focus) commits.
+	_rename.gui_input.connect(_on_rename_gui_input)
 	name_column.add_child(_rename)
 
 	# The display area; expands so the wire button(s) sit at the bottom.
@@ -306,10 +312,21 @@ func _gui_input(event: InputEvent) -> void:
 			if _display is XYPadPanel and _display.get_rect().has_point(event.position):
 				return
 			if event.pressed:
+				# Double-click the header renames in place; the release that follows
+				# must not toggle the selection.
+				if event.double_click and _header != null \
+						and _header.get_rect().has_point(event.position):
+					_start_rename()
+					_skip_release = true
+					accept_event()
+					return
 				_pressing = true
 				_press_pos = event.global_position
 				_dragging = false
 			else:
+				if _skip_release:
+					_skip_release = false
+					return
 				var moved := _pressing and _press_pos.distance_to(event.global_position) > DRAG_THRESHOLD
 				_pressing = false
 				var was_dragging := _dragging
@@ -334,6 +351,22 @@ func _start_rename() -> void:
 
 func _on_rename_submitted(_text: String) -> void:
 	_commit_rename()
+
+## Esc in the rename box reverts without committing (the gui_input signal fires
+## before LineEdit's own handling, so accepting keeps its default out).
+func _on_rename_gui_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode == KEY_ESCAPE:
+		_cancel_rename()
+		accept_event()
+
+
+func _cancel_rename() -> void:
+	if not _rename.visible:
+		return
+	_rename.visible = false
+	_name_label.visible = true
+	_rename.release_focus()
 
 
 func _commit_rename() -> void:

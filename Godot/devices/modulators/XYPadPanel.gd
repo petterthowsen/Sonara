@@ -57,6 +57,17 @@ func _build() -> void:
 	_slider.values_changed.connect(_on_values_changed)
 
 
+func _get_minimum_size() -> Vector2:
+	return _slider.get_combined_minimum_size() if _slider != null else Vector2.ZERO
+
+
+## XYPadPanel is a plain Control, not a container: the slider must be sized by hand,
+## or it keeps its 12×12 minimum and the pad appears 0-size inside the tile.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED and _slider != null:
+		_slider.position = Vector2.ZERO
+		_slider.size = size
+
 func _unbind() -> void:
 	if ModLive.holder().modulator_states_changed.is_connected(_on_states_changed):
 		ModLive.holder().modulator_states_changed.disconnect(_on_states_changed)

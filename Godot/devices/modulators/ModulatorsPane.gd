@@ -34,11 +34,9 @@ static var _remembered: Dictionary = {}
 
 var device: DeviceInstance = null
 
-var _header: HBoxContainer = null
 var _grid: HBoxContainer = null
 var _kind_menu: PopupMenu = null
 var _detail: VBoxContainer = null
-var _detail_scroll: ScrollContainer = null
 var _tiles: Array[ModulatorPanel] = []
 var _placeholders: Array[Button] = []
 ## Square cell side applied to every cell; 0 until the first layout.
@@ -53,9 +51,9 @@ var _selected_mod_id := -1
 var _controls: Dictionary = {}
 var _detail_title: Label = null
 ## Per-parameter controls (caption + control) and the columns they are flowed into.
-var _param_boxes: Array[Control] = []
-var _param_columns: HBoxContainer = null
-var _laying_out := false
+## The options flow: parameter boxes wrap in an HFlowContainer when the width runs out,
+## so no ScrollContainer is needed anywhere in the pane.
+var _param_flow: HFlowContainer = null
 var _envelope: Envelope = null
 var _envelope_control: EnvelopeControl = null
 ## Modulator the detail column was built for; -1 when it holds no controls to update in place.
@@ -63,6 +61,9 @@ var _detail_mod_id := -1
 ## Pair the detail column shows (an XY pad's XY slider); null otherwise.
 var _detail_pad: XYPad = null
 var _detail_pad_slider: XYSlider = null
+## The pair detail's X and Y knobs (modulatable Position targets), or null.
+var _pair_knob_x: RotaryKnob = null
+var _pair_knob_y: RotaryKnob = null
 ## The sidechain Source menu and the project it lists (rebuilt on channel-list changes).
 var _source_menu: OptionButton = null
 var _source_menu_project = null
@@ -128,12 +129,7 @@ func _build_structure() -> void:
 	left.add_theme_constant_override("separation", SEP)
 	add_child(left)
 
-	_header = HBoxContainer.new()
-	var title := Label.new()
-	title.text = "Modulators"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_header.add_child(title)
-	left.add_child(_header)
+	# The tab button already names the pane; no title row — the grid gets the full height.
 
 	# Column-major grid: an HBox of 3-cell columns, so cell `i` sits in column `i / 3`, row `i % 3`.
 	# No scrolling here — the device lane scrolls the pane horizontally.
@@ -148,21 +144,15 @@ func _build_structure() -> void:
 	_kind_menu.id_pressed.connect(_on_add_kind)
 	add_child(_kind_menu)
 
-	_detail_scroll = ScrollContainer.new()
-	var detail_scroll := _detail_scroll
-	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	detail_scroll.custom_minimum_size.x = 140
-	# Width follows the content (horizontal disabled). Height must not: it is the budget the options
-	# are flowed into columns against (see _layout_param_columns), so the pane grows wider, not taller.
-	# SHOW_NEVER keeps the minimum height at 0 without ever showing a scrollbar.
-	detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-	detail_scroll.resized.connect(_layout_param_columns)
+	# The options column: no ScrollContainer, ever — the device lane scrolls the pane
+	# horizontally, and the parameter boxes wrap in an HFlowContainer when the width
+	# runs out (`_param_flow`), so the pane never scrolls its own content.
 	_detail = VBoxContainer.new()
 	_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_detail.add_theme_constant_override("separation", 6)
-	detail_scroll.add_child(_detail)
-	add_child(detail_scroll)
+	_detail.custom_minimum_size.x = 140
+	add_child(_detail)
 
 	# The pane's own `resized` fires before its children are re-fitted, so reading the grid's
 	# parent height there sees the previous layout and the final size is never observed (the
@@ -303,7 +293,7 @@ func _layout_panel_size() -> void:
 	if _grid == null:
 		return
 	var parent := _grid.get_parent() as Control
-	var avail := parent.size.y - _header.get_combined_minimum_size().y - SEP
+	var avail := parent.size.y
 	var side := clampi(int(floor((avail - 2.0 * SEP) / ROWS)), PANEL_MIN_SIDE, PANEL_MAX_SIDE)
 	if side == _side:
 		return
@@ -466,6 +456,8 @@ func _clear_detail() -> void:
 	_detail_mod_id = -1
 	_detail_pad = null
 	_detail_pad_slider = null
+	_pair_knob_x = null
+	_pair_knob_y = null
 	_source_menu = null
 	if _source_menu_project != null:
 		if _source_cb_added.is_valid() and _source_menu_project.channel_added.is_connected(_source_cb_added):
@@ -478,8 +470,7 @@ func _clear_detail() -> void:
 	_envelope = null
 	_envelope_control = null
 	_detail_title = null
-	_param_columns = null
-	_param_boxes.clear()
+	_param_flow = null
 	if _detail == null:
 		return
 	for child in _detail.get_children():
@@ -506,13 +497,14 @@ func _refresh_detail() -> void:
 	if _detail == null or device == null:
 		return
 	var mod := device.get_modulator(_selected_mod_id)
-	_detail_scroll.visible = mod != null
+	_detail.visible = mod != null
 	if mod == null:
 		return
 	_detail_mod_id = mod.mod_id
 	_detail_title = Label.new()
 	_detail_title.text = mod.name
 	_detail_title.clip_text = true
+	_detail_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_detail.add_child(_detail_title)
 
 	var kind := mod.kind
@@ -525,18 +517,17 @@ func _refresh_detail() -> void:
 			_build_pair_detail(pad)
 			return
 	# A pair's Y slot (or an orphan XY half) shows the generic Position control like any kind.
-	_param_columns = HBoxContainer.new()
-	_param_columns.add_theme_constant_override("separation", 10)
-	_detail.add_child(_param_columns)
+	# The column flow is built lazily by `_build_param_control`, so a kind with no float
+	# parameters leaves no empty container behind.
 	for param in _ordered_params(kind, mod.get_parameters()):
 		_build_param_control(mod, param)
 	if kind == "sidechain":
 		_build_sidechain_source(mod)
-	_layout_param_columns.call_deferred()
 	if _controls.is_empty() and _detail_pad_slider == null and _source_menu == null:
 		var none := Label.new()
 		none.text = "No settings"
 		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		none.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_detail.add_child(none)
 
 
@@ -550,7 +541,9 @@ func _pair_of(mod: Modulator) -> XYPad:
 	return null
 
 
-## The pair's options: one 140×140 XY slider bound to both slots (spec 036 REQ-005).
+## The pair's options: one 140×140 XY slider bound to both slots (spec 036 REQ-005), plus X and
+## Y knobs below it. The knobs write the same Position parameter and, unlike the slider, are
+## modulator targets, so another modulator can route into a single axis.
 func _build_pair_detail(pad: XYPad) -> void:
 	_detail_pad = pad
 	var slider := XYSlider.new()
@@ -565,6 +558,31 @@ func _build_pair_detail(pad: XYPad) -> void:
 	_detail_pad_slider = slider
 	_detail.add_child(slider)
 	slider.values_changed.connect(func(x: float, y: float): pad.set_position(Vector2(x, y)))
+
+	var knobs := HBoxContainer.new()
+	knobs.add_theme_constant_override("separation", 12)
+	knobs.alignment = BoxContainer.ALIGNMENT_CENTER
+	knobs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail.add_child(knobs)
+	for slot in [[pad.x, "X"], [pad.y, "Y"]]:
+		var slot_mod: Modulator = slot[0]
+		var param := slot_mod.get_parameter(0)
+		if param == null:
+			continue
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 2)
+		var caption := Label.new()
+		caption.text = String(slot[1])
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		caption.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+		column.add_child(caption)
+		var knob := _make_mod_param_knob(slot_mod, param)
+		column.add_child(knob)
+		knobs.add_child(column)
+		if String(slot[1]) == "X":
+			_pair_knob_x = knob
+		else:
+			_pair_knob_y = knob
 	_sync_pair_detail()
 
 
@@ -574,6 +592,10 @@ func _sync_pair_detail() -> void:
 		return
 	var pos := _detail_pad.position()
 	_detail_pad_slider.set_values_no_signal(pos.x, pos.y)
+	if _pair_knob_x != null:
+		_pair_knob_x.set_value_no_signal(pos.x)
+	if _pair_knob_y != null:
+		_pair_knob_y.set_value_no_signal(pos.y)
 
 
 ## The sidechain's Source menu (spec 036 REQ-006): "Device In" plus every project channel by
@@ -584,6 +606,7 @@ func _build_sidechain_source(mod: Modulator) -> void:
 	_source_menu = OptionButton.new()
 	_source_menu.fit_to_longest_item = false
 	_source_menu.clip_text = true
+	_source_menu.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_detail.add_child(_source_menu)
 	_source_menu.item_selected.connect(_on_source_selected)
 	if project != null:
@@ -680,10 +703,16 @@ func _ordered_params(kind: String, params: Array) -> Array:
 
 
 func _build_param_control(mod: Modulator, param: DeviceParameter) -> void:
+	if _param_flow == null:
+		_param_flow = HFlowContainer.new()
+		_param_flow.add_theme_constant_override("separation", 10)
+		_param_flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_detail.add_child(_param_flow)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 2)
 	var caption := Label.new()
 	caption.text = param.name
+	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	caption.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	column.add_child(caption)
 
@@ -705,49 +734,26 @@ func _build_param_control(mod: Modulator, param: DeviceParameter) -> void:
 		_controls[param.id] = toggle
 		column.add_child(toggle)
 	else:
-		var knob := RotaryKnob.new()
-		knob.min_value = 0.0
-		knob.max_value = 1.0
-		knob.value_default = param.value_to_normalized(param.default_value)
-		knob.custom_minimum_size = Vector2(40, 40)
-		knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		knob.value_text_callback = func(v: float) -> String: return SimpleUnits.format(param, v, "")
-		knob.value_changed.connect(func(v: float): mod.set_param(param.id, v))
-		ModAssign.attach_modulator(knob, mod.owner(), mod.mod_id, param.id)
+		var knob := _make_mod_param_knob(mod, param)
 		_controls[param.id] = knob
 		column.add_child(knob)
-	_param_boxes.append(column)
+	_param_flow.add_child(column)
 	_refresh_param_control(mod, param)
 
 
-## Flow the parameter controls into columns that fit the pane's height, so a modulator with many
-## options (LFO) widens the pane instead of overflowing it.
-func _layout_param_columns() -> void:
-	if _laying_out or _param_columns == null or not is_instance_valid(_param_columns) \
-			or _param_boxes.is_empty():
-		return
-	_laying_out = true
-	for column in _param_columns.get_children():
-		for box in column.get_children():
-			column.remove_child(box)
-		_param_columns.remove_child(column)
-		column.free()
-	var budget := _detail_scroll.size.y - _detail_title.get_combined_minimum_size().y \
-			- float(_detail.get_theme_constant("separation"))
-	if _detail_scroll.size.y <= 0.0:
-		budget = INF
-	var column: VBoxContainer = null
-	var used := 0.0
-	for box in _param_boxes:
-		var h := box.get_combined_minimum_size().y
-		if column == null or (used + h > budget and column.get_child_count() > 0):
-			column = VBoxContainer.new()
-			column.add_theme_constant_override("separation", 6)
-			_param_columns.add_child(column)
-			used = 0.0
-		column.add_child(box)
-		used += h + 6.0
-	_laying_out = false
+## A normalized knob bound to one of the modulator's own parameters. Attached through
+## `ModAssign`, so other modulators can route into it like into any device knob.
+func _make_mod_param_knob(mod: Modulator, param: DeviceParameter) -> RotaryKnob:
+	var knob := RotaryKnob.new()
+	knob.min_value = 0.0
+	knob.max_value = 1.0
+	knob.value_default = param.value_to_normalized(param.default_value)
+	knob.custom_minimum_size = Vector2(40, 40)
+	knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	knob.value_text_callback = func(v: float) -> String: return SimpleUnits.format(param, v, "")
+	knob.value_changed.connect(func(v: float): mod.set_param(param.id, v))
+	ModAssign.attach_modulator(knob, mod.owner(), mod.mod_id, param.id)
+	return knob
 
 
 func _refresh_param_control(mod: Modulator, param: DeviceParameter) -> void:
@@ -782,6 +788,7 @@ func _build_envelope_detail(mod: Modulator) -> void:
 
 	_envelope_control = EnvelopeControl.new()
 	_envelope_control.custom_minimum_size = Vector2(120, 64)
+	_envelope_control.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_envelope_control.envelope = _envelope
 	_detail.add_child(_envelope_control)
 
@@ -789,6 +796,36 @@ func _build_envelope_detail(mod: Modulator) -> void:
 	_envelope.decay_changed.connect(func(value: float): _commit_env(mod, Envelope.Stage.DECAY, value))
 	_envelope.sustain_changed.connect(func(value: float): _commit_env(mod, Envelope.Stage.SUSTAIN, value))
 	_envelope.release_changed.connect(func(value: float): _commit_env(mod, Envelope.Stage.RELEASE, value))
+
+	# Stage knobs: same parameters as the envelope, but modulatable targets. They wrap in
+	# the shared HFlowContainer when the width runs out — never a scroll.
+	if _param_flow == null:
+		_param_flow = HFlowContainer.new()
+		_param_flow.add_theme_constant_override("separation", 10)
+		_param_flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_detail.add_child(_param_flow)
+	var letters := {
+		Envelope.Stage.ATTACK: "A",
+		Envelope.Stage.DECAY: "D",
+		Envelope.Stage.SUSTAIN: "S",
+		Envelope.Stage.RELEASE: "R",
+	}
+	for stage in [Envelope.Stage.ATTACK, Envelope.Stage.DECAY, Envelope.Stage.SUSTAIN, Envelope.Stage.RELEASE]:
+		var param := mod.get_parameter(ENV_STAGE_PARAM[stage])
+		if param == null:
+			continue
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 2)
+		var caption := Label.new()
+		caption.text = letters[stage]
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		caption.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+		column.add_child(caption)
+		var knob := _make_mod_param_knob(mod, param)
+		_controls[param.id] = knob
+		column.add_child(knob)
+		_param_flow.add_child(column)
+		_refresh_param_control(mod, param)
 	_refresh_envelope(mod)
 
 

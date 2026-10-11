@@ -42,6 +42,13 @@ var axis_line_color: Color:
 		if is_inside_tree():
 			queue_redraw()
 
+## Optional grid lines at the quarter positions (the center cross is `show_axis_lines`).
+@export var show_grid_lines := true:
+	set(s):
+		show_grid_lines = s
+		if is_inside_tree():
+			queue_redraw()
+
 @export var show_value_labels := true:
 	set(s):
 		show_value_labels = s
@@ -156,16 +163,11 @@ func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	focus_mode = Control.FOCUS_CLICK
-	mouse_exited.connect(_on_mouse_exited)
 
 
 func _get_minimum_size() -> Vector2:
 	var s = min(handle_diameter * 2, 32)
 	return Vector2(s, s)
-
-func _on_mouse_exited() -> void:
-	_dragging = false
-	queue_redraw()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -205,6 +207,16 @@ func _draw():
 
 	# draw background
 	draw_rect(Rect2(0, 0, size.x, size.y), bg_color, true, -1.0, false)
+
+	# draw the optional grid at the quarter positions, then the center cross
+	if show_grid_lines:
+		var grid_color := axis_line_color
+		grid_color.a *= 0.5
+		for f in [0.25, 0.75]:
+			var gx := size.x * float(f)
+			var gy := size.y * float(f)
+			draw_line(Vector2(gx, 0), Vector2(gx, size.y), grid_color, axis_line_width, true)
+			draw_line(Vector2(0, gy), Vector2(size.x, gy), grid_color, axis_line_width, true)
 
 	# draw axis lines
 	if show_axis_lines:
