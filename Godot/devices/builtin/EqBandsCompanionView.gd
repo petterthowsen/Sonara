@@ -1,7 +1,7 @@
 ## Companion view of the built-in EQ, shown in the device panel while the window view (the full
-## analyser) is open: one vertical strip per band with an on/off toggle, the type
-## icon and Freq, Gain and Q knobs. It holds the exact-entry and automation targets the panel view
-## has no room for (it shows only the selected band).
+## analyser) is open: one vertical strip per band with an on/off toggle, a solo toggle, the band
+## type dropdown and Freq, Gain and Q knobs. It holds the exact-entry and automation targets the
+## panel view has no room for (it shows only the selected band).
 class_name EqBandsCompanionView extends DeviceView
 
 var _items: Array[Dictionary] = []
@@ -36,16 +36,30 @@ func _build_strip(band: int, parent: Control) -> Dictionary:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
 	parent.add_child(box)
+	# Vertical space is free in a strip, width is not: the enabled toggle sits on top, the
+	# solo toggle below it, instead of sharing one wide header row.
+	var header := VBoxContainer.new()
+	header.add_theme_constant_override("separation", 2)
 	var toggle := CheckBox.new()
 	toggle.text = str(band + 1)
 	toggle.add_theme_color_override("font_color", EqCurveEditor.band_color(band))
 	toggle.toggled.connect(_on_toggled.bind(band))
-	box.add_child(toggle)
-	var icon := EqTypeIcon.new()
-	icon.color = EqCurveEditor.band_color(band)
-	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	box.add_child(icon)
-	var item := {"box": box, "toggle": toggle, "icon": icon}
+	header.add_child(toggle)
+	var solo := Button.new()
+	solo.toggle_mode = true
+	solo.icon = preload("res://assets/icons/volume-2.svg")
+	solo.tooltip_text = "Listen to band %d only" % (band + 1)
+	solo.toggled.connect(_on_solo_toggled.bind(band))
+	header.add_child(solo)
+	var type := OptionButton.new()
+	type.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var band_color := EqCurveEditor.band_color(band)
+	for i in EqResponse.TYPE_NAMES.size():
+		type.add_icon_item(EqTypeIcon.texture(i, band_color), "")
+		type.set_item_tooltip(i, EqResponse.TYPE_NAMES[i])
+	type.item_selected.connect(_on_type_selected.bind(band))
+	box.add_child(type)
+	var item := {"box": box, "toggle": toggle, "solo": solo, "type": type}
 	for entry in [["freq", "Freq", EqResponse.P_FREQ], ["gain", "Gain", EqResponse.P_GAIN], ["q", "Q", EqResponse.P_Q]]:
 		var knob := EqKnobs.make_knob(entry[1], _on_knob_changed.bind(band * EqResponse.BAND_STRIDE + int(entry[2])))
 		knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -65,7 +79,11 @@ func _on_bind() -> void:
 
 
 func _on_device_parameter_changed(param_id: int, _value: float) -> void:
-	if _built and param_id < EqResponse.BAND_COUNT * EqResponse.BAND_STRIDE:
+	if not _built or device == null:
+		return
+	if param_id == EqResponse.LISTEN_BAND:
+		_refresh_solo()
+	elif param_id < EqResponse.BAND_COUNT * EqResponse.BAND_STRIDE:
 		_refresh_band(param_id / EqResponse.BAND_STRIDE)
 
 
@@ -77,18 +95,40 @@ func _refresh_band(band: int) -> void:
 	var enabled := device.get_parameter_real(base + EqResponse.P_ENABLED) >= 0.5
 	var type := int(device.get_parameter_real(base + EqResponse.P_TYPE))
 	item["toggle"].set_pressed_no_signal(enabled)
-	item["icon"].type = type
+	item["type"].select(type)
 	item["freq"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_FREQ))
 	item["gain"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_GAIN))
 	item["q"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_Q))
 	# A disabled band stays editable (set it up, then switch it on), only dimmed.
 	item["box"].modulate.a = 1.0 if enabled else 0.55
-	EqKnobs.dim_gain(item["gain"], type)
+	EqKnobs.dim_value_control(item["gain"], type)
+	_refresh_solo()
+
+
+## The listen band is one device-level parameter for all bands: every strip's solo button
+## reflects it whenever it changes.
+func _refresh_solo() -> void:
+	if device == null:
+		return
+	var listen := int(device.get_parameter_real(EqResponse.LISTEN_BAND))
+	for band in EqResponse.BAND_COUNT:
+		_items[band]["solo"].set_pressed_no_signal(listen == band + 1)
 
 
 func _on_toggled(pressed: bool, band: int) -> void:
 	if device != null:
 		device.set_parameter_real(band * EqResponse.BAND_STRIDE + EqResponse.P_ENABLED, 1.0 if pressed else 0.0)
+
+
+## Solo a band (`LISTEN_BAND = band + 1`); pressing it while soloed goes back to Off.
+func _on_solo_toggled(pressed: bool, band: int) -> void:
+	if device != null:
+		device.set_parameter_real(EqResponse.LISTEN_BAND, float(band + 1) if pressed else 0.0)
+
+
+func _on_type_selected(index: int, band: int) -> void:
+	if device != null:
+		device.set_parameter_real(band * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(index))
 
 
 func _on_knob_changed(value: float, param_id: int) -> void:

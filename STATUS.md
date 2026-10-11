@@ -1,6 +1,19 @@
 # Sonara DAW - Project Status
 
 
+## EQ view controls (spec 035)
+
+### Working
+- `CompactSlider` (`Godot/components/CompactHSlider.gd`): text-first slider with the `RotaryKnob` interaction model (vertical drag, Shift FineDrag, Ctrl/Cmd reset, double-click `FloatingValueEditor`, `control_knob` hotkey context), modulation surface and theming. `tests/test_compact_hslider.gd` passes headless.
+- EQ footer (`EqDefaultView`) reworked per REQ-007/009 (always-selected band dropdown, solo/enabled toggles, icon type dropdown, CompactSliders for F/G/Q); companion strips gained per-band solo + type dropdown (REQ-008). `test_eq_view.gd` passes headless; `tests/run_all.sh eq compact` — all 4 scripts pass.
+- `EqTypeIcon.texture` (cached per type+colour), `EqKnobs.make_compact`/`configure_compact`/`dim_value_control`, gallery card. `CompactSlider` theme keys added in `ThemeBuilder` (`Sonara_Theme.tres` regenerated; freshness test passes).
+- Post-live fixes (user report 2026-10-11): `CompactSlider` had no intrinsic minimum size, so the EQ footer's HBox laid it out 90×0 px — text still rendered (no rect clipping) but the control could not receive mouse input. Added `_get_minimum_size()` (text line + bar), centered the label (`HORIZONTAL_ALIGNMENT_CENTER`) and raised `text_font_size` 11 → 13. Regression: `test_eq_view.gd` asserts the footer sliders' laid-out height, `test_compact_hslider.gd` asserts the intrinsic min size.
+- Panel width is automatic: `EqDefaultView._get_minimum_size` now returns the built layout's combined minimum width (toolbar vs footer row, floored at the old 420/640) instead of a fixed `Vector2(420, 250)`; regression in `test_eq_view.gd`.
+- `CompactSlider` now draws a background (theme key `bg`, the well colour the other sliders use; `bar_bg` moved to the track colour so the bar stays visible on it). Companion strips stack the enabled toggle on top with the solo toggle below it (VBox header) instead of sharing one wide row.
+
+### Not Working / To do
+- T-012 live check (user): drag feel and icon crispness in the editor, gallery card visual, theme switch re-colour, and audio check that solo (`LISTEN_BAND` 81) isolates a band (run `./test_osc.sh` then set it).
+
 ## Note effects (spec 027, #83)
 
 ### Working

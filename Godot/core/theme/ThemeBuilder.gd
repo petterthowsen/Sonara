@@ -402,6 +402,13 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 	})
 	for type in [&"VolumeSlider", &"HorSlider"]:
 		_set_colors(t, type, {&"bg": well, &"fill": accent, &"handle": handle})
+	_set_colors(t, &"CompactSlider", {
+		&"text": p.role(&"text"),
+		&"bg": well,
+		&"bar_bg": track,
+		&"bar_fill": accent,
+		&"mod_live": _with_alpha(p.role(&"text_bright"), 0.9),
+	})
 	_set_colors(t, &"HDualSlider", {
 		&"bg": well,
 		&"fill": accent,

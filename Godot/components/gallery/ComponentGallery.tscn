@@ -5,6 +5,7 @@
 [ext_resource type="Script" uid="uid://3fglhr4dpof8" path="res://components/Fader.gd" id="2_fader"]
 [ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="3_hslider"]
 [ext_resource type="Script" uid="uid://cdo41pchcayq7" path="res://components/HDualSlider.gd" id="4_dual"]
+[ext_resource type="Script" uid="uid://cg5slchi6vuah" path="res://components/CompactHSlider.gd" id="13_compact"]
 [ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="5_volumeter"]
 [ext_resource type="Script" uid="uid://tet2lon0ngmd" path="res://components/VSlider.gd" id="6_vslider"]
 [ext_resource type="Script" uid="uid://l5sifv4kcm4n" path="res://components/meter/LevelMeter.gd" id="7_levelmeter"]
@@ -104,6 +105,29 @@ script = ExtResource("3_hslider")
 min_value = -100.0
 max_value = 100.0
 value = 34.0
+
+[node name="CompactHSliderCard" type="VBoxContainer" parent="Flow" unique_id=927104535]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/CompactHSliderCard" unique_id=1745920883]
+layout_mode = 2
+text = "Compact Slider"
+horizontal_alignment = 1
+
+[node name="CompactHSlider" type="Control" parent="Flow/CompactHSliderCard" unique_id=764811259]
+custom_minimum_size = Vector2(150, 20)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("13_compact")
+min_value = 20.0
+max_value = 20000.0
+value = 2400.0
+default_value = 1000.0
+step = 10.0
+logarithmic = true
 
 [node name="DualPanCard" type="VBoxContainer" parent="Flow" unique_id=843575913]
 custom_minimum_size = Vector2(160, 0)

@@ -32,9 +32,40 @@ static func configure(knob: RotaryKnob, device: Object, param_id: int, format: S
 	ModAssign.attach(knob, device, param_id)
 
 
+## The same for the footer's `CompactSlider`s (no label of its own: the text names the control,
+## so it doubles as the tooltip).
+static func make_compact(text: String, on_changed: Callable) -> CompactSlider:
+	var slider := CompactSlider.new()
+	slider.tooltip_text = text
+	slider.value_changed.connect(on_changed)
+	return slider
+
+
+## Point `slider` at `param_id`'s range and curve (real units; the device converts), the same
+## binding `configure` gives a knob.
+static func configure_compact(slider: CompactSlider, device: Object, param_id: int, format: String, unit_suffix: String) -> void:
+	var param = device.get_parameter(param_id)
+	if param == null:
+		return
+	slider.min_value = param.min_value
+	slider.max_value = param.max_value
+	slider.logarithmic = param.is_logarithmic
+	slider.default_value = param.default_value
+	slider.value_format = format
+	var is_freq := param_id < EqResponse.OUTPUT_GAIN and param_id % EqResponse.BAND_STRIDE == EqResponse.P_FREQ
+	slider.value_text_callback = func(value: float) -> String:
+		if is_freq:
+			return FreqAxis.format_hz(value) + " Hz"
+		return (format % value) + unit_suffix
+	ModAssign.attach(slider, device, param_id)
+
+
 ## Gain means nothing for cuts, notches and band passes: dim it rather than shifting the layout.
-static func dim_gain(gain_knob: LabeledKnob, type: int) -> void:
+## Works for a `LabeledKnob` (its inner knob takes the mouse filter too) and a `CompactSlider`.
+static func dim_value_control(control: Control, type: int) -> void:
 	var uses_gain := EqResponse.type_uses_gain(type)
-	gain_knob.modulate.a = 1.0 if uses_gain else 0.25
-	gain_knob.mouse_filter = Control.MOUSE_FILTER_PASS if uses_gain else Control.MOUSE_FILTER_IGNORE
-	gain_knob.knob.mouse_filter = Control.MOUSE_FILTER_STOP if uses_gain else Control.MOUSE_FILTER_IGNORE
+	control.modulate.a = 1.0 if uses_gain else 0.25
+	control.mouse_filter = Control.MOUSE_FILTER_PASS if uses_gain else Control.MOUSE_FILTER_IGNORE
+	var inner: Variant = control.get("knob")
+	if inner is Control:
+		inner.mouse_filter = Control.MOUSE_FILTER_STOP if uses_gain else Control.MOUSE_FILTER_IGNORE

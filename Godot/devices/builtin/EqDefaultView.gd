@@ -1,7 +1,7 @@
 ## Panel view of the built-in EQ: a toolbar for the analyser mode and dB range, the curve editor
-## (`EqCurveEditor`), and the knobs (type, Freq, Gain, Q) of the selected band plus Output gain.
-## As the Window view it is the full editor with the piano strip; the Companion view
-## (`EqBandsCompanionView`) then has the knobs of every band.
+## (`EqCurveEditor`), and the footer of the selected band (selector, solo/enabled toggles, type,
+## Freq/Gain/Q compact sliders) plus Output gain. As the Window view it is the full editor with
+## the piano strip; the Companion view (`EqBandsCompanionView`) then has the knobs of every band.
 ##
 ## Analyser mode, range, resolution, speed and tilt are view state, not parameters: they live in
 ## the app config (`EqViewState.CONFIG_KEY`) and are the same for every EQ. The view subscribes to
@@ -26,12 +26,17 @@ var save_config := Callable(self, "_save_app_config")
 var _analyser_option: OptionButton = null
 var _range_option: OptionButton = null
 var _display_menu: MenuButton = null
-var _band_label: Label = null
+var _band_option: OptionButton = null
+var _solo_button: Button = null
+var _enabled_button: Button = null
 var _type_option: OptionButton = null
-var _freq_knob: LabeledKnob = null
-var _gain_knob: LabeledKnob = null
-var _q_knob: LabeledKnob = null
+var _freq_slider: CompactSlider = null
+var _gain_slider: CompactSlider = null
+var _q_slider: CompactSlider = null
 var _output_knob: LabeledKnob = null
+var _root: VBoxContainer = null
+var _footer: HBoxContainer = null
+## The band the footer shows: always one (REQ-009). The selector's band; the editor follows.
 var _band := -1
 ## Views subscribed per device path. The engine keeps one subscription per device, not one per
 ## view, so the panel and window views share it: the last one to unsubscribe cancels it.
@@ -53,21 +58,28 @@ func _is_window() -> bool:
 	return is_type(Device.ViewType.Window)
 
 
+## The panel width is automatic: the wider of the toolbar and the footer row (its dropdowns,
+## toggles, sliders and the output knob) decides, so the device grows horizontally with its
+## content. Floors keep the window view and the curve editor usable when content is narrow.
 func _get_minimum_size() -> Vector2:
-	return Vector2(640, 380) if _is_window() else Vector2(420, 250)
+	if _root == null:
+		return Vector2(640, 380) if _is_window() else Vector2(420, 250)
+	var floor_min := Vector2(640, 380) if _is_window() else Vector2(420, 250)
+	var wanted := _root.get_combined_minimum_size()
+	return Vector2(maxf(wanted.x, floor_min.x), maxf(wanted.y, floor_min.y))
 
 
 func _build() -> void:
 	if editor != null:
 		return
-	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 3)
-	add_child(root)
+	_root = VBoxContainer.new()
+	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_root.add_theme_constant_override("separation", 3)
+	add_child(_root)
 
 	var toolbar := HBoxContainer.new()
 	toolbar.add_theme_constant_override("separation", 6)
-	root.add_child(toolbar)
+	_root.add_child(toolbar)
 	toolbar.add_child(_caption("Analyser"))
 	_analyser_option = OptionButton.new()
 	for name in ["Post", "Pre", "Off"]:
@@ -93,37 +105,65 @@ func _build() -> void:
 	editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	editor.view_state_changed.connect(_on_editor_view_state_changed)
 	editor.selection_changed.connect(_on_selection_changed)
-	root.add_child(editor)
+	_root.add_child(editor)
 
-	# The selected band's knobs. No scrolling: the row is as wide as its content and the device
-	# grows horizontally with it.
-	var bottom := HBoxContainer.new()
-	bottom.custom_minimum_size.y = STRIP_HEIGHT
-	bottom.visible = not _is_window()
-	bottom.add_theme_constant_override("separation", 10)
-	root.add_child(bottom)
-	_band_label = Label.new()
-	_band_label.custom_minimum_size.x = 18
-	bottom.add_child(_band_label)
+	# The footer: band selector, solo/enabled toggles, type dropdown with icons, the three
+	# compact sliders of the selected band, then the output knob. No scrolling: the row is as
+	# wide as its content and the device grows horizontally with it.
+	_footer = HBoxContainer.new()
+	_footer.custom_minimum_size.y = STRIP_HEIGHT
+	_footer.visible = not _is_window()
+	_footer.add_theme_constant_override("separation", 10)
+	_root.add_child(_footer)
+	_band_option = OptionButton.new()
+	_band_option.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_band_option.tooltip_text = "Band"
+	for band in EqResponse.BAND_COUNT:
+		_band_option.add_icon_item(_color_swatch(EqCurveEditor.band_color(band)), str(band + 1))
+	_band_option.item_selected.connect(_on_band_selected)
+	_footer.add_child(_band_option)
+	_solo_button = Button.new()
+	_solo_button.toggle_mode = true
+	_solo_button.icon = preload("res://assets/icons/volume-2.svg")
+	_solo_button.tooltip_text = "Listen to this band only"
+	_solo_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_solo_button.toggled.connect(_on_solo_toggled)
+	_footer.add_child(_solo_button)
+	_enabled_button = Button.new()
+	_enabled_button.toggle_mode = true
+	_enabled_button.icon = preload("res://assets/icons/power.svg")
+	_enabled_button.tooltip_text = "Band on/off"
+	_enabled_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_enabled_button.toggled.connect(_on_enabled_toggled)
+	_footer.add_child(_enabled_button)
 	_type_option = OptionButton.new()
 	_type_option.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	for type_name in EqResponse.TYPE_NAMES:
-		_type_option.add_item(type_name)
+	for i in EqResponse.TYPE_NAMES.size():
+		_type_option.add_icon_item(null, EqResponse.TYPE_NAMES[i])
 	_type_option.item_selected.connect(_on_type_selected)
-	bottom.add_child(_type_option)
-	_freq_knob = EqKnobs.make_knob("Freq", _on_band_knob_changed.bind(EqResponse.P_FREQ))
-	_gain_knob = EqKnobs.make_knob("Gain", _on_band_knob_changed.bind(EqResponse.P_GAIN))
-	_q_knob = EqKnobs.make_knob("Q", _on_band_knob_changed.bind(EqResponse.P_Q))
-	for knob in [_freq_knob, _gain_knob, _q_knob]:
-		bottom.add_child(knob)
+	_footer.add_child(_type_option)
+	_freq_slider = EqKnobs.make_compact("Freq", _on_band_knob_changed.bind(EqResponse.P_FREQ))
+	_gain_slider = EqKnobs.make_compact("Gain", _on_band_knob_changed.bind(EqResponse.P_GAIN))
+	_q_slider = EqKnobs.make_compact("Q", _on_band_knob_changed.bind(EqResponse.P_Q))
+	for slider in [_freq_slider, _gain_slider, _q_slider]:
+		slider.custom_minimum_size.x = 90.0
+		slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_footer.add_child(slider)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bottom.add_child(spacer)
+	_footer.add_child(spacer)
 	_output_knob = EqKnobs.make_knob("Out", _on_param_knob_changed.bind(EqResponse.OUTPUT_GAIN))
-	bottom.add_child(_output_knob)
+	_footer.add_child(_output_knob)
 
 	_apply_state(_read_state())
 	_refresh_band_controls()
+
+
+## A small square in the band's colour, as the band selector's item icon.
+static func _color_swatch(color: Color) -> ImageTexture:
+	var image := Image.create(10, 10, false, Image.FORMAT_RGBA8)
+	image.fill(color)
+	return ImageTexture.create_from_image(image)
 
 
 func _build_display_menu(popup: PopupMenu) -> void:
@@ -160,9 +200,25 @@ func _on_bind() -> void:
 	if audio_config != null and audio_config.config.has("sample_rate"):
 		editor.sample_rate = float(audio_config.config["sample_rate"])
 	EqKnobs.configure(_output_knob.knob, device, EqResponse.OUTPUT_GAIN, "%+.1f", " dB")
-	_band = editor.selected_band
+	# REQ-009: the footer always shows a band. Fall back to the first enabled one, else band 1,
+	# and let the editor follow so the two stay in sync from the start.
+	if editor.selected_band >= 0:
+		_band = editor.selected_band
+	else:
+		_band = _fallback_band()
+		editor.select_band(_band)
 	_configure_band_knobs()
 	_refresh_band_controls()
+	_refresh_output()
+
+
+## The band to show when the editor has none: the first enabled band, else band 1.
+func _fallback_band() -> int:
+	if device != null:
+		for band in EqResponse.BAND_COUNT:
+			if device.get_parameter_real(band * EqResponse.BAND_STRIDE + EqResponse.P_ENABLED) >= 0.5:
+				return band
+	return 0
 	_refresh_output()
 
 
@@ -181,47 +237,66 @@ func _on_device_parameter_changed(param_id: int, _value: float) -> void:
 			_refresh_band_controls()
 	elif param_id == EqResponse.OUTPUT_GAIN:
 		_refresh_output()
+	elif param_id == EqResponse.LISTEN_BAND:
+		_refresh_band_controls()
 
 
 func _on_selection_changed(band: int) -> void:
+	# REQ-009: an editor selection of -1 never clears the footer's band.
+	if band < 0:
+		return
 	_band = band
+	_band_option.select(band)
 	_configure_band_knobs()
 	_refresh_band_controls()
 
 
-## Aim the three knobs at the selected band's parameters.
+func _on_band_selected(index: int) -> void:
+	_band = index
+	# The editor may already sit on this band (then select_band is a no-op without a signal).
+	editor.select_band(index)
+	_configure_band_knobs()
+	_refresh_band_controls()
+
+
+## Aim the three sliders at the selected band's parameters.
 func _configure_band_knobs() -> void:
 	if device == null or _band < 0:
 		return
 	var base := _band * EqResponse.BAND_STRIDE
-	EqKnobs.configure(_freq_knob.knob, device, base + EqResponse.P_FREQ, "%.0f", " Hz")
-	EqKnobs.configure(_gain_knob.knob, device, base + EqResponse.P_GAIN, "%+.1f", " dB")
-	EqKnobs.configure(_q_knob.knob, device, base + EqResponse.P_Q, "%.2f", "")
+	EqKnobs.configure_compact(_freq_slider, device, base + EqResponse.P_FREQ, "%.0f", " Hz")
+	EqKnobs.configure_compact(_gain_slider, device, base + EqResponse.P_GAIN, "%+.1f", " dB")
+	EqKnobs.configure_compact(_q_slider, device, base + EqResponse.P_Q, "%.2f", "")
 
 
-## Show the selected band's values; the whole row dims when no band is enabled.
+## Show the selected band's state: selector, solo/enabled toggles, type icons in the band's
+## colour and the sliders. A disabled band dims its strip, but every control stays interactive
+## (REQ-009).
 func _refresh_band_controls() -> void:
-	if _band_label == null:
+	if _band_option == null:
 		return
-	var has_band := device != null and _band >= 0
-	for control in [_band_label, _type_option, _freq_knob, _gain_knob, _q_knob]:
-		control.modulate.a = 1.0 if has_band else 0.25
-		control.mouse_filter = Control.MOUSE_FILTER_PASS if has_band else Control.MOUSE_FILTER_IGNORE
-	_type_option.disabled = not has_band
-	_freq_knob.knob.mouse_filter = Control.MOUSE_FILTER_STOP if has_band else Control.MOUSE_FILTER_IGNORE
-	_q_knob.knob.mouse_filter = _freq_knob.knob.mouse_filter
-	if not has_band:
-		_band_label.text = ""
+	if device == null or _band < 0:
+		for control in [_band_option, _solo_button, _enabled_button, _type_option, _freq_slider, _gain_slider, _q_slider]:
+			control.modulate.a = 0.25
 		return
 	var base := _band * EqResponse.BAND_STRIDE
+	var enabled := device.get_parameter_real(base + EqResponse.P_ENABLED) >= 0.5
 	var type := int(device.get_parameter_real(base + EqResponse.P_TYPE))
-	_band_label.text = str(_band + 1)
-	_band_label.add_theme_color_override("font_color", EqCurveEditor.band_color(_band))
+	var soloed := int(device.get_parameter_real(EqResponse.LISTEN_BAND)) == _band + 1
+	_band_option.select(_band)
+	_solo_button.set_pressed_no_signal(soloed)
+	_enabled_button.set_pressed_no_signal(enabled)
+	for i in EqResponse.TYPE_NAMES.size():
+		_type_option.set_item_icon(i, EqTypeIcon.texture(i, EqCurveEditor.band_color(_band)))
 	_type_option.select(type)
-	_freq_knob.knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_FREQ))
-	_gain_knob.knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_GAIN))
-	_q_knob.knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_Q))
-	EqKnobs.dim_gain(_gain_knob, type)
+	_freq_slider.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_FREQ))
+	_gain_slider.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_GAIN))
+	_q_slider.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_Q))
+	var strip_alpha := 1.0 if enabled else 0.55
+	for control in [_band_option, _solo_button, _enabled_button, _type_option, _freq_slider, _gain_slider, _q_slider]:
+		control.modulate.a = strip_alpha
+	# After the strip dim: a gain-less type dims the gain slider further and ignores the mouse.
+	EqKnobs.dim_value_control(_gain_slider, type)
 
 
 func _refresh_output() -> void:
@@ -237,6 +312,17 @@ func _on_band_knob_changed(value: float, offset: int) -> void:
 func _on_type_selected(index: int) -> void:
 	if device != null and _band >= 0:
 		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(index))
+
+
+## Solo the selected band (`LISTEN_BAND = band + 1`); pressing it while soloed goes back to Off.
+func _on_solo_toggled(pressed: bool) -> void:
+	if device != null and _band >= 0:
+		device.set_parameter_real(EqResponse.LISTEN_BAND, float(_band + 1) if pressed else 0.0)
+
+
+func _on_enabled_toggled(pressed: bool) -> void:
+	if device != null and _band >= 0:
+		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + EqResponse.P_ENABLED, 1.0 if pressed else 0.0)
 
 
 func _on_param_knob_changed(value: float, param_id: int) -> void:

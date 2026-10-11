@@ -133,7 +133,7 @@ margins or separations on scenes that a variation already covers.
 competes with track or status colours.
 
 **Custom-drawn controls** (`RotaryKnob`, `Fader`, `VolumeSlider`, `HorSlider`, `HDualSlider`,
-`Meter`, `LevelMeter`, `Volumeter`, `LightButton`, `SegmentedControl`, `XYSlider`,
+`CompactHSlider`, `Meter`, `LevelMeter`, `Volumeter`, `LightButton`, `SegmentedControl`, `XYSlider`,
 `EnvelopeControl`, `Ruler`) have their own theme type with one colour item per property, named
 without the `_color` suffix (`Fader/colors/fill`). Their colour properties are not exported:
 reading one returns the resolved theme colour, and writing one (`knob.value_arc_color = X`) sets a
@@ -178,9 +178,45 @@ subgroup for range-arc width, spacing, inset, and live-marker size/color), `HorS
 meter and fader), `XYSlider`, and `EnvelopeControl` with the `Envelope` resource (any subset of
 ADSR).
 
+### CompactHSlider (`components/CompactHSlider.gd`)
+
+A text-first slider: one line of formatted value text over a 3 px bar (`BAR_HEIGHT`), ~20 px tall in
+total. Where a full `HorSlider` does not fit (the EQ footer, spec 035), it trades the handle for the
+readout. It is a `Control` (`class_name CompactSlider`), and its interaction model is `RotaryKnob`'s
+with the drag axis vertical:
+
+- **Properties:** `min_value` / `max_value` / `value` / `default_value` / `step` (drag accumulates
+  underneath, so slow movements still reach the next step) and `logarithmic` (drag and bar both map
+  through log(min..max); needs `min_value > 0`).
+- **Formatting:** `value_text_callback: Callable(value) -> String` wins; otherwise `value_format`
+  (default `"%g"`) with `unit` appended. `edit_parse_callback: Callable(text) -> float` (return NAN
+  to reject) converts typed text back; the default parses plain numbers.
+- **Interaction contract:** left-drag changes the value with vertical motion (`-relative.y` at
+  `drag_sensitivity`), Shift applies `FineDrag` fine drag, Ctrl/Cmd-click resets to `default_value`
+  and emits `reset_requested` (`last_edit_kind` = `RESET`; emitted even when already at the
+  default), double-click opens a `FloatingValueEditor` pre-filled with the current text. Signals:
+  `value_changed`, `reset_requested`, `drag_started`/`drag_ended`, plus `last_edit_kind`
+  (`ValueEditKind`). It declares the `HotkeyActions` `control_knob` context (outside the editor).
+- **Bar:** drawn like `HorSlider` — a fill from the left, or bidirectionally from the centre when
+  the range spans negative and positive values (gain ranges, e.g. ±24 dB).
+- **Modulation surface:** the full `HorSlider` contract, so `ModAssign.attach()` works unchanged:
+  `mod_ranges` (route bars stacked above the bar's top edge),
+  `mod_live_values` (thin live markers across the bar), `mod_hint_active`/`mod_hint_color` (pulsing
+  fill), `mod_assign_active`/`mod_assign_color`/`mod_assign_amount` (dragging edits the amount and
+  emits `mod_amount_changed`; double-click emits 0), `mod_amount_text_callback` for the assign
+  tooltip.
+- **Theming:** `ThemedColors(…, &"CompactSlider")` with `CompactSlider/colors/text`, `bar_bg`,
+  `bar_fill` and `mod_live` (defined in `core/theme/ThemeBuilder.gd`, shipped in the generated
+  `Sonara_Theme.tres`); refreshed on `NOTIFICATION_THEME_CHANGED`. Read/write the colours as
+  `text_color`, `bar_bg_color`, `bar_fill_color`, `mod_live_color` per the custom-drawn rule above.
+- A `CompactHSliderCard` in `ComponentGallery.tscn` previews it with a live demo (log 20 Hz–20 kHz
+  range, "2.4 kHz" formatting, mod range, live marker and hint seeded by `ComponentGallery.gd`);
+  drag, double-click and Ctrl-reset are functional in the gallery.
+
 ## Modulation display and assign mode
 
-`RotaryKnob`, `HorSlider`, `Fader`, `VolumeSlider` and `Volumeter` share one modulation contract (there
+`RotaryKnob`, `HorSlider`, `Fader`, `VolumeSlider`, `Volumeter` and `CompactHSlider` share one
+modulation contract (there
 are no traits in GDScript, so each implements it; the maths is in `ModDisplay.gd`):
 
 - `mod_ranges: Array[Dictionary]` of `{amount, color, source, bipolar}` is drawn from the base value

@@ -28,6 +28,11 @@ func run_tests() -> void:
 	_test_tilt_lifts_the_highs()
 	_test_selection_and_piano()
 	_test_hidden_view_stops_interaction()
+	_test_footer_band_selector()
+	_test_footer_solo_enabled_type()
+	_test_type_icons_cover_all_types()
+	_test_disabled_band_stays_editable()
+	_test_companion_solo_and_type()
 	await _test_draws_in_the_tree()
 
 
@@ -270,9 +275,9 @@ func _test_view_persists_state() -> void:
 	# The knobs show the band's parameters.
 	_enable(inst, 2, EqResponse.Type.HIGH_SHELF, 4000.0, 5.0)
 	_assert(view.editor.selected_band == 2 and view._band == 2, "enabling a band selects it, and the view follows")
-	_assert(absf(view._freq_knob.knob.value - 4000.0) < 1.0 and absf(view._gain_knob.knob.value - 5.0) < 0.05, "the knobs show the selected band")
+	_assert(absf(view._freq_slider.value - 4000.0) < 1.0 and absf(view._gain_slider.value - 5.0) < 0.05, "the sliders show the selected band")
 	_assert(view._type_option.selected == EqResponse.Type.HIGH_SHELF, "and its type")
-	view._freq_knob.knob.value_changed.emit(5000.0)
+	view._freq_slider.value_changed.emit(5000.0)
 	_assert(absf(_real(inst, 2, EqResponse.P_FREQ) - 5000.0) < 0.5, "a knob writes the selected band")
 	view._type_option.item_selected.emit(EqResponse.Type.LOW_CUT)
 	_assert(int(_real(inst, 2, EqResponse.P_TYPE)) == EqResponse.Type.LOW_CUT, "the type box writes the selected band")
@@ -425,6 +430,130 @@ func _test_draws_in_the_tree() -> void:
 	await process_frame
 	_assert(view.editor._curves.size() == EqResponse.BAND_COUNT and view.editor._total.size() > 32, "curves were computed for drawing")
 	_assert(view.editor._total[0] < -10.0, "the low cut shows in the drawn total at 20 Hz")
+	# The footer's compact sliders must get a real rect from the layout: a Control with no
+	# intrinsic minimum size lays out 0 px tall in the HBox and then can't receive any input.
+	_assert(view._freq_slider.size.y > 0.0 and view._freq_slider.get_global_rect().size.y > 0.0,
+		"the footer sliders have clickable height after layout")
+	_assert(view.get_minimum_size().x >= view._footer.get_combined_minimum_size().x,
+		"the panel width follows the footer row's natural width")
 	view._on_view_hidden()
 	view.queue_free()
 	await process_frame
+
+
+# ============================================================================
+# REQ-007 / REQ-009: the footer's band selector, toggles and type dropdown
+# ============================================================================
+
+## A panel view bound to `inst` with the config stubs the other view tests use.
+func _make_panel_view(inst: Object) -> Object:
+	var view = load("res://devices/builtin/EqDefaultView.gd").new()
+	view.load_config = func(_key: String) -> Variant: return {}
+	view.save_config = func(_key: String, _value: Variant) -> void: pass
+	view.bind_to_device(inst)
+	return view
+
+
+func _test_footer_band_selector() -> void:
+	var inst := _make_instance()
+	_enable(inst, 1, EqResponse.Type.BELL, 2000.0, -3.0)
+	_enable(inst, 3, EqResponse.Type.BELL, 520.0, 2.0)
+	var view = _make_panel_view(inst)
+	_assert(view._band_option.selected == 1 and view._band == 1, "the selector shows the first enabled band")
+	# Editor selection drives the selector and the sliders.
+	view.editor.select_band(3)
+	_assert(view._band_option.selected == 3 and view._band == 3, "selecting a band in the editor moves the selector")
+	_assert(absf(view._freq_slider.value - 520.0) < 1.0 and absf(view._gain_slider.value - 2.0) < 0.05, "the sliders follow the selection")
+	# And the selector drives the editor back.
+	view._band_option.item_selected.emit(1)
+	_assert(view.editor.selected_band == 1 and view._band == 1, "choosing a band moves the editor's selection")
+	_assert(absf(view._freq_slider.value - 2000.0) < 1.0, "and the sliders re-aim at that band")
+	# REQ-009: a lost editor selection never leaves the footer without a band.
+	view.editor.select_band(-1)
+	_assert(view._band == 1 and view._band_option.selected == 1, "a -1 editor selection leaves the footer's band alone")
+	_assert(view._band_option.selected >= 0 and view._band_option.selected < EqResponse.BAND_COUNT, "the selector always has a band (1-8, none state never reached)")
+	view.free()
+
+
+func _test_footer_solo_enabled_type() -> void:
+	var inst := _make_instance()
+	_enable(inst, 2, EqResponse.Type.BELL, 800.0, 4.0)
+	var view = _make_panel_view(inst)
+	# Solo: LISTEN_BAND = band + 1, pressing again goes back to Off.
+	view._solo_button.toggled.emit(true)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 3, "soloing band 3 writes LISTEN_BAND 3")
+	view._solo_button.toggled.emit(false)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 0, "pressing the solo again goes back to Off")
+	inst.set_parameter_real(EqResponse.LISTEN_BAND, 3.0)
+	view._on_device_parameter_changed(EqResponse.LISTEN_BAND, 3.0)
+	_assert(view._solo_button.button_pressed, "the solo button reflects a LISTEN_BAND change")
+	# Enabled: writes the selected band's P_ENABLED.
+	view._enabled_button.toggled.emit(false)
+	_assert(_real(inst, 2, EqResponse.P_ENABLED) == 0.0, "the enabled toggle turns the band off")
+	view._enabled_button.toggled.emit(true)
+	_assert(_real(inst, 2, EqResponse.P_ENABLED) == 1.0, "and on again")
+	# Type: writes the selected band's P_TYPE and dims gain for gain-less types.
+	view._type_option.item_selected.emit(EqResponse.Type.NOTCH)
+	_assert(int(_real(inst, 2, EqResponse.P_TYPE)) == EqResponse.Type.NOTCH, "the type dropdown writes the selected band's type")
+	_assert(view._type_option.selected == EqResponse.Type.NOTCH, "and its selection shows it")
+	_assert(view._gain_slider.modulate.a < 1.0 and view._gain_slider.mouse_filter == Control.MOUSE_FILTER_IGNORE, "a Notch dims the gain slider")
+	view._type_option.item_selected.emit(EqResponse.Type.BELL)
+	_assert(view._gain_slider.modulate.a == 1.0 and view._gain_slider.mouse_filter == Control.MOUSE_FILTER_PASS, "a Bell lights it back up")
+	view.free()
+
+
+func _test_type_icons_cover_all_types() -> void:
+	var color := EqCurveEditor.band_color(0)
+	for i in EqResponse.TYPE_NAMES.size():
+		var tex: ImageTexture = EqTypeIcon.texture(i, color)
+		_assert(tex != null and tex.get_size().x > 0 and tex.get_size().y > 0, "type %d (%s) renders a non-empty icon" % [i, EqResponse.TYPE_NAMES[i]])
+
+
+func _test_disabled_band_stays_editable() -> void:
+	var inst := _make_instance()
+	_enable(inst, 1, EqResponse.Type.BELL, 2000.0, 0.0)
+	var view = _make_panel_view(inst)
+	view._enabled_button.toggled.emit(false)
+	_assert(_real(inst, 1, EqResponse.P_ENABLED) == 0.0, "the selected band is disabled")
+	_assert(view._band_option.selected == 1, "the footer keeps showing it (no auto-deselect)")
+	# A disabled band only dims: dragging its Freq slider still writes P_FREQ.
+	view._freq_slider.value_changed.emit(5000.0)
+	_assert(absf(_real(inst, 1, EqResponse.P_FREQ) - 5000.0) < 0.5, "a Freq drag on the disabled band still writes P_FREQ (param %d)" % (1 * EqResponse.BAND_STRIDE + EqResponse.P_FREQ))
+	view._solo_button.toggled.emit(true)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 2, "a disabled band can still be soloed")
+	view._solo_button.toggled.emit(false)
+	view._type_option.item_selected.emit(EqResponse.Type.HIGH_SHELF)
+	_assert(int(_real(inst, 1, EqResponse.P_TYPE)) == EqResponse.Type.HIGH_SHELF, "and its type stays adjustable")
+	_assert(view._freq_slider.modulate.a < 1.0, "the disabled band's controls are dimmed, not inert")
+	view.free()
+
+
+func _test_companion_solo_and_type() -> void:
+	var inst := _make_instance()
+	_enable(inst, 3, EqResponse.Type.BELL, 520.0, 2.0)
+	_enable(inst, 5, EqResponse.Type.BELL, 2500.0, 1.0)
+	var companion = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	companion.bind_to_device(inst)
+	# Per-band solo writes n+1; pressing the active one again goes back to Off.
+	companion._items[3]["solo"].toggled.emit(true)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 4, "band 4's solo button writes LISTEN_BAND 4")
+	_assert(companion._items[3]["solo"].button_pressed, "and its own state shows it")
+	companion._items[5]["solo"].toggled.emit(true)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 6, "soloing another band moves the listen band")
+	companion._items[5]["solo"].toggled.emit(false)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 0, "pressing it again goes back to Off")
+	# LISTEN_BAND is one device-level parameter: every strip's solo refreshes together.
+	inst.set_parameter_real(EqResponse.LISTEN_BAND, 4.0)
+	companion._on_device_parameter_changed(EqResponse.LISTEN_BAND, 4.0)
+	_assert(companion._items[3]["solo"].button_pressed and not companion._items[5]["solo"].button_pressed and not companion._items[0]["solo"].button_pressed, "a LISTEN_BAND change updates every strip's solo state")
+	# The type dropdown writes the band's P_TYPE.
+	companion._items[5]["type"].item_selected.emit(EqResponse.Type.NOTCH)
+	_assert(int(_real(inst, 5, EqResponse.P_TYPE)) == EqResponse.Type.NOTCH, "band 6's type dropdown writes its P_TYPE")
+	_assert(companion._items[5]["type"].get_item_tooltip(companion._items[5]["type"].selected) == "Notch", "the item carries the type name as a tooltip")
+	# And follows the device when the type changes from elsewhere.
+	inst.set_parameter_real(5 * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(EqResponse.Type.TILT))
+	companion._on_device_parameter_changed(5 * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(EqResponse.Type.TILT))
+	_assert(companion._items[5]["type"].selected == EqResponse.Type.TILT, "the dropdown's selection follows the device")
+	var icon: Texture2D = companion._items[5]["type"].get_item_icon(EqResponse.Type.TILT)
+	_assert(icon != null and icon.get_size().x > 0, "and its item icon is the band-coloured curve")
+	companion.free()
