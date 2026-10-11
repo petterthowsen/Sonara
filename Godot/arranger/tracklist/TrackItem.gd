@@ -28,7 +28,6 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 		bg_color = c
 		queue_redraw()
 
-@export_group("Selection Style")
 ## Neutral selection border, the same colour every selectable item uses (theme `border_selected`).
 var selected_outline_color: Color:
 	get:

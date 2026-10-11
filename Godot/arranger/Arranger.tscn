@@ -12,13 +12,15 @@
 [ext_resource type="Texture2D" uid="uid://bgm0h4h2v5t0d" path="res://assets/icons/circle-gauge.svg" id="5_6v1c6"]
 [ext_resource type="Script" uid="uid://3yoesqgv0tuw" path="res://components/TimelineScrollBar.gd" id="5_nqsw4"]
 [ext_resource type="Script" uid="uid://c1ko1kpn7ixej" path="res://arranger/Playhead.gd" id="6_jotmv"]
+[ext_resource type="Texture2D" uid="uid://b5v7q7i6kijk6" path="res://assets/icons/drum.svg" id="6_v5bje"]
+[ext_resource type="Texture2D" uid="uid://d78ym5jscua" path="res://assets/icons/music-2.svg" id="7_vddje"]
 [ext_resource type="Script" uid="uid://b1ka208d2k8vm" path="res://arranger/ruler/MarkerTrack.gd" id="8_8wvub"]
 [ext_resource type="Texture2D" uid="uid://687klfr8sj3d" path="res://assets/icons/folder-plus.svg" id="13_8wvub"]
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="14_autov"]
 [ext_resource type="Script" uid="uid://d2c70supsq5id" path="res://arranger/ruler/TempoTrack.gd" id="16_tempo"]
+[ext_resource type="Script" uid="uid://c0n38xarutc37" path="res://arranger/ruler/KeyChangeTrack.gd" id="17_key"]
 [ext_resource type="Texture2D" uid="uid://c2o0kitrsi84r" path="res://assets/icons/cable.svg" id="17_mxg1e"]
 [ext_resource type="Script" uid="uid://dr6wv5u2qpn6k" path="res://arranger/ruler/TimeSignatureTrack.gd" id="17_tsig"]
-[ext_resource type="Script" uid="uid://c0n38xarutc37" path="res://arranger/ruler/KeyChangeTrack.gd" id="17_key"]
 [ext_resource type="Texture2D" uid="uid://bimmip1tp0w01" path="res://assets/icons/link.svg" id="18_link"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
@@ -103,9 +105,9 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_bh1i7")
 [node name="VBox" type="VBoxContainer" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader" unique_id=675155203]
 layout_mode = 2
 
-[node name="RulerButtons" type="HBoxContainer" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox" unique_id=768694590]
+[node name="RulerButtons" type="HFlowContainer" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox" unique_id=1415505435]
 layout_mode = 2
-size_flags_horizontal = 8
+alignment = 2
 
 [node name="BeatsToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons" unique_id=1717755110]
 layout_mode = 2
@@ -137,13 +139,16 @@ icon = ExtResource("5_6v1c6")
 layout_mode = 2
 tooltip_text = "Time Signature Track"
 toggle_mode = true
-text = "TS"
+icon = ExtResource("6_v5bje")
+icon_alignment = 1
 
-[node name="KeyToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons"]
+[node name="KeyToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons" unique_id=1535041097]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 tooltip_text = "Key Track"
 toggle_mode = true
-text = "Key"
+icon = ExtResource("7_vddje")
+icon_alignment = 1
 
 [node name="TimelineHeader" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox" unique_id=612027961]
 layout_mode = 2
@@ -184,7 +189,7 @@ clip_contents = true
 layout_mode = 2
 script = ExtResource("17_tsig")
 
-[node name="KeyChangeTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox"]
+[node name="KeyChangeTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox" unique_id=1694387048]
 visible = false
 custom_minimum_size = Vector2(0, 30)
 clip_contents = true
@@ -279,9 +284,9 @@ layout_mode = 2
 [node name="AddTrackButton" type="MenuButton" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1727724344]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
+tooltip_text = "Add Track"
 icon = ExtResource("2_6tuub")
 icon_alignment = 1
-tooltip_text = "Add Track"
 
 [node name="AddFolderButton" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=562461637]
 custom_minimum_size = Vector2(32, 32)

@@ -6,14 +6,13 @@
 [ext_resource type="Texture2D" uid="uid://pcrbk3wdxtd4" path="res://assets/icons/folder.svg" id="4_v1xsl"]
 [ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="5_mscrg"]
 [ext_resource type="Texture2D" uid="uid://damamek5tek7h" path="res://assets/icons/folder-open.svg" id="6_ru4rj"]
-[ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="7_ru4rj"]
-[ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="9_ru4rj"]
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="9_yavxh"]
 [ext_resource type="Script" uid="uid://3jmrbwrbnxpg" path="res://components/CollapsingBoxContainer.gd" id="10_xkg54"]
 [ext_resource type="Script" uid="uid://cghgduhqvbyfn" path="res://components/CollapsingFlowContainer.gd" id="11_yavxh"]
-[ext_resource type="Texture2D" uid="uid://dwkn4khkbhv8u" path="res://assets/icons/panel-top.svg" id="win_closed"]
-[ext_resource type="Texture2D" uid="uid://d11snnk2qnjt7" path="res://assets/icons/panel-top-open.svg" id="win_open"]
+[ext_resource type="Texture2D" uid="uid://cbhc861t3h6le" path="res://assets/icons/plus.svg" id="13_doj3m"]
 [ext_resource type="Script" uid="uid://dqv5jd1spvtcs" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
+[ext_resource type="Texture2D" uid="uid://dwkn4khkbhv8u" path="res://assets/icons/panel-top-open.svg" id="win_closed"]
+[ext_resource type="Texture2D" uid="uid://d11snnk2qnjt7" path="res://assets/icons/panel-top.svg" id="win_open"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
 resource_local_to_scene = true
@@ -43,9 +42,9 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "window_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle", "io_button")]
-custom_minimum_size = Vector2(100, 24)
-offset_right = 233.0
-offset_bottom = 29.0
+custom_minimum_size = Vector2(100, 16)
+offset_right = 337.0
+offset_bottom = 49.0
 size_flags_vertical = 0
 focus_mode = 1
 mouse_filter = 1
@@ -58,8 +57,8 @@ arm_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContaine
 window_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/WindowToggle")
 solo_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/SoloToggle")
 mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer/MuteToggle")
-automation_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/AutomationToggle")
-automation_menu_button = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/AutomationMenuButton")
+automation_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Automation/HBox/AutomationToggle")
+automation_menu_button = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Automation/HBox/AutomationMenuButton")
 foldout_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/FoldoutToggle")
 io_button = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/IOButton")
 
@@ -77,10 +76,10 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 script = ExtResource("2_shsim")
 min_width = 12
-theme_override_colors/bg = Color(0.0627451, 0.0627451, 0.0627451, 0)
-drag_scale = 0.4
+rms_release_time = 0.1
 peak = 0.655
 volume_db = -60.0
+drag_scale = 0.4
 
 [node name="MarginContainer" type="MarginContainer" parent="VBoxContainer/HBox" unique_id=1601519965]
 layout_mode = 2
@@ -165,8 +164,8 @@ metadata/collapse_priority = -1
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 focus_mode = 0
-theme_override_font_sizes/font_size = 12
 theme_type_variation = &"RecordButton"
+theme_override_font_sizes/font_size = 12
 toggle_mode = true
 text = "R"
 icon_alignment = 1
@@ -177,8 +176,8 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 0.0
 focus_mode = 0
-theme_override_font_sizes/font_size = 12
 theme_type_variation = &"SoloButton"
+theme_override_font_sizes/font_size = 12
 toggle_mode = true
 text = "S"
 icon_alignment = 1
@@ -190,42 +189,51 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 0.0
 focus_mode = 0
-theme_override_font_sizes/font_size = 12
 theme_type_variation = &"MuteButton"
+theme_override_font_sizes/font_size = 12
 toggle_mode = true
 text = "M"
 script = ExtResource("dragtoggle_btn")
 drag_group = &"mute"
 
-[node name="AutomationMenuButton" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1871101369]
+[node name="Automation" type="PanelContainer" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=2064363982]
+layout_mode = 2
+theme_type_variation = &"ButtonPanel"
+
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Automation" unique_id=1048608783]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="AutomationToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Automation/HBox" unique_id=1780963887]
 custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+size_flags_stretch_ratio = 2.0
+tooltip_text = "Show Automation Lanes"
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+toggle_mode = true
+icon = ExtResource("9_yavxh")
+icon_alignment = 1
+expand_icon = true
+script = ExtResource("5_mscrg")
+icon_default = ExtResource("9_yavxh")
+icon_pressed = ExtResource("9_yavxh")
+
+[node name="AutomationMenuButton" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Automation/HBox" unique_id=1871101369]
+custom_minimum_size = Vector2(18, 18)
 layout_mode = 2
 size_flags_stretch_ratio = 2.0
 tooltip_text = "Automation lanes"
 focus_mode = 0
 theme_override_font_sizes/font_size = 10
-icon = ExtResource("9_yavxh")
+icon = ExtResource("13_doj3m")
 icon_alignment = 1
 expand_icon = true
-
-[node name="AutomationToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1780963887]
-custom_minimum_size = Vector2(24, 24)
-layout_mode = 2
-size_flags_stretch_ratio = 2.0
-focus_mode = 0
-theme_override_font_sizes/font_size = 10
-toggle_mode = true
-icon = ExtResource("9_ru4rj")
-icon_alignment = 1
-expand_icon = true
-script = ExtResource("5_mscrg")
-icon_default = ExtResource("9_ru4rj")
-icon_pressed = ExtResource("7_ru4rj")
 
 [node name="IOButton" type="MenuButton" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=2048027707]
-custom_minimum_size = Vector2(64, 32)
+custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
-size_flags_vertical = 10
+size_flags_vertical = 3
 focus_mode = 0
 theme_override_font_sizes/font_size = 10
 text = "Master"
