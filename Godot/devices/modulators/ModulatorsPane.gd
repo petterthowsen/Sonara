@@ -17,6 +17,11 @@ const ENV_STAGE_PARAM := {
 }
 ## LFO parameter display order: Rate, Sync, Shape, Retrigger, Phase.
 const LFO_ORDER := [10, 20, 0, 30, 40]
+## Knob parameter display order: Value, Polarity (spec 036).
+const KNOB_ORDER := [0, 10]
+## Sidechain generic parameters in display order; the Source (40) is a custom channel menu.
+const SC_ORDER := [0, 10, 20, 30]
+const SC_SOURCE_PARAM := 40
 
 ## Grid geometry: `ROWS`-cell columns of square cells (`SEP` apart), sized from the pane's height.
 const ROWS := 3
@@ -55,6 +60,14 @@ var _envelope: Envelope = null
 var _envelope_control: EnvelopeControl = null
 ## Modulator the detail column was built for; -1 when it holds no controls to update in place.
 var _detail_mod_id := -1
+## Pair the detail column shows (an XY pad's XY slider); null otherwise.
+var _detail_pad: XYPad = null
+var _detail_pad_slider: XYSlider = null
+## The sidechain Source menu and the project it lists (rebuilt on channel-list changes).
+var _source_menu: OptionButton = null
+var _source_menu_project = null
+var _source_cb_added: Callable = Callable()
+var _source_cb_removed: Callable = Callable()
 
 
 func _ready() -> void:
@@ -159,6 +172,8 @@ func _build_structure() -> void:
 
 
 ## Advertised kinds in the placeholder's `+` menu (refreshed when the registry re-announces them).
+## The XY pad is one entry (spec 036 D6): `xyy` is hidden, `xyx` lists as "XY Pad", and picking
+## it adds the whole pair through `DeviceInstance.add_xy_pad`.
 func _refresh_kinds() -> void:
 	if _kind_menu == null:
 		return
@@ -166,8 +181,14 @@ func _refresh_kinds() -> void:
 	var registry = _registry()
 	var kinds: Array = registry.get_modulator_kinds() if registry != null else []
 	for kind in kinds:
-		_kind_menu.add_item(String(kind.get("name", kind.get("id", ""))), _kind_menu.item_count)
-		_kind_menu.set_item_metadata(_kind_menu.item_count - 1, String(kind.get("id", "")))
+		var kind_id := String(kind.get("id", ""))
+		if kind_id == "xyy":
+			continue
+		var label := String(kind.get("name", kind_id))
+		if kind_id == "xyx":
+			label = "XY Pad"
+		_kind_menu.add_item(label, _kind_menu.item_count)
+		_kind_menu.set_item_metadata(_kind_menu.item_count - 1, kind_id)
 
 
 func _registry():
@@ -182,23 +203,40 @@ func _registry():
 # GRID (panels and placeholder cells)
 # ============================================================================
 
-## Rebuild the column-major grid: `C = max(1, n / 3 + 1)` columns of `ROWS` cells, panels first in
-## array order, then `3·C − n` placeholder cells (1–3). Cheap at ≤ 8 entries. Rebuilt on
-## add/remove/reorder; the selection is kept by `mod_id`.
+## Rebuild the column-major grid: `C = max(1, tiles / 3 + 1)` columns of `ROWS` cells, panels
+## first in array order, then `3·C − tiles` placeholder cells (1–3). Cheap at ≤ 8 entries.
+## Rebuilt on add/remove/reorder; the selection is kept by `mod_id`.
+##
+## Pair-aware (spec 036): an adjacent `xyx`+`xyy` becomes ONE tile (`setup_pair`); an orphan
+## `xyx`/`xyy` (a hand-edited save) degrades to a plain tile.
 func _rebuild_grid() -> void:
 	_clear_grid()
 	if device == null:
 		return
-	var n := device.modulators.size()
+	var tiles: Array = []
+	var i := 0
+	while i < device.modulators.size():
+		var mod: Modulator = device.modulators[i]
+		if mod.kind == "xyx" and i + 1 < device.modulators.size() \
+				and device.modulators[i + 1].kind == "xyy":
+			var pad := XYPad.new()
+			pad.x = mod
+			pad.y = device.modulators[i + 1]
+			tiles.append(pad)
+			i += 2
+		else:
+			tiles.append(mod)
+			i += 1
+	var n := tiles.size()
 	var columns := maxi(1, n / ROWS + 1)
 	for c in columns:
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", SEP)
 		_grid.add_child(column)
 		for r in ROWS:
-			var i: int = c * ROWS + r
-			if i < n:
-				_add_panel(column, device.modulators[i])
+			var k: int = c * ROWS + r
+			if k < n:
+				_add_panel(column, tiles[k])
 			else:
 				_add_placeholder(column)
 	if _side > 0:
@@ -209,7 +247,7 @@ func _rebuild_grid() -> void:
 		_layout_panel_size.call_deferred()
 	# At the capacity limit the last placeholder (always one at 8) is disabled: REQ-002 keeps
 	# placeholders non-zero without offering an add `add_modulator` would refuse.
-	var full := n >= device.MAX_MODULATORS
+	var full := device.modulators.size() >= device.MAX_MODULATORS
 	for placeholder in _placeholders:
 		placeholder.disabled = full
 		placeholder.tooltip_text = "Maximum of 8 modulators" if full else "Add modulator"
@@ -218,10 +256,13 @@ func _rebuild_grid() -> void:
 	_refresh_selection()
 
 
-func _add_panel(column: VBoxContainer, mod: Modulator) -> void:
+func _add_panel(column: VBoxContainer, entry: Variant) -> void:
 	var panel := ModulatorPanel.new()
 	column.add_child(panel)
-	panel.setup(mod)
+	if entry is XYPad:
+		panel.setup_pair(entry)
+	else:
+		panel.setup(entry)
 	panel.selected.connect(_on_panel_clicked)
 	panel.drag_started.connect(_on_panel_drag_started)
 	_tiles.append(panel)
@@ -321,7 +362,13 @@ func _on_add_kind(id: int) -> void:
 		return
 	if id < 0 or id >= _kind_menu.item_count:
 		return
-	var mod = device.add_modulator(String(_kind_menu.get_item_metadata(id)))
+	var kind_id := String(_kind_menu.get_item_metadata(id))
+	if kind_id == "xyx":
+		var pad: XYPad = device.add_xy_pad()
+		if pad != null:
+			_select(pad.x.mod_id)
+		return
+	var mod = device.add_modulator(kind_id)
 	if mod != null:
 		_select(mod.mod_id)
 
@@ -350,9 +397,11 @@ func _on_modulators_reordered() -> void:
 
 func _on_modulator_changed(mod_id: int) -> void:
 	for tile in _tiles:
-		if tile.modulator != null and tile.modulator.mod_id == mod_id:
+		if tile.modulator != null and tile.represents(mod_id):
 			tile.refresh()
-	if mod_id == _selected_mod_id:
+	if _detail_pad != null and _detail_pad.holds(mod_id):
+		_sync_pair_detail()
+	elif mod_id == _selected_mod_id:
 		_sync_detail()
 
 
@@ -415,6 +464,17 @@ func _exit_tree() -> void:
 func _clear_detail() -> void:
 	_controls.clear()
 	_detail_mod_id = -1
+	_detail_pad = null
+	_detail_pad_slider = null
+	_source_menu = null
+	if _source_menu_project != null:
+		if _source_cb_added.is_valid() and _source_menu_project.channel_added.is_connected(_source_cb_added):
+			_source_menu_project.channel_added.disconnect(_source_cb_added)
+		if _source_cb_removed.is_valid() and _source_menu_project.channel_removed.is_connected(_source_cb_removed):
+			_source_menu_project.channel_removed.disconnect(_source_cb_removed)
+	_source_menu_project = null
+	_source_cb_added = Callable()
+	_source_cb_removed = Callable()
 	_envelope = null
 	_envelope_control = null
 	_detail_title = null
@@ -438,6 +498,7 @@ func _sync_detail() -> void:
 		_refresh_envelope(mod)
 	for param in mod.get_parameters():
 		_refresh_param_control(mod, param)
+	_sync_source_menu()
 
 
 func _refresh_detail() -> void:
@@ -457,34 +518,164 @@ func _refresh_detail() -> void:
 	var kind := mod.kind
 	if kind == "adsr" or kind == "ad":
 		_build_envelope_detail(mod)
+		return
+	if kind == "xyx":
+		var pad := _pair_of(mod)
+		if pad != null:
+			_build_pair_detail(pad)
+			return
+	# A pair's Y slot (or an orphan XY half) shows the generic Position control like any kind.
+	_param_columns = HBoxContainer.new()
+	_param_columns.add_theme_constant_override("separation", 10)
+	_detail.add_child(_param_columns)
+	for param in _ordered_params(kind, mod.get_parameters()):
+		_build_param_control(mod, param)
+	if kind == "sidechain":
+		_build_sidechain_source(mod)
+	_layout_param_columns.call_deferred()
+	if _controls.is_empty() and _detail_pad_slider == null and _source_menu == null:
+		var none := Label.new()
+		none.text = "No settings"
+		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_detail.add_child(none)
+
+
+## The pad `mod` heads (an `xyx` immediately followed by its `xyy`), or null.
+func _pair_of(mod: Modulator) -> XYPad:
+	if mod == null or mod.kind != "xyx":
+		return null
+	for pad in device.xy_pairs():
+		if pad.x == mod:
+			return pad
+	return null
+
+
+## The pair's options: one 140×140 XY slider bound to both slots (spec 036 REQ-005).
+func _build_pair_detail(pad: XYPad) -> void:
+	_detail_pad = pad
+	var slider := XYSlider.new()
+	slider.x_min = 0.0
+	slider.x_max = 1.0
+	slider.y_min = 0.0
+	slider.y_max = 1.0
+	slider.show_value_labels = false
+	slider.show_axis_lines = false
+	slider.custom_minimum_size = Vector2(140, 140)
+	slider.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_detail_pad_slider = slider
+	_detail.add_child(slider)
+	slider.values_changed.connect(func(x: float, y: float): pad.set_position(Vector2(x, y)))
+	_sync_pair_detail()
+
+
+## Follow the model without echoing a `values_changed` back through `set_position`.
+func _sync_pair_detail() -> void:
+	if _detail_pad == null or _detail_pad_slider == null:
+		return
+	var pos := _detail_pad.position()
+	_detail_pad_slider.set_values_no_signal(pos.x, pos.y)
+
+
+## The sidechain's Source menu (spec 036 REQ-006): "Device In" plus every project channel by
+## name (master included, hardware outputs excluded), item metadata = channel id.
+func _build_sidechain_source(mod: Modulator) -> void:
+	var channel = mod.owner().get_channel() if mod.owner() != null else null
+	var project = channel.get_project() if channel != null else null
+	_source_menu = OptionButton.new()
+	_source_menu.fit_to_longest_item = false
+	_source_menu.clip_text = true
+	_detail.add_child(_source_menu)
+	_source_menu.item_selected.connect(_on_source_selected)
+	if project != null:
+		_source_menu_project = project
+		_source_cb_added = func(_channel): _rebuild_source_menu()
+		_source_cb_removed = func(_channel_id): _rebuild_source_menu()
+		project.channel_added.connect(_source_cb_added)
+		project.channel_removed.connect(_source_cb_removed)
+	_rebuild_source_menu()
+
+
+## (Re)fill the Source menu's items; the selection follows the stored channel id.
+func _rebuild_source_menu() -> void:
+	if _source_menu == null:
+		return
+	_source_menu.clear()
+	_source_menu.add_item("Device In")
+	_source_menu.set_item_metadata(0, 0)
+	var project = _source_menu_project
+	if project != null:
+		for ch in project.channels:
+			if ch.id >= AudioConfig.HARDWARE_OUTPUT_BASE:
+				continue
+			_source_menu.add_item(ch.name)
+			_source_menu.set_item_metadata(_source_menu.item_count - 1, ch.id)
+	_sync_source_menu()
+
+
+func _sync_source_menu() -> void:
+	if _source_menu == null or _detail_mod_id < 0 or device == null:
+		return
+	var mod := device.get_modulator(_detail_mod_id)
+	if mod == null or mod.kind != "sidechain":
+		return
+	var param := mod.get_parameter(SC_SOURCE_PARAM)
+	var channel_id := -1
+	if param != null:
+		channel_id = int(round(param.normalized_to_value(mod.get_param(SC_SOURCE_PARAM))))
 	else:
-		_param_columns = HBoxContainer.new()
-		_param_columns.add_theme_constant_override("separation", 10)
-		_detail.add_child(_param_columns)
-		for param in _ordered_params(kind, mod.get_parameters()):
-			_build_param_control(mod, param)
-		_layout_param_columns.call_deferred()
-		if _controls.is_empty():
-			var none := Label.new()
-			none.text = "No settings"
-			none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			_detail.add_child(none)
+		channel_id = int(round(mod.get_param(SC_SOURCE_PARAM) * 999.0))
+	var select_index := -1
+	for i in _source_menu.item_count:
+		if int(_source_menu.get_item_metadata(i)) == channel_id:
+			select_index = i
+			break
+	if select_index < 0:
+		# The stored id no longer exists (channel removed): show it as missing, keep the id.
+		_source_menu.add_item("(missing channel)")
+		_source_menu.set_item_metadata(_source_menu.item_count - 1, channel_id)
+		select_index = _source_menu.item_count - 1
+	_source_menu.select(select_index)
 
 
-## Kind parameters in display order (LFO has its own; the rest use the table order).
+func _on_source_selected(index: int) -> void:
+	if _source_menu == null or _detail_mod_id < 0 or device == null:
+		return
+	var mod := device.get_modulator(_detail_mod_id)
+	if mod == null:
+		return
+	var channel_id := int(_source_menu.get_item_metadata(index))
+	var param := mod.get_parameter(SC_SOURCE_PARAM)
+	# The engine's Source parameter is a channel id in normalized units (linear 0..999).
+	var norm := param.value_to_normalized(float(channel_id)) if param != null else float(channel_id) / 999.0
+	device.set_modulator_param(_detail_mod_id, SC_SOURCE_PARAM, norm)
+
+
+## Kind parameters in display order: LFO, Knob and Sidechain have their own; the rest use the
+## table order. The sidechain's Source (40) is excluded — the pane builds it as a custom
+## channel menu, not a generic control.
 func _ordered_params(kind: String, params: Array) -> Array:
-	if kind != "lfo":
+	var order: Array = []
+	if kind == "lfo":
+		order = LFO_ORDER
+	elif kind == "knob":
+		order = KNOB_ORDER
+	elif kind == "sidechain":
+		order = SC_ORDER
+	if order.is_empty():
 		return params
 	var by_id := {}
 	for param in params:
 		by_id[param.id] = param
 	var ordered: Array = []
-	for id in LFO_ORDER:
+	for id in order:
 		if by_id.has(id):
 			ordered.append(by_id[id])
 	for param in params:
-		if not ordered.has(param):
-			ordered.append(param)
+		if ordered.has(param):
+			continue
+		if kind == "sidechain" and param.id == SC_SOURCE_PARAM:
+			continue
+		ordered.append(param)
 	return ordered
 
 

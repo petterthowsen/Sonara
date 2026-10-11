@@ -186,7 +186,35 @@ func _shape_points(mod: Modulator, rect: Rect2) -> PackedVector2Array:
 		return _lfo_points(mod, rect)
 	if _is_envelope():
 		return _envelope_points(mod, rect)
+	if _is_knob():
+		return _knob_points(mod, rect)
 	return _trace_points(rect)
+
+
+## A knob draws as an arc glyph: from the start of the sweep up to its Value, or centred on the
+## middle of the sweep when the knob is Bipolar (REQ-002). No trace ring — the value is static.
+func _knob_points(mod: Modulator, rect: Rect2) -> PackedVector2Array:
+	var value := clampf(mod.get_param(0), 0.0, 1.0)
+	var from := 0.5 if mod.is_bipolar() else 0.0
+	var lo := minf(from, value)
+	var hi := maxf(from, value)
+	if hi - lo < 0.004:
+		hi = lo + 0.004
+	var out := PackedVector2Array()
+	var steps := 32
+	for i in range(steps + 1):
+		var t := lerpf(lo, hi, float(i) / float(steps))
+		out.append(_knob_point_at(rect, t))
+	return out
+
+
+## A point on the knob's arc: the sweep runs 270° from the bottom-left (t = 0) clockwise past
+## the top (t = 0.5) to the bottom-right (t = 1), like the device knobs.
+func _knob_point_at(rect: Rect2, t: float) -> Vector2:
+	var centre := rect.get_center()
+	var radius := minf(rect.size.x, rect.size.y) * 0.5
+	var angle := deg_to_rad(135.0 + 270.0 * clampf(t, 0.0, 1.0))
+	return centre + Vector2(cos(angle), sin(angle)) * radius
 
 
 func _lfo_points(mod: Modulator, rect: Rect2) -> PackedVector2Array:
@@ -298,6 +326,12 @@ func _dot(mod: Modulator, rect: Rect2) -> Variant:
 		var phase: float = clampf(float(state["x"]), 0.0, 1.0)
 		var value: float = _lfo_wave(mod, phase)
 		return rect.position + Vector2(phase * rect.size.x, (0.5 - 0.5 * value) * rect.size.y)
+	if _is_knob():
+		# The dot rides the arc at the live value: the engine reports a knob's output
+		# (0..1 unipolar, −1..1 bipolar), remapped onto the 0..1 sweep.
+		var live: float = float(state["value"])
+		var t := clampf((live + 1.0) * 0.5, 0.0, 1.0) if mod.is_bipolar() else clampf(live, 0.0, 1.0)
+		return _knob_point_at(rect, t)
 	if _is_envelope():
 		return _envelope_dot(mod, rect, state)
 	# Generic kinds: the dot rides the newest trace value, interpolated like the rest.
@@ -390,5 +424,12 @@ func _is_envelope() -> bool:
 	return _kind() == "adsr" or _kind() == "ad"
 
 
+func _is_knob() -> bool:
+	return _kind() == "knob"
+
+
 func _bipolar() -> bool:
-	return device.is_modulator_kind_bipolar(_kind())
+	# Per instance (spec 036 D1): a knob's Polarity is its own parameter, the other kinds read
+	# their kind table through `is_bipolar`.
+	var mod = _modulator()
+	return mod.is_bipolar() if mod != null else false

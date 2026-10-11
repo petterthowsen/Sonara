@@ -27,6 +27,15 @@ controls registered by `ModAssign.attach`. The arc returns to the knob's set val
 the stream reports nothing for the parameter. Views don't subscribe this stream themselves;
 `DeviceView.show_view`/`hide_view` drive it. Only device views (Simple View and the custom panel
 and window views) do today; the Parameters/CCs lists and the compact panels don't subscribe yet.
+
+**XY pads** (spec 036) are a Godot-level pairing of two engine modulators: an `xyx`
+immediately followed by an `xyy` in the device's modulator array (`DeviceInstance.xy_pairs()`).
+The pair adds, renames, duplicates, deletes and drags-reorders as one tile
+(`move_modulator_block` keeps the two slots adjacent), and each axis's routes are set through
+its own slot id. Both slots sync through the ordinary modulator OSC path — there is no
+pad-level message. A save with non-adjacent slots (hand-edited, or loaded by an older Godot)
+degrades to two plain tiles.
+
 The decoder (`ModLive._decode`) walks the counted
 kind 0/1 records and, for spec 033 payloads, then reads the trailing block: a `u16 ext_count`
 followed by `{u8 kind, u8 len, len bytes}` records — kind 2 is a modulator's display state

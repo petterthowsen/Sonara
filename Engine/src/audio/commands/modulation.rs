@@ -3,6 +3,7 @@
 use super::status::BuiltinParamInfo;
 use crate::audio::commands::{CommandEffects, EngineStatus};
 use crate::audio::devices::DevicePath;
+use crate::audio::modulation::kinds::SC_SOURCE;
 use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
 use tracing::warn;
@@ -41,6 +42,8 @@ pub(super) fn add_modulator(
                 mod_id,
                 kind: kind.id().to_string(),
             });
+            // A new sidechain with a channel source needs a tap (spec 036).
+            effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
         }
         Some(Err(e)) => {
             warn!("{}", e);
@@ -80,6 +83,8 @@ pub(super) fn remove_modulator(
                 device_path,
                 mod_id,
             });
+            // Its tap, if any, goes away (spec 036).
+            effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
         }
         Some(Err(e)) => {
             warn!("{}", e);
@@ -118,6 +123,11 @@ pub(super) fn set_modulator_parameter(
                 param_id,
                 value,
             });
+            // A sidechain Source (param 40, this kind only — an LFO's phase shares the id)
+            // moving between channel ids rebuilds the tap pool (spec 036 D2).
+            if param_id == SC_SOURCE && is_sidechain(state, channel_id, &device_path, mod_id) {
+                effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            }
         }
         Some(Err(e)) => {
             warn!("{}", e);
@@ -210,9 +220,32 @@ pub(super) fn clear_modulators(
         channel_id,
         device_path,
     });
+    // Any sidechain taps the device held go away (spec 036).
+    effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
     unwrap_if_empty(state, channel_id, &device_path);
 
     None
+}
+
+/// True when the device at `path` carries modulator `mod_id` and it is a `sidechain`.
+fn is_sidechain(
+    state: &mut EngineState,
+    channel_id: ChannelId,
+    device_path: &DevicePath,
+    mod_id: u8,
+) -> bool {
+    state
+        .channels
+        .get_mut(&channel_id)
+        .and_then(|channel| channel.device_at_path_mut(device_path))
+        .and_then(|device| device.as_modulated_mut())
+        .and_then(|modulated| {
+            modulated
+                .modulator_kinds()
+                .into_iter()
+                .find(|(id, _)| *id == mod_id)
+        })
+        .is_some_and(|(_, kind)| kind == crate::audio::modulation::ModulatorKind::Sidechain)
 }
 
 /// Wrap the device at `device_path` so it can carry modulators. A no-op when it is already
@@ -337,7 +370,7 @@ mod tests {
         let infos = modulator_kind_infos();
         assert!(matches!(
             infos.first(),
-            Some(EngineStatus::ModulatorKindsInfo { count: 8 })
+            Some(EngineStatus::ModulatorKindsInfo { count: 12 })
         ));
         let release = infos.iter().find_map(|info| match info {
             EngineStatus::ModulatorKindInfo {

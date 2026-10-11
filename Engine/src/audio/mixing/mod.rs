@@ -1,6 +1,7 @@
 //! Mixing: fader and pan, routing in dependency order, and the master output.
 
 mod routing;
+pub mod sidechain;
 mod solo;
 #[cfg(test)]
 mod test_support;
@@ -33,7 +34,14 @@ const SOLO_WALK_LIMIT: usize = 64;
 ///
 /// Uses `try_send` on the bounded status channel: when it's full the event is dropped rather
 /// than blocking the callback. Plugin parameter changes and SFZ parameter lists are forwarded by
-/// the command thread (`CommandWorker::poll_devices`), not here.
+/// the command thread (`CommandWorker::poll_devices`), not here. Data streams are drained with
+/// up to [`DATA_FRAMES_PER_BLOCK`] polls per device, one frame per data type: a `ModulatedDevice`
+/// answers for its own `modulation` stream and its wrapped device's streams (`spectrum`,
+/// `dynamics`) in the same block, and a stream that answers every poll (`note_state`) must not
+/// mask the others or spin the drain.
+/// Data frames forwarded per device per block (one per data type).
+const DATA_FRAMES_PER_BLOCK: usize = 4;
+
 fn forward_device_events(channel: &mut Channel, status_tx: &Sender<EngineStatus>) {
     let channel_id = channel.id;
 
@@ -48,8 +56,28 @@ fn forward_device_events(channel: &mut Channel, status_tx: &Sender<EngineStatus>
     });
 
     container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {
-        let data = rt_debug::section("poll_device_data", || device.poll_device_data());
-        if let Some((data_type, data)) = data {
+        // Every due stream, one frame per data type per block (see `forward_device_events`).
+        let mut seen: [([u8; 16], usize); DATA_FRAMES_PER_BLOCK] =
+            [([0; 16], 0); DATA_FRAMES_PER_BLOCK];
+        let mut seen_count = 0usize;
+        for _ in 0..DATA_FRAMES_PER_BLOCK {
+            let data = rt_debug::section("poll_device_data", || device.poll_device_data());
+            let Some((data_type, data)) = data else { break };
+            let name = data_type.as_bytes();
+            if name.len() <= 16 {
+                let duplicate = seen[..seen_count]
+                    .iter()
+                    .any(|(stored, len)| name.len() == *len && name == &stored[..*len]);
+                if duplicate {
+                    // The same stream answered twice: it emits one frame per poll, so
+                    // everything due was drained.
+                    break;
+                }
+                let (stored, len) = &mut seen[seen_count];
+                stored[..name.len()].copy_from_slice(name);
+                *len = name.len();
+                seen_count += 1;
+            }
             let _ = status_tx.try_send(EngineStatus::DeviceData {
                 channel_id,
                 device_path: *device_path,
@@ -76,6 +104,7 @@ pub fn mix_and_output(
     let EngineState {
         channels: channel_map,
         render_scratch,
+        sc_taps,
         ..
     } = state;
     let RenderScratch {
@@ -113,6 +142,10 @@ pub fn mix_and_output(
     route_in_dependency_order(channel_map, channel_ids, parked, ready, frames, status_tx);
 
     write_hardware_outputs(channel_map, data, channels);
+
+    // The sidechain taps read the final post-fader buffers (spec 036 D8); the next callback
+    // feeds them before its device passes run.
+    sc_taps.snapshot(channel_map, frames);
 }
 
 /// First pass: begin and finish the device chains of channels nothing routes into.
@@ -390,5 +423,76 @@ mod tests {
         // CPAL reuses its buffer, so not writing it would replay old samples.
         let output = mix_to_device(&mut master_to(0), 2);
         assert!(output.iter().all(|&sample| sample == 0.0), "{:?}", output);
+    }
+
+    #[test]
+    fn every_due_data_stream_is_drained_each_block() {
+        use crate::audio::devices::{create_effect, DevicePath};
+        use crate::audio::dsp::test_util::{stereo, white_noise};
+        use crate::audio::modulation::{wrap_at_path, ModulatorKind};
+
+        /// A channel with one (optionally modulated) EQ subscribed to `spectrum`, driven for
+        /// `frames` in 512-frame blocks with `forward_device_events` after each block, as the
+        /// mixer does. Returns the `(spectrum, modulation)` frame counts.
+        fn run(frames: usize, with_modulator: bool) -> (usize, usize) {
+            let (tx, rx) = unbounded();
+            let mut channel = test_channel(2, Some(1000), 0.0);
+            channel
+                .devices
+                .push(create_effect("sonara.builtin.eq", SAMPLE_RATE, 4_096).expect("eq"));
+            if with_modulator {
+                wrap_at_path(&mut channel.devices, &DevicePath::root(0), SAMPLE_RATE)
+                    .expect("wrap");
+                channel.devices[0]
+                    .as_modulated_mut()
+                    .expect("wrapped")
+                    .add_modulator(0, ModulatorKind::Lfo)
+                    .expect("modulator");
+                channel.devices[0]
+                    .subscribe_data("modulation")
+                    .expect("modulation");
+            }
+            channel.devices[0]
+                .subscribe_data("spectrum")
+                .expect("spectrum");
+
+            let input = stereo(&white_noise(frames, 0.3, 7));
+            let (mut spectrum, mut modulation) = (0usize, 0usize);
+            for block in input.chunks(512 * 2) {
+                let mut out = vec![0.0; block.len()];
+                channel.devices[0].process_block(block, &mut out, block.len() / 2);
+                forward_device_events(&mut channel, &tx);
+                while let Ok(status) = rx.try_recv() {
+                    if let EngineStatus::DeviceData { data_type, .. } = status {
+                        match data_type.as_str() {
+                            "spectrum" => spectrum += 1,
+                            "modulation" => modulation += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            (spectrum, modulation)
+        }
+
+        // 20 blocks of 512 frames at 48 kHz: the EQ emits a frame every 800 frames (every
+        // other block), the wrapper every 2400 (every fifth), so blocks 10 and 20 have both
+        // due and a single poll per block drops one of the two.
+        let frames = 512 * 20;
+        let (baseline, _) = run(frames, false);
+        let (spectrum, modulation) = run(frames, true);
+        assert!(
+            baseline >= 5,
+            "expected several spectrum frames, got {baseline}"
+        );
+        assert_eq!(
+            spectrum, baseline,
+            "the wrapped EQ's spectrum stream lost frames to the modulation stream: \
+             {spectrum} vs {baseline} (modulation frames: {modulation})"
+        );
+        assert!(
+            modulation >= 3,
+            "the wrapper's modulation stream starved: {modulation}"
+        );
     }
 }

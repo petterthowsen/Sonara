@@ -97,26 +97,32 @@ impl CommandWorker {
         };
         device.set_enabled(enabled);
 
-        let mut state = self.lock_state();
-        let Some(channel) = state.channels.get_mut(&channel_id) else {
-            warn!(
-                "Channel {} was removed while device {} was being created",
-                channel_id, device_id
-            );
-            return;
+        let old_taps = {
+            let mut state = self.lock_state();
+            let Some(channel) = state.channels.get_mut(&channel_id) else {
+                warn!(
+                    "Channel {} was removed while device {} was being created",
+                    channel_id, device_id
+                );
+                return;
+            };
+            match super::devices::container::insert_device(
+                &mut channel.devices,
+                &parent_path,
+                insert_pos,
+                device,
+            ) {
+                Ok(path) => info!(
+                    "Device {} added to channel {} at {} [active={}, enabled={}]",
+                    device_id, channel_id, path, active, enabled
+                ),
+                Err(e) => warn!("{}", e),
+            }
+            // A new device can carry sidechains or change tap subscriber paths (spec 036).
+            crate::audio::mixing::sidechain::rebuild_taps(&mut state)
         };
-        match super::devices::container::insert_device(
-            &mut channel.devices,
-            &parent_path,
-            insert_pos,
-            device,
-        ) {
-            Ok(path) => info!(
-                "Device {} added to channel {} at {} [active={}, enabled={}]",
-                device_id, channel_id, path, active, enabled
-            ),
-            Err(e) => warn!("{}", e),
-        }
+        // The replaced pool's buffers drop with the lock released.
+        drop(old_taps);
     }
 
     /// Detach a device under the lock and drop it afterwards: dropping a CLAP plugin closes its
@@ -135,33 +141,41 @@ impl CommandWorker {
             return;
         }
         let path = parent_path.join(position);
-        let removed = {
+        let (removed, old_taps) = {
             let mut state = self.lock_state();
             let Some(channel) = state.channels.get_mut(&channel_id) else {
                 warn!("Channel {} not found for remove device", channel_id);
                 return;
             };
             channel.release_note_effect_at(&path);
-            super::devices::container::remove_device(&mut channel.devices, &path)
+            let removed = super::devices::container::remove_device(&mut channel.devices, &path);
+            if removed.is_none() {
+                warn!("Invalid device path {} for channel {}", path, channel_id);
+                return;
+            }
+            // Its sidechains (or the shifted paths of others) change the pool (spec 036).
+            let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
+            (removed, old_taps)
         };
-        if removed.is_none() {
-            warn!("Invalid device path {} for channel {}", path, channel_id);
-            return;
-        }
+        drop(old_taps);
         drop(removed);
         info!("Device removed from channel {} at {}", channel_id, path);
     }
 
     /// Detach a channel's whole device chain under the lock and drop it afterwards.
     pub(super) fn clear_devices(&self, channel_id: ChannelId) {
-        let removed = {
+        let (removed, old_taps) = {
             let mut state = self.lock_state();
             let Some(channel) = state.channels.get_mut(&channel_id) else {
                 warn!("Channel {} not found for clear devices", channel_id);
                 return;
             };
-            std::mem::take(&mut channel.devices)
+            let removed = std::mem::take(&mut channel.devices);
+            // Any sidechains on the chain go away (spec 036).
+            let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
+            (removed, old_taps)
         };
+        drop(old_taps);
         drop(removed);
         info!("All devices cleared from channel {}", channel_id);
     }

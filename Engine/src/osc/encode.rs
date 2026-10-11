@@ -723,6 +723,37 @@ mod tests {
     }
 
     #[test]
+    fn the_modulator_kinds_batch_reports_all_twelve() {
+        let statuses = crate::audio::commands::modulator_kind_infos();
+        assert_eq!(statuses.len(), 14, "header + 12 kinds + completion");
+        assert!(matches!(
+            &statuses[0],
+            EngineStatus::ModulatorKindsInfo { count } if *count == 12
+        ));
+        for (i, kind) in crate::audio::modulation::ModulatorKind::ALL
+            .iter()
+            .enumerate()
+        {
+            assert!(
+                matches!(
+                    &statuses[1 + i],
+                    EngineStatus::ModulatorKindInfo { id, name, bipolar, params }
+                        if id.as_str() == kind.id()
+                            && name == kind.name()
+                            && *bipolar == kind.bipolar()
+                            && params.len() == kind.table().len()
+                ),
+                "kind {i} ({}) not advertised",
+                kind.id()
+            );
+        }
+        assert!(matches!(
+            &statuses[13],
+            EngineStatus::ModulatorKindsComplete { count } if *count == 12
+        ));
+    }
+
+    #[test]
     fn modulator_statuses_pin_address_and_types() {
         let path = DevicePath::root(1);
         let (addr, tags, args) = wire(EngineStatus::ModulatorAdded {

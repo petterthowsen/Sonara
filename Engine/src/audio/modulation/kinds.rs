@@ -34,6 +34,35 @@ pub const CC_NUMBER: ParamId = 0;
 /// One-pole lag time on the CC value; 0 (the default) snaps the change in this step.
 pub const CC_SMOOTH: ParamId = 10;
 
+// === Knob parameter IDs (block of ten each) ===
+
+/// The knob's value, linear 0–1; the whole point of the kind (spec 036).
+pub const KNOB_VALUE: ParamId = 0;
+/// Polarity: Unipolar routes `x`, Bipolar routes `2x − 1` while the stored value stays 0–1.
+pub const KNOB_POLARITY: ParamId = 10;
+
+/// Knob Polarity choices; index 1 is "Bipolar".
+pub const KNOB_POLARITIES: &[&str] = &["Unipolar", "Bipolar"];
+
+// === XY parameter IDs ===
+
+/// The pad position of both XY axes, linear 0–1, centred (0.5) by default (spec 036 D7).
+pub const XY_POS: ParamId = 0;
+
+// === Sidechain parameter IDs (block of ten each) ===
+
+/// High-pass before the follower; bypassed at its 20 Hz extreme (spec 036 REQ-007).
+pub const SC_LOW_CUT: ParamId = 0;
+/// Low-pass before the follower; bypassed at its 20 kHz extreme (spec 036 REQ-007).
+pub const SC_HIGH_CUT: ParamId = 10;
+/// Follower attack, 0–500 ms.
+pub const SC_ATTACK: ParamId = 20;
+/// Follower release, 5–2000 ms.
+pub const SC_RELEASE: ParamId = 30;
+/// The tapped source as a channel id (stepped; consumers round): 0 = Device In, 1 = master,
+/// 2–999 user channels. Hardware outputs (≥ 1000) are not sources (spec 036 D2).
+pub const SC_SOURCE: ParamId = 40;
+
 // === Envelope parameter IDs ===
 
 pub const ENV_ATTACK: ParamId = 0;
@@ -99,10 +128,80 @@ const CC_SPECS: [ParamSpec; 2] = [
 const CC_SLOTS: [u8; 20] = slot_table(&CC_SPECS);
 static CC_TABLE: ParamTable = ParamTable::new(&CC_SPECS, &CC_SLOTS);
 
+/// Follower times in milliseconds, skewed so short times get knob travel (both reach their
+/// minimum exactly), as in the envelope kinds.
+const SC_ATTACK_TIME: Kind = skewed(0.0, 500.0, 4.0);
+const SC_RELEASE_TIME: Kind = skewed(5.0, 2_000.0, 4.0);
+
+const KNOB_SPECS: [ParamSpec; 2] = [
+    spec(KNOB_VALUE, "Value", "Knob", "", linear(0.0, 1.0), 0.0),
+    spec(
+        KNOB_POLARITY,
+        "Polarity",
+        "Knob",
+        "",
+        Kind::Enum(KNOB_POLARITIES),
+        0.0,
+    ),
+];
+const KNOB_SLOTS: [u8; 20] = slot_table(&KNOB_SPECS);
+static KNOB_TABLE: ParamTable = ParamTable::new(&KNOB_SPECS, &KNOB_SLOTS);
+
+/// One table for both XY axes: each slot is a plain position (spec 036 D7).
+const XY_SPECS: [ParamSpec; 1] = [spec(
+    XY_POS,
+    "Position",
+    "XY Pad",
+    "",
+    linear(0.0, 1.0),
+    0.5,
+)];
+const XY_SLOTS: [u8; 10] = slot_table(&XY_SPECS);
+static XY_TABLE: ParamTable = ParamTable::new(&XY_SPECS, &XY_SLOTS);
+
+const SC_SPECS: [ParamSpec; 5] = [
+    spec(
+        SC_LOW_CUT,
+        "Low Cut",
+        "Sidechain",
+        "Hz",
+        log(20.0, 20_000.0),
+        20.0,
+    ),
+    spec(
+        SC_HIGH_CUT,
+        "High Cut",
+        "Sidechain",
+        "Hz",
+        log(20.0, 20_000.0),
+        20_000.0,
+    ),
+    spec(SC_ATTACK, "Attack", "Sidechain", "ms", SC_ATTACK_TIME, 5.0),
+    spec(
+        SC_RELEASE,
+        "Release",
+        "Sidechain",
+        "ms",
+        SC_RELEASE_TIME,
+        150.0,
+    ),
+    spec(
+        SC_SOURCE,
+        "Source",
+        "Sidechain",
+        "",
+        linear(0.0, 999.0),
+        0.0,
+    ),
+];
+const SC_SLOTS: [u8; 50] = slot_table(&SC_SPECS);
+static SC_TABLE: ParamTable = ParamTable::new(&SC_SPECS, &SC_SLOTS);
+
 /// Velocity, release, keytrack and random have no settings.
 static EMPTY_TABLE: ParamTable = ParamTable::new(&[], &[]);
 
-/// The kinds a modulator can be. The polarity (bipolar vs unipolar) is fixed per kind.
+/// The kinds a modulator can be. The polarity (bipolar vs unipolar) is fixed per kind, except
+/// `knob`, whose Polarity is a per-instance parameter (spec 036 D1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModulatorKind {
     Lfo,
@@ -116,10 +215,20 @@ pub enum ModulatorKind {
     /// A MIDI controller value, latched from the channel's CC stream (spec 032). Channel-level,
     /// so it is evaluated on the mono path only (`is_mono_only`).
     MidiCc,
+    /// A plain macro knob: its Value parameter is the output, no DSP behind it (spec 036).
+    /// Polarity is a per-instance parameter (D1), so `bipolar()` stays false.
+    Knob,
+    /// The XY pad's X axis: the pair's shared Position mapped to −1..1 (spec 036, D7).
+    XyX,
+    /// The XY pad's Y axis, as `XyX`. Godot pairs the two by array adjacency.
+    XyY,
+    /// An audio-driven peak follower (spec 036): Device In or another channel's post-fader
+    /// output, filtered and mapped −60…0 dBFS → 0…1. Channel-level, so mono-path only.
+    Sidechain,
 }
 
 impl ModulatorKind {
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 12;
     pub const ALL: [ModulatorKind; Self::COUNT] = [
         ModulatorKind::Lfo,
         ModulatorKind::Adsr,
@@ -129,6 +238,10 @@ impl ModulatorKind {
         ModulatorKind::Random,
         ModulatorKind::Release,
         ModulatorKind::MidiCc,
+        ModulatorKind::Knob,
+        ModulatorKind::XyX,
+        ModulatorKind::XyY,
+        ModulatorKind::Sidechain,
     ];
 
     /// Stable id used over OSC and in saved projects.
@@ -142,6 +255,10 @@ impl ModulatorKind {
             ModulatorKind::Random => "random",
             ModulatorKind::Release => "release",
             ModulatorKind::MidiCc => "cc",
+            ModulatorKind::Knob => "knob",
+            ModulatorKind::XyX => "xyx",
+            ModulatorKind::XyY => "xyy",
+            ModulatorKind::Sidechain => "sidechain",
         }
     }
 
@@ -155,14 +272,22 @@ impl ModulatorKind {
             ModulatorKind::Random => "Random",
             ModulatorKind::Release => "Release",
             ModulatorKind::MidiCc => "MIDI CC",
+            ModulatorKind::Knob => "Knob",
+            ModulatorKind::XyX => "XY X",
+            ModulatorKind::XyY => "XY Y",
+            ModulatorKind::Sidechain => "Sidechain",
         }
     }
 
-    /// Runs −1..1 (else 0..1).
+    /// Runs −1..1 (else 0..1). Kind-fixed: a knob's polarity is per instance (D1).
     pub fn bipolar(self) -> bool {
         matches!(
             self,
-            ModulatorKind::Lfo | ModulatorKind::Keytrack | ModulatorKind::Random
+            ModulatorKind::Lfo
+                | ModulatorKind::Keytrack
+                | ModulatorKind::Random
+                | ModulatorKind::XyX
+                | ModulatorKind::XyY
         )
     }
 
@@ -186,6 +311,9 @@ impl ModulatorKind {
             | ModulatorKind::Random
             | ModulatorKind::Release => &EMPTY_TABLE,
             ModulatorKind::MidiCc => &CC_TABLE,
+            ModulatorKind::Knob => &KNOB_TABLE,
+            ModulatorKind::XyX | ModulatorKind::XyY => &XY_TABLE,
+            ModulatorKind::Sidechain => &SC_TABLE,
         }
     }
 
@@ -196,9 +324,10 @@ impl ModulatorKind {
 
     /// True when the kind is channel-level and must never be evaluated per voice: it is
     /// excluded from the `VoiceModSpec` and applied on the mono path even for a
-    /// voice-modulating device (the `cc` kind; spec 032).
+    /// voice-modulating device (the `cc` kind; spec 032 — and the `sidechain` kind, which
+    /// follows audio, not voices).
     pub fn is_mono_only(self) -> bool {
-        matches!(self, ModulatorKind::MidiCc)
+        matches!(self, ModulatorKind::MidiCc | ModulatorKind::Sidechain)
     }
 }
 
@@ -270,7 +399,67 @@ mod tests {
             .filter(|k| k.bipolar())
             .map(|k| k.id())
             .collect();
-        assert_eq!(bipolar, ["lfo", "keytrack", "random"]);
+        assert_eq!(bipolar, ["lfo", "keytrack", "random", "xyx", "xyy"]);
+    }
+
+    #[test]
+    fn the_spec_036_kinds_advertise_their_tables() {
+        // Appended after `cc`, in the order the design fixes; the older kinds' ids and
+        // indices are unchanged (see `cc_kind_round_trips_and_keeps_old_indices`).
+        for (i, expected) in [
+            ("knob", "Knob"),
+            ("xyx", "XY X"),
+            ("xyy", "XY Y"),
+            ("sidechain", "Sidechain"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let kind = ModulatorKind::ALL[8 + i];
+            assert_eq!(kind.id(), expected.0);
+            assert_eq!(kind.name(), expected.1);
+            assert_eq!(ModulatorKind::from_id(expected.0), Some(kind));
+        }
+        assert_eq!(ModulatorKind::COUNT, 12);
+
+        let knob = ModParams::new(ModulatorKind::Knob);
+        assert!(knob.table().len() <= MAX_KIND_PARAMS);
+        assert_eq!(knob.table().len(), 2);
+        assert_eq!(knob.real(KNOB_VALUE), Some(0.0));
+        assert_eq!(knob.real(KNOB_POLARITY), Some(0.0), "Unipolar");
+        assert!(
+            !ModulatorKind::Knob.bipolar(),
+            "polarity is per instance (D1)"
+        );
+        let polarity = &ModulatorKind::Knob.table().specs[1];
+        assert_eq!(polarity.to_real(1.0), 1.0, "Bipolar");
+
+        for kind in [ModulatorKind::XyX, ModulatorKind::XyY] {
+            let xy = ModParams::new(kind);
+            assert!(xy.table().len() <= MAX_KIND_PARAMS);
+            assert_eq!(xy.table().len(), 1);
+            assert_eq!(xy.real(XY_POS), Some(0.5), "centred pad (D7)");
+            assert!(kind.bipolar(), "a centred pad applies no offset (D7)");
+            assert!(!kind.is_mono_only());
+        }
+
+        let sc = ModParams::new(ModulatorKind::Sidechain);
+        assert!(sc.table().len() <= MAX_KIND_PARAMS);
+        assert_eq!(sc.table().len(), 5);
+        assert_eq!(sc.real(SC_LOW_CUT), Some(20.0));
+        assert_eq!(sc.real(SC_HIGH_CUT), Some(20_000.0));
+        // The skewed times round-trip through a powf; hold a tolerance.
+        let attack = sc.real(SC_ATTACK).unwrap();
+        assert!((attack - 5.0).abs() < 1e-3, "attack default {attack}");
+        let release = sc.real(SC_RELEASE).unwrap();
+        assert!((release - 150.0).abs() < 1e-2, "release default {release}");
+        assert_eq!(sc.real(SC_SOURCE), Some(0.0), "Device In");
+        assert!(ModulatorKind::Sidechain.is_mono_only());
+        assert!(!ModulatorKind::Sidechain.bipolar());
+        // The Source stores a channel id in 0..=999.
+        let source = &ModulatorKind::Sidechain.table().specs[4];
+        assert_eq!(source.to_real(1.0), 999.0);
+        assert_eq!(source.to_norm(7.0), 7.0 / 999.0);
     }
 
     #[test]
@@ -281,7 +470,8 @@ mod tests {
         }
         let cc = ModulatorKind::from_id("cc").expect("cc kind");
         assert_eq!(cc, ModulatorKind::MidiCc);
-        assert_eq!(cc.index(), ModulatorKind::COUNT - 1);
+        // Spec 036 appended after it; the cc index itself is unchanged.
+        assert_eq!(cc.index(), 7);
         assert!(!cc.bipolar(), "a normalized CC is unipolar");
         assert!(!cc.is_envelope());
         assert!(cc.is_mono_only());

@@ -12,13 +12,16 @@ use crate::audio::types::{ChannelId, Tick};
 impl CommandWorker {
     /// Detach a channel under the lock and drop it, with its devices, afterwards.
     pub(super) fn remove_channel(&self, id: ChannelId) {
-        let (removed, remaining) = {
+        let (removed, remaining, old_taps) = {
             let mut state = self.lock_state();
             let removed = state.channels.remove(&id);
-            (removed, state.channels.len())
+            // The channel may be a tap source or host subscribers (spec 036).
+            let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
+            (removed, state.channels.len(), old_taps)
         };
         match removed {
             Some(channel) => {
+                drop(old_taps);
                 drop(channel);
                 info!("Channel {} removed [total channels: {}]", id, remaining);
             }
@@ -74,6 +77,8 @@ impl CommandWorker {
         {
             let mut state = self.lock_state();
             state.ensure_master_channel(self.max_buffer_size);
+            // Every subscriber and source went with the channels (spec 036).
+            let _ = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
         }
         info!("Project cleared");
     }

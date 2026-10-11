@@ -15,6 +15,7 @@ var _project_script: GDScript
 # before the autoloads exist, as in test_mod_assign_ui.gd.
 var _mod_assign: GDScript
 var _pane_script: GDScript
+var _drag_script: GDScript
 
 
 func suite_name() -> String:
@@ -26,6 +27,7 @@ func run_tests() -> void:
 	_project_script = load("res://data/Project.gd")
 	_mod_assign = load("res://devices/modulators/ModAssign.gd")
 	_pane_script = load("res://devices/modulators/ModulatorsPane.gd")
+	_drag_script = load("res://devices/modulators/ModulatorDrag.gd")
 	_setup()
 	await _test_pane_tiles_and_add()
 	await _test_context_menu_routes()
@@ -38,6 +40,11 @@ func run_tests() -> void:
 	await _test_esc_exits_assign()
 	await _test_simple_control_assign()
 	await _test_panel_tab_and_dot()
+	await _test_xy_pad_pane()
+	await _test_xy_pad_drag()
+	await _test_xy_wire_buttons()
+	await _test_xy_pad_panel_model()
+	await _test_sidechain_source_menu()
 	_mod_assign.end()
 
 
@@ -48,8 +55,12 @@ func _setup() -> void:
 	_registry._on_modulator_kind_received(_lfo_kind_args())
 	_registry._on_modulator_kind_received(_adsr_kind_args())
 	_registry._on_modulator_kind_received(["velocity", "Velocity", 0, 0])
+	_registry._on_modulator_kind_received(_knob_kind_args())
+	_registry._on_modulator_kind_received(_xy_kind_args("xyx", "XY X"))
+	_registry._on_modulator_kind_received(_xy_kind_args("xyy", "XY Y"))
+	_registry._on_modulator_kind_received(_sidechain_kind_args())
 	var asset_registry: Object = root.get_node("AssetService").device_registry
-	for kind_id in ["lfo", "adsr", "velocity"]:
+	for kind_id in ["lfo", "adsr", "velocity", "knob", "xyx", "xyy", "sidechain"]:
 		asset_registry.modulator_kinds[kind_id] = _registry.get_modulator_kind(kind_id)
 	_registry._on_builtin_info_received([
 		SYNTH_ID, "Synth", "instrument", "", 1, 0, 2, 0, "", 0,
@@ -92,6 +103,30 @@ func _adsr_kind_args() -> Array:
 	args.append_array(_float_param(10, "Decay", "s", 0.0005, 10.0, 0.3, false))
 	args.append_array(_float_param(20, "Sustain", "", 0.0, 1.0, 0.5, false))
 	args.append_array(_float_param(30, "Release", "s", 0.0005, 10.0, 0.3, false))
+	return args
+
+
+## Spec 036 kinds (same fixtures as test_device_modulators.gd).
+func _knob_kind_args() -> Array:
+	var args: Array = ["knob", "Knob", 0, 2]
+	args.append_array(_float_param(0, "Value", "", 0.0, 1.0, 0.0, false))
+	args.append_array(_enum_param(10, "Polarity", ["Unipolar", "Bipolar"], 0))
+	return args
+
+
+func _xy_kind_args(kind_id: String, kind_name: String) -> Array:
+	var args: Array = [kind_id, kind_name, 1, 1]
+	args.append_array(_float_param(0, "Position", "", 0.0, 1.0, 0.5, false))
+	return args
+
+
+func _sidechain_kind_args() -> Array:
+	var args: Array = ["sidechain", "Sidechain", 0, 5]
+	args.append_array(_float_param(0, "Low Cut", "Hz", 20.0, 20000.0, 20.0, true))
+	args.append_array(_float_param(10, "High Cut", "Hz", 20.0, 20000.0, 20000.0, true))
+	args.append_array(_float_param(20, "Attack", "ms", 0.0, 500.0, 5.0, false))
+	args.append_array(_float_param(30, "Release", "ms", 5.0, 2000.0, 150.0, false))
+	args.append_array(_float_param(40, "Source", "", 0.0, 999.0, 0.0, false))
 	return args
 
 
@@ -165,7 +200,7 @@ func _test_pane_tiles_and_add() -> void:
 	_assert(pane._tiles.size() == 1 and pane._tiles[0].modulator == mod, "the pane builds a tile per modulator")
 
 	var popup: PopupMenu = pane._kind_menu
-	_assert(popup.item_count == 3, "the + menu lists the advertised kinds")
+	_assert(popup.item_count == 6, "the + menu lists the advertised kinds (xyy hidden)")
 	var index := _kind_index(popup, "adsr")
 	_assert(index >= 0, "the envelope kind is in the menu")
 	pane._on_add_kind(index)
@@ -450,3 +485,200 @@ func _test_panel_tab_and_dot() -> void:
 	panel._set_collapsed(true)
 	_assert(panel._mod_dot.visible, "the collapsed header marks a device with modulators")
 	panel.free()
+
+
+# --- spec 036 -------------------------------------------------------------------------------
+
+## A fresh pane bound to a cleared instance.
+func _pane_for(inst: Object) -> Object:
+	var pane = _pane_script.new()
+	root.add_child(pane)
+	pane.size = Vector2(420, 330)
+	await pane.bind_to_device(inst)
+	await process_frame
+	await process_frame
+	return pane
+
+
+func _test_xy_pad_pane() -> void:
+	var inst = _instance()
+	inst.modulators.clear()
+	var pane = await _pane_for(inst)
+	var xy_index := _kind_index(pane._kind_menu, "xyx")
+	_assert(xy_index >= 0, "the + menu lists the XY Pad")
+	_assert(_kind_index(pane._kind_menu, "xyy") == -1, "and hides the Y slot kind")
+	_assert(pane._kind_menu.get_item_text(xy_index) == "XY Pad", "the entry is labelled XY Pad")
+	pane._on_add_kind(xy_index)
+	_assert(inst.modulators.size() == 2 and inst.modulators[0].kind == "xyx"
+		and inst.modulators[1].kind == "xyy", "picking XY Pad adds the two slots adjacent")
+	_assert(pane._tiles.size() == 1, "one tile for the pair")
+	var tile: ModulatorPanel = pane._tiles[0]
+	_assert(tile.pad != null and tile.pad.x == inst.modulators[0] and tile.pad.y == inst.modulators[1],
+		"the tile is a pair tile")
+	_assert(tile._display is XYPadPanel, "its display is an XYPadPanel")
+	_assert(pane._selected_mod_id == inst.modulators[0].mod_id, "the pair is selected")
+	_assert(pane._detail_pad != null and pane._detail_pad.x == tile.pad.x
+		and pane._detail_pad.y == tile.pad.y and pane._detail_pad_slider != null,
+		"the detail shows the pair's XY slider")
+	_assert(pane._detail_title.text == tile.pad.name, "titled after the pad")
+
+	inst.rename_modulator(tile.pad.x.mod_id, "Macro")
+	_assert(tile.pad.y.name == "Macro Y", "renaming X renames the pair's Y")
+	_assert(tile._name_label.text == "Macro", "the tile header shows the pair name")
+
+	var dup: XYPad = inst.duplicate_xy_pad(tile.pad)
+	_assert(dup != null and inst.xy_pairs().size() == 2 and pane._tiles.size() == 2,
+		"duplicating adds one more tile")
+	inst.remove_xy_pad(dup)
+	await process_frame
+	await process_frame
+	_assert(inst.modulators.size() == 2 and pane._tiles.size() == 1, "deleting removes the pair's tile")
+	pane.queue_free()
+
+
+func _test_xy_pad_drag() -> void:
+	# Plain first, then a pair. Dragging the plain tile onto the pair keeps the pair adjacent.
+	var inst = _instance()
+	inst.modulators.clear()
+	var plain = inst.add_modulator("velocity")
+	var pad: XYPad = inst.add_xy_pad()
+	var pane = await _pane_for(inst)
+	_assert(pane._tiles.size() == 2, "a pair renders as one tile")
+
+	var drag: Object = _drag_script.start(pane, plain)
+	_assert(drag.mod_count == 1, "a plain modulator drags as one entry")
+	var target: Object = _drag_script.resolve(pane, drag, pane._tiles[1].get_global_rect().get_center())
+	_assert(target.is_valid() and target.mod_id == pad.x.mod_id, "the pair tile is a target")
+	_assert(target.commit(drag), "the drop commits")
+	_assert(inst.modulators[0].kind == "velocity" and inst.modulators[1].kind == "xyx"
+		and inst.modulators[2].kind == "xyy", "the plain tile moved before the pair, still adjacent")
+
+	drag = _drag_script.start(pane, pad.x)
+	_assert(drag.mod_count == 2, "the pair drags as one block of two")
+	target = _drag_script.resolve(pane, drag, pane._tiles[1].get_global_rect().get_center())
+	_assert(target.is_valid() and target.mod_id == plain.mod_id, "the plain tile is a target")
+	_assert(target.commit(drag), "committed")
+	_assert(inst.modulators[0].kind == "xyx" and inst.modulators[1].kind == "xyy"
+		and inst.modulators[2].kind == "velocity", "the pair moved past the plain tile, still adjacent")
+	_assert(inst.xy_pairs().size() == 1, "the pair is intact after both drags")
+
+	drag = _drag_script.start(pane, pad.x)
+	_assert(not _drag_script.resolve(pane, drag, pane._tiles[0].get_global_rect().get_center()).is_valid(),
+		"the dragged pair's own tile is invalid")
+	pane.queue_free()
+
+
+func _test_xy_wire_buttons() -> void:
+	var inst = _instance()
+	inst.modulators.clear()
+	var pad: XYPad = inst.add_xy_pad()
+	var plain = inst.add_modulator("velocity")
+	var pane = await _pane_for(inst)
+	var pair_tile: ModulatorPanel = pane._tiles[0]
+	_assert(pair_tile._wire == null and pair_tile._wire_buttons.size() == 2, "a pair tile has two wire buttons")
+	for i in 2:
+		var button: Button = pair_tile._wire_buttons[i]
+		_assert(button.toggle_mode and button.flat, "the X/Y buttons are flat toggles (REQ-010)")
+		_assert(button.text == ("X" if i == 0 else "Y"), "labelled X and Y")
+		_assert(button.icon != null, "with the cable icon")
+	var x_color: Color = ModDisplay.source_color(0)
+	var y_color: Color = ModDisplay.source_color(1)
+	_assert(pair_tile._wire_buttons[0].get_theme_color("font_color") == x_color, "X carries its slot colour")
+	_assert(pair_tile._wire_buttons[1].get_theme_color("font_color") == y_color, "Y carries its slot colour")
+	_assert(pair_tile._wire_buttons[0].get_theme_color("icon_normal_color") == x_color,
+		"and the icon carries it too")
+	_assert(pair_tile._wire_buttons[1].get_theme_color("font_pressed_color") == y_color,
+		"the pressed state is coloured as well")
+
+	pair_tile._on_wire_toggled(true, pad.x.mod_id)
+	_assert(_mod_assign.is_active_for(inst, pad.x.mod_id), "X begins assign for the xyx slot")
+	_assert(not _mod_assign.is_active_for(inst, pad.y.mod_id), "and not for xyy")
+	_assert(pair_tile._wire_buttons[0].button_pressed and not pair_tile._wire_buttons[1].button_pressed,
+		"only the X button shows active")
+	pair_tile._on_wire_toggled(false, pad.x.mod_id)
+	_assert(not _mod_assign.is_active(), "releasing X ends assign")
+	pair_tile._on_wire_toggled(true, pad.y.mod_id)
+	_assert(_mod_assign.is_active_for(inst, pad.y.mod_id), "Y begins assign for the xyy slot")
+	_mod_assign.end()
+
+	var plain_tile: ModulatorPanel = pane._tiles[1]
+	_assert(plain_tile._wire.flat, "the plain wire button is flat too (REQ-010)")
+	_assert(plain_tile._wire.get_theme_color("font_color") == ModDisplay.source_color(2),
+		"coloured by its array index")
+	plain_tile._on_wire_toggled(true, plain.mod_id)
+	_assert(_mod_assign.is_active_for(inst, plain.mod_id), "the plain button starts assign for its modulator")
+	plain_tile._on_wire_toggled(false, plain.mod_id)
+	pane.queue_free()
+
+
+func _test_xy_pad_panel_model() -> void:
+	var inst = _instance()
+	inst.modulators.clear()
+	var pad: XYPad = inst.add_xy_pad()
+	var pane = await _pane_for(inst)
+	var xy_panel: XYPadPanel = pane._tiles[0]._display
+	xy_panel.set_values(0.3, 0.8)
+	_assert(is_equal_approx(pad.x.get_param(0), 0.3) and is_equal_approx(pad.y.get_param(0), 0.8),
+		"the compact pad writes both slots' Position")
+	_assert(is_equal_approx(pane._detail_pad_slider.value_x, 0.3)
+		and is_equal_approx(pane._detail_pad_slider.value_y, 0.8),
+		"the options pad follows the compact pad")
+	inst.set_modulator_param(pad.x.mod_id, 0, 0.6)
+	_assert(is_equal_approx(xy_panel._slider.value_x, 0.6), "the compact pad follows the model")
+	inst.set_modulator_param(pad.y.mod_id, 0, 0.1)
+	_assert(is_equal_approx(xy_panel._slider.value_y, 0.1), "for either slot")
+	pane.queue_free()
+
+
+func _test_sidechain_source_menu() -> void:
+	var project = _project_script.new()
+	var ch_a: Object = project.create_instrument_track("Inst").channel
+	var ch_b: Object = project.create_instrument_track("Other").channel
+	var inst = _inst_script.new(_synth(), ch_a.id, -1)
+	ch_a.add_device(inst)
+	var sc = inst.add_modulator("sidechain")
+	_assert(sc != null and sc.kind == "sidechain", "a sidechain can be added")
+	var pane = await _pane_for(inst)
+	pane._select(sc.mod_id)
+	await process_frame
+	var menu: OptionButton = pane._source_menu
+	_assert(menu != null, "the sidechain detail has a Source menu")
+	_assert(menu.get_item_text(0) == "Device In" and int(menu.get_item_metadata(0)) == 0,
+		"Device In is item 0 with channel id 0")
+	var ids: Array = []
+	for i in range(1, menu.item_count):
+		ids.append(int(menu.get_item_metadata(i)))
+		_assert(menu.get_item_text(i) == project.get_channel_by_id(int(menu.get_item_metadata(i))).name,
+			"channel items carry the channel name")
+	_assert(ids.has(ch_a.id) and ids.has(ch_b.id), "the menu lists the project channels by id")
+	var hardware := false
+	for id in ids:
+		if id >= 1000:
+			hardware = true
+	_assert(not hardware, "hardware outputs are excluded")
+
+	var b_index := -1
+	for i in menu.item_count:
+		if int(menu.get_item_metadata(i)) == ch_b.id:
+			b_index = i
+	pane._on_source_selected(b_index)
+	var param = sc.get_parameter(40)
+	_assert(is_equal_approx(sc.get_param(40), param.value_to_normalized(float(ch_b.id))),
+		"picking a channel stores its id normalized through set_modulator_param")
+
+	inst.set_modulator_param(sc.mod_id, 40, param.value_to_normalized(777.0))
+	pane._select(-1)
+	pane._select(sc.mod_id)
+	await process_frame
+	var found_missing := false
+	for i in pane._source_menu.item_count:
+		if pane._source_menu.get_item_text(i) == "(missing channel)":
+			found_missing = true
+	_assert(found_missing, "a stored id that no longer exists shows as (missing channel)")
+
+	var count_before: int = pane._source_menu.item_count
+	project.create_instrument_track("Third")
+	await process_frame
+	_assert(pane._source_menu != null and pane._source_menu.item_count == count_before + 1,
+		"a channel-list change rebuilds the menu")
+	pane.queue_free()

@@ -80,3 +80,15 @@ func set_name(new_name: String) -> void:
 	var o = owner()
 	if o != null:
 		o.rename_modulator(mod_id, new_name)
+
+
+## Whether this modulator's output spans −1..1 (`true`) or 0..1 (`false`).
+##
+## Polarity is kind-fixed for every kind but `knob` (spec 036 D1): a knob's Polarity is a
+## per-instance parameter, so it is read from parameter 10 (0 = Unipolar, 1 = Bipolar); every
+## other kind asks the owner's kind table.
+func is_bipolar() -> bool:
+	if kind == "knob":
+		return get_param(10) >= 0.5
+	var o = owner()
+	return o.is_modulator_kind_bipolar(kind) if o != null else false

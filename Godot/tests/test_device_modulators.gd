@@ -33,6 +33,9 @@ func run_tests() -> void:
 	_test_sync_order_adds_before_routes()
 	_test_child_move_rewrites_routes()
 	_test_child_removal_drops_or_reindexes_routes()
+	_test_xy_pad_model()
+	_test_xy_pad_pair_mutations()
+	_test_knob_bipolar_routes()
 
 
 # --- fixtures ------------------------------------------------------------------------------
@@ -43,10 +46,14 @@ func _setup_kinds() -> void:
 	_registry._on_modulator_kind_received(_adsr_kind_args())
 	_registry._on_modulator_kind_received(["velocity", "Velocity", 0, 0])
 	_registry._on_modulator_kind_received(_cc_kind_args())
+	_registry._on_modulator_kind_received(_knob_kind_args())
+	_registry._on_modulator_kind_received(_xy_kind_args("xyx", "XY X"))
+	_registry._on_modulator_kind_received(_xy_kind_args("xyy", "XY Y"))
+	_registry._on_modulator_kind_received(_sidechain_kind_args())
 	# DeviceInstance reads kinds through AssetService (it must not name the class at compile
 	# time, or the test would depend on the autoloads before they exist).
 	var asset_registry: Object = root.get_node("AssetService").device_registry
-	for kind_id in ["lfo", "adsr", "velocity", "cc"]:
+	for kind_id in ["lfo", "adsr", "velocity", "cc", "knob", "xyx", "xyy", "sidechain"]:
 		asset_registry.modulator_kinds[kind_id] = _registry.get_modulator_kind(kind_id)
 	# Built-in devices: a synth with a default modulator, and an empty container.
 	_registry._on_builtin_info_received([
@@ -100,6 +107,30 @@ func _cc_kind_args() -> Array:
 	return args
 
 
+## Spec 036 kinds: knob (Value + Polarity), the two XY slots, sidechain (Source = channel id).
+func _knob_kind_args() -> Array:
+	var args: Array = ["knob", "Knob", 0, 2]
+	args.append_array(_float_param(0, "Value", "", 0.0, 1.0, 0.0, false))
+	args.append_array(_enum_param(10, "Polarity", ["Unipolar", "Bipolar"], 0))
+	return args
+
+
+func _xy_kind_args(kind_id: String, kind_name: String) -> Array:
+	var args: Array = [kind_id, kind_name, 1, 1]
+	args.append_array(_float_param(0, "Position", "", 0.0, 1.0, 0.5, false))
+	return args
+
+
+func _sidechain_kind_args() -> Array:
+	var args: Array = ["sidechain", "Sidechain", 0, 5]
+	args.append_array(_float_param(0, "Low Cut", "Hz", 20.0, 20000.0, 20.0, true))
+	args.append_array(_float_param(10, "High Cut", "Hz", 20.0, 20000.0, 20000.0, true))
+	args.append_array(_float_param(20, "Attack", "ms", 0.0, 500.0, 5.0, false))
+	args.append_array(_float_param(30, "Release", "ms", 5.0, 2000.0, 150.0, false))
+	args.append_array(_float_param(40, "Source", "", 0.0, 999.0, 0.0, false))
+	return args
+
+
 func _synth() -> Object:
 	return root.get_node("AssetService").device_registry.get_device(SYNTH_ID)
 
@@ -132,7 +163,15 @@ func _test_kinds_parsed() -> void:
 	_assert(lfo["params"][1].id == 10 and lfo["params"][1].is_logarithmic, "lfo Rate is logarithmic")
 	var adsr: Dictionary = _registry.get_modulator_kind("adsr")
 	_assert(adsr.get("bipolar") == false and adsr["params"].size() == 4, "adsr kind parsed unipolar")
-	_assert(_registry.get_modulator_kinds().size() == 4, "four kinds advertised")
+	_assert(_registry.get_modulator_kinds().size() == 8, "eight kinds advertised")
+	var knob: Dictionary = _registry.get_modulator_kind("knob")
+	_assert(knob.get("name") == "Knob" and knob.get("bipolar") == false,
+		"knob parsed unipolar (polarity is per instance, spec 036 D1)")
+	var xyx: Dictionary = _registry.get_modulator_kind("xyx")
+	_assert(xyx.get("bipolar") == true and xyx["params"][0].id == 0, "xyx parsed bipolar with Position")
+	var sc: Dictionary = _registry.get_modulator_kind("sidechain")
+	_assert(sc["params"].size() == 5 and sc["params"][4].id == 40 and sc["params"][4].max_value == 999.0,
+		"sidechain Source is a 0..999 channel id")
 
 
 func _test_cc_kind() -> void:
@@ -403,3 +442,100 @@ func _test_sync_order_adds_before_routes() -> void:
 		"every add + param precedes every route/set (%d < %d)" % [last_add, first_route])
 	_assert(messages[last_add].args == [b.mod_id, "velocity"],
 		"the last pre-route message is the last modulator's add")
+
+
+# --- spec 036 -------------------------------------------------------------------------------
+
+func _test_xy_pad_model() -> void:
+	var inst := _instance()
+	inst.modulators.clear()
+	var pad = inst.add_xy_pad()
+	_assert(pad != null and pad.x != null and pad.y != null, "add_xy_pad returns a pad with both slots")
+	_assert(inst.modulators.size() == 2 and inst.modulators[0] == pad.x and inst.modulators[1] == pad.y,
+		"the pair is appended adjacent, X first")
+	var found: Array = inst.xy_pairs()
+	_assert(found.size() == 1 and found[0].x == pad.x and found[0].y == pad.y,
+		"xy_pairs finds the adjacent pair")
+	_assert(pad.name == "XY Pad" and pad.y.name == "XY Pad Y", "the slots are named XY Pad / XY Pad Y")
+	_assert(pad.holds(pad.x.mod_id) and pad.holds(pad.y.mod_id) and not pad.holds(7),
+		"holds() reports the pair's slots")
+	_assert(is_equal_approx(pad.position().x, 0.5) and is_equal_approx(pad.position().y, 0.5),
+		"the pad starts centred")
+	var osc := _osc()
+	if osc:
+		osc._pending_sends.clear()
+	pad.set_position(Vector2(0.3, 0.8))
+	_assert(is_equal_approx(pad.x.get_param(0), 0.3) and is_equal_approx(pad.y.get_param(0), 0.8),
+		"set_position writes both slots' Position")
+	_assert(_sent_float("/modulator/%d/param/0/value" % pad.x.mod_id, 0.3)
+		and _sent_float("/modulator/%d/param/0/value" % pad.y.mod_id, 0.8),
+		"one normalized value message per slot")
+
+	# One free slot is not enough for a pair: refused, nothing added.
+	var full := _instance()
+	full.modulators.clear()
+	for i in range(7):
+		full.add_modulator("velocity")
+	_assert(full.add_xy_pad() == null, "with one free slot an XY pad is refused")
+	_assert(full.modulators.size() == 7, "and nothing was added")
+	_assert(full.add_modulator("velocity") != null, "a plain modulator still fits")
+
+
+func _test_xy_pad_pair_mutations() -> void:
+	var inst := _instance()
+	inst.modulators.clear()
+	var pad = inst.add_xy_pad()
+	inst.remove_xy_pad(pad)
+	_assert(inst.modulators.is_empty(), "remove_xy_pad takes both slots")
+
+	pad = inst.add_xy_pad()
+	var plain = inst.add_modulator("velocity")
+	pad.set_position(Vector2(0.25, 0.75))
+	var dup = inst.duplicate_xy_pad(pad)
+	_assert(dup != null, "duplicate_xy_pad copies the pair")
+	_assert(inst.modulators.size() == 5, "two pairs plus the plain modulator")
+	var found: Array = inst.xy_pairs()
+	_assert(found.size() == 2, "both pairs stay adjacent")
+	_assert(inst.modulators[3] == dup.x and inst.modulators[4] == dup.y,
+		"the copy pair sits at the end, X then Y")
+	_assert(dup.x.kind == "xyx" and dup.y.kind == "xyy", "the copy keeps the slot kinds")
+	_assert(is_equal_approx(dup.position().x, 0.25) and is_equal_approx(dup.position().y, 0.75),
+		"the copy carries the position")
+	_assert(dup.x.name.begins_with("XY Pad") and dup.y.name == "%s Y" % dup.x.name,
+		"and a fresh pair name")
+
+	# Renaming the X slot renames the pair's Y slot.
+	inst.rename_modulator(pad.x.mod_id, "Macro")
+	_assert(pad.x.name == "Macro" and pad.y.name == "Macro Y", "the pair renames together")
+
+	# Save/load round-trips as two plain Modulators; adjacent entries re-form the pair on load.
+	var data: Dictionary = JSON.parse_string(JSON.stringify(inst.to_json()))
+	var kinds: Array = []
+	for entry in data["modulators"]:
+		kinds.append(entry["kind"])
+	_assert(kinds == ["xyx", "xyy", "velocity", "xyx", "xyy"], "the save holds five plain modulators")
+	var loaded = _inst_script.from_json(data)
+	_assert(loaded.modulators.size() == 5, "all five load")
+	var loaded_pairs: Array = loaded.xy_pairs()
+	_assert(loaded_pairs.size() == 2, "the adjacent pairs re-form on load")
+	_assert(is_equal_approx(loaded_pairs[0].position().x, 0.25)
+		and is_equal_approx(loaded_pairs[0].position().y, 0.75), "positions survive the round trip")
+	_assert(loaded.modulators[2].kind == "velocity", "and a plain modulator between pairs loads as-is")
+
+
+func _test_knob_bipolar_routes() -> void:
+	var inst := _instance()
+	inst.modulators.clear()
+	var knob = inst.add_modulator("knob")
+	_assert(knob != null and knob.kind == "knob", "a knob can be added")
+	_assert(is_equal_approx(knob.get_param(0), 0.0) and not knob.is_bipolar(),
+		"default Value 0, default polarity Unipolar")
+	inst.set_route_amount(knob.mod_id, "param/31", 0.5)
+	_assert(inst.get_routes_into("param/31")[0]["bipolar"] == false, "Unipolar routes report unipolar")
+	inst.set_modulator_param(knob.mod_id, 10, 1.0)
+	_assert(knob.is_bipolar(), "Polarity is read from parameter 10")
+	var routes: Array = inst.get_routes_into("param/31")
+	_assert(routes.size() == 1 and routes[0]["bipolar"] == true,
+		"a Bipolar knob's route reports bipolar (REQ-002)")
+	inst.set_modulator_param(knob.mod_id, 10, 0.0)
+	_assert(inst.get_routes_into("param/31")[0]["bipolar"] == false, "and back to Unipolar")

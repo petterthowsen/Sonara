@@ -732,6 +732,115 @@ func _modulator_index(mod_id: int) -> int:
 	return -1
 
 
+## ============================================================================
+## XY PADS (spec 036): a Godot-level pair over two engine slots (`xyx` + `xyy`,
+## adjacent in the array, X first). The engine sees two plain modulators.
+## ============================================================================
+
+## Add an XY pad: appends an `xyx` and then an `xyy` modulator at the end of the array. Returns
+## null (nothing added) when the engine doesn't advertise the kinds or fewer than two ids are
+## free — an XY pad occupies 2 of the MAX_MODULATORS slots.
+func add_xy_pad() -> XYPad:
+	if get_modulator_kind("xyx").is_empty() or get_modulator_kind("xyy").is_empty():
+		logger.warn("[%s] Engine does not advertise the XY pad modulator kinds" % get_display_name())
+		return null
+	var x_id := _lowest_free_mod_id()
+	if x_id < 0:
+		logger.warn("[%s] Already has the maximum of %d modulators" % [get_display_name(), MAX_MODULATORS])
+		return null
+	var y_id := -1
+	for candidate in range(MAX_MODULATORS):
+		if candidate == x_id:
+			continue
+		if get_modulator(candidate) == null:
+			y_id = candidate
+			break
+	if y_id < 0:
+		logger.warn("[%s] Needs two free modulator slots for an XY pad" % get_display_name())
+		return null
+	var x_name := _unique_modulator_name("XY Pad")
+	var x_mod := _build_modulator(x_id, "xyx", x_name, _default_mod_params("xyx"), {})
+	var y_mod := _build_modulator(y_id, "xyy", "%s Y" % x_name, _default_mod_params("xyy"), {})
+	modulators.append(x_mod)
+	modulators.append(y_mod)
+	for id in [x_id, y_id]:
+		_expect_mod_echo("add:%d" % id)
+		AudioEngineOSC.send(osc_addr("modulator/add"), [id, "xyx" if id == x_id else "xyy"])
+	modulator_added.emit(x_mod)
+	var pad := XYPad.new()
+	pad.x = x_mod
+	pad.y = y_mod
+	return pad
+
+
+## Remove both slots of `pad` (each through `remove_modulator`, so dangling routes are erased).
+func remove_xy_pad(pad: XYPad) -> void:
+	if pad == null or pad.x == null or pad.y == null:
+		return
+	remove_modulator(pad.x.mod_id)
+	remove_modulator(pad.y.mod_id)
+
+
+## Copy both slots of `pad` into a new adjacent pair at the end of the array. Returns null when
+## either slot is missing or there is no room for the copy pair.
+func duplicate_xy_pad(pad: XYPad) -> XYPad:
+	if pad == null or pad.x == null or pad.y == null:
+		return null
+	var x_copy := duplicate_modulator(pad.x.mod_id)
+	if x_copy == null:
+		return null
+	var y_copy := duplicate_modulator(pad.y.mod_id)
+	if y_copy == null:
+		# No room for the pair: don't leave half of one behind.
+		remove_modulator(x_copy.mod_id)
+		return null
+	y_copy.set_name("%s Y" % x_copy.name)
+	for entry in xy_pairs():
+		if entry.x == x_copy and entry.y == y_copy:
+			return entry
+	var out := XYPad.new()
+	out.x = x_copy
+	out.y = y_copy
+	return out
+
+
+## The array's adjacent `xyx`+`xyy` pairs, as `XYPad`s. A hand-edited save whose slots are no
+## longer adjacent degrades: each half then renders as a plain modulator tile.
+func xy_pairs() -> Array[XYPad]:
+	var out: Array[XYPad] = []
+	for i in modulators.size() - 1:
+		if modulators[i].kind == "xyx" and modulators[i + 1].kind == "xyy":
+			var pad := XYPad.new()
+			pad.x = modulators[i]
+			pad.y = modulators[i + 1]
+			out.append(pad)
+	return out
+
+
+## Move `count` (1 or 2) contiguous array entries starting at `from_index` so the block begins
+## at `to_index` (an index in the array after the removal, as `Array.insert` takes it). Every
+## array mutation that can move a pair goes through here — a swap of two entries would split a
+## pair (spec 036 D4). No OSC: the engine keys modulators by id, never by array order.
+func move_modulator_block(from_index: int, count: int, to_index: int) -> void:
+	if count < 1 or from_index < 0 or from_index + count > modulators.size():
+		return
+	var block := modulators.slice(from_index, from_index + count)
+	for _i in count:
+		modulators.remove_at(from_index)
+	to_index = clampi(to_index, 0, modulators.size())
+	for i in count:
+		modulators.insert(to_index + i, block[i])
+	modulators_reordered.emit()
+
+
+## The kind's default parameters as a normalized-value dictionary (as `add_modulator` seeds).
+func _default_mod_params(kind: String) -> Dictionary:
+	var params: Dictionary = {}
+	for param in get_modulator_kind_params(kind):
+		params[param.id] = param.value_to_normalized(param.default_value)
+	return params
+
+
 ## Swap two modulators' positions in the array. Both keep their `mod_id` (routes name ids, not
 ## positions). No OSC: the engine keys modulators by slot id and never by array order, so a
 ## reorder is pure UI/persistence state.
@@ -761,6 +870,13 @@ func rename_modulator(mod_id: int, new_name: String) -> void:
 		return
 	mod.name = unique
 	modulator_changed.emit(mod_id)
+	# An XY pad's Y slot follows its X name (spec 036): renaming the `xyx` heading a pair
+	# renames the `xyy` right after it, so the pair stays labelled as one modulator.
+	if mod.kind == "xyx":
+		var index := _modulator_index(mod_id)
+		if index >= 0 and index + 1 < modulators.size() and modulators[index + 1].kind == "xyy":
+			modulators[index + 1].name = "%s Y" % unique
+			modulator_changed.emit(modulators[index + 1].mod_id)
 
 
 ## Set a modulator parameter (normalized). Bools and enums snap to their canonical value.
@@ -830,7 +946,8 @@ func get_routes_into(target: String) -> Array[Dictionary]:
 				"name": mod.name,
 				"kind": mod.kind,
 				"amount": amount,
-				"bipolar": is_modulator_kind_bipolar(mod.kind),
+				# Per-instance (spec 036 D1): a Bipolar knob draws its route centred.
+				"bipolar": mod.is_bipolar(),
 				"color_index": i,
 			})
 	return out

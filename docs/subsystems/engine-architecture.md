@@ -69,7 +69,8 @@ Engine/src/
                        # and one file per domain: transport, channel, track, clip, device, sampler, layer,
                        # modulation, plugin, device_data
     processing/        # Audio callback stages: mod.rs (process_audio), live_midi.rs, timeline.rs, clip_midi.rs, clip_audio.rs
-    mixing/            # mix_and_output: mod.rs (passes, master output), routing.rs (routes, sends, aux sources), solo.rs
+    mixing/            # mix_and_output: mod.rs (passes, master output), routing.rs (routes, sends,
+                       # aux sources), solo.rs, sidechain.rs (spec 036 tap snapshot + feed)
     channel/           # Channel: mod.rs, chain.rs (device chain, notes), meter.rs, pan.rs, send.rs
     clip.rs            # Clip, ClipInstance, AudioPlayback (time-stretch maths)
     track.rs           # Track
@@ -81,8 +82,9 @@ Engine/src/
     analysis/          # Mix analyzer (spec: docs/analyze-plan.md): per-bar loudness/band/peak/stereo metrics, scale.rs digit scale
     render/            # Offline rendering: RenderJob, the render thread (worker.rs), WAV output (wav.rs)
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
-    modulation/        # Device modulators (spec 018): kinds.rs (kind tables), state.rs (per-instance
-                       # runtime), lfo.rs/envelope.rs (shared DSP), matrix.rs (route matrix),
+    modulation/        # Device modulators (specs 018, 033, 036): kinds.rs (kind tables — 12 kinds,
+                       # spec 036 added knob/xyx/xyy/sidechain), state.rs (per-instance runtime),
+                       # lfo.rs/envelope.rs (shared DSP), matrix.rs (route matrix),
                        # host.rs (ModulatedDevice wrapper, mono path), voice.rs (VoiceModSpec)
     devices/
       mod.rs             # Module list and re-exports only
@@ -236,6 +238,16 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 
 4. **Hardware Output**
    - The CPAL buffer is cleared, then every channel routed to a hardware output (master included) is written to its pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. Channels on the same pair accumulate; a pair the device lacks plays on 1/2. A channel routed straight to a pair skips master's effects (reference track) and is never silenced by another channel's solo. Peaks are computed by the callback afterward.
+
+**Sidechain taps** (spec 036): at the end of `mix_and_output` the callback snapshots the
+post-fader, post-pan output of every subscribed channel (`mixing/sidechain.rs::snapshot`) into
+the preallocated `EngineState.sc_taps` mono buffers — one slot per distinct source channel,
+master included; muted or solo-silenced channels snapshot silence. The next block feeds each tap
+whole into its subscriber sidechain modulators (`sidechain::feed_taps`, called in `stream.rs`
+right after the state lock and before `process_audio`) — one block of cross-channel latency.
+The command thread rebuilds slots and subscribers on any modulator/channel/device structural
+change (allocation off the audio path, swap under the lock); the feed skips a missing channel,
+path or modulator rather than failing, so a removed source decays to 0.
 
 **Invariants:**
 - Never allocate during any pass; all temporary buffers are pre-sized at initialization.
@@ -413,7 +425,8 @@ What each audio-callback stage reads and writes. `EngineState` fields: `channels
 | clip MIDI (`clip_midi`) | `tracks[*].clip_instances`, `tracks[*].channel_id`, `clips[*].midi_notes`, tick events, loop wraps | `render_scratch.note_events`; `channels[*].active_notes` and the devices' note input (`send_clip_note`, `release_clip_notes_at`) |
 | audio clip render (`clip_audio`) | `clips[*]` PCM and recorded BPM, `settings.tempo/ppq`, `device_sample_rate`, tick rates, `loop_region`, `tracks[*].channel_id` | `tracks[*].clip_instances[*].playback_position`; `channels[*].buffer_left/right` (added to) |
 
-`mix_and_output` (`mixing/`); `channels` is the only `EngineState` field besides `render_scratch` (`channel_ids`, `parked`, `ready`):
+`mix_and_output` (`mixing/`); `channels` is the only `EngineState` field besides `render_scratch`
+(`channel_ids`, `parked`, `ready`) and the spec 036 sidechain tap pool (`sc_taps`):
 
 | Stage | Reads | Writes |
 |---|---|---|
@@ -426,6 +439,7 @@ What each audio-callback stage reads and writes. `EngineState` fields: `channels
 | fader and pan (`apply_fader_and_pan`) | `mix.solo_role`, `volume_db`, `pan*`, `automation_*`, `pan_mode`, `mute` | `buffer_left/right` (cleared if silenced), gain smoothing state, `current_gain` |
 | routing sweeps (`route_in_dependency_order`: `begin_finish`, `drain_parked`, `route_finished`, `route_channel`) | `mix.pending_inputs`, `mix.done`, `mix.is_route_target`, `mix.solo_role`, `output_channel_id`, `send_channels`, source buffers and pre-fader copies, target fader gain | route targets' device chains, `mix.done`, `mix.pending_inputs`, `mix.pre_fader_*`; target `buffer_left/right` (added to); `render_scratch.ready`/`parked`; statuses via `try_send` |
 | master output (`write_master_output`) | `channels[1]` buffers and `output_channel_id` | the device output buffer only |
+| sidechain snapshot (`sidechain::snapshot`) | `sc_taps.subscribers` (slot → source `channel_id`), source `channels[*].buffer_left/right` | `sc_taps.slots[*].mono`, `.frames` |
 
 Not covered here: what the callback does around these stages (state lock, rendering guard, meters) lives in `audio/engine.rs`/`stream.rs`.
 

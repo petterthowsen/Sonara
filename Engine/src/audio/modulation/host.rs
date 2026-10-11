@@ -17,6 +17,7 @@
 //! (`child/{i.j…}/param/{id}`) or another modulator of the same device
 //! (`mod/{mod_id}/param/{id}`, stored but not evaluated until Phase 9).
 
+use super::kinds::SC_SOURCE;
 use super::matrix::ModMatrix;
 use super::state::OFFSET_EPSILON;
 use super::voice::{VoiceModRoute, VoiceModSpec, VoiceRoute};
@@ -28,6 +29,7 @@ use crate::audio::devices::{AudioDevice, DeviceContainer, DevicePath, ParamId};
 use crate::audio::midi_types::{cc14_to_unit, NoteEvent};
 use crate::audio::modulation::kinds::{CC_NUMBER, LFO_RETRIGGER};
 use crate::audio::transport::Transport;
+use crate::audio::types::ChannelId;
 use tracing::warn;
 
 /// Frames between `modulation` data stream payloads (about 20 Hz).
@@ -122,6 +124,18 @@ pub trait Modulated {
 
     /// The modulators and their kinds, in slot order.
     fn modulator_kinds(&self) -> Vec<(u8, ModulatorKind)>;
+
+    /// The current value of a modulator (as its kind's `value()` reports it), for tests and
+    /// callers that peek without unwrapping.
+    fn modulator_value(&self, mod_id: u8) -> Option<f32>;
+
+    /// Feed a `sidechain` modulator with mono frames (a cross-channel tap or, per step, the
+    /// device's own input). Other modulators and unknown ids are ignored; never allocates.
+    fn feed_sidechain(&mut self, mod_id: u8, mono: &[f32]);
+
+    /// The `sidechain` modulators with a channel source, as `(mod_id, source channel id)`
+    /// in slot order (Device In, source 0, is not listed). The tap-pool rebuild walks this.
+    fn sidechain_sources(&self) -> Vec<(u8, ChannelId)>;
 
     /// Reset every applied offset back to the base. Called before unwrapping.
     fn reset_offsets(&mut self);
@@ -391,6 +405,46 @@ impl ModulatedDevice {
         bytes
     }
 
+    /// Feed every `sidechain` modulator whose Source is Device In (0) with this step's input
+    /// frames, mono-collapsed (`0.5·(L+R)`). `inputs` is already the step's interleaved
+    /// window; a shorter slice reads silence (an instrument has no input — documented).
+    /// Chunks through a stack buffer so a whole-block step (`process_block_with_extra`) still
+    /// feeds every frame. No capture buffer: the frames are consumed at once.
+    fn feed_device_in(&mut self, inputs: &[f32], frames: usize) {
+        let mut has_device_in = false;
+        for state in self.mods.iter().flatten() {
+            if state.kind() == ModulatorKind::Sidechain && Self::is_device_in(state) {
+                has_device_in = true;
+                break;
+            }
+        }
+        if !has_device_in {
+            return;
+        }
+        let mut mono = [0.0f32; CONTROL_STEP];
+        let mut done = 0;
+        while done < frames {
+            let count = (frames - done).min(CONTROL_STEP);
+            for (i, sample) in mono[..count].iter_mut().enumerate() {
+                let base = (done + i) * 2;
+                let left = inputs.get(base).copied().unwrap_or(0.0);
+                let right = inputs.get(base + 1).copied().unwrap_or(0.0);
+                *sample = 0.5 * (left + right);
+            }
+            for state in self.mods.iter_mut().flatten() {
+                if state.kind() == ModulatorKind::Sidechain && Self::is_device_in(state) {
+                    state.feed_sidechain(&mono[..count]);
+                }
+            }
+            done += count;
+        }
+    }
+
+    /// True when a sidechain modulator's Source is Device In (0).
+    fn is_device_in(state: &ModulatorState) -> bool {
+        state.params().real(SC_SOURCE).unwrap_or(0.0).round() as u32 == 0
+    }
+
     /// Advance every modulator by `frames` and store the values, without applying them.
     fn advance(&mut self, frames: usize) {
         for (i, slot) in self.mods.iter_mut().enumerate() {
@@ -470,15 +524,19 @@ impl ModulatedDevice {
         self.dev_mut().set_voice_modulation(&spec);
     }
 
-    /// Advance the modulators and apply the summed offsets. The mono control step.
-    fn control_step(&mut self, frames: usize) {
-        self.control_step_impl(frames, 0, false)
+    /// Advance the modulators and apply the summed offsets. The mono control step. `inputs`
+    /// is the step's interleaved input window (empty for instruments), which a Device In
+    /// sidechain follows (spec 036).
+    fn control_step(&mut self, frames: usize, inputs: &[f32]) {
+        self.control_step_impl(frames, 0, false, inputs)
     }
 
     /// One control step. `base` is the step's frame offset in the block and `stamped` pushes the
     /// offsets as frame-stamped events (an async inner: a CLAP plugin keeps whole blocks) instead
-    /// of the plain `set_param_mod`.
-    fn control_step_impl(&mut self, frames: usize, base: usize, stamped: bool) {
+    /// of the plain `set_param_mod`. `inputs` is the step's interleaved input window, sliced by
+    /// the caller to exactly these frames.
+    fn control_step_impl(&mut self, frames: usize, base: usize, stamped: bool, inputs: &[f32]) {
+        self.feed_device_in(inputs, frames);
         // Mod→mod routes sum from the previous step's values and are applied before the
         // advance (spec 033): the one-step delay makes evaluation independent of slot and
         // array order, and cycles bounded delayed feedback.
@@ -835,8 +893,13 @@ fn is_note_driven(state: &ModulatorState) -> bool {
     match state.kind() {
         ModulatorKind::Lfo => state.get_param(LFO_RETRIGGER).unwrap_or(0.0) >= 0.5,
         // A `cc` modulator follows the controller stream: it must not consume the MIDI queue
-        // or retrigger per note (spec 032).
-        ModulatorKind::MidiCc => false,
+        // or retrigger per note (spec 032). The spec 036 kinds are parameter- or audio-driven
+        // and likewise ignore the note stream.
+        ModulatorKind::MidiCc
+        | ModulatorKind::Knob
+        | ModulatorKind::XyX
+        | ModulatorKind::XyY
+        | ModulatorKind::Sidechain => false,
         _ => true,
     }
 }
@@ -973,6 +1036,37 @@ impl Modulated for ModulatedDevice {
             .collect()
     }
 
+    fn modulator_value(&self, mod_id: u8) -> Option<f32> {
+        let slot = self.slot(mod_id).ok()?;
+        self.mods[slot].as_ref().map(|state| state.value())
+    }
+
+    fn feed_sidechain(&mut self, mod_id: u8, mono: &[f32]) {
+        let slot = match self.slot(mod_id) {
+            Ok(slot) => slot,
+            Err(_) => return,
+        };
+        if let Some(state) = self.mods[slot].as_mut() {
+            state.feed_sidechain(mono);
+        }
+    }
+
+    fn sidechain_sources(&self) -> Vec<(u8, ChannelId)> {
+        self.mods
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| {
+                let state = m.as_ref()?;
+                if state.kind() != ModulatorKind::Sidechain {
+                    return None;
+                }
+                // The Source parameter stores a channel id; 0 is Device In (no tap).
+                let source = state.params().real(SC_SOURCE)?.round().max(0.0) as ChannelId;
+                (source >= 1).then_some((i as u8, source))
+            })
+            .collect()
+    }
+
     fn reset_offsets(&mut self) {
         let stamped = self.dev().has_async_blocks();
         let applied = self.applied;
@@ -1010,7 +1104,7 @@ impl AudioDevice for ModulatedDevice {
         let mut done = 0;
         while done < sample_count {
             let frames = (sample_count - done).min(CONTROL_STEP);
-            self.control_step(frames);
+            self.control_step(frames, &inputs[window(done, frames, inputs.len())]);
             self.deliver_midi(done, frames);
             let in_range = window(done, frames, inputs.len());
             let out_range = window(done, frames, outputs.len());
@@ -1034,7 +1128,7 @@ impl AudioDevice for ModulatedDevice {
         // Extra-out buses can't be carved into per-sub-block slices without allocating, so this
         // path stays whole-block. It is the aux-source path, where a device is fed to the mixer
         // once; the normal chain path uses `process_block`.
-        self.control_step(sample_count);
+        self.control_step(sample_count, inputs);
         self.deliver_all_midi();
         let count = (sample_count * 2).min(outputs.len());
         if self.dev().is_sleeping() {
@@ -1060,7 +1154,12 @@ impl AudioDevice for ModulatedDevice {
         let mut done = 0;
         while done < sample_count {
             let frames = (sample_count - done).min(CONTROL_STEP);
-            self.control_step_impl(frames, done, true);
+            self.control_step_impl(
+                frames,
+                done,
+                true,
+                &inputs[window(done, frames, inputs.len())],
+            );
             done += frames;
         }
         self.dev_mut().begin_block(inputs, sample_count)
@@ -1354,12 +1453,12 @@ impl AudioDevice for ModulatedDevice {
     }
 
     /// The wrapper owns the `modulation` stream (spec 018 Phase 9); every other type belongs
-    /// to the wrapped device.
+    /// to the wrapped device. The caller polls once per block and sends one message, so the
+    /// streams are multiplexed: a due `modulation` payload wins the poll (its cadence is the
+    /// slower one), and every other poll reaches the wrapped device, whose own streams (an
+    /// EQ's `spectrum`, a compressor's `dynamics`) would otherwise starve.
     fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
-        if self.stream_subscribed {
-            if self.stream_frames < self.stream_interval {
-                return None;
-            }
+        if self.stream_subscribed && self.stream_frames >= self.stream_interval {
             self.stream_frames = 0;
             return Some(("modulation".to_string(), self.modulation_payload()));
         }
@@ -1419,8 +1518,11 @@ mod tests {
         create_drum, create_effect, DeviceCategory, DeviceSleepState, DeviceVariant, LayerDevice,
         ParamInfo,
     };
-    use crate::audio::dsp::test_util::{render, stereo, white_noise};
-    use crate::audio::modulation::kinds::{CC_NUMBER, CC_SMOOTH, ENV_RELEASE, LFO_RATE};
+    use crate::audio::dsp::test_util::{render, sine, stereo, white_noise};
+    use crate::audio::modulation::kinds::{
+        CC_NUMBER, CC_SMOOTH, ENV_RELEASE, KNOB_POLARITY, KNOB_VALUE, LFO_RATE, SC_ATTACK,
+        SC_RELEASE, SC_SOURCE,
+    };
     use std::any::Any;
     use std::time::Duration;
 
@@ -1507,7 +1609,7 @@ mod tests {
         // A quarter at 120 BPM is 24,000 frames; walk half of it in control steps.
         let mut last = f32::NEG_INFINITY;
         for step in 1..=(12_000 / CONTROL_STEP) {
-            m.control_step(CONTROL_STEP);
+            m.control_step(CONTROL_STEP, &[]);
             let value = m.values[0];
             assert!(value > last, "step {step}: the LFO stalled at {value}");
             last = value;
@@ -1644,14 +1746,14 @@ mod tests {
         m.add_modulator(0, ModulatorKind::Lfo).unwrap();
         m.add_modulator(1, ModulatorKind::Lfo).unwrap();
         m.set_modulator_route(0, "mod/1/param/10", 0.5).unwrap();
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         assert!(
             m.mod_contrib[..m.mod_contrib_len]
                 .iter()
                 .all(|(_, off)| *off == 0.0),
             "the first step used stale values"
         );
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         assert!(
             m.mod_contrib[..m.mod_contrib_len]
                 .iter()
@@ -1671,7 +1773,7 @@ mod tests {
         m.set_modulator_route(1, "mod/0/param/10", 0.5).unwrap();
         let steps = (10.0 * SR) as usize / CONTROL_STEP;
         for step in 0..steps {
-            m.control_step(CONTROL_STEP);
+            m.control_step(CONTROL_STEP, &[]);
             for value in m.values.iter() {
                 assert!(
                     value.is_finite() && value.abs() <= 1.0 + 1e-3,
@@ -1719,7 +1821,7 @@ mod tests {
         );
         // A modulator reusing the id starts unmodulated.
         m.add_modulator(1, ModulatorKind::Lfo).unwrap();
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         assert!(m.mod_contrib[..m.mod_contrib_len]
             .iter()
             .all(|(_, off)| *off == 0.0));
@@ -1999,7 +2101,7 @@ mod tests {
             !m.dev().is_sleeping(),
             "the matched CC did not wake the wrapped device"
         );
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         let expected = cc14_to_unit(8192) * 0.7;
         assert_eq!(m.values[0], cc14_to_unit(8192), "smooth 0 snapped");
         let applied = m
@@ -2046,7 +2148,7 @@ mod tests {
         m.set_modulator_param(0, CC_NUMBER, 1.0 / 119.0)
             .expect("number");
         m.send_cc(1, 8192, 0);
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         assert!((m.values[0] - unit).abs() < 1e-6);
 
         // 50 ms lag: the first step is partial, later steps converge.
@@ -2061,14 +2163,14 @@ mod tests {
             .to_norm(0.05); // 50 ms
         m.set_modulator_param(0, CC_SMOOTH, smooth).expect("smooth");
         m.send_cc(1, 8192, 0);
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         let first = m.values[0];
         assert!(
             first > 0.0 && first < unit * 0.9,
             "the first step was not partial: {first}"
         );
         for _ in 1..300 {
-            m.control_step(CONTROL_STEP);
+            m.control_step(CONTROL_STEP, &[]);
         }
         assert!(
             (m.values[0] - unit).abs() < 1e-3,
@@ -2358,6 +2460,41 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapped_device_still_polls_its_own_data_stream() {
+        // Regression (spec 036 report): with `modulation` subscribed, the wrapper used to
+        // answer every poll itself, so the wrapped EQ's `spectrum` frames were never polled
+        // and the visualizer starved.
+        let input = stereo(&white_noise(4_800, 0.3, 7));
+        let mut devices: Vec<Box<dyn AudioDevice>> =
+            vec![create_effect("sonara.builtin.eq", SR, MAX_FRAMES).expect("eq")];
+        wrap(&mut devices);
+        {
+            let modulated = devices[0].as_modulated_mut().unwrap();
+            modulated.add_modulator(0, ModulatorKind::Lfo).unwrap();
+        }
+        devices[0].subscribe_data("spectrum").expect("spectrum");
+        devices[0].subscribe_data("modulation").expect("modulation");
+
+        // One poll per block, as `mix_and_output` does.
+        let mut kinds: Vec<String> = Vec::new();
+        for block in input.chunks(512 * 2) {
+            let mut out = vec![0.0; block.len()];
+            devices[0].process_block(block, &mut out, block.len() / 2);
+            if let Some((kind, _)) = devices[0].poll_device_data() {
+                kinds.push(kind);
+            }
+        }
+        assert!(
+            kinds.contains(&"spectrum".to_string()),
+            "the wrapped EQ's spectrum stream starved: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"modulation".to_string()),
+            "the wrapper's modulation stream starved: {kinds:?}"
+        );
+    }
+
+    #[test]
     fn modulation_stream_reports_child_paths_for_nested_targets() {
         let input = stereo(&white_noise(4_800, 0.5, 11));
         let mut layer = LayerDevice::new(MAX_FRAMES);
@@ -2525,7 +2662,7 @@ mod tests {
                 let _ = m.set_modulator_route(0, &format!("mod/{target}/param/{}", spec.id), 0.1);
             }
         }
-        m.control_step(CONTROL_STEP);
+        m.control_step(CONTROL_STEP, &[]);
         let bytes = m.modulation_payload();
         let expected =
             2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4) + 2 + MAX_MODULATORS * 12 + MAX_ROUTES * 11;
@@ -2534,5 +2671,155 @@ mod tests {
             expected,
             "the audio-thread payload reallocated"
         );
+    }
+
+    /// REQ-001/002: knob 0.25 routed to a Delay Mix at amount 0.5 offsets it by +0.125
+    /// (Unipolar) or −0.25 (Bipolar: value −0.5 × amount 0.5). The stored value stays 0…1.
+    #[test]
+    fn a_knob_offsets_the_mix_per_its_polarity() {
+        for (bipolar, value, expected) in [(false, 0.25, 0.125), (true, 0.25, -0.25)] {
+            let mut m = ModulatedDevice::new(delay(), SR);
+            m.add_modulator(0, ModulatorKind::Knob).unwrap();
+            m.set_modulator_param(0, KNOB_VALUE, value).unwrap();
+            if bipolar {
+                m.set_modulator_param(0, KNOB_POLARITY, 1.0).unwrap();
+            }
+            m.set_modulator_route(0, "param/41", 0.5).unwrap();
+            m.control_step(CONTROL_STEP, &[]);
+            assert!(
+                (m.values[0] - if bipolar { -0.5 } else { 0.25 }).abs() < 1e-6,
+                "the knob's value is its parameter ({})",
+                m.values[0]
+            );
+            let off = m.own[..m.own_len]
+                .iter()
+                .find(|(id, _)| *id == DELAY_MIX)
+                .map(|(_, off)| *off);
+            assert_eq!(off, Some(expected), "bipolar: {bipolar}");
+        }
+    }
+
+    /// REQ-006, Device In: a sine into the wrapped device's input raises the sidechain's
+    /// value; the whole-block `process_block_with_extra` path (256 frames) feeds every
+    /// frame, matching the split `process_block` path exactly.
+    #[test]
+    fn a_sidechain_follows_the_device_input_on_every_path() {
+        let make = || {
+            let mut m = ModulatedDevice::new(delay(), SR);
+            m.add_modulator(0, ModulatorKind::Sidechain).unwrap();
+            m.set_modulator_param(0, SC_ATTACK, 0.0).unwrap();
+            m
+        };
+
+        let sine = stereo(&sine(1_000.0, SR, 4_800, 1.0));
+        let mut out = vec![0.0f32; 4_800 * 2];
+
+        let mut m = make();
+        m.process_block(&sine, &mut out, 4_800);
+        assert!(
+            m.values[0] > 0.9,
+            "a 0 dBFS sine raised the value to {}",
+            m.values[0]
+        );
+
+        let sine_256 = &sine[..256 * 2];
+        let mut whole = make();
+        let mut extra = vec![vec![0.0f32; 256]];
+        let mut out_whole = vec![0.0f32; 256 * 2];
+        whole.process_block_with_extra(sine_256, &mut out_whole, &mut extra, 256);
+        let mut split = make();
+        let mut out_split = vec![0.0f32; 256 * 2];
+        split.process_block(sine_256, &mut out_split, 256);
+        assert!(whole.values[0] > 0.9, "the whole block was fed");
+        assert!(
+            (whole.values[0] - split.values[0]).abs() < 1e-6,
+            "the whole-block path fed every frame: {} vs {}",
+            whole.values[0],
+            split.values[0]
+        );
+
+        // Silence (with the 5 ms minimum release) decays the follower back to 0.
+        m.set_modulator_param(0, SC_RELEASE, 0.0).unwrap();
+        let silence = vec![0.0f32; 4_800 * 2];
+        for _ in 0..20 {
+            m.process_block(&silence, &mut out, 4_800);
+        }
+        assert!(
+            m.values[0] < 0.01,
+            "silence decayed the value to {}",
+            m.values[0]
+        );
+    }
+
+    /// REQ-009 (ADR-0014): a device with any modulator never reports sleeping, and its
+    /// control steps keep running, so a sidechain still tracks a feed after more than 3 s
+    /// of silent input (simulated in 64-frame steps, not wall-clock).
+    #[test]
+    fn a_sidechain_keeps_a_sleeping_device_tracking() {
+        let mut m = ModulatedDevice::new(Box::new(Sleepy::new(false)), SR);
+        m.add_modulator(0, ModulatorKind::Sidechain).unwrap();
+        m.set_modulator_param(0, SC_ATTACK, 0.0).unwrap();
+        m.set_modulator_param(0, SC_RELEASE, 0.0).unwrap();
+        m.update_sleep_state(false);
+        let silence = vec![0.0f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+        for _ in 0..(3 * 48_000 / 64) {
+            m.process_block(&silence, &mut output, 64);
+        }
+        assert!(
+            !m.is_sleeping(),
+            "a device with a modulator never reports sleeping"
+        );
+        assert!(
+            m.values[0] < 0.01,
+            "silence kept the follower at {}",
+            m.values[0]
+        );
+
+        // The sidechain still tracks the feed that arrives now.
+        let sine = stereo(&sine(1_000.0, SR, 4_800, 1.0));
+        let mut out = vec![0.0f32; 4_800 * 2];
+        m.process_block(&sine, &mut out, 4_800);
+        assert!(
+            m.values[0] > 0.9,
+            "the follower tracked after the sleep: {}",
+            m.values[0]
+        );
+    }
+
+    /// Device In on an instrument: no input frames arrive, so the follower reads silence
+    /// (documented), while a channel source would still feed it.
+    #[test]
+    fn a_device_in_sidechain_on_an_instrument_reads_silence() {
+        let mut m = ModulatedDevice::new(
+            create_drum("sonara.builtin.kick", SR, MAX_FRAMES).expect("kick"),
+            SR,
+        );
+        m.add_modulator(0, ModulatorKind::Sidechain).unwrap();
+        m.set_modulator_param(0, SC_ATTACK, 0.0).unwrap();
+        m.set_modulator_param(0, SC_SOURCE, 0.0).unwrap();
+        m.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        let input = vec![0.0f32; 512 * 2];
+        let mut output = vec![0.0f32; 512 * 2];
+        m.process_block(&input, &mut output, 512);
+        assert!(
+            m.values[0] < 0.01,
+            "an instrument has no Device In: {}",
+            m.values[0]
+        );
+    }
+
+    /// A `sidechain` modulator is channel-level, like `cc`: it never rides the per-voice
+    /// spec, and it is not note-driven (it must not make an instrument accept notes).
+    #[test]
+    fn a_sidechain_is_mono_only_and_not_note_driven() {
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::Sidechain).unwrap();
+        assert!(!m.has_note_driven_modulator());
+        for kind in [ModulatorKind::Knob, ModulatorKind::XyX, ModulatorKind::XyY] {
+            let mut m = ModulatedDevice::new(delay(), SR);
+            m.add_modulator(0, kind).unwrap();
+            assert!(!m.has_note_driven_modulator(), "{}", kind.id());
+        }
     }
 }

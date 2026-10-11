@@ -14,10 +14,13 @@
 use super::envelope::AdsrEnvelope;
 use super::kinds::{
     ModParams, ModulatorKind, CC_NUMBER, CC_SMOOTH, ENV_ATTACK, ENV_DECAY, ENV_RELEASE,
-    ENV_SUSTAIN, LFO_PHASE, LFO_RATE, LFO_RETRIGGER, LFO_SHAPE, LFO_SYNC, MAX_KIND_PARAMS,
+    ENV_SUSTAIN, KNOB_POLARITY, KNOB_VALUE, LFO_PHASE, LFO_RATE, LFO_RETRIGGER, LFO_SHAPE,
+    LFO_SYNC, MAX_KIND_PARAMS, SC_ATTACK, SC_HIGH_CUT, SC_LOW_CUT, SC_RELEASE, XY_POS,
 };
 use super::lfo::{Lfo, LfoShape};
 use crate::audio::devices::ParamId;
+use crate::audio::dsp::env_follower::{Detection, EnvFollower};
+use crate::audio::dsp::svf::{cutoff_to_g, resonance_to_k, FilterMode, Svf, SvfCoefs};
 use crate::audio::dsp::tempo_sync::sync_beats;
 use crate::audio::midi_types::DEFAULT_RELEASE;
 use crate::audio::transport::Transport;
@@ -30,6 +33,103 @@ const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
 /// Smallest modulator-parameter offset change worth applying (below it the parameter would
 /// just be re-applied for nothing). Shared with the wrapper's offset bookkeeping.
 pub const OFFSET_EPSILON: f32 = 1e-7;
+
+/// The sidechain kind's DSP (spec 036): a 12 dB/oct high-pass ("Low Cut") and low-pass
+/// ("High Cut") ahead of a peak-detected [`EnvFollower`], all `Copy` fixed-size. Coefficients
+/// are cached and rebuilt only when the effective cut or time actually moves, so an idle step
+/// costs comparisons only.
+#[derive(Clone, Copy, Debug)]
+pub struct ScState {
+    low: Svf,
+    high: Svf,
+    low_coefs: SvfCoefs,
+    high_coefs: SvfCoefs,
+    /// Bypass at the range extremes (REQ-007): low cut off at ≤ 20.5 Hz, high cut off at
+    /// ≥ 19.5 kHz.
+    low_on: bool,
+    high_on: bool,
+    /// The cut each coefficient cache was built for; NaN while bypassed, so switching a filter
+    /// back on always rebuilds.
+    cached_low_hz: f32,
+    cached_high_hz: f32,
+    /// Peak detection (spec 036 D5).
+    follower: EnvFollower,
+    /// Follower times the coefficients were last built for.
+    cached_attack_ms: f32,
+    cached_release_ms: f32,
+}
+
+impl ScState {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            low: Svf::default(),
+            high: Svf::default(),
+            low_coefs: SvfCoefs::default(),
+            high_coefs: SvfCoefs::default(),
+            low_on: false,
+            high_on: false,
+            cached_low_hz: f32::NAN,
+            cached_high_hz: f32::NAN,
+            follower: EnvFollower::new(0.0, 0.0, sample_rate.max(1.0), Detection::Peak),
+            cached_attack_ms: 0.0,
+            cached_release_ms: 0.0,
+        }
+    }
+
+    /// Rebuild the cached coefficients and follower times for the effective settings. Only
+    /// sections whose setting actually moved past [`OFFSET_EPSILON`] are recomputed.
+    fn update(
+        &mut self,
+        sample_rate: f32,
+        low_hz: f32,
+        high_hz: f32,
+        attack_ms: f32,
+        release_ms: f32,
+    ) {
+        let low_on = low_hz > 20.5;
+        let high_on = high_hz < 19_500.0;
+        if low_on {
+            if !self.low_on || (self.cached_low_hz - low_hz).abs() > OFFSET_EPSILON {
+                self.low_coefs = SvfCoefs::new(
+                    cutoff_to_g(low_hz, sample_rate),
+                    resonance_to_k(0.0, FilterMode::Hp12),
+                    FilterMode::Hp12,
+                );
+                self.cached_low_hz = low_hz;
+            }
+        } else {
+            self.cached_low_hz = f32::NAN;
+        }
+        if high_on {
+            if !self.high_on || (self.cached_high_hz - high_hz).abs() > OFFSET_EPSILON {
+                self.high_coefs = SvfCoefs::new(
+                    cutoff_to_g(high_hz, sample_rate),
+                    resonance_to_k(0.0, FilterMode::Lp12),
+                    FilterMode::Lp12,
+                );
+                self.cached_high_hz = high_hz;
+            }
+        } else {
+            self.cached_high_hz = f32::NAN;
+        }
+        self.low_on = low_on;
+        self.high_on = high_on;
+        if (self.cached_attack_ms - attack_ms).abs() > OFFSET_EPSILON
+            || (self.cached_release_ms - release_ms).abs() > OFFSET_EPSILON
+        {
+            self.follower.set_times(attack_ms, release_ms, sample_rate);
+            self.cached_attack_ms = attack_ms;
+            self.cached_release_ms = release_ms;
+        }
+    }
+
+    /// Zero the filter states and follower; the coefficient caches stay (the cuts haven't moved).
+    fn reset(&mut self) {
+        self.low.reset();
+        self.high.reset();
+        self.follower.reset();
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct ModulatorState {
@@ -58,6 +158,13 @@ pub struct ModulatorState {
     cc_target: f32,
     /// Smoothed CC output (`cc` kind).
     cc_value: f32,
+    /// The sidechain kind's filters and follower (spec 036). Unused by every other kind.
+    sc: ScState,
+    /// Source frames credited since the last advance: `feed_sidechain` adds, `advance`
+    /// consumes one per step frame, and the remainder decays through silence — so a source
+    /// that stopped feeding (a removed channel, REQ-006) decays to 0 while one that feeds
+    /// the whole previous block (a cross-channel tap) doesn't sag between control steps.
+    sc_fed: usize,
 }
 
 impl ModulatorState {
@@ -78,6 +185,8 @@ impl ModulatorState {
             rng: (kind.index() as u32 + 1).wrapping_mul(0x9E37_79B9) | 1,
             cc_target: 0.0,
             cc_value: 0.0,
+            sc: ScState::new(sample_rate.max(1.0)),
+            sc_fed: 0,
         };
         state.apply_params();
         state
@@ -174,8 +283,13 @@ impl ModulatorState {
             ModulatorKind::Keytrack => self.last_note = note as f32,
             ModulatorKind::Random => self.random = self.next_noise(),
             ModulatorKind::Release => self.release = DEFAULT_RELEASE,
-            // Channel-level: the note stream is irrelevant (see `set_cc`).
-            ModulatorKind::MidiCc => {}
+            // Channel-level or param-only kinds: the note stream is irrelevant (see `set_cc`
+            // and the spec 036 kinds).
+            ModulatorKind::MidiCc
+            | ModulatorKind::Knob
+            | ModulatorKind::XyX
+            | ModulatorKind::XyY
+            | ModulatorKind::Sidechain => {}
         }
     }
 
@@ -315,6 +429,20 @@ impl ModulatorState {
                 }
                 self.cc_value
             }
+            // A knob and the XY axes have no time: their value is their parameters.
+            ModulatorKind::Knob | ModulatorKind::XyX | ModulatorKind::XyY => self.static_value(),
+            ModulatorKind::Sidechain => {
+                // No audio work here beyond the decay of frames the source didn't cover:
+                // the frames themselves arrive through `feed_sidechain` (Device In per step,
+                // a cross-channel tap one block at a time).
+                self.sc_update();
+                let silent = frames.saturating_sub(self.sc_fed);
+                self.sc_fed = self.sc_fed.saturating_sub(frames);
+                for _ in 0..silent {
+                    self.sc.follower.process(0.0);
+                }
+                self.sc_value()
+            }
         }
     }
 
@@ -331,6 +459,76 @@ impl ModulatorState {
             ModulatorKind::Random => self.random,
             ModulatorKind::Release => self.release,
             ModulatorKind::MidiCc => self.cc_value,
+            ModulatorKind::Knob | ModulatorKind::XyX | ModulatorKind::XyY => self.static_value(),
+            ModulatorKind::Sidechain => self.sc_value(),
+        }
+    }
+
+    /// A parameter-only value that does not change over time: a knob's `Value`, unipolar
+    /// (`x`) or bipolar (`2x − 1`), or an XY axis position mapped to `2·pos − 1` (spec 036).
+    fn static_value(&self) -> f32 {
+        match self.kind {
+            ModulatorKind::Knob => {
+                let x = self.real_eff(KNOB_VALUE).unwrap_or(0.0);
+                if self.real_eff(KNOB_POLARITY).unwrap_or(0.0) >= 0.5 {
+                    2.0 * x - 1.0
+                } else {
+                    x
+                }
+            }
+            ModulatorKind::XyX | ModulatorKind::XyY => {
+                2.0 * self.real_eff(XY_POS).unwrap_or(0.5) - 1.0
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Rebuild the sidechain's cached coefficients and follower times when the effective
+    /// settings moved. A no-op for every other kind.
+    fn sc_update(&mut self) {
+        if self.kind != ModulatorKind::Sidechain {
+            return;
+        }
+        self.sc.update(
+            self.sample_rate,
+            self.real_eff(SC_LOW_CUT).unwrap_or(20.0),
+            self.real_eff(SC_HIGH_CUT).unwrap_or(20_000.0),
+            self.real_eff(SC_ATTACK).unwrap_or(5.0),
+            self.real_eff(SC_RELEASE).unwrap_or(150.0),
+        );
+    }
+
+    /// The sidechain's follower level mapped from −60…0 dBFS onto 0…1 (spec 036 D5), so the
+    /// route amount alone sets the depth.
+    fn sc_value(&self) -> f32 {
+        let level = self.sc.follower.value();
+        ((20.0 * level.max(1e-6).log10() + 60.0) / 60.0).clamp(0.0, 1.0)
+    }
+
+    /// Run `mono` frames through the sidechain kind's filters and follower. Other kinds
+    /// ignore the feed. Called from the audio path with preallocated frames only; the value
+    /// lands on the next control step that reads it.
+    pub fn feed_sidechain(&mut self, mono: &[f32]) {
+        if self.kind != ModulatorKind::Sidechain {
+            return;
+        }
+        self.sc_update();
+        self.sc_fed = self.sc_fed.saturating_add(mono.len());
+        for &x in mono {
+            let mut y = x;
+            if self.sc.low_on {
+                y = self
+                    .sc
+                    .low
+                    .process(y, FilterMode::Hp12, &self.sc.low_coefs, 0.0, 0.0);
+            }
+            if self.sc.high_on {
+                y = self
+                    .sc
+                    .high
+                    .process(y, FilterMode::Lp12, &self.sc.high_coefs, 0.0, 0.0);
+            }
+            self.sc.follower.process(y);
         }
     }
 
@@ -368,6 +566,8 @@ impl ModulatorState {
         self.mod_offset = [0.0; MAX_KIND_PARAMS];
         self.cc_target = 0.0;
         self.cc_value = 0.0;
+        self.sc.reset();
+        self.sc_fed = 0;
     }
 
     #[inline]
@@ -609,11 +809,12 @@ mod tests {
     #[test]
     fn state_is_copy_and_bounded() {
         // `Copy` means no owned heap, and `advance` only touches these fields, so it cannot
-        // allocate. `SizeCheck` bounds the per-device cost (8 modulators per instance).
+        // allocate. `SizeCheck` bounds the per-device cost (8 modulators per instance); the
+        // sidechain's two cached SVFs plus follower (spec 036) take most of the headroom.
         fn assert_copy<T: Copy>() {}
         assert_copy::<ModulatorState>();
         assert!(
-            std::mem::size_of::<ModulatorState>() <= 256,
+            std::mem::size_of::<ModulatorState>() <= 512,
             "{} bytes",
             std::mem::size_of::<ModulatorState>()
         );
@@ -775,5 +976,138 @@ mod tests {
         );
         other.set_mod_offset(LFO_PHASE, 0.5);
         assert!(other.mod_offset.iter().all(|off| *off == 0.0));
+    }
+
+    #[test]
+    fn knob_value_follows_the_polarity_parameter() {
+        let t = transport(120.0, false, 0.0);
+        let mut knob = ModulatorState::new(ModulatorKind::Knob, SR);
+        set_real(&mut knob, KNOB_VALUE, 0.25);
+        assert_eq!(knob.advance(64, &t), 0.25, "unipolar routes x");
+
+        set_real(&mut knob, KNOB_POLARITY, 1.0); // Bipolar
+        let value = knob.advance(64, &t);
+        assert!(
+            (value + 0.5).abs() < 1e-6,
+            "bipolar routes 2x − 1, got {value}"
+        );
+        // The stored value stays 0..1, and the display row reports the mapped value.
+        assert_eq!(knob.get_param(KNOB_VALUE), Some(0.25));
+        assert_eq!(knob.display_state(), (0, 0.0, -0.5));
+
+        // A mod→mod offset moves the effective value (clamped to the range) without
+        // touching the base.
+        knob.set_mod_offset(KNOB_VALUE, 0.75);
+        assert!(
+            (knob.value() - 1.0).abs() < 1e-6,
+            "0.25 + 0.75 clamps to x = 1"
+        );
+        assert_eq!(knob.get_param(KNOB_VALUE), Some(0.25));
+
+        // Reset clears the runtime state (the offset) but keeps the parameter.
+        knob.reset();
+        assert_eq!(knob.get_param(KNOB_VALUE), Some(0.25));
+        assert!(
+            (knob.value() + 0.5).abs() < 1e-6,
+            "bipolar mapping survives"
+        );
+    }
+
+    #[test]
+    fn xy_axes_report_their_position_bipolar() {
+        let t = transport(120.0, false, 0.0);
+        for kind in [ModulatorKind::XyX, ModulatorKind::XyY] {
+            let mut xy = ModulatorState::new(kind, SR);
+            assert_eq!(
+                xy.advance(64, &t),
+                0.0,
+                "a centred pad applies no offset (D7)"
+            );
+            set_real(&mut xy, XY_POS, 0.25);
+            let value = xy.advance(64, &t);
+            assert!((value + 0.5).abs() < 1e-6, "{value}");
+            assert_eq!(xy.display_state(), (0, 0.0, -0.5));
+            // Reset keeps the parameter: the pad position is not runtime state.
+            xy.reset();
+            assert!((xy.value() + 0.5).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn the_sidechain_follower_maps_the_level_onto_the_value() {
+        let t = transport(120.0, false, 0.0);
+        let sine = crate::audio::dsp::test_util::sine(1_000.0, SR, SR as usize, 1.0);
+        let mut sc = ModulatorState::new(ModulatorKind::Sidechain, SR);
+        // Instant attack, so the follower reaches the tone's actual peak (the 5 ms default
+        // legitimately trails a 1 kHz sine by about half a dB).
+        set_real(&mut sc, SC_ATTACK, 0.0);
+        assert_eq!(sc.value(), 0.0, "silent before any feed");
+
+        // 0 dBFS → 1: the peak follower tracks the sine, so sample a whole cycle's worth of
+        // steps and take the peak (the follower misses the true sample peak slightly).
+        sc.feed_sidechain(&sine);
+        let mut peak_value = 0.0f32;
+        for _ in 0..64 {
+            peak_value = peak_value.max(sc.advance(64, &t));
+        }
+        assert!((peak_value - 1.0).abs() < 2e-3, "0 dBFS reads {peak_value}");
+        // The payload row is (stage 0, x 0, value) like every non-LFO kind.
+        let (stage, x, payload_value) = sc.display_state();
+        assert_eq!((stage, x), (0, 0.0));
+        assert!((0.0..=1.0).contains(&payload_value));
+
+        // −60 dBFS and below → 0.
+        sc.reset();
+        let quiet: Vec<f32> = sine.iter().map(|x| x * 0.001).collect();
+        sc.feed_sidechain(&quiet);
+        assert!(sc.advance(64, &t) < 1e-3, "−60 dBFS reads {}", sc.value());
+
+        // Silence decays the follower back to 0 (release 150 ms): one second of fed credit
+        // is consumed first, then two seconds of decay (simulated, not wall-clock).
+        sc.reset();
+        sc.feed_sidechain(&sine);
+        for _ in 0..3 * (SR as usize / 64) {
+            sc.advance(64, &t);
+        }
+        assert!(sc.value() < 1e-3, "silence decayed to {}", sc.value());
+    }
+
+    #[test]
+    fn the_sidechain_cuts_drop_out_of_band_tones() {
+        let frames = 24_000;
+        let tone = |freq: f32| crate::audio::dsp::test_util::sine(freq, SR, frames, 1.0);
+
+        let level = |low_cut: f32, high_cut: f32, freq: f32| {
+            let mut sc = ModulatorState::new(ModulatorKind::Sidechain, SR);
+            set_real(&mut sc, SC_LOW_CUT, low_cut);
+            set_real(&mut sc, SC_HIGH_CUT, high_cut);
+            sc.feed_sidechain(&tone(freq));
+            sc.sc.follower.value()
+        };
+
+        let raw = level(20.0, 20_000.0, 50.0);
+        let cut = level(500.0, 20_000.0, 50.0);
+        let drop = 20.0 * (cut.max(1e-9) / raw).log10();
+        assert!(drop <= -20.0, "Low Cut 500 Hz dropped 50 Hz by {drop} dB");
+
+        let raw = level(20.0, 20_000.0, 5_000.0);
+        let cut = level(20.0, 500.0, 5_000.0);
+        let drop = 20.0 * (cut.max(1e-9) / raw).log10();
+        assert!(drop <= -20.0, "High Cut 500 Hz dropped 5 kHz by {drop} dB");
+
+        // At the extremes both filters are bypassed: the follower reads the raw signal
+        // bit-exactly (REQ-007).
+        let mut sc = ModulatorState::new(ModulatorKind::Sidechain, SR);
+        let mut raw = crate::audio::dsp::env_follower::EnvFollower::new(
+            5.0,
+            150.0,
+            SR,
+            crate::audio::dsp::env_follower::Detection::Peak,
+        );
+        for &x in &tone(432.0) {
+            raw.process(x);
+        }
+        sc.feed_sidechain(&tone(432.0));
+        assert_eq!(sc.sc.follower.value(), raw.value(), "extremes match raw");
     }
 }

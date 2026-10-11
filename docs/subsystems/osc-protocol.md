@@ -191,7 +191,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/move_device` | `i:from_position, i:to_position` | Reorder top-level devices |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{path}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter |
-| `/channel/{id}/device/{path}/modulator/add` | `i:mod_id, s:kind` | Add a modulator with its kind's default parameters (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`). Wraps the device if it has none (see Modulators) |
+| `/channel/{id}/device/{path}/modulator/add` | `i:mod_id, s:kind` | Add a modulator with its kind's default parameters (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`, `release`, `cc`, `knob`, `xyx`, `xyy`, `sidechain`). Wraps the device if it has none (see Modulators) |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/remove` | - | Remove a modulator, its routes and every route into the removed slot; the last one unwraps the device |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/param/{id}/value` | `f:normalized` | Set a modulator parameter (floats clamp, enums and bools snap; the echo carries the canonical value) |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/route/set` | `s:target, f:amount` | Add, update or (amount 0) remove a route to `param/{id}`, `child/{i.j…}/param/{id}` or `mod/{mod_id}/param/{id}`; amount is clamped to −1..1. A `mod/{mod_id}/param/{id}` target (another modulator's parameter, spec 033) is evaluated, not just stored: it lands one control step (64 frames, ≈1.3 ms) later, which keeps evaluation independent of slot order and bounds mod→mod cycles to delayed feedback |
@@ -229,7 +229,7 @@ Status echoes use the same path as the command (`/active`, `/enabled`, `/loading
 parameters of that device, of a device nested inside it, or of another modulator (spec 033:
 a `mod/{mod_id}/param/{id}` route target is evaluated with one control step of delay — see
 `modulator/{id}/route/set` above). Its kind is one of `lfo`, `adsr`, `ad`, `velocity`,
-`keytrack`, `random`, `release`, `cc`; each kind has
+`keytrack`, `random`, `release`, `cc`, `knob`, `xyx`, `xyy`, `sidechain`; each kind has
 parameter table (advertised in the `/builtin/modulator_*` batch). `modulator/add` wraps the
 device in a transparent `ModulatedDevice` the first time and `modulator/remove` (or
 `modulator/clear`) unwraps it again, so a device without modulators costs nothing. Routes are
@@ -250,6 +250,27 @@ the modulator follows a lane identically to a knob (a lane owns the *controller*
 modulator). The value applies on the control step (64 frames). `cc` is evaluated on the mono
 path only (`is_mono_only`): a wrapper hands its poly-capable inner device a `VoiceModSpec` that
 excludes `cc` slots and routes, and applies those routes itself.
+
+**The `knob` kind** (spec 036) is a plain manual source: `Value` (slot 0, 0–1) is the value and
+`Polarity` (slot 10, Unipolar/Bipolar) remaps the routed value to `2·x − 1` when Bipolar while
+Value stays 0–1. Every existing route/automation/mod→mod mechanism applies unchanged.
+
+**The `xyx`/`xyy` kinds** (spec 036) are the two axes of one XY pad. Each holds one
+`Position` (slot 0, 0–1, default 0.5) and evaluates bipolar (`2·pos − 1`, so a centred pad
+offsets nothing). The engine advertises both as plain kinds; Godot adds them as an adjacent
+pair (`xyx` first) and shows one "XY Pad" tile (see godot-osc.md).
+
+**The `sidechain` kind** (spec 036) is an audio-driven source: Low Cut (slot 0) and High Cut
+(slot 10) are 12 dB/oct filters, log 20 Hz–20 kHz, each bypassed at its extreme; Attack
+(slot 20, 0–500 ms) and Release (slot 30, 5–2000 ms) shape the peak follower; Source (slot 40)
+is a **channel id**: 0 = Device In (the device's own input, fed per control step; an
+instrument has none, so it reads silence), 1 = master, 2–999 = user channels (≥1000 is not a
+valid source). A channel source follows that channel's **post-fader, post-pan** output,
+snapshotted at the end of one block and fed whole at the start of the next — one block of
+cross-channel latency. The follower's detected level maps −60…0 dBFS onto 0–1, so the route
+amount alone sets depth. The id survives channel reorder and rename; a source channel that no
+longer exists decays to 0. `sidechain` is evaluated on the mono path only (`is_mono_only`),
+like `cc`.
 
 **Loading States** (`{device}/loading_state [s:state]`, sent on every transition):
 - **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)

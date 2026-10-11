@@ -5,6 +5,7 @@ use crate::audio::block_clock::BlockClock;
 use crate::audio::channel::Channel;
 use crate::audio::clip::Clip;
 use crate::audio::devices::{AudioDevice, DevicePath};
+use crate::audio::mixing::sidechain::SidechainTaps;
 use crate::audio::project::ProjectSettings;
 use crate::audio::render_scratch::RenderScratch;
 use crate::audio::scale_map::ScaleMap;
@@ -91,6 +92,10 @@ pub struct EngineState {
     /// callback holds a clone and outputs silence while it is set; transport commands are
     /// ignored.
     pub rendering: Arc<AtomicBool>,
+    /// Cross-channel sidechain taps (spec 036): post-fader snapshots of subscribed source
+    /// channels, fed to subscribing `sidechain` modulators one block later. Rebuilt only by
+    /// the command thread; the callback only snapshots (end of mix) and feeds (block start).
+    pub sc_taps: SidechainTaps,
 }
 
 impl EngineState {
@@ -214,6 +219,7 @@ impl Default for EngineState {
             loop_region: None,
             block_clock: Arc::new(BlockClock::new()),
             rendering: Arc::new(AtomicBool::new(false)),
+            sc_taps: SidechainTaps::default(),
         }
     }
 }

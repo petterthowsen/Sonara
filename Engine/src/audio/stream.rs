@@ -789,6 +789,12 @@ fn run_live_block(
         return LiveBlock::Rendering;
     }
 
+    // Cross-channel sidechain taps (spec 036): the previous block's post-fader snapshots
+    // reach the subscribing modulators before this block's device passes run.
+    rt_debug::section("sidechain feed", || {
+        crate::audio::mixing::sidechain::feed_taps(&mut state)
+    });
+
     rt_debug::section("clear buffers", || {
         for channel in state.channels.values_mut() {
             channel.clear_buffers();

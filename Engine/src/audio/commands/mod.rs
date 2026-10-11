@@ -712,7 +712,10 @@ fn dispatch(
     }
     match cmd {
         AudioCommand::InitProject(settings) => {
-            transport::init_project(state, settings, buffer_size)
+            let status = transport::init_project(state, settings, buffer_size);
+            // A fresh project needs a fresh tap pool (spec 036).
+            effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            status
         }
         AudioCommand::Play => return transport::play(state),
         AudioCommand::Pause => return transport::pause(state),
@@ -727,7 +730,10 @@ fn dispatch(
         AudioCommand::SetTimeSignature(num, den) => transport::set_time_signature(state, num, den),
         AudioCommand::SetProjectScale(mask) => transport::set_project_scale(state, mask),
         AudioCommand::CreateChannel { id, name } => {
-            channel::create_channel(state, id, name, buffer_size)
+            let status = channel::create_channel(state, id, name, buffer_size);
+            // A new channel can be a sidechain source (spec 036).
+            effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            status
         }
         AudioCommand::SetChannelVolume { id, db } => channel::set_channel_volume(state, id, db),
         AudioCommand::SetChannelPan {
@@ -986,7 +992,13 @@ fn dispatch(
             parent_path,
             from_position,
             to_position,
-        } => device::move_device(state, channel_id, parent_path, from_position, to_position),
+        } => {
+            let status =
+                device::move_device(state, channel_id, parent_path, from_position, to_position);
+            // Device paths (tap subscriber keys) can change (spec 036).
+            effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            status
+        }
         AudioCommand::SetDeviceParameter {
             channel_id,
             device_path,

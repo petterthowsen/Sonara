@@ -1,6 +1,17 @@
 # Sonara DAW - Project Status
 
 
+## Knob, Sidechain and XY modulators (spec 036)
+
+### Working
+- Phase 1 (engine, T-001…T-005): four appended kinds (`knob`, `xyx`, `xyy`, `sidechain`; `COUNT` 12), knob/XY evaluation, `ScState` filters + peak follower (−60…0 dBFS → 0–1), Device In feed from all three call sites, cross-channel `SidechainTaps` (`EngineState.sc_taps`, command-thread rebuild, post-fader snapshot at end of `mix_and_output`, feed at block start in `stream.rs`). `cargo fmt --check` clean, `cargo test` 971 lib + 2 bin tests 0 failed, `cargo build --release` ok.
+- Phases 2–3 (Godot, T-006…T-010): `Modulator.is_bipolar()` (Bipolar knob arcs), `XYPad` pair model + `add/remove/duplicate_xy_pad`, `move_modulator_block`, pair-aware pane/tile with X/Y flat colour-coded wire buttons, `XYPadPanel`, sidechain Source channel OptionButton. `tests/run_all.sh modulator` — all 4 scripts pass.
+- Phase 4 docs (T-011): kinds + sidechain semantics in `osc-protocol.md`, tap snapshot/feed + `sc_taps` in `engine-architecture.md`, XY pair in `godot-osc.md`.
+- Post-implementation fixes (user reports 2026-10-11): (1) the EQ's spectrum visualizer died while a modulator existed: `ModulatedDevice::poll_device_data` answered every poll itself while `modulation` was subscribed, so the wrapped device's own streams (`spectrum`, `dynamics`) were never polled — the wrapper now falls through to the wrapped device unless its `modulation` payload is due. Regression: `host::tests::a_wrapped_device_still_polls_its_own_data_stream`. (2) That multiplex still made the visualizer laggy: one message per block meant a due `modulation` frame masked a due `spectrum` frame in the same block (EQ lost 2 of 10 frames → 24 instead of 30 Hz). `forward_device_events` now drains every due stream, one frame per data type per block (`DATA_FRAMES_PER_BLOCK` = 4; the note-FX `note_state` stream answers every poll, so the per-type dedupe keeps it from spinning the drain or masking the others). Regression: `mixing::tests::every_due_data_stream_is_drained_each_block` (red: spectrum 8 vs baseline 10; green: equal). Both pre-date spec 036: any modulated device with its own data stream has been affected since spec 018 Phase 9. `cargo test` 973 lib + 2 bin, 0 failed; `cargo fmt --check` clean.
+
+### Not Working / To do
+- T-012 live check (user): dynamic EQ (EQ on A, sidechain source B, Low Cut 200 Hz / High Cut 2 kHz, band gain −0.5), ducking via Utility gain with transport parked > 3 s, XY pad against two destinations (rename/duplicate/delete/drag/save/reload), knob Bipolar sign flip, `Engine/logs/last_warn.log` clean.
+
 ## EQ view controls (spec 035)
 
 ### Working

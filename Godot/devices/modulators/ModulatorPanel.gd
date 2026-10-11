@@ -1,11 +1,15 @@
-## One modulator panel in the Modulators pane (spec 018, rebuilt in 033): header (colour strip +
-## name/rename), an expanding display area (phase 3) and the wire button centered at the bottom.
-## Selection uses the shared `DeviceCard` / `DeviceCardSelected` theme variations.
+## One modulator panel in the Modulators pane (spec 018, rebuilt in 033; XY pairs in 036):
+## header (colour strip + name/rename), an expanding display area and the wire button(s)
+## centered at the bottom. Selection uses the shared `DeviceCard` / `DeviceCardSelected` theme
+## variations.
 ##
-## The wire button toggles assign mode for this modulator and pulses while active. A left click
-## selects only on release without crossing the drag threshold, so a press-and-drag never toggles
-## selection; the pane starts a swap drag past the threshold. Right-click opens the panel menu: one
-## entry per route with a disconnect action, then Rename / Duplicate / Delete.
+## The wire button toggles assign mode for this modulator and pulses while active; an XY pad
+## tile (`setup_pair`) shows two of them, one per slot. All wire buttons are flat with label and
+## icon colored by their modulator's source colour (REQ-010). A left click selects only on
+## release without crossing the drag threshold, so a press-and-drag never toggles selection; the
+## pane starts a swap drag past the threshold. Presses on an XY pad's interactive display never
+## reach that logic. Right-click opens the panel menu: one entry per route (both slots for a
+## pair) with a disconnect action, then Rename / Duplicate / Delete.
 class_name ModulatorPanel extends PanelContainer
 
 ## The panel was left-clicked (the pane toggles this modulator's detail).
@@ -22,14 +26,31 @@ const MENU_RENAME := 100000
 const MENU_DUPLICATE := 100001
 const MENU_DELETE := 100002
 
+## Theme colour overrides that color a wire button by its source (REQ-010).
+const WIRE_COLOR_ROLES := [
+	"font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color",
+	"icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color",
+]
+
+## The panel's modulator: the XY pad's X slot for a pair tile, else the single modulator.
 var modulator: Modulator = null
+## The XY pad this tile represents, or null for a plain modulator.
+var pad: XYPad = null
 var _strip: ColorRect = null
 var _name_label: Label = null
 var _rename: LineEdit = null
 var _display: Control = null
+## Single-modulator wire button; null on a pair tile.
 var _wire: Button = null
+## Pair tile wire buttons (X, then Y) and the slot mod id each drives.
+var _wire_buttons: Array[Button] = []
+var _wire_ids: Array[int] = []
+var _pulses: Dictionary = {}
 var _menu: PopupMenu = null
-var _pulse: Tween = null
+## The route menu's entries are plain indices; this parallel list maps each route item to the
+## slot mod id it disconnects (the tile's modulator for a plain tile).
+var _menu_route_mod_ids: Array[int] = []
+var _menu_route_count := 0
 var _is_selected := false
 ## Position of the left press (global), valid only while `_pressing`.
 var _press_pos := Vector2.ZERO
@@ -44,7 +65,20 @@ func setup(mod: Modulator) -> void:
 	if _display is ModulatorDisplay and modulator.owner() != null:
 		(_display as ModulatorDisplay).setup(modulator.owner(), modulator.mod_id)
 	refresh()
-	_sync_wire()
+	_sync_wires()
+
+
+## Build this tile as one XY pad: name/rename from the X slot, an interactive `XYPadPanel` as
+## the display, and one wire button per slot. Call instead of `setup`, before the tile is used.
+func setup_pair(p_pad: XYPad) -> void:
+	pad = p_pad
+	modulator = p_pad.x
+	if _name_label == null:
+		_build()
+	if _display is XYPadPanel:
+		(_display as XYPadPanel).setup(p_pad)
+	refresh()
+	_sync_wires()
 
 
 func _build() -> void:
@@ -85,33 +119,59 @@ func _build() -> void:
 	_rename.focus_exited.connect(_commit_rename)
 	name_column.add_child(_rename)
 
-	# The display area (phase 3); expands so the wire button sits at the bottom.
-	_display = ModulatorDisplay.new()
-	_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The display area; expands so the wire button(s) sit at the bottom.
+	if pad != null:
+		_display = XYPadPanel.new()
+	else:
+		_display = ModulatorDisplay.new()
+		_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_display.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(_display)
 
-	_wire = Button.new()
-	_wire.toggle_mode = true
-	_wire.focus_mode = Control.FOCUS_NONE
-	_wire.icon = WIRE_ICON
-	_wire.custom_minimum_size = Vector2(24, 24)
-	_wire.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	_wire.tooltip_text = "Assign: click, then drag a control of this device or one of its children"
-	_wire.toggled.connect(_on_wire_toggled)
-	column.add_child(_wire)
+	# The wire button(s): flat, colored by their slot's source colour (REQ-010).
+	if pad != null:
+		var wires := HBoxContainer.new()
+		wires.add_theme_constant_override("separation", 4)
+		wires.alignment = BoxContainer.ALIGNMENT_CENTER
+		wires.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		column.add_child(wires)
+		for slot in [[pad.x, "X"], [pad.y, "Y"]]:
+			var mod: Modulator = slot[0]
+			var button := _make_wire_button(String(slot[1]))
+			button.toggled.connect(_on_wire_toggled.bind(mod.mod_id))
+			wires.add_child(button)
+			_wire_buttons.append(button)
+			_wire_ids.append(mod.mod_id)
+	else:
+		_wire = _make_wire_button("")
+		_wire.toggled.connect(_on_wire_toggled.bind(-1))
+		column.add_child(_wire)
 
 	_menu = PopupMenu.new()
 	_menu.theme_type_variation = &"ContextMenuList"
 	_menu.id_pressed.connect(_on_menu_id)
 	add_child(_menu)
 
-	ModAssign.holder().changed.connect(_sync_wire)
+	ModAssign.holder().changed.connect(_sync_wires)
 	mouse_entered.connect(func(): _set_hover(true))
 	# Moving onto the wire button still counts as hovering the panel.
 	mouse_exited.connect(func(): _set_hover(get_global_rect().has_point(get_global_mouse_position())))
 	tree_exiting.connect(func(): _set_hover(false))
+
+
+func _make_wire_button(label: String) -> Button:
+	var button := Button.new()
+	button.toggle_mode = true
+	button.flat = true
+	button.focus_mode = Control.FOCUS_NONE
+	button.icon = WIRE_ICON
+	if label != "":
+		button.text = label
+	button.custom_minimum_size = Vector2(24, 24)
+	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	button.tooltip_text = "Assign: click, then drag a control of this device or one of its children"
+	return button
 
 
 ## Ask the controls this modulator is bound to to show its amounts.
@@ -132,6 +192,12 @@ func refresh() -> void:
 	set_selected(_is_selected)
 	if _wire != null:
 		_wire.tooltip_text = "Assign %s: click, then drag a control of this device or one of its children" % modulator.name
+	for i in _wire_buttons.size():
+		_wire_buttons[i].tooltip_text = "Assign %s (%s): click, then drag a control of this device or one of its children" % [modulator.name, "X" if i == 0 else "Y"]
+	for i in _wire_buttons.size():
+		_apply_wire_color(_wire_buttons[i], _wire_ids[i])
+	if _wire != null:
+		_apply_wire_color(_wire, modulator.mod_id)
 
 
 func set_selected(on: bool) -> void:
@@ -139,51 +205,89 @@ func set_selected(on: bool) -> void:
 	theme_type_variation = &"DeviceCardSelected" if _is_selected else &"DeviceCard"
 
 
-func _color() -> Color:
-	var owner = modulator.owner()
+## Source colour of the modulator `mod_id` (its array index), WHITE when it's gone.
+func _color_for_mod(mod_id: int) -> Color:
+	var owner = modulator.owner() if modulator != null else null
 	if owner == null:
 		return ModDisplay.source_color(0)
-	return ModDisplay.source_color(maxi(owner.modulators.find(modulator), 0))
+	var mod = owner.get_modulator(mod_id)
+	if mod == null:
+		return ModDisplay.source_color(0)
+	return ModDisplay.source_color(maxi(owner.modulators.find(mod), 0))
+
+
+func _color() -> Color:
+	return _color_for_mod(modulator.mod_id)
+
+
+## True when this tile shows the modulator `mod_id` (either slot of a pair).
+func represents(mod_id: int) -> bool:
+	if pad != null:
+		return pad.holds(mod_id)
+	return modulator != null and modulator.mod_id == mod_id
 
 
 # ============================================================================
 # ASSIGN MODE
 # ============================================================================
 
-func _on_wire_toggled(pressed: bool) -> void:
-	if modulator == null:
-		return
+func _on_wire_toggled(pressed: bool, mod_id: int) -> void:
+	if mod_id < 0:
+		if modulator == null:
+			return
+		mod_id = modulator.mod_id
 	if pressed:
-		ModAssign.begin(modulator.owner(), modulator.mod_id)
-	elif ModAssign.is_active_for(modulator.owner(), modulator.mod_id):
+		ModAssign.begin(modulator.owner(), mod_id)
+	elif ModAssign.is_active_for(modulator.owner(), mod_id):
 		ModAssign.end()
 
 
-## Follow the shared state: pressed while this modulator is the active one, pulsing.
-func _sync_wire() -> void:
-	if _wire == null or modulator == null:
-		return
-	var active := ModAssign.is_active_for(modulator.owner(), modulator.mod_id)
-	_wire.set_pressed_no_signal(active)
-	if active:
-		_start_pulse()
-	else:
-		_stop_pulse()
-
-
-func _start_pulse() -> void:
-	_stop_pulse()
-	_pulse = create_tween().set_loops()
-	_pulse.tween_property(_wire, "modulate:a", 0.35, 0.5)
-	_pulse.tween_property(_wire, "modulate:a", 1.0, 0.5)
-
-
-func _stop_pulse() -> void:
-	if _pulse != null:
-		_pulse.kill()
-		_pulse = null
+## Follow the shared state across this tile's wire buttons: pressed while their slot is the
+## active one, pulsing; colours re-applied (the array index may have changed).
+func _sync_wires() -> void:
+	for button in _pulses.keys():
+		_stop_pulse(button)
 	if _wire != null:
-		_wire.modulate.a = 1.0
+		_sync_one_wire(_wire, modulator.mod_id if modulator != null else -1)
+	for i in _wire_buttons.size():
+		_sync_one_wire(_wire_buttons[i], _wire_ids[i])
+
+
+## Kept for callers of the old single-wire name; the pair tile syncs through `_sync_wires`.
+func _sync_wire() -> void:
+	_sync_wires()
+
+
+func _sync_one_wire(button: Button, mod_id: int) -> void:
+	var active := mod_id >= 0 and ModAssign.is_active_for(modulator.owner(), mod_id)
+	button.set_pressed_no_signal(active)
+	_apply_wire_color(button, mod_id)
+	if active:
+		_start_pulse(button)
+	else:
+		_stop_pulse(button)
+
+
+func _apply_wire_color(button: Button, mod_id: int) -> void:
+	button.flat = true
+	var color := _color_for_mod(mod_id)
+	for role in WIRE_COLOR_ROLES:
+		button.add_theme_color_override(role, color)
+
+
+func _start_pulse(button: Button) -> void:
+	_stop_pulse(button)
+	_pulses[button] = create_tween().set_loops()
+	_pulses[button].tween_property(button, "modulate:a", 0.35, 0.5)
+	_pulses[button].tween_property(button, "modulate:a", 1.0, 0.5)
+
+
+func _stop_pulse(button: Button) -> void:
+	var pulse: Tween = _pulses.get(button)
+	if pulse != null:
+		pulse.kill()
+		_pulses.erase(button)
+	button.modulate.a = 1.0
 
 
 # ============================================================================
@@ -198,6 +302,9 @@ func _gui_input(event: InputEvent) -> void:
 			_open_menu()
 			accept_event()
 		elif event.button_index == MOUSE_BUTTON_LEFT:
+			# A press on the pair's interactive pad is the pad's, never a tile select/drag.
+			if _display is XYPadPanel and _display.get_rect().has_point(event.position):
+				return
 			if event.pressed:
 				_pressing = true
 				_press_pos = event.global_position
@@ -238,15 +345,27 @@ func _commit_rename() -> void:
 		refresh()
 
 
-## Route entries (disconnect on pick), then Rename / Duplicate / Delete.
+## Route entries of this tile's slot(s) (disconnect on pick), then Rename / Duplicate / Delete.
 func _open_menu() -> void:
 	_menu.clear()
-	var index := 0
-	for target in modulator.routes:
-		_menu.add_item("%s  %s  ✕" % [_target_name(String(target)), ModDisplay.default_amount_text(float(modulator.routes[target]))], index)
-		_menu.set_item_metadata(index, String(target))
-		index += 1
-	if index > 0:
+	_menu_route_mod_ids.clear()
+	_menu_route_count = 0
+	var entries: Array = []
+	if pad != null:
+		entries = [[pad.x, "X"], [pad.y, "Y"]]
+	elif modulator != null:
+		entries = [[modulator, ""]]
+	for entry in entries:
+		var mod: Modulator = entry[0]
+		var axis: String = entry[1]
+		for target in mod.routes:
+			var prefix := "" if axis == "" else "%s " % axis
+			_menu.add_item("%s%s  %s  ✕" % [prefix, _target_name(String(target)),
+				ModDisplay.default_amount_text(float(mod.routes[target]))], _menu.item_count)
+			_menu.set_item_metadata(_menu.item_count - 1, String(target))
+			_menu_route_mod_ids.append(mod.mod_id)
+			_menu_route_count += 1
+	if _menu_route_count > 0:
 		_menu.add_separator()
 	_menu.add_item("Rename", MENU_RENAME)
 	_menu.add_item("Duplicate", MENU_DUPLICATE)
@@ -264,12 +383,18 @@ func _on_menu_id(id: int) -> void:
 	if id == MENU_RENAME:
 		_start_rename()
 	elif id == MENU_DUPLICATE:
-		owner.duplicate_modulator(modulator.mod_id)
+		if pad != null:
+			owner.duplicate_xy_pad(pad)
+		else:
+			owner.duplicate_modulator(modulator.mod_id)
 	elif id == MENU_DELETE:
-		owner.remove_modulator(modulator.mod_id)
-	elif id >= 0 and id < modulator.routes.size():
+		if pad != null:
+			owner.remove_xy_pad(pad)
+		else:
+			owner.remove_modulator(modulator.mod_id)
+	elif id >= 0 and id < _menu_route_count:
 		var target := str(_menu.get_item_metadata(id))
-		owner.set_route_amount(modulator.mod_id, target, 0.0)
+		owner.set_route_amount(_menu_route_mod_ids[id], target, 0.0)
 		ModAssign.notify_changed()
 
 
