@@ -72,7 +72,8 @@ plugin and host (`Plugin Dragonfly Room Reverb (instance 3, host instance-3 (pid
 |---------|------|-------------|
 | `/project/init` | `f:tempo, i:numerator, i:denominator, i:ppq, i:sample_rate` | Initialize project settings |
 | `/project/clear` | - | Clear all channels and tracks |
-| `/project/scale` | `i:mask` | Godot → engine. Project scale as a 12-bit pitch-class mask (bit 0 = C, C major = 2741), 0 = no scale. Sent after `/project/init` and whenever the scale changes. Only note effects read it (Transpose in Follow Project mode, spec 027) |
+| `/project/scale` | `i:mask` | Godot → engine. Project scale as a 12-bit pitch-class mask (bit 0 = C, C major = 2741), 0 = no scale. Sent after `/project/init` and whenever the scale changes. Only note effects read it (Transpose in Follow Project mode, spec 027). This is the **base** scale; key changes along the timeline go through `/project/scale_map` |
+| `/project/scale_map` | `i:tick, i:mask, …` (pairs) | Godot → engine. Replace the whole key-change map (spec 034): each pair changes the scale mask from that tick on. Ticks ≥ 1 (tick 0 would be the base scale); masks are 12-bit and 0 is a valid change ("no scale from here"). No args clears the map, leaving only the base scale. Malformed pairs (wrong arg types, tick < 1) are dropped with a warning; a repeated tick keeps the last; the count is capped (excess pairs dropped). The base scale stays `/project/scale`, so the engine still never needs root/type — only masks. Re-sent after `/project/init` and on reconnect |
 
 ### Channel Management (Godot -> Rust)
 

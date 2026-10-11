@@ -5,7 +5,7 @@ use super::tempo_map::TempoMap;
 use super::time_signature_map::TimeSignatureMap;
 
 /// Transport state at a block's first frame.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transport {
     /// Effective tempo in BPM.
     pub tempo: f64,
@@ -19,8 +19,38 @@ pub struct Transport {
     pub bar_number: i32,
     pub time_sig_num: u16,
     pub time_sig_den: u16,
-    /// Project scale as a 12-bit pitch-class mask (bit 0 = C), 0 = none.
+    /// Project scale as a 12-bit pitch-class mask (bit 0 = C), 0 = none. This is the mask at the
+    /// block's first frame (playing or stopped); in-block key changes are in `scale_changes`.
     pub scale_mask: u16,
+    /// Key changes inside the block (spec 034): `(frame, mask)`, in frame order. Overwritten each
+    /// block. `scale_mask` already holds the mask at frame 0.
+    pub scale_changes: [(u32, u16); MAX_SCALE_CHANGES_PER_BLOCK],
+    /// Used entries of `scale_changes`.
+    pub scale_change_count: u8,
+}
+
+/// Capacity of [`Transport::scale_changes`]. A block is a few ms, so more than a handful of key
+/// changes inside it is implausible; when full, `push_scale_change` overwrites the last slot so
+/// the end of the block keeps the right key.
+pub const MAX_SCALE_CHANGES_PER_BLOCK: usize = 4;
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self {
+            tempo: 0.0,
+            tempo_inc: 0.0,
+            playing: false,
+            song_pos_beats: 0.0,
+            song_pos_seconds: 0.0,
+            bar_start_beats: 0.0,
+            bar_number: 0,
+            time_sig_num: 0,
+            time_sig_den: 0,
+            scale_mask: 0,
+            scale_changes: [(0, 0); MAX_SCALE_CHANGES_PER_BLOCK],
+            scale_change_count: 0,
+        }
+    }
 }
 
 impl Transport {
@@ -60,6 +90,34 @@ impl Transport {
             time_sig_num: seg.numerator,
             time_sig_den: seg.denominator,
             scale_mask: settings.scale_mask,
+            scale_changes: [(0, 0); MAX_SCALE_CHANGES_PER_BLOCK],
+            scale_change_count: 0,
+        }
+    }
+
+    /// The scale mask in effect at in-block frame `frame`: the last change at or before it, else
+    /// `scale_mask` (the mask at frame 0).
+    pub fn scale_mask_at_frame(&self, frame: usize) -> u16 {
+        let mut mask = self.scale_mask;
+        for &(change_frame, change_mask) in &self.scale_changes[..self.scale_change_count as usize]
+        {
+            if change_frame <= frame as u32 {
+                mask = change_mask;
+            }
+        }
+        mask
+    }
+
+    /// Record a key change inside the block. When full, the last slot is overwritten so the end
+    /// of the block keeps the right key (dropping the first entries instead would make every
+    /// frame before them read the stale block-start mask). Never grows: silently saturates.
+    pub fn push_scale_change(&mut self, frame: u32, mask: u16) {
+        let n = self.scale_change_count as usize;
+        if n < MAX_SCALE_CHANGES_PER_BLOCK {
+            self.scale_changes[n] = (frame, mask);
+            self.scale_change_count = (n + 1) as u8;
+        } else {
+            self.scale_changes[MAX_SCALE_CHANGES_PER_BLOCK - 1] = (frame, mask);
         }
     }
 
@@ -171,5 +229,36 @@ mod tests {
         assert_eq!(t.bar_start_beats, 8.0);
         let later = at(8160.0);
         assert_eq!((later.bar_number, later.bar_start_beats), (2, 8.0));
+    }
+
+    #[test]
+    fn scale_mask_at_frame_reads_the_changes() {
+        let mut t = Transport {
+            scale_mask: 2741,
+            ..Transport::default()
+        };
+        t.push_scale_change(200, 2267);
+        // Before, at and after the change frame.
+        assert_eq!(t.scale_mask_at_frame(0), 2741);
+        assert_eq!(t.scale_mask_at_frame(199), 2741);
+        assert_eq!(t.scale_mask_at_frame(200), 2267);
+        assert_eq!(t.scale_mask_at_frame(5000), 2267);
+        // No changes: the block-start mask everywhere.
+        assert_eq!(Transport::default().scale_mask_at_frame(100), 0);
+    }
+
+    #[test]
+    fn push_scale_change_saturates_by_overwriting_the_last_slot() {
+        let mut t = Transport::default();
+        for (i, frame) in [10u32, 20, 30, 40, 50].iter().enumerate() {
+            t.push_scale_change(*frame, 1 << i);
+        }
+        assert_eq!(t.scale_change_count, MAX_SCALE_CHANGES_PER_BLOCK as u8);
+        // The first slot is untouched (frames before it read the block-start mask) and the last
+        // slot holds the newest change, so the end of the block keeps the right key.
+        assert_eq!(t.scale_changes[0], (10, 1));
+        assert_eq!(t.scale_changes[3], (50, 1 << 4));
+        assert_eq!(t.scale_mask_at_frame(60), 1 << 4);
+        assert_eq!(t.scale_mask_at_frame(5), 0);
     }
 }

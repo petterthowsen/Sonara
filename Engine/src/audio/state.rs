@@ -7,6 +7,7 @@ use crate::audio::clip::Clip;
 use crate::audio::devices::{AudioDevice, DevicePath};
 use crate::audio::project::ProjectSettings;
 use crate::audio::render_scratch::RenderScratch;
+use crate::audio::scale_map::ScaleMap;
 use crate::audio::tempo_map::TempoMap;
 use crate::audio::time_signature_map::TimeSignatureMap;
 use crate::audio::track::Track;
@@ -73,6 +74,9 @@ pub struct EngineState {
     /// Tempo automation; empty means the static `settings.tempo` applies.
     pub tempo_map: TempoMap,
     pub time_signature_map: TimeSignatureMap,
+    /// Key changes along the timeline (spec 034); empty means the base `settings.scale_mask`
+    /// applies everywhere.
+    pub scale_map: ScaleMap,
     pub is_playing: AtomicBool,
     pub current_tick: AtomicI64,
     /// Fractional tick accumulator carried across buffers for sample-accurate scheduling (stored as fixed-point * 1e9)
@@ -202,6 +206,7 @@ impl Default for EngineState {
             render_scratch: RenderScratch::default(),
             tempo_map: TempoMap::default(),
             time_signature_map: TimeSignatureMap::default(),
+            scale_map: ScaleMap::default(),
             is_playing: AtomicBool::new(false),
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),

@@ -220,6 +220,7 @@ impl CommandWorker {
             AudioCommand::ClearProject => self.clear_project(),
             AudioCommand::SetTempoMap(points) => self.set_tempo_map(points),
             AudioCommand::SetTimeSignatureMap(changes) => self.set_time_signature_map(changes),
+            AudioCommand::SetScaleMap(changes) => self.set_scale_map(changes),
             AudioCommand::SetDeviceActive {
                 channel_id,
                 device_path,

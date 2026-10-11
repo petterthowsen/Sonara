@@ -22,24 +22,26 @@ func run_tests() -> void:
 
 func _test_defaults_visible() -> void:
 	var project = _project_script.new()
-	_assert(project.ruler_lanes == {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false},
-		"new project shows the beats, time and marker lanes")
+	_assert(project.ruler_lanes == {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false, "key": false},
+		"new project shows the beats, time and marker lanes, key lane hidden")
 
 
 func _test_round_trip() -> void:
 	var project = _project_script.new()
 	project.ruler_lanes["time"] = false
 	project.ruler_lanes["markers"] = false
+	project.ruler_lanes["key"] = true
 	var data: Dictionary = JSON.parse_string(JSON.stringify(project.to_json()))
 	var loaded = _project_script.from_json(data)
 	_assert(loaded.ruler_lanes["beats"] == true, "beats lane stays visible after reload")
 	_assert(loaded.ruler_lanes["time"] == false, "hidden time lane stays hidden after reload")
 	_assert(loaded.ruler_lanes["markers"] == false, "hidden marker lane stays hidden after reload")
+	_assert(loaded.ruler_lanes["key"] == true, "key lane visibility persists after reload")
 
 
 func _test_legacy_project_loads_visible() -> void:
 	var data: Dictionary = _project_script.new().to_json()
 	data.erase("ruler_lanes")
 	var loaded = _project_script.from_json(data)
-	_assert(loaded.ruler_lanes == {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false},
-		"project without ruler_lanes loads with the beats, time and marker lanes visible")
+	_assert(loaded.ruler_lanes == {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false, "key": false},
+		"project without ruler_lanes loads with the beats, time and marker lanes visible, key hidden")

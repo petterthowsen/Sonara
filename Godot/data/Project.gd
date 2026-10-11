@@ -68,7 +68,7 @@ var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 var markers: Array[SongMarker] = []
 ## Arranger header lane visibility (view state, saved with the project but not undoable).
-var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false}
+var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false, "key": false}
 ## Time signature changes after the base `time_numerator` / `time_denominator`. Empty means the
 ## base signature holds throughout.
 var time_signature_map: TimeSignatureMap = TimeSignatureMap.new():
@@ -79,6 +79,16 @@ var time_signature_map: TimeSignatureMap = TimeSignatureMap.new():
 		if time_signature_map != null:
 			time_signature_map.changed.connect(_sync_time_signature_map_to_engine)
 		_sync_time_signature_map_to_engine()
+## Key changes after the base `scale_root` / `scale_type` (spec 034). Empty means the base key
+## holds throughout. Tick-anchored: the engine resolves the mask per note-on.
+var key_change_map: KeyChangeMap = KeyChangeMap.new():
+	set(map):
+		if key_change_map != null and key_change_map.changed.is_connected(_sync_key_change_map_to_engine):
+			key_change_map.changed.disconnect(_sync_key_change_map_to_engine)
+		key_change_map = map
+		if key_change_map != null:
+			key_change_map.changed.connect(_sync_key_change_map_to_engine)
+		_sync_key_change_map_to_engine()
 ## Tempo automation. Empty means the static `tempo` applies.
 var tempo_map: TempoMap = TempoMap.new():
 	set(map):
@@ -161,6 +171,7 @@ func _init():
 	"""Initialize project with master channel (always ID 1)."""
 	tempo_map.changed.connect(_sync_tempo_map_to_engine)  # the initializer doesn't run the setter
 	time_signature_map.changed.connect(_sync_time_signature_map_to_engine)
+	key_change_map.changed.connect(_sync_key_change_map_to_engine)  # the initializer doesn't run the setter
 	var master = Channel.new(1)  # Master is always ID 1
 	master.name = "Master"
 	master.output_channel_id = 1000  # Master routes to default output device (ID 1000)
@@ -243,6 +254,7 @@ func _on_engine_confirmed_connected() -> void:
 
 	_sync_tempo_map_to_engine()
 	_sync_time_signature_map_to_engine()
+	_sync_key_change_map_to_engine()
 	_sync_loop_to_engine()
 
 	logger.info("[Project] Connected to audio engine")
@@ -283,6 +295,13 @@ func _sync_time_signature_map_to_engine() -> void:
 		args.append(int(c["numerator"]))
 		args.append(int(c["denominator"]))
 	AudioEngineOSC.send("/transport/time_signature_map", args)
+
+
+## Send the whole key change map to the engine as masks (empty clears it). Called on every change.
+func _sync_key_change_map_to_engine() -> void:
+	if _connection_state != ConnectionState.CONNECTED or key_change_map == null:
+		return
+	AudioEngineOSC.send("/project/scale_map", key_change_map.to_osc_args())
 
 
 ## Seconds after connecting before every device re-requests its state.
@@ -1393,6 +1412,11 @@ func get_scale() -> MusicalScale:
 	return MusicalScale.make(scale_root, scale_type)
 
 
+## The key in effect at `tick`: the base key before the first key change (spec 034).
+func get_scale_at_tick(tick: int) -> MusicalScale:
+	return key_change_map.scale_at_tick(tick, scale_root, scale_type)
+
+
 ## Set a clip_editor_view flag.
 func set_clip_editor_view(key: String, value: bool) -> void:
 	if clip_editor_view.get(key, false) == value:
@@ -1814,6 +1838,7 @@ func to_json() -> Dictionary:
 		"ruler_lanes": ruler_lanes.duplicate(),
 		"tempo_map": tempo_map.to_json(),
 		"time_signature_map": time_signature_map.to_json(),
+		"key_changes": key_change_map.to_json(),
 		"arranger_view": arranger_view.duplicate(),
 		"scale": {"root": scale_root, "type": scale_type},
 		"clip_editor_view": clip_editor_view.duplicate(),
@@ -1848,6 +1873,7 @@ static func from_json(data: Dictionary) -> Project:
 		project.ruler_lanes[lane] = bool(saved_lanes.get(lane, project.ruler_lanes[lane]))
 	project.tempo_map = TempoMap.from_json(data.get("tempo_map", []))
 	project.time_signature_map = TimeSignatureMap.from_json(data.get("time_signature_map", []))
+	project.key_change_map = KeyChangeMap.from_json(data.get("key_changes", []))
 	var saved_view: Dictionary = data.get("arranger_view", {})
 	for key in project.arranger_view:
 		# Fall back to this build's default per key, so a project saved before a flag existed

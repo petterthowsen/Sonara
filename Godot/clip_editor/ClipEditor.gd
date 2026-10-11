@@ -262,10 +262,14 @@ func _bind_project_scale(p: Project = null) -> void:
 			_scale_project.scale_changed.disconnect(_on_project_scale_changed)
 		if _scale_project.clip_editor_view_changed.is_connected(_on_project_view_changed):
 			_scale_project.clip_editor_view_changed.disconnect(_on_project_view_changed)
+		if _scale_project.key_change_map != null and _scale_project.key_change_map.changed.is_connected(_refresh_scale_context):
+			_scale_project.key_change_map.changed.disconnect(_refresh_scale_context)
 	_scale_project = p
 	if _scale_project != null:
 		_scale_project.scale_changed.connect(_on_project_scale_changed)
 		_scale_project.clip_editor_view_changed.connect(_on_project_view_changed)
+		if _scale_project.key_change_map != null:
+			_scale_project.key_change_map.changed.connect(_refresh_scale_context)
 	_refresh_scale_context()
 
 
@@ -277,17 +281,42 @@ func _on_project_view_changed(_key: String, _value: bool) -> void:
 	_refresh_scale_context()
 
 
-## Push the project scale and flags into the MIDI editor and sync the toolbar widgets.
+## Push the project scale and flags into the MIDI editor and sync the toolbar widgets. The scale
+## is the key in effect at the start of the bound clip instance (spec 034 D6): project base in
+## track mode or with no instance, otherwise `get_scale_at_tick(bound_clip_instance.start_ticks)`.
 func _refresh_scale_context() -> void:
 	var ctx := midi_editor.scale_context
 	var p := _scale_project
 	ctx.scale = p.get_scale() if p != null else MusicalScale.new()
+	if p != null and not track_mode and bound_clip_instance != null:
+		ctx.scale = p.get_scale_at_tick(bound_clip_instance.start_ticks)
 	ctx.snap_enabled = p != null and p.get_clip_editor_view("scale_snap")
 	ctx.fold_enabled = p != null and p.get_clip_editor_view("fold_to_scale")
 	fold_to_scale_toggle.set_pressed_no_signal(ctx.fold_enabled)
 	scale_snap_toggle.set_pressed_no_signal(ctx.snap_enabled)
 	_sync_scale_toggles()
 	_sync_selection_tools()
+
+
+## The bound instance moved: the key in effect at its start may have changed (spec 034 D6).
+func _on_bound_instance_position_changed(_new_start_ticks: int) -> void:
+	_refresh_scale_context()
+
+
+## The instance whose `position_changed` currently drives `_refresh_scale_context`.
+var _position_watched: ClipInstance = null
+
+
+## Follow `bound_clip_instance.position_changed`; disconnects from the previous instance on rebind.
+func _watch_bound_instance_position() -> void:
+	if _position_watched == bound_clip_instance:
+		return
+	if _position_watched != null and is_instance_valid(_position_watched) \
+			and _position_watched.position_changed.is_connected(_on_bound_instance_position_changed):
+		_position_watched.position_changed.disconnect(_on_bound_instance_position_changed)
+	_position_watched = bound_clip_instance
+	if _position_watched != null:
+		_position_watched.position_changed.connect(_on_bound_instance_position_changed)
 
 
 ## The scale toggles need a scale and the piano roll (not Drum View).
@@ -317,6 +346,7 @@ func _on_editor_time_signature_changed(numerator : int, denominator : int):
 	grid_helper.time_numerator = numerator
 	grid_helper.time_denominator = denominator
 	_apply_signature_context()
+	_refresh_scale_context()
 
 
 ## Point the grid at the project's time signature changes. Track mode shows song ticks, so it
@@ -403,6 +433,7 @@ func _bind_track_mode(from_selection: bool = false):
 	log.info("  - Entering TRACK-MODE (song-relative positioning)")
 	_update_mode_ui()
 	_apply_signature_context()
+	_refresh_scale_context()
 	log.info("  - Track-mode tracks: %d" % [selected_tracks.size()])
 
 	_suppress_toggle_apply = true
@@ -546,6 +577,8 @@ func _bind_clip_mode():
 		midi_editor.bind_to_clip_instance(clip_inst)
 		bound_clip_instance = clip_inst
 		_apply_signature_context()
+		_refresh_scale_context()
+		_watch_bound_instance_position()
 		_update_clip_name()
 	call_deferred("_apply_drum_view_preference")
 	_mark_ruler_context_dirty()

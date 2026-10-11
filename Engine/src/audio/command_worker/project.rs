@@ -4,6 +4,7 @@
 use tracing::{info, warn};
 
 use super::CommandWorker;
+use crate::audio::scale_map::ScaleMap;
 use crate::audio::tempo_map::TempoMap;
 use crate::audio::time_signature_map::TimeSignatureMap;
 use crate::audio::types::{ChannelId, Tick};
@@ -43,6 +44,15 @@ impl CommandWorker {
         info!("Time signature map set: {} changes", count);
     }
 
+    /// Build a scale map off the lock, swap it in, and drop the old one after unlocking.
+    pub(super) fn set_scale_map(&self, changes: Vec<(Tick, u16)>) {
+        let map = ScaleMap::from_changes(changes);
+        let count = map.changes().len();
+        let old = std::mem::replace(&mut self.lock_state().scale_map, map);
+        drop(old);
+        info!("Scale map set: {} changes", count);
+    }
+
     /// Swap out all channels, tracks and clips under the lock and drop them afterwards.
     pub(super) fn clear_project(&self) {
         let removed = {
@@ -57,6 +67,7 @@ impl CommandWorker {
                 std::mem::take(&mut state.clips),
                 std::mem::take(&mut state.tempo_map),
                 std::mem::take(&mut state.time_signature_map),
+                std::mem::take(&mut state.scale_map),
             )
         };
         drop(removed);

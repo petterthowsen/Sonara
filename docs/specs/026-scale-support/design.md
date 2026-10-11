@@ -116,9 +116,11 @@ No OSC messages. No `sync_to_engine()` changes, because the scale is never sent.
 > 12-bit pitch-class mask on `/project/scale` (`MusicalScale.mask()`), so the Transpose note effect
 > can follow it. `Project.set_scale` sends it after updating state and project sync sends it after
 > `/project/init`. Everything else here stays UI-only: the engine never sees the root or type id.
+> **Amended by spec 034 (key changes).** The engine now gets the base mask *plus a map*: key
+> changes along the timeline are synced whole-map on `/project/scale_map` as `(i:tick, i:mask)`
+> pairs (tick ≥ 1, mask 0 = no scale), and `Transport` resolves the mask per note-on frame.
 
 **Project model** (`Godot/data/Project.gd`):
-
 - `var scale_root: int = 0` (pitch class 0 to 11, 0 = C) and `var scale_type: String = "none"`
   (a `MusicalScale` type id).
 - `signal scale_changed(root: int, type_id: String)` and `func set_scale(root, type_id)`. The setter

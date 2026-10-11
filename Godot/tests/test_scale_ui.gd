@@ -11,6 +11,7 @@ func suite_name() -> String:
 func run_tests() -> void:
 	_test_picker()
 	await _test_clip_editor()
+	await _test_key_change_context()
 
 
 func _test_picker() -> void:
@@ -83,4 +84,60 @@ func _test_clip_editor() -> void:
 	_assert(not project.scale_changed.is_connected(ce._on_project_scale_changed), "old project disconnected")
 	other.set_scale(5, "blues")
 	_assert(me.scale_context.scale.display_name() == "F Blues", "new project drives the context")
+	await rig.cleanup()
+
+
+## Spec 034 G-007 (D6): clip mode uses the key in effect at the bound instance's start tick;
+## track mode and the map edits follow along.
+func _test_key_change_context() -> void:
+	root.get_node("Sonara").set_config("clip_editor/value_lanes", {})
+	var rig = load("res://tests/value_lane_rig.gd").new(self)
+	await rig.build([0, 960], [0.5, 0.5], [], [61, 62])
+	var ce = rig.editor
+	var me = rig.midi_editor
+	var project = rig.project
+	var instance = rig.instance
+	ce._bind_project_scale(project)
+
+	# Base C major, a key change to A minor at bar 5 (tick 4 * 3840).
+	project.set_scale(0, "major")
+	project.key_change_map.add_change(4 * 3840, 9, "natural_minor")
+	await process_frame
+
+	# The rig instance starts at tick 0 → base key applies there.
+	_assert(me.scale_context.scale.display_name() == "C Major",
+		"instance before the first change reads the base key")
+
+	# Move the bound instance to bar 5: the context follows the position signal.
+	ce._watch_bound_instance_position()
+	instance.set_position(4 * 3840)
+	_assert(me.scale_context.scale.display_name() == "A Natural Minor",
+		"instance at the key change reads the new key")
+
+	# Another instance at bar 1 stays on the base key.
+	var bar1 = rig.track.create_clip_instance(rig.clip, 0, 3840)
+	ce.bound_clip_instance = bar1
+	ce._watch_bound_instance_position()
+	ce._refresh_scale_context()
+	_assert(me.scale_context.scale.display_name() == "C Major",
+		"an instance at bar 1 reads the base key")
+
+	# Rebind to the bar-5 instance and edit the map: the context refreshes.
+	ce.bound_clip_instance = instance
+	ce._watch_bound_instance_position()
+	ce._refresh_scale_context()
+	_assert(me.scale_context.scale.display_name() == "A Natural Minor", "rebound instance reads its key")
+	project.key_change_map.update_change(project.key_change_map.changes[0]["id"], 2 * 3840, 7, "minor_pentatonic")
+	_assert(me.scale_context.scale.display_name() == "G Minor Pentatonic",
+		"editing the key change map refreshes the context (change moved before the instance)")
+	project.key_change_map.remove_change(project.key_change_map.changes[0]["id"])
+	_assert(me.scale_context.scale.display_name() == "C Major",
+		"deleting the change falls back to the base key")
+
+	# Track mode uses the project base even with a bound instance.
+	ce.track_mode = true
+	ce._refresh_scale_context()
+	_assert(me.scale_context.scale.display_name() == "C Major", "track mode reads the project base")
+	ce.track_mode = false
+
 	await rig.cleanup()

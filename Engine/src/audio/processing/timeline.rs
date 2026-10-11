@@ -1,9 +1,37 @@
 //! Tick timeline: turns per-frame tick rates into the ticks crossed inside a buffer, with loop
 //! wrapping.
 
+use crate::audio::scale_map::ScaleMap;
 use crate::audio::state::EngineState;
 use crate::audio::tempo_map::fill_tick_rates;
+use crate::audio::transport::Transport;
 use crate::audio::types::*;
+
+/// Fill `transport` with the key changes that fall inside this block (spec 034). Pure aside from
+/// the `&mut Transport`, so it is unit-testable. `transport.scale_mask` must already hold the
+/// mask at the block's first frame; that is also the running mask the walk starts from, so a
+/// change exactly at the playhead tick is not pushed twice. Loop wraps make ticks non-monotonic,
+/// so every tick event is looked up in the map individually — never assume ordering. Saturates
+/// via `push_scale_change`; no allocation, no logging.
+pub fn fill_scale_changes(
+    map: &ScaleMap,
+    base_mask: u16,
+    tick_events: &[(Tick, usize)],
+    transport: &mut Transport,
+) {
+    transport.scale_change_count = 0;
+    if map.is_empty() {
+        return;
+    }
+    let mut running = transport.scale_mask;
+    for &(tick, frame) in tick_events {
+        let mask = map.mask_at(tick, base_mask);
+        if mask != running {
+            transport.push_scale_change(frame as u32, mask);
+            running = mask;
+        }
+    }
+}
 
 /// Frames the transport can play from the current playhead (at most `max_frames`) before
 /// `target`'s MIDI would be dispatched. Runs the same tick arithmetic as `process_audio`, so
@@ -125,6 +153,99 @@ pub(super) fn collect_tick_events_looped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::scale_map::ScaleMap;
+    use crate::audio::transport::MAX_SCALE_CHANGES_PER_BLOCK;
+
+    #[test]
+    fn scale_changes_fill_at_the_right_frames() {
+        let map = ScaleMap::from_changes(vec![(3840, 2267)]);
+        let mut transport = Transport {
+            scale_mask: 2741,
+            ..Transport::default()
+        };
+        // The change tick is crossed at frame 250 in this block.
+        fill_scale_changes(
+            &map,
+            2741,
+            &[(3839, 200), (3840, 250), (3841, 300)],
+            &mut transport,
+        );
+        assert_eq!(transport.scale_change_count, 1);
+        assert_eq!(transport.scale_changes[0], (250, 2267));
+        assert_eq!(transport.scale_mask_at_frame(249), 2741);
+        assert_eq!(transport.scale_mask_at_frame(250), 2267);
+    }
+
+    #[test]
+    fn change_exactly_on_the_first_tick_event_pushes_at_frame_0() {
+        // emit_start_tick re-emits the playhead at frame 0 after a seek; the block-start mask
+        // lookup already saw the same tick, so the helper pushes the change at frame 0 rather
+        // than leaving the old mask on frame 0.
+        let map = ScaleMap::from_changes(vec![(3840, 2267)]);
+        let mut transport = Transport {
+            scale_mask: 2741, // stale block start (previous block was before the change)
+            ..Transport::default()
+        };
+        fill_scale_changes(&map, 2741, &[(3840, 0), (3841, 10)], &mut transport);
+        assert_eq!(transport.scale_changes[0], (0, 2267));
+        assert_eq!(transport.scale_mask_at_frame(0), 2267);
+    }
+
+    #[test]
+    fn loop_wrap_from_one_key_into_another_inside_one_block() {
+        let map = ScaleMap::from_changes(vec![(7680, 2267)]); // D minor from bar 3
+        let mut transport = Transport {
+            scale_mask: 0,
+            ..Transport::default()
+        };
+        // Loop wraps from tick 7700 back to 500 mid-block: no-scale, D minor at the change,
+        // then back to the base (no scale) at tick 500.
+        fill_scale_changes(
+            &map,
+            0,
+            &[(7670, 10), (7700, 20), (500, 30), (501, 40)],
+            &mut transport,
+        );
+        assert_eq!(transport.scale_changes[0], (20, 2267));
+        assert_eq!(transport.scale_changes[1], (30, 0));
+        assert_eq!(transport.scale_change_count, 2);
+    }
+
+    #[test]
+    fn empty_map_is_a_no_op() {
+        let mut transport = Transport::default();
+        fill_scale_changes(
+            &ScaleMap::default(),
+            2741,
+            &[(10, 0), (20, 1)],
+            &mut transport,
+        );
+        assert_eq!(transport.scale_change_count, 0);
+    }
+
+    #[test]
+    fn dropped_change_keeps_the_block_end_mask() {
+        // Five changes in one block saturate; the last slot keeps the newest so the end of the
+        // block has the right key.
+        let map = ScaleMap::from_changes(vec![(1, 1), (2, 2), (3, 4), (4, 8), (5, 16)]);
+        let mut transport = Transport {
+            scale_mask: 0,
+            ..Transport::default()
+        };
+        fill_scale_changes(
+            &map,
+            0,
+            &[(1, 0), (2, 1), (3, 2), (4, 3), (5, 4)],
+            &mut transport,
+        );
+        assert_eq!(
+            transport.scale_change_count as usize,
+            MAX_SCALE_CHANGES_PER_BLOCK
+        );
+        assert_eq!(transport.scale_changes[3], (4, 16));
+        assert_eq!(transport.scale_mask_at_frame(5), 16);
+    }
+
     use crate::audio::commands::AudioCommand;
     use crate::audio::project::ProjectSettings;
     use crate::audio::tempo_map::TempoMap;

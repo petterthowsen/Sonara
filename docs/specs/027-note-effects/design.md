@@ -119,6 +119,12 @@ every block's `Transport`, which already reaches every device. Transpose in Foll
 `transport.scale_mask`. The scale stays UI state in every other respect: no clip or note logic
 in the engine uses it.
 
+> **Amended by spec 034 (key changes).** The engine now gets the base mask *plus a tick-anchored
+> key-change map* on `/project/scale_map`; `Transport` carries the block-start mask (looked up at
+> the integer playhead tick, playing or stopped) and up to `MAX_SCALE_CHANGES_PER_BLOCK`
+> `(frame, mask)` changes inside the block, and Transpose resolves the mask per note-on frame
+> (`Transport::scale_mask_at_frame`). Everything else here still holds.
+
 ## Thread and ownership
 
 | State | Owner thread | Reached from | Real-time safe |

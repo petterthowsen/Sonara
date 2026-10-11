@@ -47,7 +47,7 @@ pub fn process_audio(
     let start_acc = acc;
 
     // Devices see the transport every block, playing or not
-    let transport = Transport::at(
+    let mut transport = Transport::at(
         &state.tempo_map,
         &state.time_signature_map,
         &state.settings,
@@ -55,51 +55,77 @@ pub fn process_audio(
         sample_rate,
         is_playing,
     );
+    // Mask at the block's first frame, from the integer playhead tick — playing or stopped, so a
+    // seek while stopped puts the keyboard on the playhead's key (spec 034, Gotcha 5).
+    transport.scale_mask = state
+        .scale_map
+        .mask_at(start_tick, state.settings.scale_mask);
+
+    // Collect the tick events before apply_transport (Gotcha 3): the transport must carry the key
+    // changes those events fall on before any device sees it. Nothing in between (fill_tick_rates,
+    // playhead dispatch) depends on devices having the transport.
+    let mut tick_rates = std::mem::take(&mut state.render_scratch.frame_tick_rates);
+    let mut tick_events = std::mem::take(&mut state.render_scratch.tick_events);
+    let mut loop_wraps = std::mem::take(&mut state.render_scratch.loop_wraps);
+    let mut note_events = std::mem::take(&mut state.render_scratch.note_events);
+    let loop_region = state.loop_region;
+    if is_playing {
+        // Per-frame tick rates from the tempo map. Uses the real device rate, not the project's.
+        // Frames past the preallocated capacity reuse the last rate rather than allocating.
+        let rate_frames = frames.min(tick_rates.capacity());
+        fill_tick_rates(
+            &state.tempo_map,
+            &state.settings,
+            start_tick as f64 + start_acc,
+            rate_frames,
+            sample_rate,
+            &mut tick_rates,
+        );
+
+        // Precompute tick boundaries within this buffer with frame offsets.
+        // Reuse preallocated scratch lists so the audio thread doesn't allocate.
+        let emit_playhead = state.take_playhead_midi_dispatch();
+        let (tick_cursor, acc) = rt_debug::section("tick events", || {
+            collect_tick_events_looped(
+                start_tick,
+                start_acc,
+                frames,
+                &tick_rates,
+                emit_playhead,
+                loop_region,
+                &mut tick_events,
+                &mut loop_wraps,
+            )
+        });
+
+        // Update global tick and carry fractional forward
+        state.set_current_tick(tick_cursor);
+        state.set_fractional_tick_accumulator(acc);
+    } else {
+        // Nothing plays while stopped, so no in-block key changes apply this block.
+        tick_events.clear();
+    }
+
+    // Fill the per-block key-change timeline (no-op while the map is empty), then hand the
+    // transport to the devices exactly once.
+    timeline::fill_scale_changes(
+        &state.scale_map,
+        state.settings.scale_mask,
+        &tick_events,
+        &mut transport,
+    );
     for channel in state.channels.values_mut() {
         apply_transport(&mut channel.devices, &transport);
     }
 
     // Only advance playhead and process clips when playing
     if !is_playing {
+        state.render_scratch.frame_tick_rates = tick_rates;
+        state.render_scratch.tick_events = tick_events;
+        state.render_scratch.loop_wraps = loop_wraps;
+        state.render_scratch.note_events = note_events;
         return;
     }
-
-    // Per-frame tick rates from the tempo map. Uses the real device rate, not the project's.
-    // Frames past the preallocated capacity reuse the last rate rather than allocating.
-    let mut tick_rates = std::mem::take(&mut state.render_scratch.frame_tick_rates);
-    let rate_frames = frames.min(tick_rates.capacity());
-    fill_tick_rates(
-        &state.tempo_map,
-        &state.settings,
-        start_tick as f64 + acc,
-        rate_frames,
-        sample_rate,
-        &mut tick_rates,
-    );
-
-    // Precompute tick boundaries within this buffer with frame offsets
-    // Reuse preallocated scratch lists so the audio thread doesn't allocate
-    let mut tick_events = std::mem::take(&mut state.render_scratch.tick_events);
-    let mut note_events = std::mem::take(&mut state.render_scratch.note_events);
-    let emit_playhead = state.take_playhead_midi_dispatch();
-    let loop_region = state.loop_region;
-    let mut loop_wraps = std::mem::take(&mut state.render_scratch.loop_wraps);
-    let (tick_cursor, acc) = rt_debug::section("tick events", || {
-        collect_tick_events_looped(
-            start_tick,
-            acc,
-            frames,
-            &tick_rates,
-            emit_playhead,
-            loop_region,
-            &mut tick_events,
-            &mut loop_wraps,
-        )
-    });
-
-    // Update global tick and carry fractional forward
-    state.set_current_tick(tick_cursor);
-    state.set_fractional_tick_accumulator(acc);
 
     // Dispatch MIDI for each tick event at its exact frame offset
     rt_debug::section("clip MIDI", || {
@@ -181,23 +207,147 @@ mod tests {
         }
     }
 
+    /// End-to-end key change (spec 034 E-006): base C major, D minor from bar 3 (tick 7680).
+    /// A B (71) sits on bar 2 beat 1 and on bar 3 beat 1 — B is a bad probe in C# (it would snap
+    /// to C in both keys); here B stays B under C major and snaps down to Bb under D minor.
+    /// Identical at every block size, including one where the change lands mid-block (2048).
     #[test]
-    fn devices_in_containers_receive_transport() {
-        use crate::audio::devices::{ChainDevice, DeviceContainer};
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let mut chain = ChainDevice::new(64);
-        chain.insert_child(0, Box::new(TransportRecorder { seen: seen.clone() }));
-        let mut state = EngineState::default();
-        let mut channel = Channel::new(2, "Fx".to_string(), 64, 48_000.0);
-        channel.devices.push(Box::new(chain));
-        state.channels.insert(2, channel);
-        state.set_current_tick(1920);
+    fn key_change_snaps_clip_notes_at_all_block_sizes() {
+        use crate::audio::clip::{Clip, ClipInstance, ClipNote, ClipType};
+        use crate::audio::devices::note_fx::scale::mask_for;
+        use crate::audio::devices::note_fx::transpose::Transpose;
+        use crate::audio::devices::note_fx::transpose::SCALE;
+        use crate::audio::devices::note_fx::NoteFxHost;
+        use crate::audio::devices::{AudioDevice, DeviceCategory, DeviceVariant};
+        use crate::audio::midi_types::NoteEvent;
+        use crate::audio::scale_map::ScaleMap;
+        use crate::audio::track::Track;
 
-        // Stopped: the transport still arrives, with playing = false
-        process_audio(&mut state, 64, 48_000.0, Instant::now());
-        let t = seen.lock().unwrap().expect("transport delivered");
-        assert!(!t.playing);
-        assert!((t.song_pos_beats - 2.0).abs() < 1e-9);
-        assert!((t.song_pos_seconds - 1.0).abs() < 1e-9);
+        const C_MAJOR: u16 = 2741; // mask_for(0, 0)
+        const D_MINOR: u16 = 1717; // mask_for(2, 1)
+        const CHANGE_TICK: i64 = 7680; // bar 3, beat 1 (4/4, 960 PPQ)
+
+        let run = |block: usize| -> Vec<(u8, bool, i64)> {
+            let mut state = EngineState::default();
+            state.settings.scale_mask = C_MAJOR;
+            state.scale_map = ScaleMap::from_changes(vec![(CHANGE_TICK, D_MINOR)]);
+
+            let mut channel = Channel::new(2, "Inst".to_string(), block, 48_000.0);
+            let mut fx = NoteFxHost::<Transpose>::new(48_000.0);
+            // "Follow Project" is choice 1 of 3, so norm = 1/2.
+            fx.set_parameter(SCALE, 0.5);
+            channel.devices.push(Box::new(fx));
+            // Records the transposed notes the note effect routes downstream.
+            let (tx, rx) = std::sync::mpsc::channel::<(usize, NoteEvent)>();
+            struct Recorder {
+                tx: std::sync::mpsc::Sender<(usize, NoteEvent)>,
+            }
+            impl crate::audio::devices::AudioDevice for Recorder {
+                fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+                    crate::audio::devices::container::copy_interleaved(inputs, outputs, n);
+                }
+                fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+                    let _ = self.tx.send((frame_offset, *event));
+                }
+                fn set_parameter(&mut self, _id: ParamId, _v: ParamValue) {}
+                fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+                    None
+                }
+                fn device_id(&self) -> &str {
+                    "test.key_change"
+                }
+                fn device_name(&self) -> &str {
+                    "Recorder"
+                }
+                fn device_category(&self) -> DeviceCategory {
+                    DeviceCategory::Instrument
+                }
+                fn device_variant(&self) -> DeviceVariant {
+                    DeviceVariant::BuiltIn
+                }
+                fn parameters(&self) -> Vec<ParamInfo> {
+                    Vec::new()
+                }
+                fn reset(&mut self) {}
+                fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                    self
+                }
+            }
+            channel.devices.push(Box::new(Recorder { tx }));
+            state.channels.insert(2, channel);
+
+            let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
+            clip.midi_notes = vec![
+                ClipNote {
+                    id: 1,
+                    note: 71, // B
+                    velocity: 0.8,
+                    release: crate::audio::DEFAULT_RELEASE,
+                    start_tick: 3840, // bar 2 beat 1
+                    duration_ticks: 480,
+                },
+                ClipNote {
+                    id: 2,
+                    note: 71,
+                    velocity: 0.8,
+                    release: crate::audio::DEFAULT_RELEASE,
+                    start_tick: 7680, // bar 3 beat 1: D minor from here
+                    duration_ticks: 480,
+                },
+            ];
+            clip.content_length_ticks = 9600;
+            state.clips.insert("c".to_string(), clip);
+            let mut track = Track::new(1, 2);
+            track.clip_instances.push(ClipInstance::new(
+                "i".to_string(),
+                "c".to_string(),
+                0,
+                15360,
+            ));
+            state.tracks.insert(1, track);
+
+            state.set_is_playing(true);
+            state.request_playhead_midi_dispatch();
+            state.ensure_master_channel(block);
+            let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+            let mut out = vec![0.0f32; block * 2];
+            let mut seen: Vec<(u8, bool, i64)> = Vec::new();
+            let mut frames_played = 0i64;
+            while state.get_current_tick() < 9600 {
+                process_audio(&mut state, block, 48_000.0, Instant::now());
+                crate::audio::mixing::mix_and_output(&mut state, &mut out, 2, block, &status_tx);
+                while let Ok((frame, event)) = rx.try_recv() {
+                    seen.push((
+                        event.key(),
+                        matches!(event, NoteEvent::On { .. }),
+                        frames_played + frame as i64,
+                    ));
+                }
+                frames_played += block as i64;
+            }
+
+            let ons: Vec<(u8, i64)> = seen
+                .iter()
+                .filter(|(_, on, _)| *on)
+                .map(|&(k, _, f)| (k, f))
+                .collect();
+            assert_eq!(ons.len(), 2, "block {block}: {seen:?}");
+            // Bar 2: B in C major. Bar 3: the same B snaps down to Bb in D minor.
+            assert_eq!(ons[0].0, 71, "block {block}");
+            assert_eq!(ons[1].0, 70, "block {block}");
+            // The key change tick is at frame 192000: the note-on must land there (the
+            // accumulator can round to one sample early), with the correct key, whatever the
+            // block size.
+            assert!(
+                (ons[1].1 - 192_000).abs() <= 1,
+                "block {block}: {}",
+                ons[1].1
+            );
+            seen
+        };
+
+        for block in [64usize, 512, 2048] {
+            run(block);
+        }
     }
 }

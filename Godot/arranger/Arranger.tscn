@@ -18,6 +18,7 @@
 [ext_resource type="Script" uid="uid://d2c70supsq5id" path="res://arranger/ruler/TempoTrack.gd" id="16_tempo"]
 [ext_resource type="Texture2D" uid="uid://c2o0kitrsi84r" path="res://assets/icons/cable.svg" id="17_mxg1e"]
 [ext_resource type="Script" uid="uid://dr6wv5u2qpn6k" path="res://arranger/ruler/TimeSignatureTrack.gd" id="17_tsig"]
+[ext_resource type="Script" uid="uid://c0n38xarutc37" path="res://arranger/ruler/KeyChangeTrack.gd" id="17_key"]
 [ext_resource type="Texture2D" uid="uid://bimmip1tp0w01" path="res://assets/icons/link.svg" id="18_link"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
@@ -138,6 +139,12 @@ tooltip_text = "Time Signature Track"
 toggle_mode = true
 text = "TS"
 
+[node name="KeyToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons"]
+layout_mode = 2
+tooltip_text = "Key Track"
+toggle_mode = true
+text = "Key"
+
 [node name="TimelineHeader" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox" unique_id=612027961]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -176,6 +183,13 @@ custom_minimum_size = Vector2(0, 30)
 clip_contents = true
 layout_mode = 2
 script = ExtResource("17_tsig")
+
+[node name="KeyChangeTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox"]
+visible = false
+custom_minimum_size = Vector2(0, 30)
+clip_contents = true
+layout_mode = 2
+script = ExtResource("17_key")
 
 [node name="TempoTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox" unique_id=1400000001]
 visible = false

@@ -869,7 +869,7 @@ func _apply_time_signature_silent(value: Array) -> void:
 	time_signature_changed.emit(numerator, denominator)
 
 
-## Set the project scale (undoable). UI state only: nothing goes to the engine.
+## Set the project scale (undoable). Goes to the engine as the base-key mask on /project/scale (spec 027); key changes ride /project/scale_map (spec 034).
 func set_project_scale(root: int, type_id: String) -> void:
 	if project == null:
 		return

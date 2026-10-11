@@ -62,6 +62,8 @@ var _syncing_split: bool = false
 @onready var tempo_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/TempoToggle
 @onready var time_signature_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/TimeSignatureToggle
 @onready var time_signature_track: TimeSignatureTrack = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/TimeSignatureTrack
+@onready var key_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/KeyToggle
+@onready var key_change_track: KeyChangeTrack = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/KeyChangeTrack
 @onready var tempo_track: TempoTrack = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/TempoTrack
 @onready var marker_track: MarkerTrack = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/MarkerTrack
 
@@ -159,6 +161,7 @@ func _ready():
 	markers_toggle.toggled.connect(_on_markers_track_toggled)
 	tempo_toggle.toggled.connect(func(_pressed: bool): _apply_ruler_row_visibility())
 	time_signature_toggle.toggled.connect(func(_pressed: bool): _apply_ruler_row_visibility())
+	key_toggle.toggled.connect(func(_pressed: bool): _apply_ruler_row_visibility())
 	_apply_ruler_row_visibility()
 
 
@@ -835,6 +838,7 @@ func _apply_ruler_row_visibility() -> void:
 		current_project.ruler_lanes["markers"] = markers_toggle.button_pressed
 		current_project.ruler_lanes["tempo"] = tempo_toggle.button_pressed
 		current_project.ruler_lanes["time_signature"] = time_signature_toggle.button_pressed
+		current_project.ruler_lanes["key"] = key_toggle.button_pressed
 	if ruler:
 		ruler.visible = beats_ruler_toggle.button_pressed
 	if real_ruler:
@@ -843,6 +847,8 @@ func _apply_ruler_row_visibility() -> void:
 		marker_track.visible = markers_toggle.button_pressed
 	if time_signature_track:
 		time_signature_track.visible = time_signature_toggle.button_pressed
+	if key_change_track:
+		key_change_track.visible = key_toggle.button_pressed
 	if tempo_track:
 		tempo_track.visible = tempo_toggle.button_pressed
 
@@ -884,6 +890,7 @@ func _on_project_activated(project: Project) -> void:
 	markers_toggle.set_pressed_no_signal(project.ruler_lanes.get("markers", true))
 	tempo_toggle.set_pressed_no_signal(project.ruler_lanes.get("tempo", false))
 	time_signature_toggle.set_pressed_no_signal(project.ruler_lanes.get("time_signature", false))
+	key_toggle.set_pressed_no_signal(project.ruler_lanes.get("key", false))
 	_apply_ruler_row_visibility()
 	automation_view_toggle.set_pressed_no_signal(project.get_arranger_view("automation"))
 	routing_view_toggle.set_pressed_no_signal(project.get_arranger_view("routing"))
@@ -898,6 +905,8 @@ func _on_project_activated(project: Project) -> void:
 		marker_track.bind_project(project)
 	time_signature_track.set_grid_helper(grid_helper)
 	time_signature_track.bind_project(project)
+	key_change_track.set_grid_helper(grid_helper)
+	key_change_track.bind_project(project)
 	tempo_track.set_grid_helper(grid_helper)
 	tempo_track.bind_project(project)
 	
@@ -965,6 +974,7 @@ func _unbind_from_project() -> void:
 	if marker_track:
 		marker_track.bind_project(null)
 	time_signature_track.bind_project(null)
+	key_change_track.bind_project(null)
 	tempo_track.bind_project(null)
 	grid_helper.tempo_map = null
 	grid_helper.time_signature_map = null

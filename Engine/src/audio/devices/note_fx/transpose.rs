@@ -56,13 +56,18 @@ pub struct Transpose {
     mode: u8,
     root: usize,
     scale_type: usize,
-    project_mask: u16,
+    /// Snapshot of the transport (spec 034): `scale_mask` is the block-start mask and
+    /// `scale_changes` the in-block key-change timeline, so Follow Project snaps each note to the
+    /// scale at its own frame.
+    transport: Transport,
 }
 
 impl Transpose {
-    fn mask(&self) -> u16 {
+    fn mask(&self, at: u64, now: u64) -> u16 {
         match self.mode {
-            MODE_FOLLOW => self.project_mask,
+            MODE_FOLLOW => self
+                .transport
+                .scale_mask_at_frame(at.saturating_sub(now) as usize),
             MODE_CUSTOM => mask_for(self.root, self.scale_type),
             _ => 0,
         }
@@ -77,7 +82,7 @@ impl NoteProcessor for Transpose {
             mode: 0,
             root: 0,
             scale_type: 0,
-            project_mask: 0,
+            transport: Transport::default(),
         }
     }
 
@@ -112,7 +117,7 @@ impl NoteProcessor for Transpose {
                 velocity,
             } => {
                 let shifted = key as i32 + self.semitones + 12 * self.octaves;
-                let key = snap(shifted, self.mask());
+                let key = snap(shifted, self.mask(at, cx.now()));
                 cx.emit_on_with(note_id, key, velocity, at, note_id);
             }
             NoteEvent::Off {
@@ -123,7 +128,7 @@ impl NoteProcessor for Transpose {
     }
 
     fn set_transport(&mut self, transport: &Transport) {
-        self.project_mask = transport.scale_mask;
+        self.transport = *transport;
     }
 }
 
@@ -189,6 +194,84 @@ mod tests {
             ..Transport::default()
         });
         assert_eq!(play(&mut d, &[61]), vec![60]);
+    }
+
+    /// Transport for Follow mode: C major at block start with a change to D minor at `frame`
+    /// (the B/Bb pair: B is in C major but not D minor, and the tie snaps down to Bb).
+    fn c_major_then_d_minor_at(frame: u32) -> Transport {
+        let mut t = Transport {
+            scale_mask: mask_for(0, 0),
+            ..Transport::default()
+        };
+        t.push_scale_change(frame, mask_for(2, 1));
+        t
+    }
+
+    #[test]
+    fn b_snaps_per_note_frame_across_a_key_change() {
+        let mut d = device();
+        set(&mut d, SCALE, MODE_FOLLOW as f32);
+        d.set_transport(&c_major_then_d_minor_at(200));
+        d.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 71, // B
+                velocity: 0.8,
+            },
+            0,
+        );
+        d.send_note_event(
+            &NoteEvent::On {
+                note_id: 2,
+                key: 71,
+                velocity: 0.8,
+            },
+            250,
+        );
+        let mut out = d
+            .process_notes(512)
+            .iter()
+            .filter(|n| matches!(n.event, NoteEvent::On { .. }))
+            .map(|n| n.event.key())
+            .collect::<Vec<_>>();
+        out.sort();
+        // B stays B under C major at frame 0; the same pitch in the D-minor part of the block
+        // snaps down to Bb.
+        assert_eq!(out, vec![70, 71]);
+    }
+
+    #[test]
+    fn note_held_across_a_key_change_releases_the_pitch_it_started_on() {
+        let mut d = device();
+        set(&mut d, SCALE, MODE_FOLLOW as f32);
+        d.set_transport(&c_major_then_d_minor_at(200));
+        d.send_note_event(
+            &NoteEvent::On {
+                note_id: 7,
+                key: 71, // B, snapped to B in C major
+                velocity: 0.8,
+            },
+            0,
+        );
+        assert_eq!(d.process_notes(64)[0].event.key(), 71);
+        d.send_note_event(
+            &NoteEvent::Off {
+                note_id: 7,
+                key: 71,
+                release: 0.5,
+            },
+            300,
+        );
+        let out = d.process_notes(512).to_vec();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(
+            out[0].event,
+            NoteEvent::Off {
+                note_id: 7,
+                key: 71,
+                ..
+            }
+        ));
     }
 
     #[test]

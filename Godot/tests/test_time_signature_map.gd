@@ -170,8 +170,8 @@ func _test_arranger_lane() -> void:
 
 	var lane = arranger.time_signature_track
 	var header = lane.get_parent()
-	_assert(header.get_child(lane.get_index() - 1).name == "Ruler" and header.get_child(lane.get_index() + 1).name == "TempoTrack",
-		"lane sits between Ruler and TempoTrack")
+	_assert(header.get_child(lane.get_index() - 1).name == "Ruler" and header.get_child(lane.get_index() + 1).name == "KeyChangeTrack",
+		"lane sits between Ruler and the key lane")
 	_assert(not lane.visible, "lane starts hidden")
 	arranger.time_signature_toggle.button_pressed = true
 	_assert(lane.visible and project.ruler_lanes["time_signature"] == true, "toggle shows the lane and is stored")

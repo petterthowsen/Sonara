@@ -66,6 +66,9 @@ pub enum AudioCommand {
     SetTimeSignature(i32, i32),
     /// Project scale as a 12-bit pitch-class mask (bit 0 = C), 0 = none (spec 027).
     SetProjectScale(u16),
+    /// Key changes along the timeline: `(tick, mask)` pairs (spec 034). Replaces the whole map;
+    /// empty clears it and only the base scale remains.
+    SetScaleMap(Vec<(Tick, u16)>),
 
     // Channel management
     CreateChannel {
@@ -1281,6 +1284,7 @@ fn dispatch(
         | AudioCommand::ConfigureDeviceData { .. }
         | AudioCommand::SetTempoMap(_)
         | AudioCommand::SetTimeSignatureMap(_)
+        | AudioCommand::SetScaleMap(_)
         | AudioCommand::ReloadDevice { .. }
         | AudioCommand::SetPluginHosting { .. }
         | AudioCommand::SetAudioConfig { .. }

@@ -84,8 +84,9 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **`sync_to_engine()`** — full-state resync method on data models, used on (re)connect/project load.
 - **GridHelper** — the shared tempo/zoom/scroll/snap object converting ticks ↔ pixels; views share one instance.
 - **Note map** — labels/colours per pitch on a channel (`NONE`/`AUTO`/`NAMED` mode). Labels only, never sent to the engine. An Auto map comes from the first Drum Machine (pad names) or zoned Layer (slot names per mapped input note) on the root chain.
-- **Project scale** — one root pitch class (C–B) plus a scale type (`MusicalScale`), or none; saved with the project, set from the main toolbar. UI only, never sent to the engine (spec 026).
-- **In-scale pitch** — a MIDI pitch whose pitch class belongs to the project scale.
+- **Project scale** — the key at the start of the project: one root pitch class (C–B) plus a scale type (`MusicalScale`), or none; saved with the project, set from the main toolbar. Its 12-bit mask reaches the engine on `/project/scale` as the base key (specs 026/027).
+- **Key change** — an arranger-ruler marker (Key lane) that changes the project scale from its tick onward; root + type picked from a `ScalePicker` dropdown, snapped to bar lines. Tick-anchored (spec 034).
+- **Key change map** — the ordered set of key changes (`KeyChangeMap`), synced to the engine whole-map on `/project/scale_map` as `(tick, mask)` pairs; a change's mask 0 = "no scale from here". The engine resolves the mask per note-on frame; changing a scale never touches existing notes (spec 026 REQ-020).
 - **Scale step** — a move from an in-scale pitch to the next one above or below. An out-of-scale note moves by scale steps counted from the in-scale pitch below it and keeps its semitone offset.
 - **Scale snap** — clip editor toggle (per project) that keeps placed, dragged and transposed notes on in-scale pitches; Shift bypasses it like grid snap; keyswitch keys are never snapped.
 - **Fold to scale** — optional clip editor toggle (per project, off by default) that hides out-of-scale rows in the piano roll, keeping rows for pitches that notes use.
