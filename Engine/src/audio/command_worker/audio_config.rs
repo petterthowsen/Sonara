@@ -1,6 +1,7 @@
-//! Audio device settings on the command thread (Phase 7): reopening the output stream on
-//! another device, rate or buffer size, preparing devices for a new rate while it is stopped,
-//! and following the PipeWire graph.
+//! Audio device settings on the command thread (Phase 7, spec 041): reopening the output stream
+//! on another driver, device, rate or buffer size, preparing devices for a new rate while it is
+//! stopped, forcing PipeWire's quantum and rate on the PipeWire driver, and following the
+//! PipeWire graph.
 
 use tracing::{error, info, warn};
 
@@ -9,9 +10,9 @@ use crate::audio::commands::{AudioConfigReport, EngineStatus};
 use crate::audio::devices::clap_host::subprocess_adapter::PluginIpcHandle;
 use crate::audio::devices::clap_host::SubprocessClapAdapter;
 use crate::audio::devices::{container, DevicePath};
-use crate::audio::pipewire::{describe_mismatch, required_period, GraphInfo};
+use crate::audio::pipewire::{describe_mismatch, required_period, GraphInfo, RealtimeState};
 use crate::audio::stream::{
-    list_output_devices, StreamInfo, StreamRequest, DEFAULT_SAMPLE_RATE, MAX_PERIOD_FRAMES,
+    list_output_devices, Driver, StreamInfo, StreamRequest, DEFAULT_SAMPLE_RATE, MAX_PERIOD_FRAMES,
     MIN_PERIOD_FRAMES,
 };
 use crate::audio::types::{ChannelId, HARDWARE_OUTPUT_BASE};
@@ -38,7 +39,8 @@ impl CommandWorker {
             return;
         }
         info!(
-            "Audio config requested: device '{}', {} Hz, {} frames",
+            "Audio config requested: {} driver, device '{}', {} Hz, {} frames",
+            request.driver.label(),
             display_device(&request.device),
             request.sample_rate,
             request.period_frames
@@ -47,41 +49,20 @@ impl CommandWorker {
         self.apply_audio_config();
     }
 
+    /// Open the first stream, at engine start.
+    pub fn open_output(&mut self) {
+        self.apply_audio_config();
+    }
+
     /// Reopen the stream for the current request. The steps run in this order so no callback
     /// ever sees a device at the wrong rate: stop the stream; resolve the config (the device
-    /// may not support the requested rate); prepare every device for the resolved rate; start.
-    /// A device that won't open falls back to the default device, then to the default config.
+    /// may not support the requested rate); prepare every device for the resolved rate; force
+    /// PipeWire's quantum and rate (PipeWire driver); start. A device that won't open falls back
+    /// to the driver's default device, then (when PipeWire was asked for) to ALSA's, then to the
+    /// default config.
     pub(super) fn apply_audio_config(&mut self) {
         let request = self.audio.request.clone();
-        let quantum_at = |rate: u32| {
-            self.audio
-                .graph
-                .as_ref()
-                .map_or(0, |graph| graph.quantum_at(rate))
-        };
-        let quantum = quantum_at(request.sample_rate);
-        let first = StreamRequest {
-            period_frames: required_period(request.period_frames, quantum),
-            ..request.clone()
-        };
-        let mut candidates = vec![first.clone()];
-        if !request.device.is_empty() {
-            candidates.push(StreamRequest {
-                device: String::new(),
-                ..first.clone()
-            });
-        }
-        let fallback = StreamRequest::default();
-        let fallback = StreamRequest {
-            period_frames: required_period(
-                fallback.period_frames,
-                quantum_at(fallback.sample_rate),
-            ),
-            ..fallback
-        };
-        if !candidates.contains(&fallback) {
-            candidates.push(fallback);
-        }
+        let candidates = self.stream_candidates(&request);
 
         let old_rate = self.lock_state().device_sample_rate;
         if let Err(e) = self.stream.stop() {
@@ -95,7 +76,8 @@ impl CommandWorker {
                 Ok(resolved) => resolved,
                 Err(e) => {
                     warn!(
-                        "Can't use output '{}': {}",
+                        "Can't use {} output '{}': {}",
+                        candidate.driver.label(),
                         display_device(&candidate.device),
                         e
                     );
@@ -108,14 +90,27 @@ impl CommandWorker {
                 }
             };
             self.set_device_rate(resolved.sample_rate as f32);
+            match resolved.driver {
+                Driver::PipeWire => {
+                    let quantum = if resolved.period_frames > 0 {
+                        resolved.period_frames
+                    } else {
+                        candidate.period_frames
+                    };
+                    if let Some(notice) = self.force_clock(quantum, resolved.sample_rate) {
+                        notices.push(notice);
+                    }
+                }
+                Driver::Alsa => self.release_clock(),
+            }
             match self.stream.start() {
                 Ok(info) => {
                     started = Some((info, candidate.period_frames));
                     break;
                 }
                 Err(e) => {
-                    warn!("Can't open output '{}': {}", resolved.device, e);
-                    notices.push(format!("Couldn't open {}: {}.", resolved.device, e));
+                    warn!("Can't open output '{}': {}", resolved.label, e);
+                    notices.push(format!("Couldn't open {}: {}.", resolved.label, e));
                 }
             }
         }
@@ -123,16 +118,23 @@ impl CommandWorker {
         match &started {
             Some((info, opened_period)) => {
                 self.audio.opened_period = *opened_period;
+                if info.driver != request.driver {
+                    notices.push(format!(
+                        "{} isn't running; playing through {}.",
+                        request.driver.label(),
+                        info.driver.label()
+                    ));
+                }
                 if info.sample_rate != request.sample_rate {
                     notices.push(format!(
                         "{} doesn't run at {} Hz; using {} Hz.",
-                        info.device, request.sample_rate, info.sample_rate
+                        info.label, request.sample_rate, info.sample_rate
                     ));
                 }
                 if info.period_frames == 0 {
                     notices.push(format!(
                         "{} didn't accept a fixed buffer size; using its default.",
-                        info.device
+                        info.label
                     ));
                 }
             }
@@ -140,9 +142,11 @@ impl CommandWorker {
                 error!("No audio output could be opened; the engine is silent");
                 notices.push("No audio output could be opened.".to_string());
                 self.audio.opened_period = 0;
+                self.release_clock();
             }
         }
         self.audio.notice = notices.join(" ");
+        self.audio.forced_by_other = false;
 
         let new_rate = self.lock_state().device_sample_rate;
         if new_rate != old_rate {
@@ -154,6 +158,83 @@ impl CommandWorker {
         }
         self.check_master_output();
         self.report_audio_config();
+    }
+
+    /// The configs to try for `request`, in order: the request; the driver's default device;
+    /// ALSA's default device when PipeWire was asked for (PipeWire isn't running); the default
+    /// config on either driver. On ALSA the period grows so the ring holds PipeWire's quantum.
+    fn stream_candidates(&self, request: &StreamRequest) -> Vec<StreamRequest> {
+        let adapt = |candidate: StreamRequest| {
+            if candidate.driver != Driver::Alsa {
+                return candidate;
+            }
+            let quantum = self
+                .audio
+                .graph
+                .as_ref()
+                .map_or(0, |graph| graph.quantum_at(candidate.sample_rate));
+            StreamRequest {
+                period_frames: required_period(candidate.period_frames, quantum),
+                ..candidate
+            }
+        };
+        let defaults = StreamRequest::default();
+        let mut wanted = vec![request.clone()];
+        if !request.device.is_empty() {
+            wanted.push(StreamRequest {
+                device: String::new(),
+                ..request.clone()
+            });
+        }
+        if request.driver == Driver::PipeWire {
+            wanted.push(StreamRequest {
+                driver: Driver::Alsa,
+                device: String::new(),
+                ..request.clone()
+            });
+        }
+        wanted.push(StreamRequest {
+            driver: request.driver,
+            ..defaults.clone()
+        });
+        wanted.push(StreamRequest {
+            driver: Driver::Alsa,
+            ..defaults
+        });
+
+        let mut candidates: Vec<StreamRequest> = Vec::new();
+        for candidate in wanted.into_iter().map(adapt) {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+        candidates
+    }
+
+    /// Force PipeWire's quantum and rate to the stream's. Returns a notice when it can't.
+    fn force_clock(&mut self, quantum: u32, rate: u32) -> Option<String> {
+        let result = self
+            .audio
+            .forced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .apply(quantum, rate);
+        result.err().map(|e| {
+            warn!("Can't force PipeWire's quantum and rate: {}", e);
+            format!(
+                "Couldn't set PipeWire's buffer size ({}); the engine follows the graph's quantum.",
+                e
+            )
+        })
+    }
+
+    /// Stop forcing PipeWire's quantum and rate, restoring what was there before.
+    fn release_clock(&mut self) {
+        self.audio
+            .forced
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .restore();
     }
 
     /// Prepare every device for `sample_rate` (no-op when it's the current rate). The stream is
@@ -247,20 +328,23 @@ impl CommandWorker {
     }
 
     /// Send `/audio/config`, logging a graph/stream conflict once when it appears: a WARN when
-    /// the buffer had to grow or PipeWire resamples the engine, else INFO.
+    /// the buffer had to grow, PipeWire resamples the engine or another application forces the
+    /// graph, else INFO.
     pub(super) fn report_audio_config(&mut self) {
         let active = self.stream.active();
         let graph = self.audio.graph.clone().unwrap_or_default();
         let requested_period = self.audio.request.period_frames;
+        let forced_by_other = self.audio.forced_by_other;
         let mismatch = active
             .as_ref()
-            .map(|active| describe_mismatch(&graph, active, requested_period))
+            .map(|active| describe_mismatch(&graph, active, requested_period, forced_by_other))
             .unwrap_or_default();
         if mismatch != self.audio.mismatch {
-            let serious = active.as_ref().is_some_and(|active| {
-                active.period_frames > requested_period
-                    || (graph.rate > 0 && graph.rate != active.sample_rate)
-            });
+            let serious = forced_by_other
+                || active.as_ref().is_some_and(|active| {
+                    active.period_frames > requested_period
+                        || (graph.rate > 0 && graph.rate != active.sample_rate)
+                });
             if mismatch.is_empty() {
                 info!("PipeWire graph and output stream agree again");
             } else if serious {
@@ -277,32 +361,41 @@ impl CommandWorker {
             graph_rate: graph.rate,
             mismatch,
             notice: self.audio.notice.clone(),
+            output_latency_us: self.audio.latency_us,
+            realtime: self.audio.realtime,
         }));
     }
 
-    /// `/audio/devices/request`: enumerate on a background thread (it opens every device).
+    /// `/audio/devices/request`: enumerate the requested driver's devices on a background thread
+    /// (it opens every ALSA device).
     pub(super) fn list_audio_devices(&self) {
         let active = self.stream.active();
+        let driver = self.audio.request.driver;
         let status_tx = self.status_tx.clone();
         std::thread::spawn(move || {
-            let devices = list_output_devices(active.as_ref());
+            let devices = list_output_devices(driver, active.as_ref());
             let count = devices.len();
             for device in devices {
                 let _ = status_tx.send(EngineStatus::AudioDeviceInfo(device));
             }
             let _ = status_tx.send(EngineStatus::AudioDevicesComplete { count });
-            info!("Listed {} output devices", count);
+            info!("Listed {} {} output devices", count, driver.label());
         });
     }
 
-    /// The PipeWire graph changed: grow (or restore) the buffer when the quantum needs it, and
-    /// report the graph in `/audio/config`.
+    /// The PipeWire graph changed. On ALSA: grow (or restore) the buffer when the quantum needs
+    /// it. On PipeWire the engine plays at whatever quantum the graph runs and only notes when
+    /// another application forces it (the next settings change forces again). Either way the
+    /// graph goes into `/audio/config`.
     pub(super) fn on_pipewire_graph(&mut self, graph: GraphInfo) {
         let requested = self.audio.request.period_frames;
-        let rate = self
-            .stream
-            .active()
+        let active = self.stream.active();
+        let rate = active
+            .as_ref()
             .map_or(self.audio.request.sample_rate, |active| active.sample_rate);
+        let native = active
+            .as_ref()
+            .is_some_and(|active| active.driver == Driver::PipeWire);
         let needed = required_period(requested, graph.quantum_at(rate));
         let previous_quantum = self.audio.graph.as_ref().map_or(0, |g| g.quantum);
         let previous_rate = self.audio.graph.as_ref().map_or(0, |g| g.rate);
@@ -314,9 +407,16 @@ impl CommandWorker {
         }
         let hint = forced_quantum_hint(&graph);
         let quantum = graph.quantum;
+        self.audio.forced_by_other = native
+            && !self
+                .audio
+                .forced
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_ours(&graph);
         self.audio.graph = Some(graph);
 
-        if self.audio.opened_period != 0 && needed != self.audio.opened_period {
+        if !native && self.audio.opened_period != 0 && needed != self.audio.opened_period {
             info!(
                 "Reopening the output stream with a {}-frame buffer for PipeWire's {}-frame quantum (requested {}){}",
                 needed, quantum, requested, hint
@@ -325,6 +425,16 @@ impl CommandWorker {
         } else {
             self.report_audio_config();
         }
+    }
+
+    /// The monitor measured new output latency or realtime state.
+    pub(super) fn on_output_health(&mut self, latency_us: u32, realtime: RealtimeState) {
+        if latency_us == self.audio.latency_us && realtime == self.audio.realtime {
+            return;
+        }
+        self.audio.latency_us = latency_us;
+        self.audio.realtime = realtime;
+        self.report_audio_config();
     }
 }
 

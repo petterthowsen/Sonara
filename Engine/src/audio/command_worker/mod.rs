@@ -20,7 +20,7 @@ use super::commands::{process_command, AudioCommand, CommandEffects, EngineStatu
 use super::devices::clap_host::PluginScanner;
 use super::devices::{DeviceFactory, DevicePath};
 use super::ipc::ProcessManager;
-use super::pipewire::GraphInfo;
+use super::pipewire::{ForcedClock, GraphInfo, RealtimeState};
 use super::render::RenderHandle;
 use super::state::EngineState;
 use super::stream::{StreamControl, StreamRequest};
@@ -52,6 +52,14 @@ struct AudioSettings {
     notice: String,
     /// Last graph/stream conflict reported, so each new one is logged once.
     mismatch: String,
+    /// The engine's forcing of PipeWire's quantum and rate (spec 041), shared with the
+    /// termination handler.
+    forced: Arc<Mutex<ForcedClock>>,
+    /// Another application changed the forced quantum or rate after the engine forced its own.
+    forced_by_other: bool,
+    /// Last output health from the monitor.
+    latency_us: u32,
+    realtime: RealtimeState,
 }
 
 /// Owns the command thread's resources and applies commands to the shared engine state.
@@ -85,6 +93,7 @@ impl CommandWorker {
         block_clock: Arc<BlockClock>,
         stream: StreamControl,
         audio_request: StreamRequest,
+        forced: Arc<Mutex<ForcedClock>>,
     ) -> Self {
         let process_manager = Arc::new(ProcessManager::new());
         let device_factory = DeviceFactory::new(
@@ -114,6 +123,10 @@ impl CommandWorker {
                 graph: None,
                 notice: String::new(),
                 mismatch: String::new(),
+                forced,
+                forced_by_other: false,
+                latency_us: 0,
+                realtime: RealtimeState::Unknown,
             },
             block_clock,
             render: None,
@@ -186,10 +199,12 @@ impl CommandWorker {
             } => self.reload_device(channel_id, device_path),
             AudioCommand::SetPluginHosting { policy } => self.set_plugin_hosting(policy),
             AudioCommand::SetAudioConfig {
+                driver,
                 device,
                 sample_rate,
                 period_frames,
             } => self.set_audio_config(StreamRequest {
+                driver,
                 device,
                 sample_rate,
                 period_frames,
@@ -197,6 +212,10 @@ impl CommandWorker {
             AudioCommand::RequestAudioConfig => self.report_audio_config(),
             AudioCommand::RequestAudioDevices => self.list_audio_devices(),
             AudioCommand::PipeWireGraph(graph) => self.on_pipewire_graph(graph),
+            AudioCommand::OutputHealth {
+                latency_us,
+                realtime,
+            } => self.on_output_health(latency_us, realtime),
             route @ AudioCommand::SetChannelRoute { id: 1, .. } => self.set_master_route(route),
             AudioCommand::SavePluginState {
                 channel_id,

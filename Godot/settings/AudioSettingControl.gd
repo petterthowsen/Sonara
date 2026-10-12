@@ -106,11 +106,17 @@ func _entries() -> Array:
 	var entries: Array = []
 	var device_name := str(Settings.get_value(AudioConfig.DEVICE_KEY))
 	match _setting.key:
+		AudioConfig.DRIVER_KEY:
+			entries.append(["pipewire", "PipeWire"])
+			entries.append(["alsa", "ALSA"])
+			var driver := str(_value)
+			if driver not in ["pipewire", "alsa"]:
+				entries.append([driver, driver])
 		AudioConfig.DEVICE_KEY:
 			var default_device := AudioConfig.find_device("")
 			var default_label := "System default"
 			if not default_device.is_empty():
-				default_label += " (%s)" % default_device.name
+				default_label += " (%s)" % AudioConfig.device_label(default_device)
 			entries.append(["", default_label])
 			for device in AudioConfig.devices:
 				entries.append([device.name, _device_label(device)])
@@ -129,7 +135,7 @@ func _entries() -> Array:
 
 
 static func _device_label(device: Dictionary) -> String:
-	var label: String = device.name
+	var label := AudioConfig.device_label(device)
 	var channels := int(device.get("channels", 0))
 	if channels > 2:
 		label += " — %d channels" % channels
@@ -146,10 +152,21 @@ func _info_text() -> String:
 	if not AudioConfig.has_config():
 		return "No audio output is open."
 	match _setting.key:
+		AudioConfig.DRIVER_KEY:
+			var driver := str(config.get("driver", ""))
+			if driver.is_empty():
+				return ""
+			var text := "Running: %s" % _driver_name(driver)
+			match str(config.get("realtime", "unknown")):
+				"granted":
+					text += " · realtime scheduling granted"
+				"denied":
+					text += " · realtime scheduling denied"
+			return text
 		AudioConfig.DEVICE_KEY:
 			var pairs := int(config.output_pairs)
 			return "Running: %s, %d Hz, %d frames (%.1f ms), %d output pair%s" % [
-				config.device, config.sample_rate, config.buffer_size, config.latency_ms,
+				config.get("device_label", config.device), config.sample_rate, config.buffer_size, config.latency_ms,
 				pairs, "" if pairs == 1 else "s"]
 		AudioConfig.RATE_KEY:
 			if int(config.sample_rate) != int(_value):
@@ -160,8 +177,19 @@ func _info_text() -> String:
 				parts.append("Running with %d frames." % config.buffer_size)
 			if int(config.graph_quantum) > 0:
 				parts.append("PipeWire quantum: %d frames at %d Hz." % [config.graph_quantum, config.graph_rate])
+			if float(config.get("output_latency_ms", 0.0)) > 0.0:
+				parts.append("Output latency: %.0f ms." % config.output_latency_ms)
 			return " ".join(parts)
 	return ""
+
+
+static func _driver_name(driver: String) -> String:
+	match driver:
+		"pipewire":
+			return "PipeWire"
+		"alsa":
+			return "ALSA"
+	return driver
 
 
 ## Problems to point out: the engine's notice on the device row, graph conflicts on the buffer row.

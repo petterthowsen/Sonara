@@ -16,6 +16,9 @@ var _saved_config: Dictionary
 var _saved_config_path: String
 
 const CONFIG_ARGS := ["hw:CARD=USB", 44100, 256, 5.8, 4, 0, "hw:CARD=USB", 44100, 256, 1024, 48000,
+	"PipeWire runs a 1024-frame quantum.", "", "alsa", "pipewire", "USB Audio", 12.5, "granted"]
+## The engine's older, 13-argument report.
+const OLD_CONFIG_ARGS := ["hw:CARD=USB", 44100, 256, 5.8, 4, 0, "hw:CARD=USB", 44100, 256, 1024, 48000,
 	"PipeWire runs a 1024-frame quantum.", ""]
 
 
@@ -32,6 +35,7 @@ func run_tests() -> void:
 
 	_test_settings_are_registered()
 	_test_message_from_settings()
+	_test_driver_change_resets_device()
 	_test_parse_reports()
 	_test_rates_and_buffers_per_device()
 	_test_notice_is_raised_once()
@@ -73,26 +77,50 @@ func _test_message_from_settings() -> void:
 	_sonara.set_config(_script.RATE_KEY, 44100)
 	_sonara.set_config(_script.BUFFER_KEY, 256)
 	var config := _new_config()
-	_assert(config.build_message() == ["hw:CARD=USB", 44100, 256], "message is device, rate, buffer: %s" % [config.build_message()])
+	_sonara.set_config(_script.DRIVER_KEY, "alsa")
+	_assert(config.build_message() == ["hw:CARD=USB", 44100, 256, "alsa"], "message is device, rate, buffer, driver: %s" % [config.build_message()])
 	_sonara.set_config(_script.DEVICE_KEY, "")
 	_assert(config.build_message()[0] == "", "the system default is sent as \"\"")
+	_sonara.set_config(_script.DRIVER_KEY, "pipewire")
+	_assert(config.build_message()[3] == "pipewire", "the driver defaults to pipewire")
+	config.free()
+
+
+func _test_driver_change_resets_device() -> void:
+	var settings := root.get_node("/root/Settings")
+	_sonara.set_config(_script.DEVICE_KEY, "hw:CARD=USB")
+	var config := _new_config()
+	config._on_setting_changed(_script.DRIVER_KEY, "alsa")
+	_assert(settings.get_value(_script.DEVICE_KEY) == "", "a driver change resets the device to the system default")
+	_assert(config._devices_refresh_pending and config._apply_scheduled, "a driver change schedules a re-apply and a device refresh")
+	config._apply_deferred()
+	_assert(not config._devices_refresh_pending, "the device refresh is done after applying")
+	_sonara.set_config(_script.DEVICE_KEY, "hw:CARD=USB")
+	config._on_setting_changed(_script.RATE_KEY, 48000)
+	_assert(settings.get_value(_script.DEVICE_KEY) == "hw:CARD=USB" and not config._devices_refresh_pending, "other settings keep the device")
 	config.free()
 
 
 func _test_parse_reports() -> void:
-	var device: Dictionary = _script.parse_device(["pipewire", 1, 32, 2048, 2, 44100, 48000])
-	_assert(device.name == "pipewire" and device.is_default and device.channels == 2, "device fields parse")
+	var device: Dictionary = _script.parse_device(["pipewire", "PipeWire", 1, 32, 2048, 2, 44100, 48000])
+	_assert(device.name == "pipewire" and device.label == "PipeWire" and device.is_default and device.channels == 2, "device fields parse")
+	_assert(_script.device_label({"name": "x", "label": ""}) == "x", "an empty label falls back to the id")
 	_assert(device.rates == [44100, 48000], "trailing ints are the rates")
-	_assert(_script.parse_device(["x", 0, 32]).is_empty(), "short device message is rejected")
+	_assert(_script.parse_device(["x", "X", 0, 32]).is_empty(), "short device message is rejected")
 
 	var parsed: Dictionary = _script.parse_config(CONFIG_ARGS)
 	_assert(parsed.device == "hw:CARD=USB" and parsed.sample_rate == 44100 and parsed.buffer_size == 256, "running config parses")
 	_assert(parsed.output_pairs == 4 and parsed.graph_quantum == 1024 and parsed.graph_rate == 48000, "pairs and graph parse")
 	_assert(parsed.mismatch.begins_with("PipeWire"), "mismatch text parses")
+	_assert(parsed.driver == "alsa" and parsed.requested_driver == "pipewire", "drivers parse")
+	_assert(parsed.device_label == "USB Audio" and is_equal_approx(parsed.output_latency_ms, 12.5) and parsed.realtime == "granted", "label, output latency and realtime parse")
+	var old: Dictionary = _script.parse_config(OLD_CONFIG_ARGS)
+	_assert(old.device == "hw:CARD=USB" and old.driver == "" and old.realtime == "unknown" and old.output_latency_ms == 0.0, "the older 13-argument report still parses")
+	_assert(old.device_label == "hw:CARD=USB", "the label falls back to the device id")
 	_assert(_script.parse_config(["x", 1]).is_empty(), "short config message is rejected")
 
 	var config := _new_config()
-	config._on_device(["pipewire", 1, 32, 2048, 2, 48000])
+	config._on_device(["pipewire", "PipeWire", 1, 32, 2048, 2, 48000])
 	config._on_device(["bad"])
 	var fired := [0]
 	config.devices_changed.connect(func() -> void: fired[0] += 1)
@@ -105,9 +133,9 @@ func _test_parse_reports() -> void:
 func _test_rates_and_buffers_per_device() -> void:
 	var config := _new_config()
 	config.devices = _devices([
-		["pipewire", 1, 32, 2048, 2, 44100, 48000, 96000],
-		["hw:CARD=USB", 0, 128, 1024, 8, 48000],
-		["busy", 0, 32, 2048, 0],
+		["pipewire", "PipeWire", 1, 32, 2048, 2, 44100, 48000, 96000],
+		["hw:CARD=USB", "USB Audio", 0, 128, 1024, 8, 48000],
+		["busy", "Busy", 0, 32, 2048, 0],
 	])
 	_assert(config.find_device("").name == "pipewire", "\"\" finds the default device")
 	_assert(config.rates_for("", 48000) == [44100, 48000, 96000], "default device rates")
@@ -158,8 +186,8 @@ func _test_settings_control() -> void:
 	var saved_loaded: bool = autoload.devices_loaded
 	var saved_config: Dictionary = autoload.config
 	autoload.devices = _devices([
-		["pipewire", 1, 32, 2048, 2, 44100, 48000],
-		["hw:CARD=USB", 0, 128, 1024, 8, 48000],
+		["pipewire", "PipeWire", 1, 32, 2048, 2, 44100, 48000],
+		["hw:CARD=USB", "USB Audio", 0, 128, 1024, 8, 48000],
 	])
 	autoload.devices_loaded = true
 	autoload.config = _script.parse_config(CONFIG_ARGS)
@@ -175,10 +203,10 @@ func _test_settings_control() -> void:
 	var labels: Array[String] = []
 	for i in device_control._option.item_count:
 		labels.append(device_control._option.get_item_text(i))
-	_assert(labels == ["System default (pipewire)", "pipewire", "hw:CARD=USB — 8 channels", "hw:CARD=Gone (not found)"],
+	_assert(labels == ["System default (PipeWire)", "PipeWire", "USB Audio — 8 channels", "hw:CARD=Gone (not found)"],
 		"device options: default, listed devices, the missing saved one: %s" % [labels])
 	_assert(device_control._option.selected == 3, "the saved device stays selected")
-	_assert(device_control._info.text.begins_with("Running: hw:CARD=USB, 44100 Hz, 256 frames"), "info shows the running config: %s" % device_control._info.text)
+	_assert(device_control._info.text.begins_with("Running: USB Audio, 44100 Hz, 256 frames"), "info shows the running config: %s" % device_control._info.text)
 	var edited: Array = []
 	device_control.value_edited.connect(func(value) -> void: edited.append(value))
 	device_control._option.select(2)
@@ -191,6 +219,7 @@ func _test_settings_control() -> void:
 	buffer_control.setup(settings.get_setting(_script.BUFFER_KEY), 256)
 	_assert(buffer_control._option.get_item_text(0) == "128 frames (2.7 ms)", "buffer labels show latency at the set rate: %s" % buffer_control._option.get_item_text(0))
 	_assert(buffer_control._info.text.contains("PipeWire quantum: 1024 frames at 48000 Hz"), "buffer info shows the graph: %s" % buffer_control._info.text)
+	_assert(buffer_control._info.text.contains("Output latency: 12 ms"), "buffer info shows the output latency: %s" % buffer_control._info.text)
 	_assert(buffer_control._warning.visible and buffer_control._warning.text.begins_with("PipeWire"), "buffer warning shows the mismatch")
 
 	var rate_control = scene.instantiate()
@@ -198,7 +227,19 @@ func _test_settings_control() -> void:
 	rate_control.setup(settings.get_setting(_script.RATE_KEY), 48000)
 	_assert(rate_control._info.text == "Running at 44100 Hz.", "rate info says when the engine runs another rate: %s" % rate_control._info.text)
 
-	for control in [device_control, buffer_control, rate_control]:
+	var driver_control = scene.instantiate()
+	root.add_child(driver_control)
+	driver_control.setup(settings.get_setting(_script.DRIVER_KEY), "alsa")
+	var driver_labels: Array[String] = []
+	for i in driver_control._option.item_count:
+		driver_labels.append(driver_control._option.get_item_text(i))
+	_assert(driver_labels == ["PipeWire", "ALSA"] and driver_control._option.selected == 1, "driver options: %s" % [driver_labels])
+	_assert(driver_control._info.text == "Running: ALSA · realtime scheduling granted", "driver info shows driver and realtime: %s" % driver_control._info.text)
+	autoload.config = _script.parse_config(OLD_CONFIG_ARGS)
+	driver_control._refresh()
+	_assert(driver_control._info.text.is_empty(), "driver info copes with an older engine: %s" % driver_control._info.text)
+
+	for control in [device_control, buffer_control, rate_control, driver_control]:
 		control.queue_free()
 	await process_frame
 	autoload.devices = saved_devices

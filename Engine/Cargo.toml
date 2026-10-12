@@ -15,8 +15,9 @@ name = "plugin_host"
 path = "src/bin/plugin_host.rs"
 
 [dependencies]
-# Audio backend - CPAL handles PipeWire/JACK/ALSA automatically
-cpal = "0.15"
+# Audio backend: native PipeWire or ALSA (spec 041); realtime-dbus promotes the callback thread via rtkit
+cpal = { version = "0.18.2", features = ["pipewire", "realtime-dbus"] }
+ctrlc = { version = "3", features = ["termination"] }  # Restore PipeWire's forced quantum on SIGINT/SIGTERM
 
 # Audio file format support
 hound = "3.5"  # WAV writing for offline renders (export, stems)

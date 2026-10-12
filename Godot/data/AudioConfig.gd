@@ -3,16 +3,20 @@
 # buffer size the engine runs with. Owns the engine's device list and the running config, sends
 # the OSC and emits signals; UI never sends OSC directly.
 #
-# The three settings live in the Settings registry ("audio/output_device", "audio/sample_rate",
-# "audio/buffer_size"). Changing one applies live: the engine reopens its stream, preparing
+# The four settings live in the Settings registry ("audio/driver", "audio/output_device",
+# "audio/sample_rate", "audio/buffer_size"). Changing the driver resets the device to the system
+# default, since device ids belong to one driver. Changing one applies live: the engine reopens its stream, preparing
 # devices for a new rate while it is stopped. The engine reports what actually runs, which can
 # differ from the settings (missing device, unsupported rate, PipeWire's quantum):
-#   /audio/devices/request -> /audio/device [name, is_default, min_buffer, max_buffer, channels, rate...]
+#   /audio/devices/request -> /audio/device [id, label, is_default, min_buffer, max_buffer, channels, rate...]
 #                             ... -> /audio/devices/complete [count]
-#   /audio/config/set [device, rate, buffer]      ("" = system default device)
+#                             (the devices of the requested driver; asked again after a driver change)
+#   /audio/config/set [device, rate, buffer, driver]   ("" = system default device; driver is
+#       "pipewire" or "alsa"; device is an id of that driver)
 #   /audio/config/request -> /audio/config [device, rate, buffer, latency_ms, output_pairs,
 #       is_default_device, requested_device, requested_rate, requested_buffer, graph_quantum,
-#       graph_rate, mismatch, notice]
+#       graph_rate, mismatch, notice, driver, requested_driver, device_label, output_latency_ms,
+#       realtime]   (the last five are optional; realtime is "granted", "denied" or "unknown")
 #   /audio/config/changed [rate]   (the device rate changed: audio clips reload)
 #
 # Registered as the "AudioConfig" autoload, after Settings.
@@ -20,10 +24,11 @@ extends Node
 
 var logger := Log.make("AudioConfig")
 
+const DRIVER_KEY := "audio/driver"
 const DEVICE_KEY := "audio/output_device"
 const RATE_KEY := "audio/sample_rate"
 const BUFFER_KEY := "audio/buffer_size"
-const KEYS := [DEVICE_KEY, RATE_KEY, BUFFER_KEY]
+const KEYS := [DRIVER_KEY, DEVICE_KEY, RATE_KEY, BUFFER_KEY]
 
 ## Hardware output IDs: 1000 = outputs 1/2 of the selected device, 1001 = 3/4, …
 const HARDWARE_OUTPUT_BASE := 1000
@@ -39,7 +44,7 @@ signal sample_rate_changed(sample_rate: int)
 ## The engine couldn't use the saved settings (e.g. the device is missing). Shown once per text.
 signal notice_raised(text: String)
 
-## Output devices from the engine: {name, is_default, min_buffer, max_buffer, channels, rates}.
+## Output devices from the engine: {name (the id), label, is_default, min_buffer, max_buffer, channels, rates}.
 var devices: Array[Dictionary] = []
 ## True once a device list arrived.
 var devices_loaded := false
@@ -48,6 +53,7 @@ var config: Dictionary = {}
 
 var _pending_devices: Array[Dictionary] = []
 var _apply_scheduled := false
+var _devices_refresh_pending := false
 var _last_notice := ""
 
 
@@ -80,6 +86,7 @@ func build_message() -> Array:
 		str(Settings.get_value(DEVICE_KEY)),
 		int(Settings.get_value(RATE_KEY)),
 		int(Settings.get_value(BUFFER_KEY)),
+		str(Settings.get_value(DRIVER_KEY)),
 	]
 
 
@@ -101,6 +108,10 @@ func request_config() -> void:
 func _on_setting_changed(key: String, _value) -> void:
 	if key not in KEYS:
 		return
+	if key == DRIVER_KEY:
+		# Device ids belong to one driver: fall back to the system default and list the new driver's devices.
+		Settings.set_value(DEVICE_KEY, "")
+		_devices_refresh_pending = true
 	# Settings are written one at a time (and all at once on OK); apply once per frame.
 	if not _apply_scheduled:
 		_apply_scheduled = true
@@ -110,6 +121,9 @@ func _on_setting_changed(key: String, _value) -> void:
 func _apply_deferred() -> void:
 	_apply_scheduled = false
 	sync_to_engine()
+	if _devices_refresh_pending:
+		_devices_refresh_pending = false
+		request_devices()
 
 
 func _on_engine_connected() -> void:
@@ -124,17 +138,18 @@ func _on_engine_connected() -> void:
 
 ## Parse /audio/device arguments. Returns {} when malformed.
 static func parse_device(args: Array) -> Dictionary:
-	if args.size() < 5:
+	if args.size() < 6:
 		return {}
 	var rates: Array[int] = []
-	for i in range(5, args.size()):
+	for i in range(6, args.size()):
 		rates.append(int(args[i]))
 	return {
 		"name": str(args[0]),
-		"is_default": int(args[1]) != 0,
-		"min_buffer": int(args[2]),
-		"max_buffer": int(args[3]),
-		"channels": int(args[4]),
+		"label": str(args[1]),
+		"is_default": int(args[2]) != 0,
+		"min_buffer": int(args[3]),
+		"max_buffer": int(args[4]),
+		"channels": int(args[5]),
 		"rates": rates,
 	}
 
@@ -143,7 +158,7 @@ static func parse_device(args: Array) -> Dictionary:
 static func parse_config(args: Array) -> Dictionary:
 	if args.size() < 13:
 		return {}
-	return {
+	var parsed := {
 		"device": str(args[0]),
 		"sample_rate": int(args[1]),
 		"buffer_size": int(args[2]),
@@ -157,7 +172,16 @@ static func parse_config(args: Array) -> Dictionary:
 		"graph_rate": int(args[10]),
 		"mismatch": str(args[11]),
 		"notice": str(args[12]),
+		# Fields appended with the driver choice; defaults when an older engine omits them.
+		"driver": str(args[13]) if args.size() > 13 else "",
+		"requested_driver": str(args[14]) if args.size() > 14 else "",
+		"device_label": str(args[15]) if args.size() > 15 else "",
+		"output_latency_ms": float(args[16]) if args.size() > 16 else 0.0,
+		"realtime": str(args[17]) if args.size() > 17 else "unknown",
 	}
+	if parsed.device_label.is_empty():
+		parsed.device_label = parsed.device
+	return parsed
 
 
 func _on_device(args: Array) -> void:
@@ -223,6 +247,12 @@ func output_pairs() -> int:
 static func output_label(output_id: int) -> String:
 	var pair := output_id - HARDWARE_OUTPUT_BASE
 	return "Outputs %d/%d" % [pair * 2 + 1, pair * 2 + 2]
+
+
+## The readable name of a device dictionary (its id when the engine sent no label).
+static func device_label(device: Dictionary) -> String:
+	var label := str(device.get("label", ""))
+	return label if not label.is_empty() else str(device.get("name", ""))
 
 
 ## The listed device `name` ("" = the system default device), or {} when unknown.

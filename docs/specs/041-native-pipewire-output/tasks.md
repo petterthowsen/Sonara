@@ -9,7 +9,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
 
 ## Phase 1 — cpal 0.18 and the driver, end to end
 
-- [ ] **T-001** [REQ-006] Upgrade cpal to 0.18.2 (features `pipewire`, `realtime-dbus`) and port
+- [x?] **T-001** [REQ-006] Upgrade cpal to 0.18.2 (features `pipewire`, `realtime-dbus`) and port
   `stream.rs` to its API with ALSA still the only driver used: `SampleRate` as `u32`,
   `StreamConfig` by value, `description()`/`id()` instead of `name()`, `cpal::Error`, explicit
   `play()`. `Fixed(period)` instead of `period × ALSA_PERIODS`; `ALSA_PERIODS` = 2,
@@ -21,7 +21,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
     stream started with the requested period; `./test_osc.sh` makes sound
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-001, REQ-002, REQ-005] Add `Driver { PipeWire, Alsa }` to `StreamRequest`,
+- [x?] **T-002** [REQ-001, REQ-002, REQ-005] Add `Driver { PipeWire, Alsa }` to `StreamRequest`,
   `StreamInfo` and `AudioCommand::SetAudioConfig`; `resolve` and `list_output_devices` use
   `cpal::host_from_id(driver.host_id())` and match by device id; `label` on `StreamInfo` and
   `OutputDeviceInfo`; the PipeWire default pseudo-device is not listed. Default driver PipeWire.
@@ -33,7 +33,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
     native stream (not `alsa_playback.engine`), and audio plays
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-002, REQ-005] OSC: optional 4th `s:driver` on `/audio/config/set`;
+- [x?] **T-003** [REQ-002, REQ-005] OSC: optional 4th `s:driver` on `/audio/config/set`;
   `/audio/device` with `label` at index 1; `/audio/devices/request` lists the requested driver's
   devices.
   - _Files_: `Engine/src/osc/routes/audio.rs`, `Engine/src/osc/encode.rs`,
@@ -45,14 +45,14 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
 
 ## Phase 2 — behaviour
 
-- [ ] **T-004** [REQ-011] Render callbacks in chunks of at most `MAX_BLOCK_FRAMES` inside
+- [x?] **T-004** [REQ-011] Render callbacks in chunks of at most `MAX_BLOCK_FRAMES` inside
   `run_live_block` (one lock, block clock published per chunk, meters once).
   - _Files_: `Engine/src/audio/stream.rs`
   - _Output_: any callback length renders correctly without allocation
   - _Verify_: `cargo test long_callbacks_render_in_chunks`
   - _Depends on_: T-001
 
-- [ ] **T-005** [REQ-003, REQ-004] Candidate list per driver: request → default device on the
+- [x?] **T-005** [REQ-003, REQ-004] Candidate list per driver: request → default device on the
   same driver → ALSA default when PipeWire was requested (notice) → default config. Driver switch
   stops and reopens like a device change.
   - _Files_: `Engine/src/audio/command_worker/audio_config.rs`
@@ -62,7 +62,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
     driver; starting with `PIPEWIRE_RUNTIME_DIR=/nonexistent` runs on ALSA with a notice
   - _Depends on_: T-003
 
-- [ ] **T-006** [REQ-007, REQ-008, REQ-009] `ForcedClock` over a `MetadataIo` trait (real impl via
+- [x?] **T-006** [REQ-007, REQ-008, REQ-009] `ForcedClock` over a `MetadataIo` trait (real impl via
   `pw-metadata`): `apply` saves previous values on first use and writes quantum and rate;
   `restore` writes them back only while still ours. Command worker applies it before starting a
   PipeWire stream and on every config change, and restores when switching to ALSA.
@@ -74,7 +74,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
     buffer 256 → updates within a second
   - _Depends on_: T-005
 
-- [ ] **T-007** [REQ-009] Termination handler: `ctrlc` (feature `termination`) restores the
+- [x?] **T-007** [REQ-009] Termination handler: `ctrlc` (feature `termination`) restores the
   `ForcedClock` and exits.
   - _Files_: `Engine/Cargo.toml`, `Engine/src/main.rs`, `Engine/src/audio/engine.rs`
   - _Output_: Ctrl+C / SIGTERM leave PipeWire's settings as they were
@@ -82,7 +82,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
     is back; `kill -TERM` likewise
   - _Depends on_: T-006
 
-- [ ] **T-008** [REQ-010] Foreign forcing: `on_pipewire_graph` on the PipeWire driver never
+- [x?] **T-008** [REQ-010] Foreign forcing: `on_pipewire_graph` on the PipeWire driver never
   reopens; when the graph's forced values aren't ours it marks `forced_by_other`, and
   `describe_mismatch` says another application forces the quantum/rate. The next
   `set_audio_config` forces again.
@@ -93,7 +93,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
     2048` with Sonara at 512 → 2048-frame blocks, no xruns, `/audio/config` mismatch names it
   - _Depends on_: T-006
 
-- [ ] **T-009** [REQ-012, REQ-013, REQ-014] Output health: callback stores `playback − callback`
+- [x?] **T-009** [REQ-012, REQ-013, REQ-014] Output health: callback stores `playback − callback`
   and its tid once; the error callback maps `Xrun` and `RealtimeDenied`; gap detection and pw-top
   ERR are skipped on the PipeWire driver; the monitor keeps running without the PipeWire tools,
   derives `RealtimeState` and sends `AudioCommand::OutputHealth` on change; `/audio/config`
@@ -110,7 +110,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
 
 ## Phase 3 — Godot
 
-- [ ] **T-010** [REQ-002, REQ-003, REQ-005, REQ-012, REQ-013] Register `audio/driver`;
+- [x?] **T-010** [REQ-002, REQ-003, REQ-005, REQ-012, REQ-013] Register `audio/driver`;
   `AudioConfig` sends the driver, parses the new `/audio/device` and `/audio/config` fields,
   resets the device and re-requests devices on a driver change; `AudioSettingControl` shows the
   Driver row, device labels, output latency and realtime state.
@@ -123,7 +123,7 @@ Prerequisite: `libpipewire-0.3-dev libspa-0.2-dev libclang-dev libdbus-1-dev` in
 
 ## Phase 4 — docs
 
-- [ ] **T-011** [REQ-all] Update `osc-protocol.md` (audio section), `engine-architecture.md`
+- [x?] **T-011** [REQ-all] Update `osc-protocol.md` (audio section), `engine-architecture.md`
   (monitor line, output section, command classification), `engine-debugging.md` (xrun sources,
   forcing) and `CONTEXT.md` (Driver, Forced quantum).
   - _Files_: `docs/subsystems/osc-protocol.md`, `docs/subsystems/engine-architecture.md`,

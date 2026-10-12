@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::command_worker::CommandWorker;
 pub use super::commands::{AudioCommand, EngineStatus};
-use super::pipewire;
+use super::pipewire::{self, ForcedClock};
 pub use super::state::EngineState;
 use super::stream::{
     CallbackContext, CallbackCounters, StreamControl, StreamRequest, MAX_BLOCK_FRAMES,
@@ -23,28 +23,35 @@ pub struct AudioEngine {
     command_tx: Sender<AudioCommand>,
     state: Arc<Mutex<EngineState>>,
     status_rx: Receiver<EngineStatus>,
+    forced_clock: Arc<Mutex<ForcedClock>>,
 }
 
 impl AudioEngine {
     /// Create and initialize a new audio engine with provided status channel. The stream opens
-    /// on the default device at the default rate and buffer size; Godot then sends the saved
-    /// settings (`AudioCommand::SetAudioConfig`).
+    /// on the default driver's default device at the default rate and buffer size (falling back
+    /// like a settings change does); Godot then sends the saved settings
+    /// (`AudioCommand::SetAudioConfig`).
     pub fn with_status_channel(
         status_tx: Sender<EngineStatus>,
         status_rx: Receiver<EngineStatus>,
     ) -> Result<Self> {
         info!("Initializing DAW audio engine...");
-        info!("Using audio host: {}", cpal::default_host().id().name());
 
         // Create command channel for thread-safe communication
         let (command_tx, command_rx) = crossbeam::channel::unbounded();
 
         let state = Arc::new(Mutex::new(EngineState::default()));
-        let (block_clock, rendering) = {
-            let fresh = state.lock().expect("fresh state lock");
-            (fresh.block_clock.clone(), fresh.rendering.clone())
+        let (block_clock, rendering, sample_rate) = {
+            let mut fresh = state.lock().expect("fresh state lock");
+            fresh.ensure_master_channel(MAX_BLOCK_FRAMES);
+            (
+                fresh.block_clock.clone(),
+                fresh.rendering.clone(),
+                fresh.device_sample_rate,
+            )
         };
         let counters = Arc::new(CallbackCounters::default());
+        let forced_clock = Arc::new(Mutex::new(ForcedClock::system()));
 
         let stream = StreamControl::spawn(CallbackContext {
             status_tx: status_tx.clone(),
@@ -53,38 +60,23 @@ impl AudioEngine {
             block_clock: block_clock.clone(),
             rendering,
         })?;
-        let request = StreamRequest::default();
-        let resolved = stream
-            .resolve(&request)
-            .map_err(anyhow::Error::msg)
-            .context("No usable output device")?;
-        let sample_rate = resolved.sample_rate;
-        {
-            let mut state_lock = state.lock().unwrap();
-            state_lock.device_sample_rate = sample_rate as f32;
-            state_lock.settings.sample_rate = sample_rate as i32;
-            state_lock.ensure_master_channel(MAX_BLOCK_FRAMES);
-        }
-        let active = stream
-            .start()
-            .map_err(anyhow::Error::msg)
-            .context("Failed to start the output stream")?;
-        info!(
-            "Output: {} at {} Hz, {} channels, period {} frames",
-            active.device, active.sample_rate, active.channels, active.period_frames
-        );
 
-        // Command thread: applies commands, doing slow work outside the state lock
-        let worker = CommandWorker::new(
+        // Command thread: applies commands, doing slow work outside the state lock. It opens the
+        // first stream before it starts taking commands.
+        let request = StreamRequest::default();
+        info!("Using audio driver: {}", request.driver.label());
+        let mut worker = CommandWorker::new(
             state.clone(),
             status_tx.clone(),
             command_tx.clone(),
-            sample_rate as f32,
+            sample_rate,
             MAX_BLOCK_FRAMES,
             block_clock,
             stream,
             request,
+            forced_clock.clone(),
         );
+        worker.open_output();
         let command_thread = thread::Builder::new()
             .name("engine-commands".to_string())
             .spawn(move || worker.run(command_rx))
@@ -97,7 +89,14 @@ impl AudioEngine {
             command_tx,
             state,
             status_rx,
+            forced_clock,
         })
+    }
+
+    /// The engine's forcing of PipeWire's quantum and rate, for the termination handler to
+    /// restore.
+    pub fn forced_clock(&self) -> Arc<Mutex<ForcedClock>> {
+        self.forced_clock.clone()
     }
 
     /// Hardware callback rate the mixer and devices are running at.

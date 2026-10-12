@@ -461,6 +461,17 @@ func _register_all_settings() -> void:
 
 	# --- Audio: output device (engine-stability-plan Phase 7). AudioConfig applies them live. ---
 	_register(Setting.new(
+		"audio/driver",
+		"Driver",
+		Type.STRING,
+		"pipewire",
+		CATEGORY_AUDIO,
+		"How the engine talks to the sound system.\n\n"
+		+ "PipeWire: the engine plays through PipeWire natively and sets the graph's quantum to the buffer size while it runs (restored on exit).\n\n"
+		+ "ALSA: the engine opens an ALSA device: hardware directly, or PipeWire's ALSA bridge. Use it when PipeWire isn't running or to bypass native PipeWire.\n\n"
+		+ "Changing the driver resets the output device to the system default.",
+	)).sub("Output").scene("res://settings/AudioSettingControl.tscn")
+	_register(Setting.new(
 		"audio/output_device",
 		"Output Device",
 		Type.STRING,
@@ -484,7 +495,8 @@ func _register_all_settings() -> void:
 		1024,
 		CATEGORY_AUDIO,
 		"Frames the engine renders per block. Smaller buffers lower latency but cost more CPU and can crackle.\n\n"
-		+ "Under PipeWire the engine never runs a buffer that can't hold the graph's quantum: when the quantum is larger, it uses a bigger buffer and says so here.",
+		+ "PipeWire driver: the engine sets PipeWire's quantum to this size while it runs and restores it on exit. If another application forces a different quantum, the engine follows it and says so here.\n\n"
+		+ "ALSA driver: if PipeWire's quantum is larger, the engine uses a bigger buffer that holds it and says so here.",
 	)).sub("Output").range(32, 2048, 1).scene("res://settings/AudioSettingControl.tscn")
 
 	# --- Audio: plugin hosting (engine-stability-plan Phase 5) ---

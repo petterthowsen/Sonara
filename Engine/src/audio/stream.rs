@@ -1,5 +1,6 @@
-//! The hardware output stream (Phase 7): device enumeration, config selection, and the stream
-//! thread that owns the CPAL stream and its watchdog.
+//! The hardware output stream (Phase 7, spec 041): device enumeration per driver (native
+//! PipeWire or ALSA), config selection, and the stream thread that owns the CPAL stream and its
+//! watchdog.
 //!
 //! `Stream` is `!Send`, so one thread owns it and takes requests over a channel. The command
 //! thread reconfigures in steps (`stop`, `resolve`, prepare devices, `start`) so devices can be
@@ -7,11 +8,9 @@
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{
-    BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize,
-};
+use cpal::{BufferSize, Device, SampleFormat, Stream, StreamConfig, SupportedBufferSize};
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,17 +28,18 @@ use super::state::EngineState;
 /// size, so a buffer-size change never reallocates them.
 pub const MAX_BLOCK_FRAMES: usize = 8192;
 
-/// cpal 0.15's ALSA backend sets the period to a quarter of `BufferSize::Fixed`, so the engine
-/// asks for a buffer of this many periods. The period is the buffer-size setting (frames per
-/// callback, which PipeWire adopts as the node latency). Recheck after a cpal upgrade.
-pub const ALSA_PERIODS: u32 = 4;
+/// cpal 0.18's ALSA backend makes `BufferSize::Fixed(n)` a period of `n` frames in a buffer of
+/// this many periods. The period is the buffer-size setting (frames per callback). Recheck after
+/// a cpal upgrade.
+pub const ALSA_PERIODS: u32 = 2;
 
 /// Smallest period the engine asks for.
 pub const MIN_PERIOD_FRAMES: u32 = 32;
 
-/// Largest period: cpal's ALSA callback can deliver the whole buffer (`ALSA_PERIODS` periods) at
-/// once, and that must still fit `MAX_BLOCK_FRAMES`.
-pub const MAX_PERIOD_FRAMES: u32 = MAX_BLOCK_FRAMES as u32 / ALSA_PERIODS;
+/// Largest period the engine asks for (PipeWire's default `clock.max-quantum`). Callbacks may
+/// still be longer (another application forcing a larger quantum); `run_live_block` renders
+/// those in `MAX_BLOCK_FRAMES` chunks.
+pub const MAX_PERIOD_FRAMES: u32 = 2048;
 
 /// Rate and period used until Godot sends the saved settings (and when they can't be opened).
 pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
@@ -72,13 +72,63 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const STATS_INTERVAL: Duration = Duration::from_millis(500);
 
 /// With a device-default buffer (size unknown), a gap between callback starts longer than this
-/// many block durations counts as an xrun. cpal 0.15's ALSA backend recovers underruns without
-/// calling the error callback, so callback gaps are the main xrun signal.
+/// many block durations counts as an xrun. On the ALSA driver callback gaps are the main xrun
+/// signal; the PipeWire driver reports underruns itself (`ErrorKind::Xrun`).
 const XRUN_GAP_FACTOR: f64 = 1.5;
+
+/// The way the engine reaches the sound system (spec 041).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Driver {
+    /// A native PipeWire node: one block per graph cycle, no extra ring.
+    #[default]
+    PipeWire,
+    /// An ALSA device (PipeWire's ALSA bridge or real hardware).
+    Alsa,
+}
+
+impl Driver {
+    /// The name used in OSC and `config.json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Driver::PipeWire => "pipewire",
+            Driver::Alsa => "alsa",
+        }
+    }
+
+    /// Parse an OSC/config name; None for an unknown one.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "pipewire" => Some(Driver::PipeWire),
+            "alsa" => Some(Driver::Alsa),
+            _ => None,
+        }
+    }
+
+    /// The readable name, for logs and notices.
+    pub fn label(self) -> &'static str {
+        match self {
+            Driver::PipeWire => "PipeWire",
+            Driver::Alsa => "ALSA",
+        }
+    }
+
+    fn host_id(self) -> cpal::HostId {
+        match self {
+            Driver::PipeWire => cpal::HostId::PipeWire,
+            Driver::Alsa => cpal::HostId::Alsa,
+        }
+    }
+}
+
+/// cpal's PipeWire pseudo-devices that follow the default sink. Godot's "System default" stands
+/// for them, so they aren't listed.
+const PIPEWIRE_DEFAULT_IDS: [&str; 2] = ["output_default", "sink_default"];
 
 /// The output configuration the user asked for. An empty `device` is the system default.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamRequest {
+    pub driver: Driver,
+    /// The device's id on `driver` (`Device::id`), "" for the system default.
     pub device: String,
     pub sample_rate: u32,
     pub period_frames: u32,
@@ -87,6 +137,7 @@ pub struct StreamRequest {
 impl Default for StreamRequest {
     fn default() -> Self {
         Self {
+            driver: Driver::default(),
             device: String::new(),
             sample_rate: DEFAULT_SAMPLE_RATE,
             period_frames: DEFAULT_PERIOD_FRAMES,
@@ -97,10 +148,15 @@ impl Default for StreamRequest {
 /// The configuration a stream actually runs with, which may differ from the request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamInfo {
+    pub driver: Driver,
+    /// The device's id on `driver`.
     pub device: String,
+    /// The device's readable name.
+    pub label: String,
     pub is_default_device: bool,
     pub sample_rate: u32,
-    /// Frames per callback asked of ALSA; 0 when the device only opened with its own default.
+    /// Frames per callback asked of the driver; 0 when the device only opened with its own
+    /// default.
     pub period_frames: u32,
     pub channels: u16,
 }
@@ -123,7 +179,10 @@ impl StreamInfo {
 /// One output device, for the Settings device list.
 #[derive(Debug, Clone)]
 pub struct OutputDeviceInfo {
-    pub name: String,
+    /// What `/audio/config/set` takes.
+    pub id: String,
+    /// The readable name.
+    pub label: String,
     pub is_default: bool,
     /// Empty when the device couldn't be queried (busy, or no f32 support).
     pub sample_rates: Vec<u32>,
@@ -139,9 +198,18 @@ pub struct CallbackCounters {
     /// Incremented on every callback (including lock-miss silence) so the watchdog can tell
     /// hardware is still waking this process.
     pub callbacks: AtomicU64,
-    /// Stream errors, callback gaps and PipeWire errors on the engine's node.
+    /// Underruns: the PipeWire driver's own reports, or on ALSA stream errors, callback gaps
+    /// and PipeWire errors on the engine's node.
     pub xruns: AtomicU64,
     pub lock_misses: AtomicU64,
+    /// Driver-measured time from rendering a block to it reaching the hardware, in µs.
+    pub output_latency_us: AtomicU32,
+    /// The callback thread's id, stored by the first callback of each stream (0 until then).
+    pub callback_tid: AtomicI32,
+    /// The driver couldn't give the callback thread realtime scheduling.
+    pub realtime_denied: AtomicBool,
+    /// The running stream is a native PipeWire node (xruns come from the driver itself).
+    pub native_pipewire: AtomicBool,
 }
 
 /// What every stream callback needs, cloned into each stream the thread opens.
@@ -311,14 +379,32 @@ fn start(ctx: &CallbackContext, resolved: Resolved) -> Result<ActiveStream, Stri
         mut config,
         mut info,
     } = resolved;
+    let counters = &ctx.counters;
+    counters
+        .native_pipewire
+        .store(info.driver == Driver::PipeWire, Ordering::Relaxed);
+    counters.callback_tid.store(0, Ordering::Relaxed);
+    counters.realtime_denied.store(false, Ordering::Relaxed);
+    counters.output_latency_us.store(0, Ordering::Relaxed);
     let stream = open_output_stream(&device, &mut config, ctx).map_err(|e| e.to_string())?;
     if config.buffer_size == BufferSize::Default {
         info.period_frames = 0;
     }
     stream.play().map_err(|e| e.to_string())?;
+    let ring = match (info.driver, config.buffer_size) {
+        (Driver::Alsa, BufferSize::Fixed(_)) => format!(", ALSA buffer {} periods", ALSA_PERIODS),
+        _ => String::new(),
+    };
     info!(
-        "Audio stream started: {} at {} Hz, {} channels, period {} frames ({:?})",
-        info.device, info.sample_rate, info.channels, info.period_frames, config.buffer_size
+        "Audio stream started on {}: {} ({}) at {} Hz, {} channels, period {} frames ({:?}{})",
+        info.driver.label(),
+        info.label,
+        info.device,
+        info.sample_rate,
+        info.channels,
+        info.period_frames,
+        config.buffer_size,
+        ring
     );
     Ok(ActiveStream {
         stream,
@@ -353,7 +439,7 @@ fn watchdog(ctx: &CallbackContext, running: &mut ActiveStream) {
         stalled_at.elapsed().as_secs_f32()
     );
 
-    let mut config = running.config.clone();
+    let mut config = running.config;
     match open_output_stream(&running.device, &mut config, ctx) {
         Ok(new_stream) => match new_stream.play() {
             Ok(()) => {
@@ -371,32 +457,83 @@ fn watchdog(ctx: &CallbackContext, running: &mut ActiveStream) {
     running.backoff = (running.backoff * 2).min(Duration::from_secs(10));
 }
 
+/// The cpal host for `driver`.
+fn open_host(driver: Driver) -> Result<cpal::Host, String> {
+    cpal::host_from_id(driver.host_id())
+        .map_err(|e| format!("{} isn't available: {}", driver.label(), e))
+}
+
+/// A device's id on its host ("" when it has none).
+fn device_id(device: &Device) -> String {
+    device
+        .id()
+        .map(|id| id.id().to_string())
+        .unwrap_or_default()
+}
+
+/// A device's readable name: the default sink's description for PipeWire's default
+/// pseudo-device (`default_sink` is that sink's id, from the session manager).
+fn device_label(device: &Device, default_sink: Option<&(String, String)>) -> String {
+    let id = device_id(device);
+    if PIPEWIRE_DEFAULT_IDS.contains(&id.as_str()) {
+        if let Some((_, label)) = default_sink {
+            return label.clone();
+        }
+    }
+    device
+        .description()
+        .map(|description| description.name().to_string())
+        .unwrap_or(id)
+}
+
+/// The id and readable name of the device the system default plays on.
+fn default_device(host: &cpal::Host, driver: Driver) -> Option<(String, String)> {
+    match driver {
+        Driver::PipeWire => {
+            let id = super::pipewire::default_sink_name()?;
+            let device = host
+                .output_devices()
+                .ok()?
+                .find(|device| device_id(device) == id)?;
+            Some((id, device_label(&device, None)))
+        }
+        Driver::Alsa => {
+            let device = host.default_output_device()?;
+            Some((device_id(&device), device_label(&device, None)))
+        }
+    }
+}
+
 /// Find the device for `request` and choose its config.
 fn resolve(request: &StreamRequest) -> Result<Resolved, String> {
-    let host = cpal::default_host();
-    let default_name = host
-        .default_output_device()
-        .and_then(|device| device.name().ok());
+    let host = open_host(request.driver)?;
+    let default = default_device(&host, request.driver);
     let device = if request.device.is_empty() {
         host.default_output_device()
             .ok_or_else(|| "no default output device".to_string())?
     } else {
         host.output_devices()
             .map_err(|e| e.to_string())?
-            .find(|device| device.name().ok().as_deref() == Some(request.device.as_str()))
+            .find(|device| device_id(device) == request.device)
             .ok_or_else(|| format!("output device '{}' not found", request.device))?
     };
-    let name = device.name().map_err(|e| e.to_string())?;
+    let id = device_id(&device);
+    let label = device_label(&device, default.as_ref());
     let config = select_stream_config(&device, request.sample_rate, request.period_frames)
-        .map_err(|e| format!("{}: {}", name, e))?;
+        .map_err(|e| format!("{}: {}", label, e))?;
     let period_frames = match config.buffer_size {
-        BufferSize::Fixed(frames) => frames / ALSA_PERIODS,
+        BufferSize::Fixed(frames) => frames,
         BufferSize::Default => 0,
     };
     let info = StreamInfo {
-        is_default_device: request.device.is_empty() || default_name.as_deref() == Some(&name),
-        device: name,
-        sample_rate: config.sample_rate.0,
+        driver: request.driver,
+        is_default_device: request.device.is_empty()
+            || default
+                .as_ref()
+                .is_some_and(|(default_id, _)| *default_id == id),
+        device: id,
+        label,
+        sample_rate: config.sample_rate,
         period_frames,
         channels: config.channels,
     };
@@ -407,8 +544,8 @@ fn resolve(request: &StreamRequest) -> Result<Resolved, String> {
     })
 }
 
-/// Choose an f32 output config at `sample_rate` with a fixed buffer of `ALSA_PERIODS` periods,
-/// falling back to the device's default rate when it can't run at `sample_rate`.
+/// Choose an f32 output config at `sample_rate` with a fixed period of `period_frames`, falling
+/// back to the device's default rate when it can't run at `sample_rate`.
 fn select_stream_config(
     device: &Device,
     sample_rate: u32,
@@ -425,7 +562,7 @@ fn select_stream_config(
     {
         sample_rate
     } else {
-        let fallback = default_config.sample_rate().0;
+        let fallback = default_config.sample_rate();
         warn!(
             "Device has no {} Hz f32 output config, using {} Hz",
             sample_rate, fallback
@@ -451,22 +588,22 @@ fn select_stream_config(
     };
 
     let buffer_frames = fixed_buffer_frames(period_frames, range.buffer_size());
-    let mut config = range.clone().with_sample_rate(SampleRate(rate)).config();
+    let mut config = (*range).with_sample_rate(rate).config();
     config.buffer_size = BufferSize::Fixed(buffer_frames);
     Ok(config)
 }
 
 fn range_supports(range: &cpal::SupportedStreamConfigRange, rate: u32) -> bool {
-    range.min_sample_rate().0 <= rate && rate <= range.max_sample_rate().0
+    range.min_sample_rate() <= rate && rate <= range.max_sample_rate()
 }
 
-/// `ALSA_PERIODS` periods of `period_frames`, within the device's buffer range.
+/// `period_frames` within the engine's and the device's period range (cpal 0.18 reports the
+/// period range for ALSA and the quantum range for PipeWire).
 fn fixed_buffer_frames(period_frames: u32, range: &SupportedBufferSize) -> u32 {
     let period = period_frames.clamp(MIN_PERIOD_FRAMES, MAX_PERIOD_FRAMES);
-    let frames = period * ALSA_PERIODS;
     match *range {
-        SupportedBufferSize::Range { min, max } if min <= max => frames.clamp(min, max),
-        _ => frames,
+        SupportedBufferSize::Range { min, max } if min <= max && max > 0 => period.clamp(min, max),
+        _ => period,
     }
 }
 
@@ -487,26 +624,33 @@ fn pick_channels(counts: &[u16], default: u16) -> u16 {
     }
 }
 
-/// Every output device with the rates and period range it supports. Opens each device to query
-/// it, so it's slow: run it off the command and stream threads.
-pub fn list_output_devices(active: Option<&StreamInfo>) -> Vec<OutputDeviceInfo> {
-    let host = cpal::default_host();
-    let default_name = host
-        .default_output_device()
-        .and_then(|device| device.name().ok());
+/// Every output device on `driver` with the rates and period range it supports. Opens each ALSA
+/// device to query it, so it's slow: run it off the command and stream threads.
+pub fn list_output_devices(driver: Driver, active: Option<&StreamInfo>) -> Vec<OutputDeviceInfo> {
+    let host = match open_host(driver) {
+        Ok(host) => host,
+        Err(e) => {
+            warn!("Can't list output devices: {}", e);
+            return Vec::new();
+        }
+    };
+    let default_id = default_device(&host, driver).map(|(id, _)| id);
     let Ok(devices) = host.output_devices() else {
         return Vec::new();
     };
 
     let mut list = Vec::new();
     for device in devices {
-        let Ok(name) = device.name() else {
+        let id = device_id(&device);
+        if id.is_empty()
+            || (driver == Driver::PipeWire && PIPEWIRE_DEFAULT_IDS.contains(&id.as_str()))
+        {
             continue;
-        };
-        let is_default = default_name.as_deref() == Some(name.as_str());
+        }
         let mut info = OutputDeviceInfo {
-            name,
-            is_default,
+            is_default: default_id.as_deref() == Some(id.as_str()),
+            label: device_label(&device, None),
+            id,
             sample_rates: Vec::new(),
             min_period: MIN_PERIOD_FRAMES,
             max_period: MAX_PERIOD_FRAMES,
@@ -521,7 +665,9 @@ pub fn list_output_devices(active: Option<&StreamInfo>) -> Vec<OutputDeviceInfo>
             }
             Err(_) => {
                 // Busy: a hardware device the engine itself has open reports what it runs.
-                if let Some(active) = active.filter(|active| active.device == info.name) {
+                if let Some(active) =
+                    active.filter(|active| active.driver == driver && active.device == info.id)
+                {
                     info.sample_rates = vec![active.sample_rate];
                     info.channels = active.channels;
                 }
@@ -539,7 +685,7 @@ fn fill_device_info(
 ) {
     let mut rates: Vec<u32> = Vec::new();
     for range in ranges {
-        let (min, max) = (range.min_sample_rate().0, range.max_sample_rate().0);
+        let (min, max) = (range.min_sample_rate(), range.max_sample_rate());
         if min == max {
             rates.push(min);
         } else {
@@ -559,10 +705,12 @@ fn fill_device_info(
     info.channels = pick_channels(&counts, default_channels);
 
     if let Some(SupportedBufferSize::Range { min, max }) =
-        ranges.first().map(|range| range.buffer_size().clone())
+        ranges.first().map(|range| *range.buffer_size())
     {
-        info.min_period = (min / ALSA_PERIODS).clamp(MIN_PERIOD_FRAMES, MAX_PERIOD_FRAMES);
-        info.max_period = (max / ALSA_PERIODS).clamp(info.min_period, MAX_PERIOD_FRAMES);
+        if min <= max && max > 0 {
+            info.min_period = min.clamp(MIN_PERIOD_FRAMES, MAX_PERIOD_FRAMES);
+            info.max_period = max.clamp(info.min_period, MAX_PERIOD_FRAMES);
+        }
     }
 }
 
@@ -639,6 +787,7 @@ impl LoadWindow {
 /// `STATS_INTERVAL`, sends `EngineStatus::EngineStats` (also after a lock miss, so the UI can
 /// tell a busy engine from a stalled one).
 fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) -> Result<Stream> {
+    let native_pipewire = ctx.counters.native_pipewire.load(Ordering::Relaxed);
     let CallbackContext {
         status_tx,
         state,
@@ -646,22 +795,22 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
         block_clock,
         rendering,
     } = ctx;
-    let sample_rate = config.sample_rate.0;
+    let sample_rate = config.sample_rate;
     let channels = config.channels as usize;
 
     let mut samples_since_update = 0;
     let update_interval = sample_rate / 20;
 
     let mut load = LoadWindow::new(Instant::now());
-    // Start and expected duration of the previous callback, for gap (xrun) detection.
+    // Start and expected duration of the previous callback, for gap (xrun) detection on ALSA.
     let mut previous_block: Option<(Instant, Duration)> = None;
-    // cpal's ALSA callback fills all free space, so the ring is full after every callback and
-    // underruns only if the next one comes later than the whole buffer lasts. Comparing with the
-    // previous block instead miscounts when block sizes vary, as they do while PipeWire
-    // resamples the stream (1024/1881/2739 frames at 44.1 kHz in a 48 kHz graph).
+    // The ALSA ring underruns only if the next callback comes later than the whole buffer
+    // (`ALSA_PERIODS` periods) lasts. Comparing with the previous block instead miscounts when
+    // block sizes vary, as they do while PipeWire resamples the stream (1024/1881/2739 frames at
+    // 44.1 kHz in a 48 kHz graph).
     let buffer_duration = match config.buffer_size {
         BufferSize::Fixed(frames) => Some(Duration::from_secs_f64(
-            frames as f64 / sample_rate.max(1) as f64,
+            (frames * ALSA_PERIODS) as f64 / sample_rate.max(1) as f64,
         )),
         BufferSize::Default => None,
     };
@@ -669,8 +818,8 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
     let error_counters = counters.clone();
 
     let stream = device.build_output_stream(
-        config,
-        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+        *config,
+        move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
             crate::audio::dsp::denormal::flush_denormals_to_zero();
             let processing_start = Instant::now();
             counters.callbacks.fetch_add(1, Ordering::Relaxed);
@@ -678,15 +827,31 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
             let frames = data.len() / channels;
             let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
 
-            if let Some((previous_start, previous_duration)) = previous_block {
-                let gap = processing_start.duration_since(previous_start);
-                let limit =
-                    buffer_duration.unwrap_or_else(|| previous_duration.mul_f64(XRUN_GAP_FACTOR));
-                if gap > limit {
-                    counters.xruns.fetch_add(1, Ordering::Relaxed);
-                }
+            let timestamp = info.timestamp();
+            let latency = timestamp.playback.duration_since(timestamp.callback);
+            counters.output_latency_us.store(
+                latency.as_micros().min(u32::MAX as u128) as u32,
+                Ordering::Relaxed,
+            );
+            if counters.callback_tid.load(Ordering::Relaxed) == 0 {
+                // SAFETY: gettid has no preconditions. One syscall, on the first callback only.
+                let tid = unsafe { libc::gettid() };
+                counters.callback_tid.store(tid, Ordering::Relaxed);
             }
-            previous_block = Some((processing_start, block_duration));
+
+            // The PipeWire driver reports its underruns itself (`ErrorKind::Xrun`), and its
+            // callbacks are scheduled by the graph, so a gap means nothing there.
+            if !native_pipewire {
+                if let Some((previous_start, previous_duration)) = previous_block {
+                    let gap = processing_start.duration_since(previous_start);
+                    let limit = buffer_duration
+                        .unwrap_or_else(|| previous_duration.mul_f64(XRUN_GAP_FACTOR));
+                    if gap > limit {
+                        counters.xruns.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                previous_block = Some((processing_start, block_duration));
+            }
 
             rt_debug::check_callback(|| {
                 let outcome = run_live_block(
@@ -734,9 +899,17 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
                 rt_debug::report();
             }
         },
-        move |err| {
-            error_counters.xruns.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!("Audio stream error: {}", err);
+        move |err: cpal::Error| match err.kind() {
+            cpal::ErrorKind::Xrun => {
+                error_counters.xruns.fetch_add(1, Ordering::Relaxed);
+            }
+            cpal::ErrorKind::RealtimeDenied => {
+                error_counters
+                    .realtime_denied
+                    .store(true, Ordering::Relaxed);
+                tracing::warn!("Realtime scheduling denied for the audio callback: {}", err);
+            }
+            _ => tracing::warn!("Audio stream error: {}", err),
         },
         None,
     )?;
@@ -754,8 +927,8 @@ enum LiveBlock {
     Rendering,
 }
 
-/// Render one live block into the interleaved `data`, then run `after` with the state still
-/// locked (meter sends). Outputs silence when the state lock stays busy or an offline render
+/// Render one live callback into the interleaved `data` (in `MAX_BLOCK_FRAMES` chunks when it is
+/// longer), then run `after` with the state still locked (meter sends). Outputs silence when the state lock stays busy or an offline render
 /// runs. The render flag is checked before locking (so a render holding the lock for a block
 /// doesn't count as lock misses) and again after (a render may have started while this
 /// callback waited for the lock).
@@ -775,10 +948,15 @@ fn run_live_block(
         data.fill(0.0);
         return LiveBlock::Rendering;
     }
-    let frames = data.len() / channels.max(1);
-    let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
-    // One absolute deadline for every subprocess plugin in this callback.
-    block_clock.publish(processing_start, block_duration);
+    let channels = channels.max(1);
+    let chunk_samples = MAX_BLOCK_FRAMES * channels;
+    let chunk_duration = |chunk: &[f32]| {
+        Duration::from_secs_f64((chunk.len() / channels) as f64 / sample_rate as f64)
+    };
+    // One absolute deadline for every subprocess plugin in this chunk (the first one here; the
+    // rest below, when the driver delivers more than `MAX_BLOCK_FRAMES`).
+    let first_chunk = data.len().min(chunk_samples);
+    block_clock.publish(processing_start, chunk_duration(&data[..first_chunk]));
 
     let Some(mut state) = lock_state_for_callback(state, processing_start) else {
         data.fill(0.0);
@@ -789,37 +967,50 @@ fn run_live_block(
         return LiveBlock::Rendering;
     }
 
-    // Cross-channel sidechain taps (spec 036): the previous block's post-fader snapshots
-    // reach the subscribing modulators before this block's device passes run.
-    rt_debug::section("sidechain feed", || {
-        crate::audio::mixing::sidechain::feed_taps(&mut state)
-    });
-
-    rt_debug::section("clear buffers", || {
-        for channel in state.channels.values_mut() {
-            channel.clear_buffers();
+    // A callback longer than the preallocated buffers (another application forcing a large
+    // quantum) renders as consecutive blocks under the one lock.
+    let mut chunk_start = processing_start;
+    for (index, chunk) in data.chunks_mut(chunk_samples).enumerate() {
+        let frames = chunk.len() / channels;
+        if index > 0 {
+            block_clock.publish(Instant::now(), chunk_duration(chunk));
         }
-    });
 
-    rt_debug::section("process_audio", || {
-        process_audio(&mut state, frames, sample_rate, processing_start)
-    });
-    rt_debug::section("mix_and_output", || {
-        mix_and_output(&mut state, data, channels, frames, status_tx)
-    });
+        // Cross-channel sidechain taps (spec 036): the previous block's post-fader snapshots
+        // reach the subscribing modulators before this block's device passes run.
+        rt_debug::section("sidechain feed", || {
+            crate::audio::mixing::sidechain::feed_taps(&mut state)
+        });
 
-    // The browser preview goes straight to the output, after the master (spec 037).
-    rt_debug::section("preview", || {
-        if state.preview.mix_into(data, channels, sample_rate) {
-            let _ = status_tx.try_send(state.preview.status());
-        }
-    });
+        rt_debug::section("clear buffers", || {
+            for channel in state.channels.values_mut() {
+                channel.clear_buffers();
+            }
+        });
 
-    rt_debug::section("update_peaks", || {
-        for channel in state.channels.values_mut() {
-            channel.update_peaks(frames, sample_rate);
-        }
-    });
+        rt_debug::section("process_audio", || {
+            process_audio(&mut state, frames, sample_rate, chunk_start)
+        });
+        rt_debug::section("mix_and_output", || {
+            mix_and_output(&mut state, chunk, channels, frames, status_tx)
+        });
+
+        // The browser preview goes straight to the output, after the master (spec 037).
+        rt_debug::section("preview", || {
+            if state.preview.mix_into(chunk, channels, sample_rate) {
+                let _ = status_tx.try_send(state.preview.status());
+            }
+        });
+
+        rt_debug::section("update_peaks", || {
+            for channel in state.channels.values_mut() {
+                channel.update_peaks(frames, sample_rate);
+            }
+        });
+
+        // Live MIDI lands relative to the chunk's place in the callback.
+        chunk_start += Duration::from_secs_f64(frames as f64 / sample_rate as f64);
+    }
 
     after(&mut state);
     LiveBlock::Rendered
@@ -876,25 +1067,7 @@ mod tests {
 
     #[test]
     fn live_output_is_silent_while_rendering() {
-        use crate::audio::channel::Channel;
-        use crate::audio::devices::{AudioDevice, PolySynthDevice};
-
-        let mut state = EngineState::default();
-        state.ensure_master_channel(MAX_BLOCK_FRAMES);
-        let mut channel = Channel::new(2, "Synth".to_string(), MAX_BLOCK_FRAMES, 48_000.0);
-        let mut synth = PolySynthDevice::new(48_000.0);
-        synth.prepare(48_000.0, MAX_BLOCK_FRAMES);
-        channel.devices.push(Box::new(synth));
-        channel.send_note_event_to_devices(
-            &crate::audio::NoteEvent::On {
-                note_id: 1,
-                key: 60,
-                velocity: 100.0 / 127.0,
-            },
-            0,
-        );
-        state.channels.insert(2, channel);
-        state.set_is_playing(true);
+        let state = synth_state();
         let rendering = state.rendering.clone();
         let block_clock = state.block_clock.clone();
         let state = Mutex::new(state);
@@ -1019,32 +1192,120 @@ mod tests {
     }
 
     #[test]
-    fn buffer_is_four_periods_within_the_device_range() {
+    fn alsa_buffer_is_the_period() {
         let wide = SupportedBufferSize::Range {
-            min: 64,
+            min: 16,
             max: 1 << 20,
         };
-        assert_eq!(fixed_buffer_frames(1024, &wide), 4096);
-        assert_eq!(fixed_buffer_frames(256, &wide), 1024);
+        assert_eq!(fixed_buffer_frames(1024, &wide), 1024);
+        assert_eq!(fixed_buffer_frames(256, &wide), 256);
         // Clamped to the engine's limits…
-        assert_eq!(fixed_buffer_frames(8192, &wide), MAX_BLOCK_FRAMES as u32);
-        assert_eq!(
-            fixed_buffer_frames(1, &wide),
-            MIN_PERIOD_FRAMES * ALSA_PERIODS
-        );
+        assert_eq!(fixed_buffer_frames(8192, &wide), MAX_PERIOD_FRAMES);
+        assert_eq!(fixed_buffer_frames(1, &wide), MIN_PERIOD_FRAMES);
         // …and to the device's.
         let narrow = SupportedBufferSize::Range {
-            min: 2048,
-            max: 3000,
+            min: 512,
+            max: 1000,
         };
-        assert_eq!(fixed_buffer_frames(128, &narrow), 2048);
-        assert_eq!(fixed_buffer_frames(1024, &narrow), 3000);
+        assert_eq!(fixed_buffer_frames(128, &narrow), 512);
+        assert_eq!(fixed_buffer_frames(1024, &narrow), 1000);
+        // A PipeWire device whose clock settings haven't arrived reports 0..0.
+        let unknown = SupportedBufferSize::Range { min: 0, max: 0 };
+        assert_eq!(fixed_buffer_frames(256, &unknown), 256);
+    }
+
+    #[test]
+    fn driver_parses() {
+        assert_eq!(Driver::parse("pipewire"), Some(Driver::PipeWire));
+        assert_eq!(Driver::parse("alsa"), Some(Driver::Alsa));
+        assert_eq!(Driver::parse("jack"), None);
+        assert_eq!(Driver::parse(""), None);
+        for driver in [Driver::PipeWire, Driver::Alsa] {
+            assert_eq!(Driver::parse(driver.as_str()), Some(driver));
+        }
+        assert_eq!(Driver::default(), Driver::PipeWire);
+    }
+
+    /// A playing state with a held PolySynth note on channel 2.
+    fn synth_state() -> EngineState {
+        use crate::audio::channel::Channel;
+        use crate::audio::devices::{AudioDevice, PolySynthDevice};
+
+        let mut state = EngineState::default();
+        state.ensure_master_channel(MAX_BLOCK_FRAMES);
+        let mut channel = Channel::new(2, "Synth".to_string(), MAX_BLOCK_FRAMES, 48_000.0);
+        let mut synth = PolySynthDevice::new(48_000.0);
+        synth.prepare(48_000.0, MAX_BLOCK_FRAMES);
+        channel.devices.push(Box::new(synth));
+        channel.send_note_event_to_devices(
+            &crate::audio::NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 100.0 / 127.0,
+            },
+            0,
+        );
+        state.channels.insert(2, channel);
+        state.set_is_playing(true);
+        state
+    }
+
+    #[test]
+    fn long_callbacks_render_in_chunks() {
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let render = |blocks: &[usize]| {
+            let state = synth_state();
+            let rendering = state.rendering.clone();
+            let block_clock = state.block_clock.clone();
+            let state = Mutex::new(state);
+            let mut out = Vec::new();
+            for &frames in blocks {
+                let mut data = vec![0.0; frames * 2];
+                let outcome = run_live_block(
+                    &state,
+                    &rendering,
+                    &block_clock,
+                    &mut data,
+                    2,
+                    48_000.0,
+                    Instant::now(),
+                    &status_tx,
+                    |_| {},
+                );
+                assert_eq!(outcome, LiveBlock::Rendered);
+                out.extend_from_slice(&data);
+            }
+            let tick = state.lock().unwrap().get_current_tick();
+            (out, tick)
+        };
+
+        let long = 2 * MAX_BLOCK_FRAMES;
+        let (chunked, chunked_tick) = render(&[long]);
+        let (split, split_tick) = render(&[MAX_BLOCK_FRAMES, MAX_BLOCK_FRAMES]);
+        assert_eq!(chunked.len(), long * 2);
+        assert!(
+            chunked[2 * MAX_BLOCK_FRAMES..]
+                .iter()
+                .any(|&s| s.abs() > 0.001),
+            "the second chunk plays"
+        );
+        assert_eq!(
+            chunked, split,
+            "one long callback sounds like two blocks of the largest size"
+        );
+        assert_eq!(
+            chunked_tick, split_tick,
+            "the transport advanced the whole callback"
+        );
+        assert!(chunked_tick > 0);
     }
 
     #[test]
     fn output_pairs_and_latency() {
         let info = StreamInfo {
+            driver: Driver::Alsa,
             device: "hw".into(),
+            label: "HW".into(),
             is_default_device: false,
             sample_rate: 48_000,
             period_frames: 480,

@@ -1093,7 +1093,8 @@ Level 0 has 64-frame blocks aligned to frame 0; each level merges two blocks of 
 
 ### `/audio/devices/request` (Godot -> Rust)
 
-No arguments. The engine lists its output devices on a background thread (it opens each one to
+No arguments. The engine lists the output devices of the **requested driver** (the driver of the
+last `/audio/config/set`) on a background thread (it opens each one to
 query it, which takes a moment). It answers with one `/audio/device` per device, then
 `/audio/devices/complete [i:count]`.
 
@@ -1101,22 +1102,33 @@ query it, which takes a moment). It answers with one `/audio/device` per device,
 
 | # | Type | Meaning |
 |---|---|---|
-| 0 | s | `name`: the device name, as `/audio/config/set` expects it |
-| 1 | i | `is_default`: 1 for the system default device |
-| 2 | i | `min_buffer`: smallest buffer size (frames per callback) the device takes |
-| 3 | i | `max_buffer`: largest, at most 2048 |
-| 4 | i | `channels`: output channels the engine would open (0 when it couldn't query the device) |
-| 5… | i | the sample rates it supports; none when the device is busy or has no f32 output |
+| 0 | s | `id`: the device id of that driver, as `/audio/config/set` expects it |
+| 1 | s | `label`: the readable name to show |
+| 2 | i | `is_default`: 1 for the driver's default device |
+| 3 | i | `min_buffer`: smallest buffer size (frames per callback) the device takes |
+| 4 | i | `max_buffer`: largest, at most 2048 |
+| 5 | i | `channels`: output channels the engine would open (0 when it couldn't query the device) |
+| 6… | i | the sample rates it supports; none when the device is busy or has no f32 output |
 
-### `/audio/config/set [s:device, i:rate, i:buffer]` (Godot -> Rust)
+The default pseudo-device of the PipeWire host isn't listed; Godot's "System default" stands for
+it. Godot requests the list again after a driver change.
 
-Run the output stream on `device` (`""` is the system default) at `rate` Hz with `buffer` frames
-per callback (clamped to 32–2048).
+### `/audio/config/set [s:device, i:rate, i:buffer, s:driver]` (Godot -> Rust)
+
+Run the output stream on `device` (`""` is the driver's default; an id from `/audio/device` for
+that driver) at `rate` Hz with `buffer` frames per callback (clamped to 32–2048). `driver` is
+`"pipewire"` (native PipeWire) or `"alsa"`. A missing 4th argument (older Godot) means
+`"pipewire"`; an unknown value is logged and treated as `"pipewire"`.
 - The engine stops the stream, prepares every device and plugin for the new rate, and starts it
   again, then sends `/audio/config`.
 - A request equal to the running one only sends `/audio/config`.
-- If the device is missing or won't open, the engine falls back to the default device, then to the
-  default config (48 kHz, 1024 frames), and says so in `notice`.
+- On PipeWire the engine forces the graph's quantum and rate to the request (`clock.force-quantum`
+  and `clock.force-rate`, through `pw-metadata`) before it starts, and restores them when it
+  switches to ALSA or exits. A later request forces again.
+- If the device is missing or won't open, the engine tries the driver's default device, then
+  ALSA's default when PipeWire was asked for (notice "PipeWire isn't running; playing through
+  ALSA."), then the default config (48 kHz, 1024 frames) on the driver and on ALSA, and says so in
+  `notice`.
 - Godot sends this at start, on every engine (re)connect and before `/project/init`.
 
 ### `/audio/config/request` (Godot -> Rust)
@@ -1125,8 +1137,8 @@ No arguments. The engine answers with `/audio/config`.
 
 ### `/audio/config` (Rust -> Godot)
 
-The running output configuration. Sent after every change (including PipeWire graph changes) and
-on request.
+The running output configuration. Sent after every change (including PipeWire graph changes and
+new output health) and on request.
 
 | # | Type | Meaning |
 |---|---|---|
@@ -1141,12 +1153,19 @@ on request.
 | 8 | i | `requested_buffer` |
 | 9 | i | `graph_quantum`: PipeWire's running quantum (0 when unknown or not on PipeWire) |
 | 10 | i | `graph_rate`: PipeWire's graph rate |
-| 11 | s | `mismatch`: warning when the graph and the stream conflict (quantum larger than the buffer, other rate), with the `pw-metadata` command that forced it; `""` if none |
-| 12 | s | `notice`: why the running config differs from the request (device missing, rate unsupported, no fixed buffer); `""` if none |
+| 11 | s | `mismatch`: warning when the graph and the stream conflict (quantum larger than the buffer, other rate), with the `pw-metadata` command that forced it; "Another application forces PipeWire to …" when something else changed the forced values after the engine; `""` if none |
+| 12 | s | `notice`: why the running config differs from the request (device missing, rate unsupported, no fixed buffer, driver unavailable); `""` if none |
+| 13 | s | `driver`: the running driver (`"pipewire"`/`"alsa"`, `""` without a stream) |
+| 14 | s | `requested_driver` |
+| 15 | s | `device_label`: readable name of the running device |
+| 16 | f | `output_latency_ms`: driver-reported time from render to hardware; 0 until measured |
+| 17 | s | `realtime`: `"granted"`, `"denied"` or `"unknown"` (not yet known) |
 
-The buffer can be larger than requested. When PipeWire's quantum is larger than the ALSA buffer
-(four buffers of the requested size), the engine reopens with a buffer that holds a whole graph
-cycle. It returns to the requested size once the quantum drops.
+`latency_ms` (#3) is one buffer; `output_latency_ms` (#16) is the whole path to the hardware.
+
+On PipeWire the engine plays at the quantum it forced and never reopens when the graph changes. On
+ALSA, when PipeWire's quantum is larger than the ALSA buffer (two periods), the engine reopens with
+a period that holds a whole graph cycle, and returns to the requested size once the quantum drops.
 
 ### `/audio/config/changed [i:rate]` (Rust -> Godot)
 

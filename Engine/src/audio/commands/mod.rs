@@ -537,9 +537,11 @@ pub enum AudioCommand {
     },
 
     // Audio device settings (Phase 7)
-    /// Reopen the output stream on `device` ("" = system default) at `sample_rate` with
-    /// `period_frames` per callback. Devices are prepared for a new rate while it is stopped.
+    /// Reopen the output stream on `driver`'s `device` ("" = system default) at `sample_rate`
+    /// with `period_frames` per callback. Devices are prepared for a new rate while it is
+    /// stopped.
     SetAudioConfig {
+        driver: crate::audio::stream::Driver,
         device: String,
         sample_rate: u32,
         period_frames: u32,
@@ -550,6 +552,12 @@ pub enum AudioCommand {
     RequestAudioDevices,
     /// The PipeWire graph changed (from the monitor thread).
     PipeWireGraph(super::pipewire::GraphInfo),
+    /// The output stream's driver-measured latency or realtime state changed (from the monitor
+    /// thread).
+    OutputHealth {
+        latency_us: u32,
+        realtime: super::pipewire::RealtimeState,
+    },
 
     // Plugin GUI
     OpenPluginGui {
@@ -1350,6 +1358,7 @@ fn dispatch(
         | AudioCommand::RequestAudioConfig
         | AudioCommand::RequestAudioDevices
         | AudioCommand::PipeWireGraph(_)
+        | AudioCommand::OutputHealth { .. }
         | AudioCommand::ScanPlugins { .. }
         | AudioCommand::StartRender(_)
         | AudioCommand::CancelRender { .. }

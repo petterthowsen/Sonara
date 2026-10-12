@@ -329,7 +329,8 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
         ),
         EngineStatus::AudioDeviceInfo(device) => {
             let mut args = vec![
-                OscType::String(device.name),
+                OscType::String(device.id),
+                OscType::String(device.label),
                 OscType::Int(device.is_default as i32),
                 OscType::Int(device.min_period as i32),
                 OscType::Int(device.max_period as i32),
@@ -564,7 +565,8 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
 }
 
 /// `/audio/config` arguments: the running stream (device "" and zeros when none could be
-/// opened), then the request, the PipeWire graph and the two warning texts.
+/// opened), then the request, the PipeWire graph, the two warning texts, and (spec 041) the
+/// drivers, the device's readable name, the measured output latency and the realtime state.
 fn audio_config_args(report: crate::audio::commands::AudioConfigReport) -> Vec<OscType> {
     let active = report.active;
     let (device, is_default, rate, period, latency, pairs) = match &active {
@@ -577,6 +579,10 @@ fn audio_config_args(report: crate::audio::commands::AudioConfigReport) -> Vec<O
             a.output_pairs(),
         ),
         None => (String::new(), false, 0, 0, 0.0, 0),
+    };
+    let (driver, label) = match &active {
+        Some(a) => (a.driver.as_str(), a.label.clone()),
+        None => ("", String::new()),
     };
     vec![
         OscType::String(device),
@@ -592,6 +598,11 @@ fn audio_config_args(report: crate::audio::commands::AudioConfigReport) -> Vec<O
         OscType::Int(report.graph_rate as i32),
         OscType::String(report.mismatch),
         OscType::String(report.notice),
+        OscType::String(driver.to_string()),
+        OscType::String(report.requested.driver.as_str().to_string()),
+        OscType::String(label),
+        OscType::Float(report.output_latency_us as f32 / 1000.0),
+        OscType::String(report.realtime.as_str().to_string()),
     ]
 }
 
@@ -1040,10 +1051,74 @@ mod tests {
             notice: "No audio output could be opened.".into(),
             ..Default::default()
         });
-        assert_eq!(args.len(), 13);
+        assert_eq!(args.len(), 18);
         assert_eq!(args[0], string(""));
         assert_eq!(args[1], OscType::Int(0));
         assert_eq!(args[4], OscType::Int(0));
         assert_eq!(args[12], string("No audio output could be opened."));
+        assert_eq!(args[13], string(""), "no running driver");
+        assert_eq!(args[14], string("pipewire"), "the requested driver");
+        assert_eq!(args[15], string(""));
+        assert_eq!(args[16], OscType::Float(0.0));
+        assert_eq!(args[17], string("unknown"));
+    }
+
+    #[test]
+    fn audio_config_tail_names_driver_latency_and_realtime() {
+        use crate::audio::commands::AudioConfigReport;
+        use crate::audio::pipewire::RealtimeState;
+        use crate::audio::stream::{Driver, StreamInfo, StreamRequest};
+        let args = audio_config_args(AudioConfigReport {
+            active: Some(StreamInfo {
+                driver: Driver::PipeWire,
+                device: "alsa_output.pci.analog-stereo".into(),
+                label: "Ryzen HD Audio Controller Analog Stereo".into(),
+                is_default_device: true,
+                sample_rate: 48_000,
+                period_frames: 1024,
+                channels: 2,
+            }),
+            requested: StreamRequest {
+                driver: Driver::PipeWire,
+                ..Default::default()
+            },
+            output_latency_us: 42_667,
+            realtime: RealtimeState::Granted,
+            ..Default::default()
+        });
+        assert_eq!(args[0], string("alsa_output.pci.analog-stereo"));
+        assert_eq!(args[13], string("pipewire"));
+        assert_eq!(args[14], string("pipewire"));
+        assert_eq!(args[15], string("Ryzen HD Audio Controller Analog Stereo"));
+        assert_eq!(args[16], OscType::Float(42.667));
+        assert_eq!(args[17], string("granted"));
+    }
+
+    #[test]
+    fn audio_device_carries_id_then_label() {
+        use crate::audio::stream::OutputDeviceInfo;
+        let messages = encode_status(EngineStatus::AudioDeviceInfo(OutputDeviceInfo {
+            id: "alsa_output.usb".into(),
+            label: "USB Audio".into(),
+            is_default: false,
+            sample_rates: vec![44_100, 48_000],
+            min_period: 32,
+            max_period: 2048,
+            channels: 2,
+        }));
+        assert_eq!(messages[0].addr, "/audio/device");
+        assert_eq!(
+            messages[0].args,
+            vec![
+                string("alsa_output.usb"),
+                string("USB Audio"),
+                OscType::Int(0),
+                OscType::Int(32),
+                OscType::Int(2048),
+                OscType::Int(2),
+                OscType::Int(44_100),
+                OscType::Int(48_000),
+            ]
+        );
     }
 }

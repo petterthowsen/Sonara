@@ -47,6 +47,20 @@ fn main() -> Result<()> {
 
     let engine = AudioEngine::with_status_channel(status_tx, status_rx)?;
     info!("Audio engine initialized");
+
+    // Give PipeWire's forced quantum and rate back on Ctrl+C / SIGTERM (spec 041 REQ-009).
+    let forced_clock = engine.forced_clock();
+    let handler_clock = forced_clock.clone();
+    if let Err(e) = ctrlc::set_handler(move || {
+        info!("Termination signal received; restoring PipeWire's settings and exiting");
+        handler_clock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .restore();
+        std::process::exit(0);
+    }) {
+        warn!("Can't install the termination handler: {}", e);
+    }
     let command_tx = engine.command_sender();
     let status_rx = engine.status_receiver();
 
@@ -64,6 +78,10 @@ fn main() -> Result<()> {
     info!("DAW Audio Engine is running. Press Ctrl+C to exit.");
 
     // Blocks until the server stops.
-    osc_server.run(command_tx, status_rx, log_writers, &mut window_manager)?;
-    Ok(())
+    let result = osc_server.run(command_tx, status_rx, log_writers, &mut window_manager);
+    forced_clock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .restore();
+    result
 }

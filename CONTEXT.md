@@ -74,6 +74,8 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **EngineStatus** — the command/status channel payload type; statuses flow audio/command threads → main thread → OSC → Godot at ~20 Hz.
 - **AudioCommand** — the command type; OSC server → command thread, which applies it to `EngineState` (slow work with the lock released).
 - **`req_id`** — request token correlating async audio-file jobs (decode, waveform) with their completions. Stale completions must be ignored.
+- **Driver** — how the engine talks to the sound system: `pipewire` (native PipeWire through cpal, the default) or `alsa`. Device ids belong to one driver, so changing the driver resets the output device to the system default. Setting `audio/driver`, sent as the 4th argument of `/audio/config/set`.
+- **Forced quantum** — PipeWire's `clock.force-quantum` / `clock.force-rate`, which the engine sets itself (via `pw-metadata`) to the buffer size and sample rate while it plays on the PipeWire driver, and restores on exit or when switching to ALSA. If another application changes them, the engine follows and reports it in `mismatch`.
 - **LoadState** — lifecycle of a clip or device: Idle → Loading → Ready/Failed; plugins can also go Ready → **Crashed** when their host process dies, and come back through a **Reload**. While Loading, Failed or Crashed, the audio thread passes audio through (or outputs silence for instruments).
 
 ## Automation

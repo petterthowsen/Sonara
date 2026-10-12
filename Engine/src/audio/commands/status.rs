@@ -61,6 +61,11 @@ pub struct AudioConfigReport {
     pub mismatch: String,
     /// Why the running config differs from the request (device missing, rate unsupported), "".
     pub notice: String,
+    /// Driver-measured time from rendering a block to it reaching the hardware (0 until
+    /// measured).
+    pub output_latency_us: u32,
+    /// Whether the callback thread runs with realtime scheduling.
+    pub realtime: crate::audio::pipewire::RealtimeState,
 }
 
 /// Status updates from audio thread

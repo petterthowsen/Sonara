@@ -5,6 +5,7 @@ use rosc::OscType;
 use tracing::warn;
 
 use super::RouteCtx;
+use crate::audio::stream::Driver;
 use crate::audio::AudioCommand;
 
 /// Handle audio device routes: `/audio/devices/*` and `/audio/config/*`. Returns false for an address this area doesn't
@@ -18,7 +19,8 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
         ["audio", "config", "request"] => {
             cx.commands.send(AudioCommand::RequestAudioConfig)?;
         }
-        // /audio/config/set <device:s> <rate:i> <buffer:i> — device "" is the default.
+        // /audio/config/set <device:s> <rate:i> <buffer:i> [driver:s] — device "" is the
+        // driver's default; no driver (older Godot) means PipeWire.
         ["audio", "config", "set"] => match parse_audio_config(args) {
             Ok(command) => cx.commands.send(command)?,
             Err(e) => warn!("Ignoring /audio/config/set: {}", e),
@@ -28,13 +30,22 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
     Ok(true)
 }
 
-/// Parse `/audio/config/set <device:s> <rate:i> <buffer:i>`.
+/// Parse `/audio/config/set <device:s> <rate:i> <buffer:i> [driver:s]`. A missing or unknown
+/// driver is PipeWire.
 fn parse_audio_config(args: &[OscType]) -> Result<AudioCommand, String> {
     match args {
-        [OscType::String(device), OscType::Int(rate), OscType::Int(buffer), ..]
+        [OscType::String(device), OscType::Int(rate), OscType::Int(buffer), rest @ ..]
             if *rate >= 0 && *buffer > 0 =>
         {
+            let driver = match rest.first() {
+                Some(OscType::String(name)) => Driver::parse(name).unwrap_or_else(|| {
+                    warn!("Unknown audio driver '{}'; using PipeWire", name);
+                    Driver::PipeWire
+                }),
+                _ => Driver::PipeWire,
+            };
             Ok(AudioCommand::SetAudioConfig {
+                driver,
                 device: device.clone(),
                 sample_rate: *rate as u32,
                 period_frames: *buffer as u32,
@@ -53,23 +64,37 @@ mod tests {
     use crate::osc::parse::test_support::string;
 
     #[test]
-    fn audio_config_set_parses_device_rate_and_buffer() {
+    fn audio_config_set_parses_device_rate_buffer_and_driver() {
         match parse_audio_config(&[
             string("hw:CARD=USB"),
             OscType::Int(44_100),
             OscType::Int(256),
         ]) {
             Ok(AudioCommand::SetAudioConfig {
+                driver,
                 device,
                 sample_rate,
                 period_frames,
             }) => {
+                assert_eq!(driver, Driver::PipeWire, "an older Godot gets PipeWire");
                 assert_eq!(device, "hw:CARD=USB");
                 assert_eq!(sample_rate, 44_100);
                 assert_eq!(period_frames, 256);
             }
             other => panic!("unexpected {:?}", other),
         }
+        let driver_of = |name: &str| match parse_audio_config(&[
+            string(""),
+            OscType::Int(48_000),
+            OscType::Int(1024),
+            string(name),
+        ]) {
+            Ok(AudioCommand::SetAudioConfig { driver, .. }) => driver,
+            other => panic!("unexpected {:?}", other),
+        };
+        assert_eq!(driver_of("alsa"), Driver::Alsa);
+        assert_eq!(driver_of("pipewire"), Driver::PipeWire);
+        assert_eq!(driver_of("jack"), Driver::PipeWire, "unknown is PipeWire");
         assert!(parse_audio_config(&[string(""), OscType::Int(48_000)]).is_err());
         assert!(parse_audio_config(&[string(""), OscType::Int(48_000), OscType::Int(0)]).is_err());
         assert!(parse_audio_config(&[OscType::Int(1), OscType::Int(2), OscType::Int(3)]).is_err());
