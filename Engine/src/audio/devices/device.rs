@@ -375,6 +375,14 @@ pub trait AudioDevice: Send {
         0
     }
 
+    /// Command thread, under the state lock, when the latency plan may be stale: bring any
+    /// internal latency alignment up to date and return `latency_frames()`. Containers override
+    /// it to recurse into their children and size their branch delays, which may allocate (a
+    /// known gap, like `LoadDeviceFile`).
+    fn update_latency(&mut self, _sample_rate: f32) -> u32 {
+        self.latency_frames()
+    }
+
     /// Adopt a new device sample rate. Runs on the command thread while the output stream is
     /// stopped, so it may allocate. `max_frames` is the largest block `process_block` will get.
     /// Devices whose processing doesn't depend on the rate keep the default no-op; containers

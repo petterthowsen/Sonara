@@ -6,7 +6,7 @@ mod routing;
 pub mod sidechain;
 mod solo;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;

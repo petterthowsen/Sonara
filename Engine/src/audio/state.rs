@@ -107,6 +107,11 @@ pub struct EngineState {
     /// on the callback thread. Built and dropped by the command thread outside the lock, swapped
     /// in under it.
     pub pool: Option<ChannelPool>,
+    /// Latency compensation adds this many frames before the hardware outputs (spec 042 part D):
+    /// the longest compensated path. Set by the command thread with the channels' plans.
+    pub output_latency_frames: u32,
+    /// Channels whose path latency was clamped to the compensation limit (REQ-017).
+    pub latency_over_limit: u32,
     /// Browser sample preview (spec 037), mixed into the hardware output after the master.
     pub preview: PreviewPlayer,
 }
@@ -258,6 +263,8 @@ impl Default for EngineState {
             perf_timing: false,
             perf_subscribers: 0,
             pool: None,
+            output_latency_frames: 0,
+            latency_over_limit: 0,
             preview: PreviewPlayer::default(),
         }
     }

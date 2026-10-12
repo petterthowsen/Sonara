@@ -173,7 +173,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test parallel_paths_null_at_master zero_latency_project_unchanged` passes; T-012's pool test still passes
   - _Depends on_: T-017
 
-- [ ] **T-019** [REQ-015, REQ-016, REQ-017] Command thread refresh and reporting
+- [x?] **T-019** [REQ-015, REQ-016, REQ-017] Command thread refresh and reporting
   - _Files_: `Engine/src/audio/command_worker/latency.rs` (new), `Engine/src/audio/command_worker/mod.rs`, `Engine/src/audio/command_worker/audio_config.rs` (`set_device_rate`), `Engine/src/audio/command_worker/perf.rs`, `Engine/src/audio/devices/device.rs` (`update_latency` default)
   - _Output_:
     - `refresh_latency` runs every poll: rebuild on signature change, allocate outside the lock, swap under it, drop after unlock, warn on over-limit.

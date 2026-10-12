@@ -330,6 +330,8 @@ impl CommandWorker {
         for (channel_id, device_path, handle) in plugins {
             self.reactivate_plugin(channel_id, device_path, &handle);
         }
+        // The 1 s compensation limit is in frames at the new rate
+        self.refresh_latency();
     }
 
     /// Re-activate a plugin at the engine's current rate (the host deactivates it first).

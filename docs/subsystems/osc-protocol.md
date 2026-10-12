@@ -1190,15 +1190,18 @@ Every 500 ms while subscribed, for each channel that ran in the interval. Loads 
 block time (1.0 = the whole block). The channel's own load covers its work including its devices.
 Each `(avg, peak)` pair is a top-level device by index (a container is one entry); `avg` is the
 device's time over the interval's block time, so a device that slept half the interval shows half
-its running load. A removed channel stops being reported. `out_latency_frames` is 0 until latency
-compensation reports it.
+its running load. A removed channel stops being reported. `out_latency_frames` is the channel's
+path latency: the most any route or send into it was compensated to, plus its own devices'
+latency (capped at 1 s).
 
 ### `/status/engine_perf [i:processing_threads, s:threads_realtime, i:output_latency_frames, i:over_limit_channels, i:sample_rate]` (Rust -> Godot)
 
 Sent after the channel messages of each report. `processing_threads` counts the callback thread
 plus the worker pool's threads (1 = no workers). `threads_realtime` is the workers' realtime
-state: `granted`, `denied`, `partial` (only some got it) or `none` (no workers). Until latency
-compensation lands, the latency and over-limit counts are 0.
+state: `granted`, `denied`, `partial` (only some got it) or `none` (no workers).
+`output_latency_frames` is what latency compensation adds before the hardware outputs (the longest
+path into any pair), and `over_limit_channels` counts channels whose path latency exceeds 1 s and
+was capped.
 
 ### `/engine/threads/set [i:threads]` (Godot -> Rust)
 

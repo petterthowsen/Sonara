@@ -30,6 +30,7 @@ mod audio_config;
 use device_tick::{PluginStatsLog, PluginStatsReport};
 mod device_tick;
 mod devices;
+mod latency;
 mod perf;
 mod plugins;
 mod project;
@@ -86,6 +87,8 @@ pub struct CommandWorker {
     block_clock: Arc<BlockClock>,
     /// The offline render running or last run (`audio/render`).
     render: Option<RenderHandle>,
+    /// What the installed latency plan was built from (`refresh_latency`).
+    latency: latency::LatencyStatus,
 }
 
 impl CommandWorker {
@@ -140,6 +143,7 @@ impl CommandWorker {
             },
             block_clock,
             render: None,
+            latency: latency::LatencyStatus::default(),
         }
     }
 
@@ -155,6 +159,7 @@ impl CommandWorker {
             }
             if Instant::now() >= next_poll {
                 self.poll_devices();
+                self.refresh_latency();
                 self.report_perf();
                 next_poll = Instant::now() + DEVICE_POLL_INTERVAL;
             }

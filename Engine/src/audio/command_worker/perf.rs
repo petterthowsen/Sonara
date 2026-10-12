@@ -73,7 +73,7 @@ fn collect_perf(state: &mut EngineState, out: &mut Vec<EngineStatus>) {
             channel_id,
             load_avg: timer.load_avg(),
             load_peak: timer.peak_load,
-            out_latency_frames: 0,
+            out_latency_frames: channel.latency.out_frames,
             devices,
         });
     }
@@ -85,8 +85,8 @@ fn collect_perf(state: &mut EngineState, out: &mut Vec<EngineStatus>) {
     out.push(EngineStatus::EnginePerf {
         processing_threads,
         threads_realtime: threads_realtime.to_string(),
-        output_latency_frames: 0,
-        over_limit_channels: 0,
+        output_latency_frames: state.output_latency_frames,
+        over_limit_channels: state.latency_over_limit,
         sample_rate: state.device_sample_rate as u32,
     });
 }

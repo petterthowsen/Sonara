@@ -70,7 +70,7 @@ pub(super) fn add_test_device(channel: &mut Channel, level: f32) -> Arc<AtomicUs
 
 /// Effect that scales its input by `gain` and delays it by `delay` frames, reporting the delay
 /// as its latency.
-pub(super) struct LatencyDevice {
+pub(crate) struct LatencyDevice {
     pub(super) gain: f32,
     pub(super) delay: usize,
     /// Interleaved history, `delay` frames long, used as a ring.
@@ -79,7 +79,7 @@ pub(super) struct LatencyDevice {
 }
 
 impl LatencyDevice {
-    pub(super) fn new(delay: usize, gain: f32) -> Self {
+    pub(crate) fn new(delay: usize, gain: f32) -> Self {
         Self {
             gain,
             delay,
