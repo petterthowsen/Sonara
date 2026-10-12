@@ -16,6 +16,10 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI). Needs a Godot UI check and a forced-quantum run
 - [ ] Phase 8: Later work, in this order: 8a parallel plugin dispatch (designed), 8b RT priority, then CPU affinity, latency compensation and lock-free state as the numbers call for them
   - [x] Phase 8a: Parallel plugin dispatch (begin/finish per plugin block, parked chains in mixer passes 1 and 3). Needs `rt-debug`, OSC smoke tests and the live LibreStrings measurement
+  - [x?] Phase 8b: Realtime priority for plugin-host audio threads and the new channel worker pool (spec 042, `docs/specs/042-engine-performance-and-latency-compensation/`). `mlockall` stays open
+  - [x?] Phase 8, parallel channel processing: built-in devices on a `ChannelPool` (spec 042, ADR 0020)
+  - [x?] Phase 8, plugin latency compensation: path latency aligned at the summing points (spec 042, ADR 0021)
+  - [ ] Phase 8, CPU affinity: still open (only if the realtime threads still show migration jitter)
 
 Do the phases in order unless the dependency notes say otherwise. This plan is the design: no separate specs.
 When a phase has to deviate from it, update this file first. Phase 3 must already implement the
@@ -927,15 +931,22 @@ Drive these by Phase 0 numbers, not by default. They are listed in the order to 
   `plugin_host` audio thread `SCHED_FIFO`, with rtkit as the fallback. Call `mlockall`. Report
   both in `EngineStats`. See the Phase 1 notes for what the dev machine allows. This matters
   most after 8a, when several host threads compete with the rest of the system for cores at once.
+  **Done in spec 042** for the plugin hosts' `plugin-audio` threads (`Doorbell::audio_realtime`,
+  reported in `<device>/stats` and the Engine panel) and for the new channel worker pool. The
+  `mlockall` half is not done.
 - **CPU affinity** for the audio thread and plugin audio threads, as a setting. Only if 8b
   measurements still show migration jitter.
 - **Plugin latency compensation**, using `latency_frames()` from Phase 3 and the routing graph in
   `mixing.rs`. This is about timing correctness, not CPU: it doesn't reduce dropouts.
+  **Done in spec 042** (ADR 0021): delay at the summing points, container branch alignment,
+  `PluginEvent::LatencyChanged` for plugins that change latency at runtime, and a bypass delay in
+  the CLAP adapter.
 - **Lock-free engine state** (TODO.md "phase 2"). The audio thread owns `EngineState` and drains
   a lock-free command queue. Removed objects are sent back to be dropped off-thread. Worth doing
   if `lock_misses` stays above zero. It has been 0 in every measurement since Phase 3.
 - **Parallel channel processing** of built-in devices across a worker pool, only if single-core
-  load is still the bottleneck after 8a.
+  load is still the bottleneck after 8a. **Done in spec 042** (ADR 0020): the unit is a channel's
+  chain, the callback thread takes part, and summing stays serial.
 
 ### Phase 8a: Parallel plugin dispatch
 

@@ -19,6 +19,10 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Route** — a channel's primary output, via `output_channel_id` (default 1). Processed in dependency order: a channel finishes once, after everything routing or sending into it.
 - **Send** — a secondary tap into another channel: `Send { target_channel_id, amount_db, pre_fader, muted }`. Pre-fader sends tap the pre-pass copy; post-fader sends read the post-fader buffer.
 - **Fader / pan** — applied in the fader pass, and once per route target when it finishes — never while routing.
+- **Processing thread** — a thread, other than the audio callback's, that runs channels' device chains during a block (`sonara-worker-N`, the `ChannelPool`, ADR-0020). The callback takes jobs too and keeps fader/pan, routing and summing. The **Processing threads** setting is Auto (`min(cores / 2, 8) − 1`) or 1..cores; 1 means everything runs on the callback thread.
+- **Device latency** — the frames by which a device delays its output, as it reports them (`AudioDevice::latency_frames()`). A bypassed device keeps it.
+- **Path latency** — the latency a channel's signal has accumulated when it reaches a route or send target: its own chain's device latency plus the largest path latency among its inputs. Shown per channel in the Engine panel; the total before the hardware output is the plugin latency.
+- **Compensation** — delaying the earlier signals that meet at a channel (a bus, master, a hardware pair) so all of them arrive aligned to the sample (ADR-0021). Capped at 1 s per channel.
 - **Track** — a sequencer lane, separate from channels; points at one via `default_channel_id`.
 - **Clip** — note or audio content living on a track. Audio clips carry `recorded_bpm` for BPM-based time-stretching (`stretch = project_bpm / recorded_bpm`).
 - **ClipInstance** — a placement of a clip on a track, with a tick position (and per-instance fractional playback position for stretched audio).

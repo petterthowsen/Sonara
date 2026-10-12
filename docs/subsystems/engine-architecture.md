@@ -8,6 +8,7 @@ The Rust audio engine keeps slow work off the real-time path:
 - **Command Thread** (`command_worker/`): `CommandWorker` applies `AudioCommand`s to the `EngineState` (`audio/state.rs`) it shares with the audio callback through `Arc<Mutex<_>>`. It holds the lock only to read or swap state: plugin scans, device construction and teardown, and plugin subprocess IPC (GUI open/close, activation) run with the lock released. It is the only thread that adds or removes channels and devices, which is what makes releasing the lock mid-command safe. `command_worker/mod.rs` has the flat `handle` dispatch; the work lives in `device_tick.rs` (the 100 ms device poll and plugin stats), `plugins.rs`, `devices.rs`, `project.rs`, `render.rs` and `audio_config.rs`. Fast commands go through `commands/mod.rs::process_command` under the lock (`apply_locked`).
   - **`CommandEffects`** (`commands/mod.rs`): `process_command(state, cmd, buffer_size, &mut effects)` never sends and never frees. Statuses go into `effects.statuses` (in the order the command produced them) and objects the command removed (a clip, replaced PCM) into `effects.trash`. `apply_locked` locks, applies, unlocks, then sends the statuses and drops the trash, so a full status channel or a large free can't make the callback miss its `try_lock`. Known exceptions: `SamplerDevice` and `SfizzDevice` send loading states through their own `status_tx` from inside commands, and a few small drops (`unwrap_if_empty`, `clear_modulators`, `remove_zone`) still happen under the lock.
 - **Audio Callback Thread**: Real-time audio generation (high priority, no allocations). Takes the state with `lock_state_for_callback` (`stream.rs`): spins on `try_lock` for up to `STATE_LOCK_BUDGET` (1 ms), then outputs silence for that buffer.
+- **Processing Threads** (`mixing/pool.rs`, "sonara-worker-N", spec 042, ADR 0020): the `ChannelPool` in `EngineState::pool` (a `ChannelPool` of 0 threads, or `None`, means everything runs on the callback thread). While the callback holds the state lock it hands the pool the device chains of channels that can't depend on each other, and takes jobs itself. Each worker requests realtime scheduling the same way plugin hosts do (`audio/realtime.rs`; plugin hosts report theirs in `Doorbell::audio_realtime`). Auto is `min(cores / 2, 8) - 1` workers; Settings › Audio › Processing threads (`/engine/threads/set`) changes it live. The command thread builds and drops the pool outside the lock.
 - **Stream Thread** (`stream.rs`, "audio-stream"): owns the CPAL output stream (`Stream` is `!Send`) and its watchdog, which reopens the stream when callbacks stall. The command thread drives it through `StreamControl` (`stop`, `resolve`, `start`) to change device, rate or buffer size (Phase 7, see below).
 - **PipeWire Monitor** (`pipewire.rs`): every 3 s reads the graph with `pw-top -b`, `pw-dump` and `pw-metadata`, reports quantum/rate changes (`PipeWireGraph`) and output health, i.e. output latency and realtime state (`OutputHealth`), to the command thread. It adds pw-top's ERR count on the engine's node to the xrun counter only on ALSA. Without the tools it still reports output health.
 - **Render Thread** (`audio/render/`, "engine-render"): runs one offline render at a time (export, stems), started by `AudioCommand::StartRender` on the command thread. It calls `process_audio` and `mix_and_output` with its own clock, locking the state for one block at a time and writing files with the lock released. While `EngineState::rendering` is set the live callback outputs silence without locking, transport commands are ignored and `BlockClock` is in offline mode (below). Wire format: `osc-protocol.md` › Offline Rendering.
@@ -64,13 +65,16 @@ Engine/src/
     stream.rs          # Stream thread + watchdog, device enumeration, config selection, the audio callback
     pipewire.rs        # PipeWire graph monitor (quantum, rate, errors), `ForcedClock` and the buffer-vs-quantum rule
     command_worker/    # Command thread: mod.rs (struct, run, handle dispatch, apply_locked), device_tick.rs,
-                       # plugins.rs, devices.rs, project.rs, render.rs, audio_config.rs (reconfiguring the stream)
+                       # plugins.rs, devices.rs, project.rs, render.rs, audio_config.rs (reconfiguring the stream,
+                       # rebuild_pool), perf.rs (channel/device timing report), latency.rs (refresh_latency)
     commands/          # mod.rs (AudioCommand enum, process_command dispatcher, CommandEffects), status.rs (EngineStatus),
                        # and one file per domain: transport, channel, track, clip, device, sampler, layer,
                        # modulation, plugin, device_data
     processing/        # Audio callback stages: mod.rs (process_audio), live_midi.rs, timeline.rs, clip_midi.rs, clip_audio.rs
     mixing/            # mix_and_output: mod.rs (passes, master output), routing.rs (routes, sends,
-                       # aux sources), solo.rs, sidechain.rs (spec 036 tap snapshot + feed)
+                       # aux sources), solo.rs, sidechain.rs (spec 036 tap snapshot + feed),
+                       # pool.rs (ChannelPool, spec 042), latency.rs (LatencySignature, LatencyPlan)
+    realtime.rs        # promote_current_thread: realtime request shared by plugin host and pool workers
     channel/           # Channel: mod.rs, chain.rs (device chain, notes), meter.rs, pan.rs, send.rs
     clip.rs            # Clip, ClipInstance, AudioPlayback (time-stretch maths)
     track.rs           # Track
@@ -105,6 +109,7 @@ Engine/src/
     dsp/
       mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
       delay_line.rs      # Ring buffer with linear/Hermite fractional reads
+      block_delay.rs     # StereoBlockDelay (path-latency rings), AlignDelay (container branch alignment); spec 042
       denormal.rs        # flush_denormals_to_zero (called at the top of every callback)
       env_follower.rs    # Peak/RMS envelope follower (attack/release)
       gain.rs            # dB helpers, DcBlocker, dry/wet Mix laws
@@ -162,6 +167,7 @@ Godot/              # Godot 4.7 UI App
 - The range ends on the frame before the end tick's MIDI would be dispatched: `processing/timeline.rs::frames_before_tick` runs the same tick arithmetic as `process_audio`, so a note on the end tick never leaks into the tail. The tail then renders with the transport stopped (fixed length, or until the master stays below −90 dBFS for 1 s).
 - Each block drains live MIDI, wakes every device (polysynth and sampler sleep on wall-clock time, which would make two renders of the same range differ), and publishes an offline plugin deadline. After `mix_and_output` every channel buffer holds that channel's post-fader, post-pan output, which is what stems are copied from.
 - Analysis jobs (`RenderJob::analysis`, `/render/analyze`) feed the same blocks to an `Analyzer`. The worker copies the tapped channels' buffers out each block, passing the block's start tick (`current_tick` plus the fractional accumulator). The render starts at `render_start_tick()` (tick 0 or a pre-roll) while the analyzer accumulates only inside the requested range, and the tail isn't analyzed. The JSON result is written as `<path>.part`, then renamed.
+- **Latency (spec 042).** Taps skip their channel's `out_frames` (master: the output latency), so each file starts at the start of the range. The plan is read once at render start; a mid-render latency change isn't followed. Fixed tails cap every tap at range + tail, and until-silent tails start counting silence only after `max(skip)` tail frames, so a length can differ from a no-latency render by up to one block.
 - `end` always runs: reset devices, plugins back to realtime, playhead restored, `rendering` cleared. Two renders of the same range are bit-identical for built-in devices.
 
 ### Sample-Accurate Scheduling
@@ -245,6 +251,21 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 
 4. **Hardware Output**
    - The CPAL buffer is cleared, then every channel routed to a hardware output (master included) is written to its pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. Channels on the same pair accumulate; a pair the device lacks plays on 1/2. A channel routed straight to a pair skips master's effects (reference track) and is never silenced by another channel's solo. Peaks are computed by the callback afterward.
+
+**Channel worker pool** (spec 042, `mixing/pool.rs`, ADR 0020). Two of the passes treat channels as independent, and only those use the pool: the device pre-pass (channels nothing routes into) and each sweep of `route_in_dependency_order` (the `ready` list). `PooledPass::run` collects the eligible channels' addresses into `RenderScratch::jobs` (`usize`, so `EngineState` stays `Send`) and calls `ChannelPool::run_jobs` when the pool has workers and there are at least 2 jobs; otherwise the existing loop runs unchanged.
+- `run_jobs` publishes a generation and the job list (`PoolShared`, one packed claim word of generation, count and next index), rings a futex, claims jobs itself and then waits (spin about 20 us, then futex) for `done_count` to reach the number of *started* jobs. A job no worker reached is claimed by the callback, so a late or paused worker can't stall the block.
+- A job runs `begin_device_chain`. A chain that parks at a plugin goes into the claiming thread's own park queue (`RenderScratch::job_parks` on the callback), drained once no jobs are left, so plugins on different channels still overlap (Phase 8a per thread).
+- Order-dependent work stays serial on the callback thread in `ready` order: device events, fader and pan, routing and summing, aux sources, hardware output. `channel_ids` is sorted every block (`sort_unstable`), so summation order, and with it the output, is the same with 1 or N threads.
+- Safety invariant (documented on `PoolShared`): a thread dereferences a job pointer only between claiming it and adding it to `done_count`; the callback holds the state lock for the whole span and doesn't touch the channel map meanwhile.
+- Timing: `Channel::device_timers` (`DeviceTimer`, inline, `MAX_TIMED_DEVICES`) and `MixBuffers::timer` are filled only while `EngineState::perf_timing` is set (Godot's performance popup is subscribed). The command thread reads and resets them under the lock every 500 ms (`command_worker/perf.rs`).
+
+**Latency compensation** (spec 042 part D, ADR 0021). Every channel has `in_latency` (the largest `out_latency` among the channels routing or sending into it) and `out_latency` (`in_latency` plus the sum of its top-level devices' `latency_frames()`), kept in `Channel::latency` (`ChannelLatency`). Each edge delays its source by `target.in_frames - source.out_frames`: the route, each send (`send_delays`) and the hardware write (`hw_delay`, against the largest writer into that pair).
+- The delay is a read through a per-channel stereo ring (`ChannelLatency::post`, and `pre` for delayed pre-fader sends), written once per block in `route_finished`. A channel whose edges all have delay 0 owns no ring and takes the plain `add_scaled` path, so a project without latency is sample-identical to before. Pan is still applied once, never while routing.
+- `ChannelLatency::aux` (an `AlignDelay`) delays an aux-source device's main output by `aux_delay`; return channels start at their source device's latency.
+- Maximum compensation is 1 s at the running rate. A channel above it is clamped, counted in `EngineState::latency_over_limit`, and warned about once. `EngineState::output_latency_frames` is the largest path latency into any hardware pair. Both go out in `/status/engine_perf`.
+- Planning is on the command thread (`command_worker/latency.rs::refresh_latency`, called from every 20 ms device poll and after a rate change). Each poll first calls `AudioDevice::update_latency` on every top-level device (a container's branch can get slower without its reported latency changing; unchanged it is a no-op), then builds a `LatencySignature` under the lock (route, send targets, top-level `latency_frames()` sum and aux-source latency per channel). It replans only when the signature or the rate changed: `mixing/latency.rs::plan` (a cycle-safe topological walk; cycle edges get delay 0), rings allocated outside the lock and swapped in under it. A channel's existing rings are kept when they still reach the needed delay, so unaffected channels keep their history (no click). The replaced state is dropped after the lock.
+- Containers align their own parallel branches with `AlignDelay` (interleaved): Chain dry path, Layer and Drum Machine per slot plus the dry path, Multiband per band position plus the Mix dry and thru paths, Reverb dry path (by its Wet FX slot latency). Reverb and PolySynth count a device slot's latency only while it is live (`DeviceSlots::is_live`): an all-bypassed slot is skipped by the device and adds nothing. Each container reports the result as its `latency_frames()`. A bypassed path keeps its latency (the CLAP adapter's `bypass_delay` does the same), so bypassing never shifts timing.
+- The sidechain taps (spec 036) are not compensated: they still follow their source one block late.
 
 **Sidechain taps** (spec 036): at the end of `mix_and_output` the callback snapshots the
 post-fader, post-pan output of every subscribed channel (`mixing/sidechain.rs::snapshot`) into
@@ -418,12 +439,20 @@ Classes:
 | `SetLayerSlotSeparateOut` | graph edit | `commands/layer.rs` |  |
 | `AuditionLayerSlot` | graph edit | `commands/layer.rs` |  |
 
-Totals: 69 graph edit, 22 build/teardown, 5 query, 12 command thread only (108 commands). "Handled in" is where the logic lives; commands in `command_worker/` are matched in `CommandWorker::handle`, everything else reaches `commands/mod.rs::process_command` through `apply_locked`.
+Totals: 70 graph edit, 23 build/teardown, 5 query, 13 command thread only (111 commands). "Handled in" is where the logic lives; commands in `command_worker/` are matched in `CommandWorker::handle`, everything else reaches `commands/mod.rs::process_command` through `apply_locked`.
+
+Not commands, but they allocate **under the state lock** (known gaps, like `LoadDeviceFile`; both are rare, only when a latency changes, and spec 042 leaves them for the phase 2 lock removal):
+
+| Call | Class | Called from | Notes |
+|---|---|---|---|
+| `AudioDevice::update_latency` | build/teardown | `command_worker/latency.rs::refresh_latency` (every device poll, lock held) | Containers (Chain, Layer, Drum Machine, Multiband, Reverb, PolySynth) re-derive their `latency_frames()` and resize their branch `AlignDelay`s. A branch delay whose value changes (`AlignDelay::set`) allocates a new ring under the lock and clears that branch's history; the same value is a no-op. The default implementation just returns `latency_frames()`. |
+| `SubprocessClapAdapter::set_latency_frames` | build/teardown | `set_active_state` and the `PluginEvent::LatencyChanged` handler in `device_tick.rs` (via `with_plugin`, lock held) | Resizes the `bypass_delay` and its scratch planes when the reported latency changed. Re-activating at the same latency keeps the delay running. |
+| `LatencyPlan` install | build/teardown | `command_worker/latency.rs::install` | Not an allocation under the lock: the new `ChannelLatency` rings are built outside it, swapped in under it, and the replaced ones dropped after unlock. |
 
 ### Stage read/write map
 
 What each audio-callback stage reads and writes. `EngineState` fields: `channels`, `tracks`, `clips`, `settings`, `device_sample_rate`,
-`tempo_map`, `time_signature_map`, `loop_region`, `render_scratch`; the atomics `is_playing`, `current_tick`, `fractional_tick_accumulator`,
+`tempo_map`, `time_signature_map`, `loop_region`, `render_scratch`; the spec 042 state `pool` (`Option<ChannelPool>`), `perf_timing`, `perf_subscribers`, `output_latency_frames` and `latency_over_limit`; the atomics `is_playing`, `current_tick`, `fractional_tick_accumulator`,
 `dispatch_playhead_tick`; `rendering` is read by the callback before these stages and `block_clock` by plugin adapters.
 
 `process_audio` (`processing/`):
@@ -451,6 +480,9 @@ What each audio-callback stage reads and writes. `EngineState` fields: `channels
 | pre-fader copy (`routing::copy_pre_fader`) | `send_channels`, `buffer_left/right` | `mix.has_pre_fader_copy`, `mix.pre_fader_left/right` |
 | fader and pan (`apply_fader_and_pan`) | `mix.solo_role`, `volume_db`, `pan*`, `automation_*`, `pan_mode`, `mute` | `buffer_left/right` (cleared if silenced), gain smoothing state, `current_gain` |
 | routing sweeps (`route_in_dependency_order`: `begin_finish`, `drain_parked`, `route_finished`, `route_channel`) | `mix.pending_inputs`, `mix.done`, `mix.is_route_target`, `mix.solo_role`, `output_channel_id`, `send_channels`, source buffers and pre-fader copies, target fader gain | route targets' device chains, `mix.done`, `mix.pending_inputs`, `mix.pre_fader_*`; target `buffer_left/right` (added to); `render_scratch.ready`/`parked`; statuses via `try_send` |
+| channel pool (`PooledPass::run` → `ChannelPool::run_jobs`, inside the device pre-pass and each routing sweep) | `state.pool` (`&PoolShared`), `RenderScratch::jobs`/`job_parks`, the eligible channels' state as the chain runner does | the eligible channels' device chains, `mix.cursor`/`chain_start`, buffers, `device_timers`, `mix.timer`, `sleep_changes` (each channel by exactly one thread); `PoolShared` atomics (`generation`, claim word, `done_count`) |
+| timing (`perf_timing`, chain runner `on_device_time`, `MixBuffers::timer`) | `state.perf_timing` (copied to `mix.timing` at the start of `mix_and_output`) | `channels[*].device_timers`, `mix.timer`; reset by the command thread under the lock every 500 ms |
+| latency compensation (`route_finished`, `route_channel`, `write_hardware_outputs`) | `channels[*].latency` (`in_frames`, `out_frames`, `route_delay`, `send_delays`, `hw_delay`, `aux_delay`) | the channel's `latency.post`/`pre` rings (written once per block), `latency.aux`; target buffers (added to through the ring when the delay is above 0) |
 | master output (`write_master_output`) | `channels[1]` buffers and `output_channel_id` | the device output buffer only |
 | sidechain snapshot (`sidechain::snapshot`) | `sc_taps.subscribers` (slot → source `channel_id`), source `channels[*].buffer_left/right` | `sc_taps.slots[*].mono`, `.frames` |
 

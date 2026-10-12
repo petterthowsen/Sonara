@@ -359,3 +359,15 @@ Live checks (release build, with the user's permission for the engine on port 70
 ## Open questions
 
 - [x] None. (PolySynth's slot code is in `instruments/polysynth/mod.rs`; `/engine/*` needs a dispatch arm in `osc/routes/mod.rs`.)
+
+## As built
+
+Differences from, or additions to, the design above. The code is the reference.
+
+1. **`refresh_latency` calls `update_latency` on every poll.** `command_worker/latency.rs` calls `AudioDevice::update_latency` on every top-level device each 20 ms poll, before it builds the signature, not only when the signature changed: a container branch can get slower without changing what the container reports. Unchanged, the call is a no-op. It replans only when the signature or the rate changed. A branch delay that changes allocates under the lock (not only when it grows).
+2. **Rings are kept across a replan.** A channel's existing `post`/`pre` rings (and `aux`) are kept when they still reach the needed delay, so unaffected channels keep their history and don't click. The replaced state is dropped after unlock.
+3. **`AlignDelay`** (`dsp/block_delay.rs`) is an interleaved alignment delay over a `StereoBlockDelay`. Containers use it (Chain dry path; Layer and Drum Machine per slot plus the dry path; Multiband per band position plus the Mix dry and thru paths; Reverb dry path), and so does the channel's aux-source delay (`ChannelLatency::aux`, `aux_delay`). Every container's bypassed path keeps its latency, the same decision as the CLAP adapter's `bypass_delay`.
+4. **Reverb and PolySynth count a slot's latency only while the slot is live** (`DeviceSlots::is_live`). An all-bypassed slot is skipped by the device, so it adds nothing.
+5. **CLAP restarts.** `request_restart` and `latency.changed` both set `restart_requested`; `activate_plugin` clears the flag right after every `activate`, so a compliant plugin's in-activation `latency.changed` doesn't loop. The restart is `restart_plugin` in `plugin_host/commands.rs`. The engine applies `PluginEvent::LatencyChanged` with `set_latency_frames`, not `set_active_state`.
+6. **Renders** (`render/worker.rs`). Taps skip their channel's `out_frames` (master: the output latency). Fixed tails cap every tap at range + tail. Until-silent tails start counting silence only after `max(skip)` tail frames, so a length can differ from a no-latency render by up to one block. The plan is read once at render start; a mid-render latency change isn't followed.
+7. **`EngineState::output_latency_frames` and `latency_over_limit`** carry the plan's summary for `/status/engine_perf`.

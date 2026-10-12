@@ -23,6 +23,21 @@ let changed = self.parameters_changed.lock().unwrap();
 
 `EngineState` (`audio/state.rs`) is shared with the command thread (`audio/command_worker/`). Anything that thread does with the state lock held must be fast, because the callback gives up after `STATE_LOCK_BUDGET` and outputs silence. Put slow commands (IPC, file or plugin loading, dropping CLAP devices) in `CommandWorker` with the lock released. Fast commands (`audio/commands/`, `process_command`) run with the lock held but must not send statuses or free memory there: they push statuses and removed objects into a `CommandEffects`, and `CommandWorker::apply_locked` sends and drops them after unlocking. If you add a command that removes a channel, clip, PCM buffer or device, push it into `effects.trash`.
 
+## Processing Threads (spec 042, ADR 0020)
+
+The `ChannelPool` workers (`sonara-worker-N`, `mixing/pool.rs`) run channels' device chains for the callback, so they follow the same contract. Everything above applies to code that runs on a worker: no allocation, no blocking I/O, no state lock, no `println!`. They wait only on futexes and atomics (`PoolShared`: `generation`, the packed claim word, `done_count`), and `rt_debug::check_callback` wraps each job when the `rt-debug` feature is on.
+- **What stays on the callback thread:** device events (`forward_device_events`), fader and pan, routing and summing (`route_finished`, `route_channel`), aux sources, the ring writes for latency compensation, hardware output and meters. Only `begin_device_chain` / `resume_device_chain` for channels that can't depend on each other run on workers.
+- **Handoff invariant:** the callback holds the state lock for the whole pass and does not touch the channel map until `done_count` reaches the number of started jobs. A worker dereferences a channel address only between claiming its index (for the current generation) and adding it to `done_count`. Each channel is reached by one thread at a time.
+- **Never wait for an unstarted job.** The callback claims jobs through the same counter as the workers, so a late, paused or descheduled worker costs nothing: the callback runs the job itself. Only a job a worker has *started* is waited for, bounded by that job's own work, as when the callback runs it.
+- **No allocation anywhere in a pass:** the job list (`RenderScratch::jobs`, capacity `MAX_CHANNELS`) and the per-thread park queues (`VecDeque` with capacity `MAX_CHANNELS`) are preallocated, `channel_ids` is sorted with `sort_unstable`, and the pool itself is built and dropped (joined) by the command thread outside the lock.
+- **Shared state in devices:** a device must not touch mutable state shared with another channel's device (a `static`, `thread_local!`, an `Arc<Mutex<_>>` cache) unless it is atomic. `pool_output_matches_single_thread` checks that 1 and N threads give bit-identical output.
+- **Realtime request:** each worker promotes itself once at start (`audio/realtime.rs::promote_current_thread`, which blocks on rtkit, so never from a thread that is already realtime) and stores granted or denied; a denial only means normal priority. Processing threads = 1 (or 0 workers) takes the unchanged single-threaded code path.
+- **Timing** (`perf_timing`) is two `Instant::now()` reads per top-level device and per channel, plain adds into `Channel::device_timers` / `MixBuffers::timer`, never resized and read by the command thread under the lock. It runs only while Godot's performance popup is subscribed.
+
+## Latency compensation on the callback
+
+Compensation adds delay reads, never allocation. The rings (`ChannelLatency::post`/`pre`/`aux`, container `AlignDelay`s, the CLAP adapter's `bypass_delay`) are sized by the command thread (`refresh_latency` builds the `LatencyPlan`; `update_latency`, `set_latency_frames`) with `max delay + MAX_BLOCK_FRAMES` frames, so the callback only writes a block and reads it back at an offset. The command thread's sizing is where the exceptions are: `update_latency` and `set_latency_frames` can allocate under the state lock when a delay changes (see `engine-architecture.md` › Command classification), so keep those allocations rare (only when a latency changes). A channel with no delayed edge owns no ring, and the plain `add_scaled` path runs.
+
 ## Audio Processing Pipeline
 
 The audio engine processes each callback in this order:
@@ -59,7 +74,7 @@ Location: `Engine/src/audio/processing/` (`mod.rs` orders the stages; `live_midi
 The mixer now runs five passes to support sends, SIMD-aware devices, and bus effects while keeping the callback allocation-free.
 
 1. **Device Pre-Pass (non-bus channels)**  
-   - Calls `Channel::process_device_chain()` on every channel that generates its own audio (instrument/audio/master).  
+   - Calls `Channel::process_device_chain()` on every channel that generates its own audio (instrument/audio/master), on the `ChannelPool` workers and the callback together when processing threads > 1.  
    - Skips buses so they can process once they hold routed/sent audio.  
    - CLAP/Sfizz adapters flush pending parameter changes to the UI here.
 
@@ -73,6 +88,8 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
    - Route targets (buses, master) run `process_device_chain()` on finishing, even with no input, so reverb/delay tails ring after playback stops; then they apply their own pan.
    - The finished channel then mixes into its `output_channel_id` and send targets. Pre-fader sends tap `MixBuffers::pre_fader_*` (copied before the device pre-pass) and reapply pan; post-fader sends read the pass-2 buffer.
    - Routes and send returns are scaled by the destination gain (`get_gain()`). Never reapply pan while routing.
+   - Each sweep's ready channels run on the `ChannelPool` when it has workers (see Processing Threads); `route_finished` and `route_channel` stay serial in `ready` order.
+   - Latency compensation: an edge whose source has less path latency than the target's input reads the source through its ring (`ChannelLatency::post`/`pre`) at `target.in_frames - source.out_frames`. Pan is still applied once.
    - Solo/mute rules still apply; master never routes onward and is never silenced by solo. Routing cycles are broken at the first unfinished channel.
 
 4. **Master Output & Metering**  
@@ -148,10 +165,14 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 6. **Decoding audio on the callback**: All decode/resample work must happen in `AudioFileService`; the callback should only read ready-to-play PCM.
 7. **Allowing invalid routing**: INSTRUMENT→INSTRUMENT creates ambiguous audio source
 8. **Forgetting bus device pass**: Buses must process after ingesting routed audio; do not call `process_device_chain()` on them earlier.
+9. **Doing order-dependent work on a pool worker**: summing, pan, fader and device events stay on the callback thread in `ready` order, or the output differs between 1 and N threads.
+10. **Waiting for a pool job no thread has started**: claim it on the callback instead.
+11. **Allocating a delay ring on the callback**: compensation rings are sized by the command thread; the callback only reads and writes them.
 
 ## Related Files
 
-- `Engine/src/audio/mixing/`: Full mixing implementation (`mod.rs` the passes, `routing.rs` routing, sends and aux sources, `solo.rs` solo roles)
+- `Engine/src/audio/mixing/`: Full mixing implementation (`mod.rs` the passes, `routing.rs` routing, sends and aux sources, `solo.rs` solo roles, `pool.rs` the channel worker pool, `latency.rs` the compensation plan)
+- `Engine/src/audio/realtime.rs`: realtime promotion shared by pool workers and the plugin host's audio thread
 - `Engine/src/audio/processing/`: Callback pipeline orchestration
 - `Engine/src/audio/state.rs`: `EngineState`, the data the callback and command thread share
 - `Engine/src/audio/engine.rs`: Engine initialization

@@ -245,7 +245,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: every address in design.md's protocol table appears in the doc with its arguments
   - _Depends on_: T-003, T-008, T-013
 
-- [ ] **T-027** [REQ-all] Engine and plugin subsystem docs
+- [x?] **T-027** [REQ-all] Engine and plugin subsystem docs
   - _Files_: `docs/subsystems/engine-architecture.md`, `docs/subsystems/engine-audio-thread.md`, `docs/subsystems/engine-plugin-architecture.md`, `docs/engine-stability-plan.md`
   - _Output_:
     - Pool and compensation in "Mixing".
@@ -256,7 +256,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: each file mentions the new state names from design.md's ownership table
   - _Depends on_: T-024
 
-- [ ] **T-028** [REQ-all] ADRs and glossary
+- [x?] **T-028** [REQ-all] ADRs and glossary
   - _Files_: `docs/adr/0020-channel-worker-pool.md` (new), `docs/adr/0021-latency-compensation-at-summing-points.md` (new), `CONTEXT.md`
   - _Output_: both ADRs in the existing ADR format; glossary entries for processing thread, path latency and compensation
   - _Verify_: the ADRs follow the structure of `docs/adr/0019-vst3-hosting.md`; glossary terms match requirements.md "Terms"
