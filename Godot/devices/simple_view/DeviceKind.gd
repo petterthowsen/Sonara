@@ -10,6 +10,7 @@ const REVERB := "reverb"
 const DELAY := "delay"
 const COMPRESSOR := "compressor"
 const EQ := "eq"
+const STEP_SEQUENCER := "step_sequencer"
 const GENERIC := "generic"
 
 ## Feature tag → kind, checked in this order (reverbs sometimes also tag "delay").
@@ -34,6 +35,7 @@ const NAME_KEYWORDS: Array[Array] = [
 	[DELAY, ["delay*", "echo*"]],
 	[COMPRESSOR, ["compress*", "comp", "limiter", "leveler"]],
 	[EQ, ["eq", "equali*", "equaliser"]],
+	[STEP_SEQUENCER, ["sequenc*", "seq", "stepseq*"]],
 	[SYNTH, ["synth*", "polysynth"]],
 ]
 

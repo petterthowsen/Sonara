@@ -209,10 +209,11 @@ static func pack_block(sizes: Array[Vector2i], max_cols: int, max_rows: int) -> 
 	return best
 
 
-## Block for a whole group (see `pack_block` for the result): a single row when it's a few
-## one-row controls, else the full page height when it holds a fader, else the narrowest `BLOCK_ROWS`-tall block up to `MAX_BLOCK_COLUMNS` wide,
+## Block for a whole group (see `pack_block` for the result): the narrowest full-height block when
+## it's a `column` group (a sequencer step) or holds a fader, else a single row when it's a few
+## one-row controls, else the narrowest `BLOCK_ROWS`-tall block up to `MAX_BLOCK_COLUMNS` wide,
 ## else the narrowest full-height one. A group too big for a page gets as much as fits.
-static func group_block(sizes: Array[Vector2i], rows: int, max_columns: int) -> Dictionary:
+static func group_block(sizes: Array[Vector2i], rows: int, max_columns: int, column := false) -> Dictionary:
 	var cells := 0
 	var one_row := true
 	var has_fader := false
@@ -220,7 +221,7 @@ static func group_block(sizes: Array[Vector2i], rows: int, max_columns: int) -> 
 		cells += s.x * s.y
 		one_row = one_row and s.y == 1
 		has_fader = has_fader or s == SimpleControlKinds.footprint(SimpleControlKinds.FADER)
-	if has_fader:
+	if has_fader or column:
 		# a fader would be squashed in a two-row block: give the group the page height
 		var tall := _narrowest_block(sizes, rows, max_columns)
 		if not tall.is_empty():
@@ -277,7 +278,8 @@ static func _block_is_better(count: int, size: Vector2i, best: Dictionary) -> bo
 
 
 ## Pack `groups` onto pages `rows` tall. Each group is `{id, title, page, items: [{kind, params,
-## label?}]}`; groups with the same `page` title share a page, in order of first appearance.
+## label?}], column?}` (`column`: a full-height block, see `group_block`); groups with the same
+## `page` title share a page, in order of first appearance.
 ## A page grows to the right up to `max_columns`, then continues on a new page titled after the
 ## first group (or family of groups) on it. A group is only split when it's wider than
 ## `max_columns` on its own; groups may carry `family` and `family_title` to be kept together.
@@ -331,7 +333,7 @@ static func _pack_section(groups: Array, title: String, rows: int, max_columns: 
 		var sizes := _item_sizes(items, rows, max_columns)
 		var start := 0
 		while start < items.size():
-			var block := group_block(sizes.slice(start), rows, max_columns)
+			var block := group_block(sizes.slice(start), rows, max_columns, group.get("column", false))
 			if block.count == 0:
 				break  # unreachable: sizes are clamped to the grid
 			if columns == null or columns.right_edge_for(block.size) > max_columns:
@@ -363,7 +365,8 @@ static func _backfill_column(groups: Array, at: int, columns: Columns, rows: int
 		var end := _family_end(groups, i)
 		if end - i == 1:
 			var group: Dictionary = groups[i]
-			var block := group_block(_item_sizes(group.items, rows, max_columns), rows, max_columns)
+			var block := group_block(_item_sizes(group.items, rows, max_columns), rows, max_columns,
+				group.get("column", false))
 			if block.count == group.items.size() and probe.fits_current_column(block.size):
 				probe.place(block.size)
 				groups.remove_at(i)
@@ -389,7 +392,7 @@ static func _family_end(groups: Array, start: int) -> int:
 static func _groups_fit(groups: Array, columns: Columns, rows: int, max_columns: int) -> bool:
 	for group in groups:
 		var sizes := _item_sizes(group.items, rows, max_columns)
-		var block := group_block(sizes, rows, max_columns)
+		var block := group_block(sizes, rows, max_columns, group.get("column", false))
 		if block.count < sizes.size() or columns.right_edge_for(block.size) > max_columns:
 			return false
 		columns.place(block.size)

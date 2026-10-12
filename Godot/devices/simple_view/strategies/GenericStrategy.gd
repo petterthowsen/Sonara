@@ -111,6 +111,14 @@ func group_for_item(item: Dictionary) -> Dictionary:
 	return group_for_role(item.role)
 
 
+## A group `item` must go in whatever its module path or name says, as `{id, title, label?,
+## family?, family_title?, column?}` (`column`: lay the group out as full-height columns), or {}
+## to group it the usual way. Claimed items are left out when module paths and name sections are
+## worked out for the rest.
+func claimed_group(_item: Dictionary) -> Dictionary:
+	return {}
+
+
 ## Optional annotation for one generated control, read when the view binds it (so it never needs
 ## to be saved in the layout): a strategy returns a copy carrying extra display keys, e.g. the
 ## Sync parameter a Time knob follows. `params` are the instance's parameters, for id lookups.

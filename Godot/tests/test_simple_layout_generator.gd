@@ -43,6 +43,8 @@ func run_tests() -> void:
 	_test_extrabold_fixture()
 	_test_librestrings_fixture()
 	_test_compressor_faders()
+	_test_step_sequencer_layout()
+	_test_step_sequencer_flat_names()
 
 
 ## ----------------------------------------------------------------------------
@@ -132,7 +134,8 @@ func _test_kind_inference() -> void:
 	_assert(DeviceKind.infer(_device("x.comp", "Bus Compressor", Device.DeviceCategory.Effect, ["audio-effect", "compressor"])) == DeviceKind.COMPRESSOR,
 		"compressor feature → compressor")
 	_assert(DeviceKind.infer(_device("x.eq", "Para EQ")) == DeviceKind.EQ, "EQ by name → eq")
-	_assert(DeviceKind.infer(_device("x.seq", "Step Sequencer")) == DeviceKind.GENERIC, "'sequencer' is not an eq")
+	_assert(DeviceKind.infer(_device("x.seq", "Step Sequencer")) == DeviceKind.STEP_SEQUENCER,
+		"'sequencer' is a step sequencer, not an eq")
 	_assert(DeviceKind.infer(null) == DeviceKind.GENERIC, "null → generic")
 
 
@@ -568,8 +571,9 @@ func _test_no_overlap_in_bounds() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 4004
 	var names := ["Gain", "Mix", "Attack", "Decay", "Sustain", "Release", "Pos X", "Pos Y", "Band 1 Freq",
-		"Band 1 Gain", "Band 1 Q", "Rate", "Depth", "Cutoff", "Reso", "Thing"]
-	var kinds := [DeviceKind.GENERIC, DeviceKind.SYNTH, DeviceKind.REVERB, DeviceKind.DELAY, DeviceKind.COMPRESSOR, DeviceKind.EQ]
+		"Band 1 Gain", "Band 1 Q", "Rate", "Depth", "Cutoff", "Reso", "Thing", "Step 2 Pitch"]
+	var kinds := [DeviceKind.GENERIC, DeviceKind.SYNTH, DeviceKind.REVERB, DeviceKind.DELAY, DeviceKind.COMPRESSOR, DeviceKind.EQ,
+		DeviceKind.STEP_SEQUENCER]
 	for iteration in range(40):
 		var params: Array = []
 		for id in range(rng.randi_range(0, 90)):
@@ -949,3 +953,82 @@ func _test_compressor_faders() -> void:
 	_assert(by_param[0].rect[3] == 3, "a fader keeps its three rows (%s)" % [by_param[0].rect])
 	var generic := SimpleLayoutGenerator.generate(_device("x.fx", "Fx"), [_float(0, "Output Gain", "dB", -12, 12)])
 	_assert(generic.pages[0].controls[0].kind == "knob", "a generic device keeps its knobs")
+
+
+## The built-in Step Sequencer's parameter table: Pattern and Timing, then 16 steps of On, Pitch,
+## Velocity and Chance, each step its own module.
+func _step_sequencer_params(steps := 16) -> Array:
+	var params: Array = []
+	var add := func(p: DeviceParameter, module: String) -> void:
+		p.module = module
+		params.append(p)
+	add.call(_float(0, "Length", "", 1, 16), "Pattern")
+	add.call(_enum(1, "Mode", 2), "Pattern")
+	add.call(_enum(2, "Velocity Source", 2), "Pattern")
+	add.call(_enum(10, "Rate", 12), "Timing")
+	add.call(_float(11, "Gate", "%", 10, 200), "Timing")
+	add.call(_float(12, "Swing", "%", 0, 75), "Timing")
+	for k in steps:
+		var module := "Step %d" % (k + 1)
+		add.call(_bool(100 + 10 * k, "On"), module)
+		add.call(_float(101 + 10 * k, "Pitch", "st", -24, 24), module)
+		add.call(_float(102 + 10 * k, "Velocity", "%", 0, 100), module)
+		add.call(_float(103 + 10 * k, "Chance", "%", 0, 100), module)
+	return params
+
+
+## Each step is one column (its controls stacked in parameter order), the steps run left to right
+## in order, and the other controls sit to the left of the first step.
+func _test_step_sequencer_layout() -> void:
+	var device := _device("sonara.builtin.step_sequencer", "Step Sequencer", Device.DeviceCategory.NoteEffect)
+	var params := _step_sequencer_params()
+	var layout := SimpleLayoutGenerator.generate(device, params)
+	_assert(layout.kind == DeviceKind.STEP_SEQUENCER, "generated with the Step Sequencer strategy")
+	_check_layout(layout, params, "Step Sequencer")
+	_check_page_widths(layout, "Step Sequencer")
+	_assert(layout.pages.size() == 1, "16 steps and the extras fit one page (%d pages)" % layout.pages.size())
+	var first_step_x := int(_find(layout, 100).control.rect[0])
+	for id in [0, 1, 2, 10, 11, 12]:
+		var rect: Array = _find(layout, id).control.rect
+		_assert(int(rect[0]) + int(rect[2]) <= first_step_x, "param %d left of the steps %s" % [id, rect])
+	for k in 16:
+		var on := _find(layout, 100 + 10 * k)
+		_assert(on.group_title == "Step %d" % (k + 1), "step %d has its own group (%s)" % [k + 1, on.group_title])
+		for part in 4:
+			var control: Dictionary = _find(layout, 100 + 10 * k + part).control
+			_assert(control.rect == [first_step_x + k, part, 1, 1],
+				"step %d part %d at column %d row %d %s" % [k + 1, part, first_step_x + k, part, control.rect])
+	_assert(_find(layout, 102).control.get("label", "") == "Velocity", "step labels drop the step number")
+
+	# A 2-row page: each step is two columns wide, still in order and right of the extras.
+	var short := SimpleLayoutGenerator.generate(device, params, 2)
+	_check_layout(short, params, "Step Sequencer (2 rows)")
+	var step1: Array = _find(short, 100).control.rect
+	var step2: Array = _find(short, 110).control.rect
+	_assert(int(step2[0]) == int(step1[0]) + 2, "two-row steps sit side by side (%s, %s)" % [step1, step2])
+	_assert(int(_find(short, 12).control.rect[0]) < int(step1[0]), "extras still before the steps")
+
+
+## A plugin without module paths: "Step 3 Gate" names and a "Steps" module with "Pitch 3" names
+## both group by step.
+func _test_step_sequencer_flat_names() -> void:
+	_assert(StepSequencerStrategy.step_of("Step 3 Gate", "") == {"step": 3, "label": "Gate"}, "'Step 3 Gate' → step 3")
+	_assert(StepSequencerStrategy.step_of("Gate", "Step 03") == {"step": 3, "label": "Gate"}, "module 'Step 03' → step 3")
+	_assert(StepSequencerStrategy.step_of("Pitch 12", "Steps") == {"step": 12, "label": "Pitch"}, "'Pitch 12' in Steps → step 12")
+	_assert(StepSequencerStrategy.step_of("Step Length", "").is_empty(), "no number, no step")
+	_assert(StepSequencerStrategy.step_of("Pitch 2", "").is_empty(), "a trailing number alone isn't a step")
+
+	var params: Array = [_float(0, "Swing"), _float(1, "Master Gain")]
+	for k in 8:
+		params.append(_bool(10 + 2 * k, "Step %d On" % (k + 1)))
+		params.append(_float(11 + 2 * k, "Step %d Gate" % (k + 1)))
+	var layout := SimpleLayoutGenerator.generate(_device("x.seq", "SeqBox"), params)
+	_check_layout(layout, params, "flat step sequencer")
+	var first := _find(layout, 10)
+	_assert(first.group_title == "Step 1" and first.control.get("label", "") == "On", "flat step 1 grouped (%s)" % [first])
+	for k in 8:
+		var on: Array = _find(layout, 10 + 2 * k).control.rect
+		var gate: Array = _find(layout, 11 + 2 * k).control.rect
+		_assert(gate[0] == on[0] and gate[1] == on[1] + 1, "flat step %d stacks On over Gate (%s, %s)" % [k + 1, on, gate])
+	for id in [0, 1]:
+		_assert(int(_find(layout, id).control.rect[0]) < int(first.control.rect[0]), "param %d before the steps" % id)
