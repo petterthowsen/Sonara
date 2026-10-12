@@ -304,8 +304,8 @@ func _test_modulators_toggle_and_scroll() -> void:
 	_assert(mod._grid is HBoxContainer and mod._grid.get_child_count() > 0
 			and mod._grid.get_child(0) is VBoxContainer,
 		"the modulator grid is a column-major HBox of cell columns: %s" % mod._grid.get_class())
-	_assert(mod._detail_scroll != null and mod._detail_scroll.get_parent() == mod,
-		"the options panel sits beside the list, not inside its scroll")
+	_assert(mod._detail != null and mod._detail.get_parent() == mod,
+		"the options panel sits beside the list as a direct child of the pane")
 
 
 func _test_panes_slide_and_fade() -> void:

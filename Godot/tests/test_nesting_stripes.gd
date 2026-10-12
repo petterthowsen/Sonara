@@ -69,11 +69,11 @@ func _test_nested_rows_stripe_every_ancestor() -> void:
 		"lane header reserves the ancestors' stripes plus its track's")
 	_assert(_item_inset(t.outer) == 0, "top-level folder has no inset")
 
-	# Every track's meter starts one stripe past its inset, so its own background fills the column
-	# its children's (and automation lanes') stripe continues.
+	# A folder's meter starts one stripe past its inset, so its own background fills the column
+	# its children's (and automation lanes') stripe continues. Plain tracks keep the meter at the
+	# right end of the row.
 	_assert(_meter_x(t.outer) == WIDTH, "top-level folder meter sits after its own column")
 	_assert(_meter_x(t.inner) == 2 * WIDTH, "nested folder meter sits after inset + own column")
-	_assert(_meter_x(t.a) == 3 * WIDTH, "plain track meter sits after inset + own column")
 
 
 func _test_moving_enclosing_folder_updates_descendants() -> void:
