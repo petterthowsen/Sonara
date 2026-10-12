@@ -39,7 +39,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
     - Live: `oscsend localhost 7000 /engine/perf/subscribe` makes `oscdump 7001` show `/status/channel_perf` every 500 ms. After unsubscribe they stop.
   - _Depends on_: T-002
 
-- [ ] **T-004** [REQ-001, REQ-002, REQ-004] Godot model: EngineStatus perf parsing and subscription
+- [x?] **T-004** [REQ-001, REQ-002, REQ-004] Godot model: EngineStatus perf parsing and subscription
   - _Files_: `Godot/data/EngineStatus.gd`, `Godot/tests/test_engine_perf.gd` (new)
   - _Output_:
     - `ChannelPerf` and `EnginePerf` with `from_osc`, plus `channel_perf_received` and `engine_perf_received`.
@@ -47,7 +47,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `Godot/tests/run_all.sh engine_perf` passes (parsing, with a variable device count)
   - _Depends on_: T-003
 
-- [ ] **T-005** [REQ-001, REQ-002, REQ-004] Engine panel channel table
+- [x?] **T-005** [REQ-001, REQ-002, REQ-004] Engine panel channel table
   - _Files_: `Godot/editor/EnginePanel.gd`, `Godot/tests/test_engine_perf.gd`
   - _Output_:
     - The popup subscribes on show and unsubscribes on hide and `_exit_tree`.

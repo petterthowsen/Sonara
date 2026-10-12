@@ -33,6 +33,12 @@ const PERFORMANCE_TOOLTIP := (
 		+ "The panel shows these counters only once they are above zero, and names a plugin\n"
 		+ "only while it drops out or takes 50% or more of a block (PLUGIN_PEAK_WARN).")
 
+## The engine reports every 500 ms; a channel silent for 2 intervals is dropped from the table.
+const CHANNEL_PERF_STALE_MSEC := 1000
+## Latest ChannelPerf per channel id: {channel_id: {"perf": ChannelPerf, "msec": int}}.
+var _channel_perf: Dictionary = {}
+var _perf_subscribed: bool = false
+
 const POPUP_REOPEN_GUARD_MSEC := 250
 var _popup_hidden_msec: int = -1000000
 
@@ -57,6 +63,7 @@ func _ready() -> void:
 	Sonara.editor.project_closed.connect(_on_project_closed)
 	
 	_engine_status.engine_stats_received.connect(_on_engine_stats_received)
+	_engine_status.channel_perf_received.connect(_on_channel_perf_received)
 	performance_text.tooltip_text = PERFORMANCE_TOOLTIP
 	_engine_status.start()
 	
@@ -94,12 +101,31 @@ func _on_performance_button_pressed() -> void:
 	var origin := Vector2i(performance_button.get_screen_position()
 			+ Vector2(0, performance_button.size.y))
 	performance_popup.popup(Rect2i(origin, Vector2i.ZERO))
+	_set_perf_subscribed(true)
 	performance_button.set_pressed_no_signal(true)
 
 
 func _on_performance_popup_hidden() -> void:
 	_popup_hidden_msec = Time.get_ticks_msec()
+	_set_perf_subscribed(false)
 	performance_button.set_pressed_no_signal(false)
+
+
+## Subscribe to (or leave) the engine's perf reports. Guarded so the engine's subscriber count
+## stays balanced however often the popup shows and hides.
+func _set_perf_subscribed(on: bool) -> void:
+	if on == _perf_subscribed:
+		return
+	_perf_subscribed = on
+	if on:
+		_engine_status.subscribe_perf()
+	else:
+		_engine_status.unsubscribe_perf()
+		_channel_perf.clear()
+
+
+func _on_channel_perf_received(perf: EngineStatus.ChannelPerf) -> void:
+	_channel_perf[perf.channel_id] = {"perf": perf, "msec": Time.get_ticks_msec()}
 
 
 ## Dot + state on the connect button; the click action goes in the tooltip.
@@ -170,6 +196,7 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 
 
 func _exit_tree() -> void:
+	_set_perf_subscribed(false)
 	_engine_status.stop()
 
 
@@ -223,7 +250,8 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 			WORST_PLUGINS_IN_TOOLTIP)
 	if not ranked.is_empty() and _is_plugin_notable(ranked[0]):
 		parts.append(_plugin_text(ranked[0]))
-	performance_text.text = "\n".join(parts)
+	var channel_table := _channels_text(project.channels if project else [], now)
+	performance_text.text = "\n".join(parts) + channel_table
 	_set_load_text("%.0f%%" % (stats.load_avg * 100.0))
 	var load_color := ""
 	if stats.load_peak >= 1.0 or stats.xruns > 0 and now - _xrun_msec < COUNTER_ALERT_MSEC:
@@ -238,6 +266,68 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 	var totals := "\n\nXruns %d, lock misses %d, plugin dropouts %d since the engine started." % [
 		stats.xruns, stats.lock_misses, stats.plugin_underruns]
 	performance_text.tooltip_text = PERFORMANCE_TOOLTIP + totals + _plugins_tooltip(ranked)
+
+
+## The "Channels" section appended to the popup text; empty when nothing reported lately.
+func _channels_text(channels: Array, now_msec: int) -> String:
+	_drop_stale_channel_perf(_channel_perf, now_msec)
+	var rows := build_channel_rows(_channel_perf, channels)
+	if rows.is_empty():
+		return ""
+	var lines: PackedStringArray = ["", "", "Channels"]
+	for row in rows:
+		var line := "%s%s  %.1f%% (peak %.1f%%)" % [
+			"    " if row.is_device else "", row.name, row.load_avg * 100.0, row.load_peak * 100.0]
+		if row.host_load >= 0.0:
+			line += "  host %.0f%%" % (row.host_load * 100.0)
+		if not row.is_device and row.load_peak >= 1.0:
+			line = _colored(line, COLOR_ALERT)
+		lines.append(line)
+	return "\n".join(lines)
+
+
+## Remove entries of `entries` ({id: {"perf", "msec"}}) not updated for CHANNEL_PERF_STALE_MSEC.
+static func _drop_stale_channel_perf(entries: Dictionary, now_msec: int) -> void:
+	for id in entries.keys():
+		if now_msec - int(entries[id]["msec"]) > CHANNEL_PERF_STALE_MSEC:
+			entries.erase(id)
+
+
+## Table rows for the Channels section, heaviest channel (by load_avg) first, each followed by
+## its top-level device rows in chain order. `entries` is {channel_id: {"perf", "msec"}} and
+## `channels` the project's Channel models, which give the names. A container is one row.
+## Each row: {name, load_avg, load_peak, is_device, host_load} (host_load < 0 = not a plugin).
+static func build_channel_rows(entries: Dictionary, channels: Array) -> Array[Dictionary]:
+	var perfs: Array = []
+	for id in entries:
+		perfs.append(entries[id]["perf"])
+	perfs.sort_custom(func(a: EngineStatus.ChannelPerf, b: EngineStatus.ChannelPerf) -> bool:
+		if a.load_avg != b.load_avg:
+			return a.load_avg > b.load_avg
+		return a.channel_id < b.channel_id)
+	var by_id: Dictionary = {}
+	for channel in channels:
+		by_id[channel.id] = channel
+	var now := Time.get_ticks_msec()
+	var rows: Array[Dictionary] = []
+	for perf: EngineStatus.ChannelPerf in perfs:
+		var channel = by_id.get(perf.channel_id)
+		rows.append({
+			"name": channel.name if channel else "Channel %d" % perf.channel_id,
+			"load_avg": perf.load_avg, "load_peak": perf.load_peak,
+			"is_device": false, "host_load": -1.0})
+		for i in perf.device_count():
+			var dev: DeviceInstance = null
+			if channel and i < channel.devices.size():
+				dev = channel.devices[i]
+			var host := -1.0
+			if dev != null and dev.plugin_stats != null and dev.plugin_stats.is_fresh(now):
+				host = dev.plugin_stats.load_avg
+			rows.append({
+				"name": dev.get_display_name() if dev else "Device %d" % (i + 1),
+				"load_avg": perf.device_avg[i], "load_peak": perf.device_peak[i],
+				"is_device": true, "host_load": host})
+	return rows
 
 
 ## Every device instance in `channels`, including those nested in containers.
