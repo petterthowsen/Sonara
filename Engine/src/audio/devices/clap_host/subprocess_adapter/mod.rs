@@ -342,19 +342,28 @@ impl SubprocessClapAdapter {
         }
     }
 
-    /// Command thread only (allocates): record the plugin's latency and size the bypass delay
-    /// for it. Clears the delay, so the first `latency` frames after a change are silent.
+    /// Command thread only: record the plugin's latency and size the bypass delay for it. A
+    /// change clears the delay, so the first `latency` frames after it are silent; the same
+    /// latency again (a re-activation) keeps the delay running.
+    ///
+    /// Callers hold the state lock (`with_plugin`), so a change allocates under it. That is rare
+    /// (activation, or a latency change) and listed with `update_latency` in the command
+    /// classification.
     pub fn set_latency_frames(&mut self, frames: u32) {
         self.load.set_latency_frames(frames);
         let latency = frames as usize;
+        if latency == self.bypass_latency {
+            return;
+        }
         if latency == 0 {
             self.bypass_latency = 0;
             return;
         }
         self.bypass_delay.prepare(latency, MAX_BLOCK_FRAMES);
         for plane in &mut self.bypass_scratch {
-            plane.clear();
-            plane.resize(MAX_BLOCK_FRAMES, 0.0);
+            if plane.len() < MAX_BLOCK_FRAMES {
+                plane.resize(MAX_BLOCK_FRAMES, 0.0);
+            }
         }
         self.bypass_latency = latency;
     }
