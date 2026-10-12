@@ -219,6 +219,19 @@ Examples:
 - Top-level param: `/channel/2/device/0/param/1`
 - Nested param: `/channel/2/device/0/child/1/param/1`
 - Add into container: `/channel/2/device/0/add_device` `[id, position, ...]`
+- Add into a device slot: `/channel/2/device/0/child/1/add_device` `[id, position, ...]` (PolySynth FX)
+
+**Device slots (spec 040).** A *slotted device* (PolySynth, Delay, Reverb) owns fixed slot chains
+that the **engine** creates in the device's constructor; slot *i* is child *i* of the device, so a
+slot's devices live at `{device}/child/{slot}` and `{device}/child/{slot}/child/{n}`. Godot mirrors
+the chains as children for saving and paths but never sends `add_device`, `remove_device` or
+`move_device` for a slot chain itself, only for the devices inside one. Inserting straight into the
+slotted device (`{device}/add_device`) is refused with a warning, as is a device the slot's `kind`
+rejects. Parameter and automation paths (`{device}/child/{slot}/child/{n}/param/{id}`) and modulator
+route targets (`child/{slot}.{n}/param/{id}`) work as in any container. Kinds: `note` takes note effects only; `audio` takes effects (no instruments, no
+note effects); `loop` takes the same as `audio` but no CLAP plugin and no device that processes
+asynchronously, because it runs inside a feedback loop in sub-blocks. Advertised in `/builtin/info`
+(above).
 
 ### Device State Updates (Rust -> Godot)
 
@@ -432,7 +445,9 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
     s:kind, s:name,
     i:param_count, repeat: (i:param_id, f:normalized),
     i:route_count, repeat: (s:target, f:amount)
-  )
+  ),
+  i:slot_count,
+  repeat slot_count times: ( s:key, s:name, s:kind )
 ]
 ```
 - `type`: "float" | "bool" | "enum"
@@ -444,6 +459,12 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
   the device. Godot seeds a new `DeviceInstance` from them and does not re-send them on load. A
   device without a default patch sends `0`. PolySynth's default patch (Filter Env → Cutoff) lands
   here in spec 018 Phase 6.
+- The slot block (spec 040) is the last block, after the default modulators: `slot_count`, then a
+  `(key, name, kind)` triple per device slot, in slot order (`kind` is `"note"`, `"audio"` or
+  `"loop"`). A device without slots sends `0`. An older decoder stops after the default
+  modulators and never reads it. Current slots: PolySynth `note_fx` (Note FX, note) and `fx`
+  (FX, audio); Delay `fb_fx` (FB FX, loop); Reverb `tank_fx` (Tank FX, loop) and `wet_fx`
+  (Wet FX, audio).
 
 ##### Modulator Kinds (Rust → Godot)
 The same `/builtin/request` batch advertises the modulator kinds, after the devices:

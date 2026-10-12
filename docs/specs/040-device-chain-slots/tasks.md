@@ -163,13 +163,30 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test route_reaches_slot_device` passes
   - _Depends on_: T-006
 
-- [ ] **T-012** [REQ-011] Real-time review and the full engine gate.
+- [x?] **T-012** [REQ-011] Real-time review and the full engine gate.
   - Read every new audio-path function against ADR-0002: no `Vec` growth, no `String` or
     `format!` outside the warn-once paths, and no locks.
   - _Files_: everything from T-001 to T-011
   - _Output_: a review note in this task: what was checked and what was found
   - _Verify_: `cargo test` (all) passes; `cargo fmt --check` is clean; `cargo build --release`
   - _Depends on_: T-006 to T-011
+  - _Review note_: read `slots.rs`, the PolySynth `render` / `begin_block` / `finish_block` /
+    `send_note_event` / `send_cc` / sink drain, the Delay and Reverb sub-block and Wet FX paths
+    (`finish_loop`, `late_looped`, `render`, `begin_block`), `note_fx/routing.rs`, `ChainDevice::process_block`
+    and the `ModulatedDevice` forwards against ADR-0002. Checked: no `Vec` growth, `String` / `format!`,
+    locks or I/O on the audio path (the `format!` calls are in `check_insert` / `SlotKind::accepts`,
+    command thread only; `tracing::warn!` only on the full-queue drop paths); the `mem::take` of scratch
+    leaves `Vec::new()` behind (no allocation) and is put back on every path; reverb loop scratch is
+    fixed-size arrays; work per block is bounded (sub-blocks of 64, chunked Wet FX, `is_live` / `has_async`
+    walk only the slot's own tree). Found and fixed two issues: (1) `PolySynthDevice::queue_note` pushed
+    into `queued_midi` without a capacity check, so a Note FX burst could grow the Vec on the audio
+    thread; a full queue now drops the note. (2) `DeviceSlots::prepare` grew `slot_buf` but not the slot
+    `ChainDevice` buffers (created for 4096 frames), so with `max_frames` above 4096 (stream max is 8192)
+    a Reverb Wet FX chunk or whole-block FX run was silently truncated by the chain; `prepare` now takes
+    the sample rate and prepares the chains (test `prepare_grows_slot_chains_with_the_scratch`). Not
+    changed: `sort_by_key` on `queued_midi` is pre-existing (stable sort, at most 128 entries, fits the
+    sort's stack scratch). Gate: `cargo test` 1062 + 2 pass, `cargo fmt --check` clean,
+    `cargo build --release` ok.
 
 ## Phase 3 — Godot: model, sync, rules
 
@@ -244,7 +261,7 @@ with `Godot/tests/run_all.sh <word>`.
 
 ## Phase 4 — Godot: Simple View
 
-- [ ] **T-018** [REQ-024–026] The slot control kind and the tile.
+- [x?] **T-018** [REQ-024–026] The slot control kind and the tile.
   - `SimpleControlKinds.SLOT` with footprint (2, 1) and 0 parameters.
   - `SimpleControl` builds a `DeviceSlotButton` for it.
   - `DeviceSlotButton` gets `show_count`, `_can_drop_data` and `_drop_data`, which add to the
@@ -261,7 +278,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh simple_view` passes
   - _Depends on_: T-014
 
-- [ ] **T-019** [REQ-023, REQ-027] The generator puts the tiles last.
+- [x?] **T-019** [REQ-023, REQ-027] The generator puts the tiles last.
   - `SimpleLayoutGenerator.generate` appends the "Slots" column group after the Main groups.
     `VERSION = 15`.
   - Test in `test_simple_layout_generator.gd`: `test_slot_tiles_are_last_on_main` for
@@ -272,7 +289,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh simple_layout` passes
   - _Depends on_: T-018
 
-- [ ] **T-020** [REQ-028] Edited layouts get the missing tiles.
+- [x?] **T-020** [REQ-028] Edited layouts get the missing tiles.
   - `SimpleLayout.reconcile_slots(keys)` and the call to it in `SimpleLayoutStore.load_or_generate`.
   - Test: `test_edited_layout_gets_slot_tiles_appended`. Every other control keeps its rect.
   - _Files_: `Godot/devices/simple_view/SimpleLayout.gd`,
@@ -311,7 +328,7 @@ with `Godot/tests/run_all.sh <word>`.
 
 ## Phase 6 — docs
 
-- [ ] **T-024** [REQ-001] Document the protocol and the domain terms.
+- [x?] **T-024** [REQ-001] Document the protocol and the domain terms.
   - `docs/subsystems/osc-protocol.md`: the `/builtin/info` slot block, and a "Device slots" note
     (engine-owned chains, `{device}/child/{slot}` paths, kinds).
   - `CONTEXT.md`: Device slot, Slotted device and Loop slot.
