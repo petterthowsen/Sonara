@@ -318,6 +318,12 @@ static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, 
 		return AiTool.fail("Asset not found: %s" % str(spec.get("asset_path", "")))
 	if asset.type == Asset.TYPE.Audio and not is_drum_machine(parent):
 		return add_sampler(channel, parent, [asset], {"name": spec.get("name", ""), "position": args.get("position", -1)})
+	if DeviceSlots.is_slotted(parent):
+		# A slotted device takes devices in its slots: the open one, else the first that fits.
+		var slot := DeviceSlots.target_chain(parent, DeviceDropUtil.device_for_asset(asset))
+		if slot == null:
+			return AiTool.fail("%s has no slot that takes that device (%s)" % [parent.get_display_name(), ", ".join(DeviceSlots.specs(parent).map(func(s): return "%s: %s" % [s.name, s.kind]))])
+		parent = slot
 	if parent:
 		if not DeviceDropUtil.can_drop_on_container(channel, parent, asset):
 			return AiTool.fail("Cannot add that asset into %s" % parent.get_display_name())
@@ -374,6 +380,8 @@ static func add_sampler(channel: Channel, parent: DeviceInstance, assets: Array,
 		return AiTool.fail("No audio files given")
 	if parent and not parent.is_container():
 		return AiTool.fail("Parent is not a container device")
+	if DeviceSlots.is_slotted(parent) or DeviceSlots.kind_for_host(parent) != "":
+		return AiTool.fail("A Sampler is an instrument and can't go into a device slot")
 	var host: Array[DeviceInstance] = parent.children if parent else channel.devices
 	var before: Dictionary = {}
 	for d in host:

@@ -46,9 +46,17 @@ static func device_fits_channel(device: Device, channel: Channel) -> bool:
 
 
 ## Whether `device` may go inside `host_parent` (null = channel root): note effects never go
-## inside a Multiband FX band, where no notes arrive (spec 027 REQ-035).
+## inside a Multiband FX band, where no notes arrive (spec 027 REQ-035). Inside a device slot the
+## slot's kind decides (spec 040 REQ-014..016); a slotted device itself fits what one of its slots
+## takes.
 static func device_fits_host(device: Device, host_parent: DeviceInstance) -> bool:
-	if device == null or not device.is_note_effect():
+	if device == null:
+		return true
+	if DeviceSlots.is_slotted(host_parent):
+		return DeviceSlots.has_slot_for(host_parent, device)
+	if not DeviceSlots.accepts(DeviceSlots.kind_for_host(host_parent), device):
+		return false
+	if not device.is_note_effect():
 		return true
 	return not NoteFx.is_inside_multiband(host_parent)
 
@@ -64,6 +72,8 @@ static func can_drop_instance_on_host(
 		return false
 	if Multiband.is_band_chain(inst):
 		return false  # band positions are fixed (spec 016 D9)
+	if DeviceSlots.is_slot_chain(inst):
+		return false  # a slotted device's slots are fixed (spec 040 REQ-018)
 	if copying:
 		# A copy leaves the original (and its aux returns) behind; it only has to fit.
 		if not device_fits_channel(inst.device, channel) or not copy_fits_host(inst, host_parent):
@@ -77,6 +87,10 @@ static func can_drop_instance_on_host(
 			return false
 	if host_parent == null:
 		return true
+	if DeviceSlots.is_slotted(host_parent):
+		return false  # devices go into one of its slots, never straight into the device
+	if not DeviceSlots.accepts_instance(DeviceSlots.kind_for_host(host_parent), inst):
+		return false  # the slot's kind refuses it, or a device inside it (spec 040 REQ-014..016)
 	if Multiband.is_multiband(host_parent) and SlotChain.is_chain(inst):
 		return false
 	if inst == host_parent:
@@ -88,10 +102,14 @@ static func can_drop_instance_on_host(
 
 ## Whether a copy of `inst` may be inserted straight into `host_parent`. Layers, Drum Machines and
 ## Multiband FX hold slot or band chains, where a move reroutes the device; a copy only goes in
-## as a Chain.
+## as a Chain. Inside a device slot the slot's kind applies to the copy and what it holds.
 static func copy_fits_host(inst: DeviceInstance, host_parent: DeviceInstance) -> bool:
 	if host_parent == null:
 		return true
+	if DeviceSlots.is_slotted(host_parent):
+		return false
+	if not DeviceSlots.accepts_instance(DeviceSlots.kind_for_host(host_parent), inst):
+		return false
 	if SlotChain.is_slot_parent(host_parent) or Multiband.is_multiband(host_parent):
 		return SlotChain.is_chain(inst) and not Multiband.is_multiband(host_parent)
 	return true
@@ -597,6 +615,8 @@ static func can_drop_on_container(channel: Channel, container: DeviceInstance, d
 	var data = DeviceDrag.unwrap(drag_data)
 	if channel == null or container == null or not container.is_container():
 		return false
+	if DeviceSlots.is_slotted(container):
+		return false  # a slotted device is not a user container: drops go into its slots
 	if data is DeviceInstance:
 		return can_drop_instance_on_host(channel, data, container, DeviceDrag.is_copy(drag_data))
 	if data is Array:

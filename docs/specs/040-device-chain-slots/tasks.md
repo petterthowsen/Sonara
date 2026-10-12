@@ -211,7 +211,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh device_chain_slots` passes
   - _Depends on_: T-013
 
-- [ ] **T-016** [REQ-014–018] Drop rules and fixed slots.
+- [x?] **T-016** [REQ-014–018] Drop rules and fixed slots.
   - `DeviceDropUtil`: `device_fits_host` and `copy_fits_host` apply the slot kind;
     `can_drop_instance_on_host` refuses slot chains; `can_drop_on_container` is false for
     slotted devices.

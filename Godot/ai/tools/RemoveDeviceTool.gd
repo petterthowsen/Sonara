@@ -33,6 +33,8 @@ func execute(args: Dictionary) -> Dictionary:
 		return fail("Channel not found for device")
 	if Multiband.is_band_chain(inst):
 		return fail("A Multiband FX band can't be removed; remove the devices inside it instead")
+	if DeviceSlots.is_slot_chain(inst):
+		return fail("A device slot can't be removed; remove the devices inside it instead")
 	var snapshot := compact_device(project, inst)
 	var path: String = snapshot.path
 	HistoryUtil.execute(DeviceRemoveCommand.new(channel, inst))

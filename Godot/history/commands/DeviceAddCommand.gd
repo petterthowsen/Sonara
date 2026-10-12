@@ -1,7 +1,9 @@
 # DeviceAddCommand.gd
 # Undoable addition of a DeviceInstance to a Channel (keeps instance identity). A device added
 # straight into a Layer or Drum Machine goes in wrapped in a new slot chain (SlotChain.for_parent);
-# `device_instance` is then that slot chain.
+# `device_instance` is then that slot chain. A device added straight into a slotted device (PolySynth,
+# Delay, Reverb) goes into the slot that takes it, and `device_instance` stays null when none does or
+# when the slot's kind refuses the device.
 class_name DeviceAddCommand extends Command
 
 ## Channel that receives the device.
@@ -34,6 +36,18 @@ func _init(
 		if band != null:
 			parent = band
 			position = -1
+	var refused := false
+	if DeviceSlots.is_slotted(parent):
+		# A slotted device's chains are fixed: the device goes into the slot that takes it
+		# (the open one first), and nothing is added when no slot does (spec 040 REQ-014..018).
+		parent = DeviceSlots.target_chain(parent, p_device.device) if p_device != null else null
+		position = -1
+		refused = parent == null
+	if parent != null and p_device != null and not DeviceSlots.accepts_instance(DeviceSlots.kind_for_host(parent), p_device):
+		refused = true  # the slot's kind refuses it, or a device inside it
+	if refused:
+		device_instance = null  # do() and undo() become no-ops
+		return
 	device_instance = SlotChain.for_parent(parent, p_device)
 
 

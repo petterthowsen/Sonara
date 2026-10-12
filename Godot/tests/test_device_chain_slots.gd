@@ -18,6 +18,9 @@ var _project_script: GDScript
 var _device_script: GDScript
 var _device_instance_script: GDScript
 var _slots: GDScript
+var _asset_script: GDScript
+var _drop_util: GDScript
+var _add_cmd: GDScript
 var _nodes: Array[Node] = []
 var _project: Object
 
@@ -31,7 +34,14 @@ func run_tests() -> void:
 	_device_script = load("res://data/Device.gd")
 	_device_instance_script = load("res://data/DeviceInstance.gd")
 	_slots = load("res://data/DeviceSlots.gd")
+	_asset_script = load("res://browser/Asset.gd")
+	_drop_util = load("res://devices/DeviceDropUtil.gd")
+	_add_cmd = load("res://history/commands/DeviceAddCommand.gd")
 	_device(CHAIN_ID, _device_script.DeviceCategory.Effect, true)
+	_device("sonara.builtin.transpose", _device_script.DeviceCategory.NoteEffect)
+	_device("sonara.builtin.saturator", _device_script.DeviceCategory.Effect)
+	var clap: Object = _device("test.clap.fx", _device_script.DeviceCategory.Effect)
+	clap.device_type = _device_script.DeviceType.CLAP
 	_slotted(POLY_ID, _device_script.DeviceCategory.Instrument, [
 		["note_fx", "Note FX", "note"], ["fx", "FX", "audio"]])
 	_slotted(DELAY_ID, _device_script.DeviceCategory.Effect, [["fb_fx", "FB FX", "loop"]])
@@ -45,6 +55,11 @@ func run_tests() -> void:
 	_test_slot_role_colors()
 	_test_slot_accessors()
 	_test_sync_skips_slot_chains()
+	_test_note_slot_takes_note_effects_only()
+	_test_audio_slot_rejects_instruments_and_note_fx()
+	_test_loop_slot_rejects_plugins()
+	_test_slot_chain_cannot_move_or_be_removed()
+	_test_drop_on_slotted_panel_is_not_a_container_drop()
 
 
 ## Registered fake device `device_id`.
@@ -257,3 +272,129 @@ func _test_sync_skips_slot_chains() -> void:
 	_assert(_structure_sends(osc) == [base + "/child/1/remove_device"] and poly.children[1].children.is_empty(), "a device in a slot can be removed")
 	ch._is_connected = false
 	osc._pending_sends.clear()
+
+
+func _asset(device_id: String) -> Object:
+	var asset: Object = _asset_script.new()
+	asset.type = _asset_script.TYPE.Device
+	asset.path = device_id
+	return asset
+
+
+## A slotted device `device_id` on `ch`.
+func _slotted_on(ch: Object, device_id: String) -> Object:
+	var inst := _inst(device_id, ch)
+	ch.add_device(inst)
+	return inst
+
+
+## True when `device_id` may go into `host`: as a browser asset and as a dragged instance.
+func _fits(ch: Object, host: Object, device_id: String) -> bool:
+	var as_asset: bool = _drop_util.can_drop_on_container(ch, host, _asset(device_id))
+	var as_instance: bool = _drop_util.can_drop_instance_on_host(ch, _inst(device_id, ch), host)
+	_assert(as_asset == as_instance, "%s: asset and instance agree on %s (%s / %s)" % [host.name, device_id, as_asset, as_instance])
+	return as_asset and as_instance
+
+
+func _test_note_slot_takes_note_effects_only() -> void:
+	var ch: Object = _fresh_project()
+	var poly := _slotted_on(ch, POLY_ID)
+	var note_fx: Object = poly.children[0]
+	_assert(_fits(ch, note_fx, "sonara.builtin.transpose"), "a Transpose is accepted on the Note FX slot")
+	_assert(not _fits(ch, note_fx, DELAY_ID), "a Delay is refused on the Note FX slot")
+	_assert(not _fits(ch, note_fx, POLY_ID), "an instrument is refused on the Note FX slot")
+	var cmd = _add_cmd.new(ch, _inst(DELAY_ID, ch), -1, note_fx)
+	_assert(cmd.device_instance == null, "DeviceAddCommand adds nothing a note slot refuses")
+	cmd.do()
+	_assert(note_fx.children.is_empty(), "so the slot stays empty")
+	var transpose := _inst("sonara.builtin.transpose", ch)
+	_add_cmd.new(ch, transpose, -1, note_fx).do()
+	_assert(note_fx.children == [transpose], "an accepted Transpose lands in the slot")
+
+
+func _test_audio_slot_rejects_instruments_and_note_fx() -> void:
+	var ch: Object = _fresh_project()
+	var poly := _slotted_on(ch, POLY_ID)
+	var fx: Object = poly.children[1]
+	_assert(not _fits(ch, fx, POLY_ID), "a PolySynth is refused on the FX slot")
+	_assert(not _fits(ch, fx, "sonara.builtin.transpose"), "a Transpose is refused on the FX slot")
+	_assert(_fits(ch, fx, DELAY_ID), "a Delay is accepted on the FX slot")
+	var chain := _inst(CHAIN_ID, ch)
+	ch.add_device(chain, -1, fx)
+	_assert(_fits(ch, fx, CHAIN_ID), "a Chain of effects is accepted on the FX slot")
+	var holder := _inst(CHAIN_ID, ch)
+	var inner := _inst("sonara.builtin.transpose", ch)
+	holder.children.append(inner)
+	inner.set_parent_device(holder)
+	_assert(not _drop_util.can_drop_instance_on_host(ch, holder, fx), "a Chain holding a Transpose is refused on the FX slot")
+	_assert(not _drop_util.can_drop_instance_on_host(ch, holder, chain), "and inside a Chain in the FX slot, whose kind still governs")
+	_assert(_drop_util.can_drop_instance_on_host(ch, _inst(DELAY_ID, ch), chain), "a Delay goes inside that Chain")
+	_assert(not _drop_util.copy_fits_host(holder, fx) and _drop_util.copy_fits_host(_inst(DELAY_ID, ch), fx), "copies follow the same kinds")
+	_assert(_slots.kind_for_host(chain) == "audio", "a Chain in FX is still under the audio slot")
+
+
+func _test_loop_slot_rejects_plugins() -> void:
+	var ch: Object = _fresh_project()
+	var delay := _slotted_on(ch, DELAY_ID)
+	var reverb := _slotted_on(ch, REVERB_ID)
+	_assert(not _fits(ch, delay.children[0], "test.clap.fx"), "a CLAP effect is refused on the Delay's FB FX slot")
+	_assert(_fits(ch, delay.children[0], "sonara.builtin.saturator"), "a built-in effect is accepted on FB FX")
+	_assert(not _fits(ch, reverb.children[0], "test.clap.fx"), "a CLAP effect is refused on Tank FX")
+	_assert(_fits(ch, reverb.children[1], "test.clap.fx"), "a CLAP effect is accepted on the Reverb's Wet FX slot")
+	_assert(not _fits(ch, delay.children[0], POLY_ID), "an instrument is refused on a loop slot")
+	var holder := _inst(CHAIN_ID, ch)
+	var plugin := _inst("test.clap.fx", ch)
+	holder.children.append(plugin)
+	plugin.set_parent_device(holder)
+	_assert(not _drop_util.can_drop_instance_on_host(ch, holder, delay.children[0]), "a Chain holding a plugin is refused on a loop slot")
+
+
+func _test_slot_chain_cannot_move_or_be_removed() -> void:
+	var ch: Object = _fresh_project()
+	var poly := _slotted_on(ch, POLY_ID)
+	var fx: Object = poly.children[1]
+	_assert(not _drop_util.can_drop_instance_on_host(ch, fx, null), "a slot chain can't be dragged to the channel root")
+	_assert(not _drop_util.can_drop_instance_on_host(ch, fx, poly.children[0]), "nor into another slot")
+	_assert(not _drop_util.can_drop_instance_on_host(ch, fx, poly.children[1]), "nor onto itself")
+	_assert(not _drop_util.can_drop_instance_on_host(ch, poly.children[0], null, true), "nor copied out")
+	var removal: Object = load("res://history/commands/DeviceRemoveCommand.gd").new(ch, fx)
+	removal.do()
+	_assert(poly.children.size() == 2 and poly.children[1] == fx, "removing a slot chain does nothing")
+	ch.move_device(0, 1, poly)
+	_assert(poly.children[0].name == "Note FX", "moving a slot chain does nothing")
+	_assert(_slots.clear_command(fx) == null, "an empty slot has nothing to clear")
+	var delay := _inst(DELAY_ID, ch)
+	_add_cmd.new(ch, delay, -1, fx).do()
+	var clear: Object = _slots.clear_command(fx)
+	_assert(clear != null, "a slot with a device can be cleared")
+	clear.do()
+	_assert(fx.children.is_empty() and poly.children.size() == 2, "Clear Slot empties the slot and keeps the chain")
+	clear.undo()
+	_assert(fx.children == [delay], "undo brings the device back")
+
+
+func _test_drop_on_slotted_panel_is_not_a_container_drop() -> void:
+	var ch: Object = _fresh_project()
+	var poly := _slotted_on(ch, POLY_ID)
+	var reverb := _slotted_on(ch, REVERB_ID)
+	_assert(not _drop_util.can_drop_on_container(ch, poly, _asset(DELAY_ID)), "a slotted device is no container for asset drops")
+	_assert(not _drop_util.can_drop_on_device(poly, _asset(DELAY_ID)), "dropping a Delay on the PolySynth panel is not a drop")
+	_assert(not _drop_util.can_drop_instance_on_host(ch, _inst(DELAY_ID, ch), poly), "nor is an instance drop onto it")
+	# DeviceAddCommand (used by tools and paste) still finds a slot: the open one first.
+	var transpose := _inst("sonara.builtin.transpose", ch)
+	_add_cmd.new(ch, transpose, -1, poly).do()
+	_assert(poly.children[0].children == [transpose], "a Transpose added to the device goes to Note FX")
+	var delay := _inst(DELAY_ID, ch)
+	var cmd = _add_cmd.new(ch, delay, -1, poly)
+	cmd.do()
+	_assert(poly.children[1].children == [delay] and cmd.device_instance == delay, "a Delay added to the device goes to FX")
+	var saturator := _inst("sonara.builtin.saturator", ch)
+	reverb.set_slot_open("wet_fx", true)
+	_add_cmd.new(ch, saturator, -1, reverb).do()
+	_assert(reverb.children[1].children == [saturator] and reverb.children[0].children.is_empty(), "the open slot wins when it accepts")
+	_assert(_add_cmd.new(ch, _inst(POLY_ID, ch), -1, reverb).device_instance == null, "a device no slot takes is not added")
+	cmd.undo()
+	_assert(poly.children[1].children.is_empty(), "undo removes it again")
+	var before_root: int = ch.devices.size()
+	_add_cmd.new(ch, _inst(POLY_ID, ch), -1, poly).do()
+	_assert(ch.devices.size() == before_root, "a refused add doesn't fall back to the channel root")

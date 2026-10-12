@@ -83,11 +83,13 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	
 	device = device_instance
 	label.set_value(device.get_display_name())
-	remove.text = "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else "Remove")
+	var slot_chain := DeviceSlots.is_slot_chain(device)
+	remove.text = "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else ("Clear Slot" if slot_chain else "Remove"))
 	load_kit.visible = DrumKit.is_drum_machine(device)
 	paste_button.disabled = not DeviceActions.can_paste()
 	# Pads and band chains are fixed by their host; only plain devices copy.
-	var plain := not _pad_return() and not Multiband.is_band_chain(device)
+	var plain := not _pad_return() and not Multiband.is_band_chain(device) and not slot_chain
+	label.disabled = slot_chain  # a device slot keeps its name
 	copy_button.visible = plain
 	paste_button.visible = plain
 	duplicate_button.visible = plain
@@ -137,6 +139,10 @@ func _on_remove_pressed() -> void:
 			var clear := Multiband.clear_band_command(parent, Multiband.position_of(parent, device))
 			if clear:
 				HistoryUtil.execute(clear)
+		elif DeviceSlots.is_slot_chain(device):
+			var clear_slot := DeviceSlots.clear_command(device)
+			if clear_slot:
+				HistoryUtil.execute(clear_slot)
 		elif channel:
 			HistoryUtil.execute(DeviceRemoveCommand.new(channel, device, device.position))
 	hide()

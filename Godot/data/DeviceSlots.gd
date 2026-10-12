@@ -146,3 +146,17 @@ static func ensure_chains(inst: DeviceInstance) -> void:
 		chain.position = i
 		chain.set_parent_device(inst)
 		inst.children.append(chain)
+
+
+## Undoable command that empties slot chain `chain`, or null when it is already empty.
+static func clear_command(chain: DeviceInstance) -> Command:
+	var channel := chain.get_channel() if chain != null else null
+	if channel == null or not is_slot_chain(chain) or chain.children.is_empty():
+		return null
+	# Loaded on use: naming DeviceRemoveCommand here would make DeviceInstance depend on Channel
+	# while it compiles, before the autoloads exist.
+	var remove_script: GDScript = load("res://history/commands/DeviceRemoveCommand.gd")
+	var cmds: Array[Command] = []
+	for i in range(chain.children.size() - 1, -1, -1):
+		cmds.append(remove_script.new(channel, chain.children[i], i, chain))
+	return MacroCommand.new("Clear Slot", cmds)
