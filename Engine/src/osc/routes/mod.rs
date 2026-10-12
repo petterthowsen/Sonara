@@ -122,7 +122,7 @@ impl OscServer {
             Some("plugin" | "plugins" | "builtin") => {
                 warn_on_arg_error(plugin::route(&parts, args, &mut cx))?
             }
-            Some("audio") => warn_on_arg_error(audio::route(&parts, args, &mut cx))?,
+            Some("audio" | "engine") => warn_on_arg_error(audio::route(&parts, args, &mut cx))?,
             Some("render") => warn_on_arg_error(render::route(&parts, args, &mut cx))?,
             Some("audiofile") => warn_on_arg_error(audiofile::route(&parts, args, &cx))?,
             Some("preview") => warn_on_arg_error(preview::route(&parts, args, &cx))?,
@@ -401,6 +401,27 @@ mod tests {
             .send("/preview/play", vec![Str("/s/kick.wav".into())])
             .is_empty());
         assert!(h.send("/preview/seek", vec![]).is_empty());
+    }
+
+    #[test]
+    fn engine_routes_reach_the_audio_area() {
+        let mut h = Harness::new();
+        let sent = h.send("/engine/perf/subscribe", vec![]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetPerfSubscription { subscribe: true }]
+        ));
+        let sent = h.send("/engine/perf/unsubscribe", vec![]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetPerfSubscription { subscribe: false }]
+        ));
+        let sent = h.send("/engine/threads/set", vec![Int(4)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetProcessingThreads { threads: 4 }]
+        ));
+        assert!(h.send("/engine/threads/set", vec![Int(-1)]).is_empty());
     }
 
     #[test]

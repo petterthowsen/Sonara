@@ -8,7 +8,8 @@ use super::RouteCtx;
 use crate::audio::stream::Driver;
 use crate::audio::AudioCommand;
 
-/// Handle audio device routes: `/audio/devices/*` and `/audio/config/*`. Returns false for an address this area doesn't
+/// Handle audio device and engine routes: `/audio/devices/*`, `/audio/config/*` and `/engine/*`.
+/// Returns false for an address this area doesn't
 /// know, so the caller can try the next area or report an unknown address.
 pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Result<bool> {
     match parts {
