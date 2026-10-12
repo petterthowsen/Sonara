@@ -2,10 +2,11 @@
 //! extra outputs.
 
 use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 use crossbeam::channel::Sender;
 
-use crate::audio::channel::{fader_gain, Channel};
+use crate::audio::channel::{elapsed_ns, fader_gain, Channel};
 use crate::audio::commands::EngineStatus;
 use crate::audio::devices::container::ChainStep;
 use crate::audio::dsp::interleave::deinterleave_stereo;
@@ -237,6 +238,7 @@ pub(super) fn route_finished(
     let Some(channel) = channel_map.get_mut(&id) else {
         return;
     };
+    let started = channel.mix.timing.then(Instant::now);
     if channel.mix.is_route_target {
         copy_pre_fader(channel, frames);
         if !channel.mute {
@@ -247,6 +249,9 @@ pub(super) fn route_finished(
         }
     }
     route_channel(channel_map, id, frames);
+    if let (Some(started), Some(channel)) = (started, channel_map.get_mut(&id)) {
+        channel.mix.timer.add(elapsed_ns(started));
+    }
 }
 
 /// Finish the parked device chains, waiting on each channel's plugin in the order they parked.
@@ -458,6 +463,8 @@ mod tests {
         enabled: bool,
         sleeping: bool,
         sleep_on_silence: bool,
+        /// Time `begin_block` spends before returning, as the start of a slow block.
+        begin_cost: std::time::Duration,
     }
 
     impl FakePlugin {
@@ -469,6 +476,7 @@ mod tests {
                 enabled: true,
                 sleeping: false,
                 sleep_on_silence: false,
+                begin_cost: std::time::Duration::ZERO,
             }
         }
     }
@@ -480,6 +488,7 @@ mod tests {
         }
         fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool {
             self.log.lock().unwrap().push(AsyncEvent::Begin(self.id));
+            std::thread::sleep(self.begin_cost);
             true
         }
         fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
@@ -761,6 +770,37 @@ mod tests {
 
         assert_eq!(source_calls.load(Ordering::Relaxed), 1);
         assert!((state.channels[&3].buffer_left[0] - 0.8).abs() < 1e-4);
+    }
+
+    #[test]
+    fn channel_timer_excludes_parked_wait() {
+        // Track 2 parks at its plugin; track 3's plugin then takes 20 ms to begin, while track 2
+        // waits. That wait is track 3's work, not track 2's.
+        let cost = std::time::Duration::from_millis(20);
+        let log = AsyncLog::default();
+        let mut parked = source_track(2, 1);
+        parked.devices.push(Box::new(FakePlugin::new(2, 1.0, &log)));
+        let mut slow = source_track(3, 1);
+        let mut plugin = FakePlugin::new(3, 1.0, &log);
+        plugin.begin_cost = cost;
+        slow.devices.push(Box::new(plugin));
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), parked, slow]);
+        state.perf_timing = true;
+        mix_master(&mut state);
+
+        assert_eq!(
+            log.lock().unwrap()[..2],
+            [AsyncEvent::Begin(2), AsyncEvent::Begin(3)],
+            "track 3 began while track 2 was parked"
+        );
+        let channel_ns = |id: ChannelId| state.channels[&id].mix.timer.total_ns;
+        let cost_ns = cost.as_nanos() as u64;
+        assert!(channel_ns(3) >= cost_ns, "track 3: {} ns", channel_ns(3));
+        assert!(channel_ns(2) < cost_ns / 2, "track 2: {} ns", channel_ns(2));
+        let device = |id: ChannelId| state.channels[&id].device_timers[0];
+        assert!(device(3).total_ns >= cost_ns);
+        assert!(device(2).total_ns < cost_ns / 2);
+        assert_eq!((device(2).blocks, device(3).blocks), (1, 1));
     }
 
     #[test]

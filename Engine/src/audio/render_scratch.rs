@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use super::channel::ChannelTimer;
 use super::devices::container::ChainCursor;
 use super::types::{ChannelId, MidiNote, NoteId, Tick, TrackId};
 
@@ -104,6 +105,10 @@ pub struct MixBuffers {
     pub cursor: ChainCursor,
     /// First device index of the chain the cursor runs on.
     pub chain_start: usize,
+    /// Perf timing is on this buffer (copied from `EngineState::perf_timing`).
+    pub timing: bool,
+    /// This channel's own processing time over the current perf report interval.
+    pub timer: ChannelTimer,
 }
 
 impl MixBuffers {

@@ -19,7 +19,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test chain_timer_counts_each_device` passes; all existing container tests pass
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-001, REQ-002] Per-channel device and channel timers
+- [x?] **T-002** [REQ-001, REQ-002] Per-channel device and channel timers
   - _Files_: `Engine/src/audio/channel/mod.rs`, `Engine/src/audio/channel/chain.rs`, `Engine/src/audio/render_scratch.rs`, `Engine/src/audio/mixing/mod.rs`, `Engine/src/audio/mixing/routing.rs`, `Engine/src/audio/state.rs`
   - _Output_:
     - New `DeviceTimer` and `ChannelTimer`, plus `Channel::device_timers: [DeviceTimer; 64]`, `MixBuffers::{timer, timing}` and `EngineState::{perf_timing, perf_subscribers}`.

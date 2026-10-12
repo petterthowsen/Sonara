@@ -6,10 +6,12 @@
 mod chain;
 mod meter;
 mod pan;
+mod perf;
 mod send;
 
 pub(crate) use meter::fader_gain;
 pub use pan::{PanCoefficients, PanMode};
+pub use perf::{elapsed_ns, ChannelTimer, DeviceTimer, MAX_TIMED_DEVICES};
 pub use send::Send;
 
 use crate::audio::active_notes::ActiveNotes;
@@ -98,6 +100,10 @@ pub struct Channel {
     /// than `MAX_SLEEP_CHANGES` devices change at once would grow it.
     pub sleep_changes: Vec<(crate::audio::devices::DevicePath, bool)>,
 
+    /// Time of each top-level device (by index) over the current perf report interval. Only
+    /// written while `mix.timing` is on.
+    pub device_timers: [DeviceTimer; MAX_TIMED_DEVICES],
+
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
 }
@@ -151,6 +157,7 @@ impl Channel {
             extra_out_targets: Vec::new(),
             extra_out_buffers: Vec::new(),
             sleep_changes: Vec::with_capacity(MAX_SLEEP_CHANGES),
+            device_timers: [DeviceTimer::default(); MAX_TIMED_DEVICES],
             mix: MixBuffers::new(buffer_size),
         }
     }

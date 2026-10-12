@@ -1,12 +1,13 @@
 //! Device chain and note processing for a channel.
 
-use super::Channel;
+use super::{elapsed_ns, Channel};
 use crate::audio::active_notes::NoteSource;
 use crate::audio::devices::container::{ChainCursor, ChainStep};
 use crate::audio::devices::AudioDevice;
 use crate::audio::dsp::interleave::{deinterleave_stereo, interleave_stereo};
 use crate::audio::midi_types::{cc14_from_cc7, NoteEvent, DEFAULT_RELEASE};
 use crate::audio::render_scratch::ClipNoteEvent;
+use std::time::Instant;
 
 /// Send a note event through `devices` in chain order, waking those that take note input. It
 /// stops at the first note effect, which hands it on in the note phase (spec 027).
@@ -103,6 +104,14 @@ impl Channel {
     /// Leading note effects only get their note phase: their audio is a pass-through of the
     /// silent input.
     pub fn process_aux_source(&mut self, sample_count: usize) {
+        let started = self.mix.timing.then(Instant::now);
+        self.process_aux_source_untimed(sample_count);
+        if let Some(started) = started {
+            self.mix.timer.add(elapsed_ns(started));
+        }
+    }
+
+    fn process_aux_source_untimed(&mut self, sample_count: usize) {
         self.dispatch_notes(sample_count);
         let src = self.aux_source_index();
         if src >= self.devices.len() {
@@ -129,6 +138,7 @@ impl Channel {
             "process_block_with_extra",
             self.devices[src].device_id(),
         );
+        let device_started = self.mix.timing.then(Instant::now);
         crate::audio::rt_debug::device_section(section, || {
             self.devices[src].process_block_with_extra(
                 &self.device_input_buffer,
@@ -137,6 +147,9 @@ impl Channel {
                 sample_count,
             )
         });
+        if let (Some(started), Some(timer)) = (device_started, self.device_timers.get_mut(src)) {
+            timer.add(elapsed_ns(started));
+        }
         self.extra_out_buffers = extras;
 
         deinterleave_stereo(
@@ -159,13 +172,21 @@ impl Channel {
     /// Start the device chain from `start`, running devices until one begins a block
     /// asynchronously (`Parked`; finish with `resume_device_chain`) or the chain ends. Scheduled
     /// MIDI is dispatched and the note phase runs when `start` is 0. The channel buffers hold the result once `Done`.
+    ///
+    /// With `mix.timing` on, the call's time goes to the channel timer and each device's to its
+    /// device timer.
     pub fn begin_device_chain(&mut self, start: usize, sample_count: usize) -> ChainStep {
+        let started = self.mix.timing.then(Instant::now);
         if start == 0 {
             crate::audio::rt_debug::section("device MIDI dispatch", || {
                 self.dispatch_notes(sample_count)
             });
         }
-        self.begin_chain_from(start, sample_count)
+        let step = self.begin_chain_from(start, sample_count);
+        if let Some(started) = started {
+            self.mix.timer.add(elapsed_ns(started));
+        }
+        step
     }
 
     /// `begin_device_chain` without MIDI dispatch.
@@ -192,6 +213,8 @@ impl Channel {
 
         self.mix.chain_start = start;
         self.mix.cursor = ChainCursor::start(has_input_activity);
+        let timing = self.mix.timing;
+        let device_timers = &mut self.device_timers;
         let sleep_changes = &mut self.sleep_changes;
         let step = crate::audio::devices::container::run_chain(
             &mut self.devices[start..],
@@ -199,8 +222,12 @@ impl Channel {
             &mut self.device_output_buffer,
             sample_count,
             &mut self.mix.cursor,
-            false,
-            &mut |_, _| {},
+            timing,
+            &mut |idx, ns| {
+                if let Some(timer) = device_timers.get_mut(start + idx) {
+                    timer.add(ns);
+                }
+            },
             &mut |idx, sleeping| {
                 sleep_changes.push((
                     crate::audio::devices::DevicePath::root(start + idx),
@@ -213,8 +240,22 @@ impl Channel {
 
     /// Finish the plugin this channel's chain parked at (waiting for it), then run the rest of
     /// the chain until it parks again or ends.
+    ///
+    /// Timed like `begin_device_chain`. The wait while parked falls between the two calls, so
+    /// neither counts it.
     pub fn resume_device_chain(&mut self, sample_count: usize) -> ChainStep {
+        let started = self.mix.timing.then(Instant::now);
+        let step = self.resume_chain_untimed(sample_count);
+        if let Some(started) = started {
+            self.mix.timer.add(elapsed_ns(started));
+        }
+        step
+    }
+
+    fn resume_chain_untimed(&mut self, sample_count: usize) -> ChainStep {
         let start = self.mix.chain_start;
+        let timing = self.mix.timing;
+        let device_timers = &mut self.device_timers;
         let sleep_changes = &mut self.sleep_changes;
         let step = crate::audio::devices::container::resume_chain(
             &mut self.devices[start..],
@@ -222,8 +263,12 @@ impl Channel {
             &mut self.device_output_buffer,
             sample_count,
             &mut self.mix.cursor,
-            false,
-            &mut |_, _| {},
+            timing,
+            &mut |idx, ns| {
+                if let Some(timer) = device_timers.get_mut(start + idx) {
+                    timer.add(ns);
+                }
+            },
             &mut |idx, sleeping| {
                 sleep_changes.push((
                     crate::audio::devices::DevicePath::root(start + idx),

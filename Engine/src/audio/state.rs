@@ -97,6 +97,11 @@ pub struct EngineState {
     /// channels, fed to subscribing `sidechain` modulators one block later. Rebuilt only by
     /// the command thread; the callback only snapshots (end of mix) and feeds (block start).
     pub sc_taps: SidechainTaps,
+    /// Channel and device timers run (spec 042): on while `perf_subscribers > 0`. Set by the
+    /// command thread under the lock; the callback copies it into each channel's `mix.timing`.
+    pub perf_timing: bool,
+    /// Counted `/engine/perf/subscribe` requests not yet unsubscribed.
+    pub perf_subscribers: u32,
     /// Browser sample preview (spec 037), mixed into the hardware output after the master.
     pub preview: PreviewPlayer,
 }
@@ -223,6 +228,8 @@ impl Default for EngineState {
             block_clock: Arc::new(BlockClock::new()),
             rendering: Arc::new(AtomicBool::new(false)),
             sc_taps: SidechainTaps::default(),
+            perf_timing: false,
+            perf_subscribers: 0,
             preview: PreviewPlayer::default(),
         }
     }

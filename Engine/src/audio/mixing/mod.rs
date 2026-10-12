@@ -7,10 +7,11 @@ mod solo;
 mod test_support;
 
 use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 use crossbeam::channel::Sender;
 
-use super::channel::Channel;
+use super::channel::{elapsed_ns, Channel};
 use super::commands::EngineStatus;
 use super::devices::container::{self, ChainStep};
 use super::render_scratch::RenderScratch;
@@ -105,8 +106,11 @@ pub fn mix_and_output(
         channels: channel_map,
         render_scratch,
         sc_taps,
+        perf_timing,
+        device_sample_rate,
         ..
     } = state;
+    let timing = *perf_timing;
     let RenderScratch {
         channel_ids,
         parked,
@@ -115,6 +119,9 @@ pub fn mix_and_output(
     } = render_scratch;
 
     let has_solo = channel_map.values().any(|c| c.solo);
+    for channel in channel_map.values_mut() {
+        channel.mix.timing = timing;
+    }
     channel_ids.clear();
     channel_ids.extend(channel_map.keys().copied());
     // HashMap order differs per instance; sort so summation order is deterministic. In place,
@@ -149,6 +156,13 @@ pub fn mix_and_output(
     // The sidechain taps read the final post-fader buffers (spec 036 D8); the next callback
     // feeds them before its device passes run.
     sc_taps.snapshot(channel_map, frames);
+
+    if timing && *device_sample_rate > 0.0 {
+        let block_ns = (frames as f64 * 1e9 / *device_sample_rate as f64) as u64;
+        for channel in channel_map.values_mut() {
+            channel.mix.timer.end_block(block_ns);
+        }
+    }
 }
 
 /// First pass: begin and finish the device chains of channels nothing routes into.
@@ -199,21 +213,29 @@ fn apply_fader_and_pan(channel_map: &mut HashMap<ChannelId, Channel>, frames: us
     // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
     // Silent channels are cleared. Send-only sources keep their buffer for sends to a soloed bus.
     for channel in channel_map.values_mut() {
+        let started = channel.mix.timing.then(Instant::now);
         if is_silenced(channel) {
             channel.clear_buffers();
-            continue;
+        } else {
+            fader_and_pan(channel, frames);
         }
-
-        let pan = channel.get_pan_coefficients();
-        for i in 0..frames {
-            let smoothed_gain = channel.get_smoothed_gain();
-            let left_in = channel.buffer_left[i] * smoothed_gain;
-            let right_in = channel.buffer_right[i] * smoothed_gain;
-
-            // Apply 4-coefficient pan matrix
-            channel.buffer_left[i] = left_in * pan.left_to_left + right_in * pan.right_to_left;
-            channel.buffer_right[i] = left_in * pan.left_to_right + right_in * pan.right_to_right;
+        if let Some(started) = started {
+            channel.mix.timer.add(elapsed_ns(started));
         }
+    }
+}
+
+/// Apply the smoothed fader gain and the pan matrix to one channel's buffer.
+fn fader_and_pan(channel: &mut Channel, frames: usize) {
+    let pan = channel.get_pan_coefficients();
+    for i in 0..frames {
+        let smoothed_gain = channel.get_smoothed_gain();
+        let left_in = channel.buffer_left[i] * smoothed_gain;
+        let right_in = channel.buffer_right[i] * smoothed_gain;
+
+        // Apply 4-coefficient pan matrix
+        channel.buffer_left[i] = left_in * pan.left_to_left + right_in * pan.right_to_left;
+        channel.buffer_right[i] = left_in * pan.left_to_right + right_in * pan.right_to_right;
     }
 }
 
@@ -335,6 +357,42 @@ mod tests {
         track.buffer_left.fill(0.5);
         track.buffer_right.fill(0.25);
         state_with(vec![test_channel(1, Some(output), 0.0), track])
+    }
+
+    #[test]
+    fn timing_off_records_nothing() {
+        use crate::audio::channel::{ChannelTimer, DeviceTimer};
+
+        let mut track = test_channel(2, Some(1), 0.0);
+        add_test_device(&mut track, 0.1);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), track]);
+
+        mix(&mut state);
+        for channel in state.channels.values() {
+            assert_eq!(
+                channel.mix.timer,
+                ChannelTimer::default(),
+                "channel {}",
+                channel.id
+            );
+            assert!(channel
+                .device_timers
+                .iter()
+                .all(|t| *t == DeviceTimer::default()));
+        }
+
+        // Switched on, the same block is counted once per channel and once for the device.
+        state.perf_timing = true;
+        mix(&mut state);
+        for channel in state.channels.values() {
+            assert_eq!(channel.mix.timer.blocks, 1, "channel {}", channel.id);
+            assert_eq!(channel.mix.timer.current_ns, 0, "block closed");
+        }
+        assert_eq!(state.channels[&2].device_timers[0].blocks, 1);
+        assert_eq!(
+            state.channels[&1].device_timers[0].blocks, 0,
+            "master has no device"
+        );
     }
 
     #[test]
