@@ -83,7 +83,7 @@ func _args_of(entry: Variant) -> Array:
 func _test_project_format_version() -> void:
 	var p = load("res://data/Project.gd").new()
 	var j: Dictionary = p.to_json()
-	_assert(j.get("format_version") == 2, "projects save format_version 2")
-	_assert(load("res://data/Project.gd").from_json(j).format_version == 2, "version 2 reads back")
+	_assert(j.get("format_version") == 3, "projects save format_version 3")
+	_assert(load("res://data/Project.gd").from_json(j).format_version == 3, "version 3 reads back")
 	j.erase("format_version")
 	_assert(load("res://data/Project.gd").from_json(j).format_version == 1, "a missing format_version is 1")

@@ -45,7 +45,7 @@ signal clip_editor_view_changed(key: String, value: bool)
 
 # Time and tempo
 ## Project file format. 2 = note values stored as normalized `vel` / `rel` (spec 019).
-const FORMAT_VERSION := 2
+const FORMAT_VERSION := 3
 ## Format version this project was loaded from (1 when the file had none).
 var format_version: int = FORMAT_VERSION
 
@@ -1919,7 +1919,11 @@ static func from_json(data: Dictionary) -> Project:
 
 	# Clear default master and load channels
 	project.channels.clear()
+	var migrate_scales: bool = project.format_version < 3
 	for channel_data in data.get("channels", []):
+		if migrate_scales:
+			for device_data in channel_data.get("devices", []):
+				DeviceInstance.migrate_scale_catalogue(device_data)
 		var channel := Channel.from_json(channel_data)
 		channel.set_project(project)
 		project.channels.append(channel)
@@ -1946,6 +1950,8 @@ static func from_json(data: Dictionary) -> Project:
 
 	_relink_folder_buses(project)
 	_migrate_slot_automation(project)
+	if migrate_scales:
+		_migrate_scale_type_automation(project)
 	_migrate_cc_automation(project)
 	project._rebuild_channel_child_ids_from_parents()
 	# Before ensure_all, so pad returns re-syncing their names see an already unique namespace.
@@ -1972,6 +1978,26 @@ static func _migrate_slot_automation(project: Project) -> void:
 					break
 	for ch in project.channels:
 		ch.migrated_slot_paths.clear()
+
+
+## Spec 038: lanes automating a Transpose's Scale Type (param 12) hold values for the 12-entry
+## enum; remap their points to the current one. Runs once, for projects saved before format 3.
+static func _migrate_scale_type_automation(project: Project) -> void:
+	for track in project.tracks:
+		var ch: Channel = track.get_linked_channel() if track else null
+		if ch == null:
+			continue
+		for lane in track.automation_lanes:
+			var target: AutomationTarget = lane.target
+			if target == null or target.kind != AutomationTarget.Kind.DEVICE_PARAM \
+					or target.param_id != DeviceInstance.TRANSPOSE_SCALE_TYPE_PARAM:
+				continue
+			var instance: Object = target.resolve(ch)
+			if instance == null or instance.device == null \
+					or instance.device.device_id != DeviceInstance.TRANSPOSE_DEVICE_ID:
+				continue
+			for point in lane.points:
+				point.value = MusicalScale.migrate_v1_type_norm(point.value)
 
 
 ## Rewrite saved lanes that drove an SFZ sampler's controller parameter (`device/…/param/N`,

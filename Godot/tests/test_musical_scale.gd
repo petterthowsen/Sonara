@@ -36,7 +36,7 @@ func _test_c_pitch_classes() -> void:
 		"minor_pentatonic": [0, 3, 5, 7, 10],
 		"blues": [0, 3, 5, 6, 7, 10],
 	}
-	_assert(MusicalScale.TYPES.size() == expected.size(), "catalogue has 13 types")
+	_assert(MusicalScale.TYPES.size() >= expected.size(), "catalogue still has the 13 original types (spec 038 adds more)")
 	for id in expected:
 		_assert(_pcs(0, id) == expected[id], "C %s pitch classes" % id)
 

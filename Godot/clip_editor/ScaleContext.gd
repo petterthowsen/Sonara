@@ -39,6 +39,11 @@ func highlight_active() -> bool:
 	return not drum_view and not scale.is_none()
 
 
+## Note names use flats: a scale is set, the piano roll is shown and the key is spelled with flats.
+func spell_flats() -> bool:
+	return highlight_active() and scale.uses_flats()
+
+
 func snap_active() -> bool:
 	return highlight_active() and snap_enabled
 

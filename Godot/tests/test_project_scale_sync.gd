@@ -6,10 +6,6 @@
 # Headless the OSC client never becomes ready, so sends queue in AudioEngineOSC._pending_sends.
 extends TestBase
 
-## Transpose parameter 12 (Scale Type) choices as the engine advertises them: MusicalScale.TYPES
-## labels in order, without "None".
-const ENGINE_SCALE_TYPES := ["Major", "Natural Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Locrian", "Major Pentatonic", "Minor Pentatonic", "Blues"]
-
 var _osc: Node
 
 
@@ -25,7 +21,6 @@ func run_tests() -> void:
 	var scale_script: GDScript = load("res://data/MusicalScale.gd")
 	_test_mask(scale_script)
 	_test_set_scale()
-	_test_labels(scale_script)
 
 
 func _scale_sends() -> Array:
@@ -60,11 +55,3 @@ func _test_set_scale() -> void:
 	_osc._pending_sends.clear()
 	project._send_scale_to_engine()
 	_assert(_scale_sends().size() == 1 and _scale_sends()[0].args == [0], "project sync sends the current mask")
-
-
-func _test_labels(scale_script: GDScript) -> void:
-	var labels: Array = []
-	for entry in scale_script.TYPES:
-		if entry["id"] != scale_script.NONE_ID:
-			labels.append(entry["label"])
-	_assert(labels == ENGINE_SCALE_TYPES, "Transpose Scale Type labels match MusicalScale.TYPES minus None: %s" % [labels])

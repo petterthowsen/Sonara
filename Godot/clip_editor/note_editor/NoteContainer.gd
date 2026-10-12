@@ -47,7 +47,29 @@ var layout: LaneLayout = LaneLayout.chromatic():
 ## Defaults to an inactive context, so a standalone NoteEditor never snaps.
 var scale_context: ScaleContext = ScaleContext.new():
 	set(c):
+		if scale_context and scale_context.changed.is_connected(_push_spelling):
+			scale_context.changed.disconnect(_push_spelling)
 		scale_context = c if c else ScaleContext.new()
+		scale_context.changed.connect(_push_spelling)
+		_push_spelling()
+
+
+## Give every VisualNote the scale context's current note spelling (REQ-006).
+func _push_spelling() -> void:
+	var flats := scale_context.spell_flats()
+	for child in get_children():
+		if child is VisualNote and child.spell_flats != flats:
+			child.spell_flats = flats
+			child._update_visual()
+
+
+func _init() -> void:
+	child_entered_tree.connect(_on_child_entered)
+
+
+func _on_child_entered(node: Node) -> void:
+	if node is VisualNote:
+		node.spell_flats = scale_context.spell_flats()
 
 @export var note_height := 20.0:
 	set(nh):

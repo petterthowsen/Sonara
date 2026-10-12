@@ -15,11 +15,13 @@ const MIDDLE_C_OCTAVE: int = 3
 # Note names (within an octave)
 const NOTE_NAMES: Array[String] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
+const FLAT_NOTE_NAMES: Array[String] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+
 # ============================================================================
 # MIDI NOTE CONVERSIONS
 # ============================================================================
 
-static func midi_to_note_name(midi_note: int) -> String:
+static func midi_to_note_name(midi_note: int, flats := false) -> String:
 	"""Convert MIDI note number to note name (e.g., 60 -> "C3")."""
 	if midi_note < MIDI_MIN or midi_note > MIDI_MAX:
 		return "Invalid"
@@ -28,7 +30,7 @@ static func midi_to_note_name(midi_note: int) -> String:
 	@warning_ignore("integer_division")
 	var octave = (midi_note / 12) - 2  # Octave offset: MIDI 0 = C-2
 	
-	return NOTE_NAMES[note_in_octave] + str(octave)
+	return (FLAT_NOTE_NAMES if flats else NOTE_NAMES)[note_in_octave] + str(octave)
 
 static func note_name_to_midi(note_name: String) -> int:
 	"""Convert note name to MIDI note number (e.g., "C3" -> 60).

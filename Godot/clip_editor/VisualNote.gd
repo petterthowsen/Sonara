@@ -43,6 +43,8 @@ var is_pending: bool = false:
 
 ## True while the note is drawn as a Drum View hit marker rather than a bar.
 ## The stored duration is untouched either way (REQ-022).
+## Name pitches with flats (key spelling, pushed by NoteContainer).
+var spell_flats: bool = false
 var drum_mode: bool = false
 
 ## Velocity brightness is rounded to this many steps, so the notes of one colour share a
@@ -188,7 +190,7 @@ func _update_visual() -> void:
 
 	# Update label
 	if label and midi_note_data:
-		var note_name = Midi.midi_to_note_name(midi_note_data.note)
+		var note_name = Midi.midi_to_note_name(midi_note_data.note, spell_flats)
 		if label.text != note_name:
 			label.text = note_name
 		_apply_label_color(Color.WHITE)

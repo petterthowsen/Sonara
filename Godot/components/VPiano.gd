@@ -342,7 +342,7 @@ func _draw_key(note : int):
 	if note_has_label(note) or not entry_name.is_empty():
 		var font = get_theme_default_font()
 		var font_size = 14
-		var label := entry_name if not entry_name.is_empty() else Midi.midi_to_note_name(note)
+		var label := entry_name if not entry_name.is_empty() else Midi.midi_to_note_name(note, scale_context != null and scale_context.spell_flats())
 		var label_size = font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, TextServer.JUSTIFICATION_NONE,TextServer.DIRECTION_LTR,TextServer.ORIENTATION_HORIZONTAL)
 		var label_y = note_to_y_center(note) + (label_size.y * 0.3)
 		var label_color = key_color_white if black else key_color_black

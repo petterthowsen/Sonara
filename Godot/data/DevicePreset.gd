@@ -7,7 +7,7 @@
 class_name DevicePreset extends RefCounted
 
 const FORMAT := "sonara.device_preset"
-const VERSION := 1
+const VERSION := 2
 const FILE_SETTINGS: Array[String] = ["assets/samples/paths", "assets/sfz/paths"]
 ## Channel fields that point at the project or the source channel, not at the return itself.
 const RETURN_CONTEXT_KEYS: Array[String] = ["id", "parent_channel_id", "output_channel_id",
@@ -152,6 +152,8 @@ func instantiate(channel_id: int, project: Project = null) -> DeviceInstance:
 	if file_version > VERSION:
 		warnings.append("Preset '%s' was saved by a newer version of Sonara" % name)
 	var data: Dictionary = device.duplicate(true)
+	if file_version < 2:
+		DeviceInstance.migrate_scale_catalogue(data)
 	DeviceInstance.refresh_ids_in_json(data, channel_id)
 	_resolve_files(data)
 	data["name"] = name
@@ -194,6 +196,8 @@ func _attach_returns(inst: DeviceInstance, channel_id: int, project: Project) ->
 		project.next_channel_id += 1
 		data["id"] = new_id
 		for dev in data.get("devices", []):
+			if file_version < 2:
+				DeviceInstance.migrate_scale_catalogue(dev)
 			DeviceInstance.refresh_ids_in_json(dev, new_id)
 			_resolve_files(dev)
 		var ch := Channel.from_json(data)

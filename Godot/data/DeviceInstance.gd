@@ -2578,6 +2578,26 @@ func _parameter_values_to_json() -> Dictionary:
 	return out
 
 
+const TRANSPOSE_DEVICE_ID := "sonara.builtin.transpose"
+const TRANSPOSE_SCALE_TYPE_PARAM := 12
+
+
+## Spec 038 REQ-007: rewrite the Scale Type (param 12) of every Transpose in a saved device JSON
+## tree from the 12-entry enum to the current one. Recurses into "children". Only call it on
+## data saved before the catalogue grew (project format < 3, preset version < 2).
+static func migrate_scale_catalogue(data: Dictionary) -> void:
+	if str(data.get("device_id", "")) == TRANSPOSE_DEVICE_ID and data.get("parameter_values") is Dictionary:
+		var values: Dictionary = data["parameter_values"]
+		for key in [str(TRANSPOSE_SCALE_TYPE_PARAM), TRANSPOSE_SCALE_TYPE_PARAM]:
+			if values.has(key):
+				values[key] = MusicalScale.migrate_v1_type_norm(float(values[key]))
+	var kids: Variant = data.get("children", [])
+	if kids is Array:
+		for child in kids:
+			if child is Dictionary:
+				migrate_scale_catalogue(child)
+
+
 ## Give a serialized device tree new instance ids on `channel_id`, dropping aux return links.
 static func refresh_ids_in_json(device_data: Dictionary, channel_id: int) -> void:
 	device_data.erase("id")

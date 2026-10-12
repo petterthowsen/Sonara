@@ -2,6 +2,8 @@
 
 Implements [requirements.md](./requirements.md).
 
+> Note: spec 038 extended the scale catalogue to 47 scale types with groups and key spelling; see [../038-scale-catalogue/design.md](../038-scale-catalogue/design.md).
+
 ## Context
 
 - `Godot/data/Project.gd`: the project model. Persisted view state already lives here as
