@@ -19,6 +19,9 @@
   - The logger (`logging/mod.rs`) writes through `Arc<Mutex<File>>`; `warn!` from several realtime threads at once contends on it. That's pre-existing on the audio thread and not pool-specific, but avoid logging per block on workers.
   - No FTZ/DAZ denormal flags are set anywhere today. If they are added later, workers need them too (MXCSR is per thread).
 
+### Not Working / To do
+- Live observation (user, 2026-10-12, release build after T-014): orchestral project (mostly sfz, some built-ins, one Decent Sampler plugin, Dragonfly Hall Reverb plugin) went from 40% to 38% load. That is far short of REQ-008's < 50% target, but it's not the T-015 benchmark (8 × PolySynth + Reverb). Not yet known: whether the comparison was Processing threads 1 vs Auto (6 threads here), and which channels are on the serial path. Suspects: a reverb bus that every section sends to runs after all its inputs finish, so its plugin round trip is serial; plugin IPC wait counts as callback time; sfizz instances may be cheap enough that the pool's per-pass overhead eats the gain.
+
 ## Saturator (spec 031)
 
 ### Working

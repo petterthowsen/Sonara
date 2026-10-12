@@ -239,7 +239,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
 
 ## Phase 5: Docs
 
-- [ ] **T-026** [REQ-all] OSC protocol doc
+- [x?] **T-026** [REQ-all] OSC protocol doc
   - _Files_: `docs/subsystems/osc-protocol.md`
   - _Output_: `/engine/perf/subscribe`, `/engine/perf/unsubscribe`, `/engine/threads/set`, `/status/channel_perf`, `/status/engine_perf` and `<device>/stats` argument 8 are documented
   - _Verify_: every address in design.md's protocol table appears in the doc with its arguments
