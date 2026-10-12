@@ -190,7 +190,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh device_chain_slots` passes
   - _Depends on_: T-005
 
-- [ ] **T-014** [REQ-019–021] Slot keys, colours and open state.
+- [x?] **T-014** [REQ-019–021] Slot keys, colours and open state.
   - Make the CONTAINER SLOTS functions handle slotted devices: `slot_keys` returns the spec keys,
     and `has_slot`, `slot_chain`, `slot_devices`, `slot_key_for` and `slot_title` follow them.
     `slot_color` returns the role colour, and `set_slot_color` ignores device slot keys.

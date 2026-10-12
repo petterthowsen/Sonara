@@ -1268,6 +1268,10 @@ func slot_keys() -> PackedStringArray:
 	var keys := PackedStringArray()
 	if not is_container():
 		return keys
+	if DeviceSlots.is_slotted(self):
+		for spec in DeviceSlots.specs(self):
+			keys.append(String(spec["key"]))
+		return keys
 	if not device.container_focuses_one_child():
 		keys.append(CHAIN_SLOT)
 		return keys
@@ -1290,6 +1294,9 @@ func has_slot(key: String) -> bool:
 ## The Chain holding slot `key`'s devices: this Chain itself, a Layer's or Drum Machine's slot
 ## chain, or null for an empty pad.
 func slot_chain(key: String) -> DeviceInstance:
+	if DeviceSlots.is_slotted(self):
+		var index := slot_keys().find(key)
+		return children[index] if index >= 0 and index < children.size() else null
 	if key == CHAIN_SLOT and is_container() and not device.container_focuses_one_child():
 		return self
 	var note := pad_slot_note(key) if _is_drum_machine() else -1
@@ -1316,6 +1323,11 @@ func slot_devices(key: String) -> Array[DeviceInstance]:
 func slot_key_for(inst: DeviceInstance) -> String:
 	if inst == null or inst == self or not contains_device(inst):
 		return ""
+	if DeviceSlots.is_slotted(self):
+		for i in children.size():
+			if children[i].contains_device(inst):
+				return slot_keys()[i] if i < slot_keys().size() else ""
+		return ""
 	if not device.container_focuses_one_child():
 		return CHAIN_SLOT
 	for child in children:
@@ -1327,6 +1339,9 @@ func slot_key_for(inst: DeviceInstance) -> String:
 ## Slot caption: "Chain" for a Chain's slot, the slot chain's name for a Layer or Drum Machine
 ## slot, or the note name of an empty pad.
 func slot_title(key: String) -> String:
+	if DeviceSlots.is_slotted(self):
+		var chain := slot_chain(key)
+		return chain.get_display_name() if chain != null else ""
 	if key == CHAIN_SLOT:
 		return "Chain"
 	var chain := slot_chain(key)
@@ -1338,6 +1353,8 @@ func slot_title(key: String) -> String:
 
 ## Color of slot `key`. A slot without one gets a random color that is kept from then on.
 func slot_color(key: String) -> Color:
+	if DeviceSlots.is_slotted(self):
+		return DeviceSlots.role_color(slot_kind(key))
 	if not _slot_colors.has(key):
 		var band := Multiband.position_of(self, slot_chain(key)) if Multiband.is_multiband(self) else 0
 		_slot_colors[key] = Multiband.band_color(band) if band > 0 else Color.from_hsv(randf(), 0.6, 0.72)
@@ -1345,8 +1362,20 @@ func slot_color(key: String) -> Color:
 
 
 func set_slot_color(key: String, color: Color) -> void:
+	if DeviceSlots.is_slotted(self):
+		return  # device slots use fixed role colours
 	_slot_colors[key] = color
 	slots_changed.emit()
+
+
+## Kind ("note", "audio" or "loop") of device slot `key`, or "" for any other slot.
+func slot_kind(key: String) -> String:
+	if not DeviceSlots.is_slotted(self):
+		return ""
+	for spec in DeviceSlots.specs(self):
+		if String(spec["key"]) == key:
+			return String(spec["kind"])
+	return ""
 
 
 func is_slot_open(key: String) -> bool:
@@ -1371,7 +1400,7 @@ func open_slot_keys() -> PackedStringArray:
 func set_slot_open(key: String, open: bool) -> void:
 	if open == is_slot_open(key) or not has_slot(key):
 		return
-	if open and device.container_focuses_one_child():
+	if open and (DeviceSlots.is_slotted(self) or device.container_focuses_one_child()):
 		_open_slots = PackedStringArray([key])
 	elif open:
 		_open_slots.append(key)

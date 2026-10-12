@@ -41,6 +41,9 @@ func run_tests() -> void:
 	_test_new_instances_have_slots()
 	_test_pre_spec_json_gets_empty_slots()
 	_test_slotted_round_trip()
+	_test_one_slot_open()
+	_test_slot_role_colors()
+	_test_slot_accessors()
 
 
 ## Registered fake device `device_id`.
@@ -158,3 +161,54 @@ func _test_slotted_round_trip() -> void:
 	data["children"][0]["name"] = "Renamed"
 	var adopted: Object = _device_instance_script.from_json(data)
 	_assert(_names(adopted.children) == ["Note FX", "FX"] and adopted.children[1].children.size() == 1, "chains are adopted by name, then position, and renamed")
+
+
+func _test_one_slot_open() -> void:
+	var poly := _inst(POLY_ID)
+	var emitted := [0]
+	poly.slots_changed.connect(func() -> void: emitted[0] += 1)
+	_assert(poly.open_slot_keys().is_empty(), "slots start closed")
+	poly.set_slot_open("note_fx", true)
+	_assert(Array(poly.open_slot_keys()) == ["note_fx"] and emitted[0] == 1, "opening Note FX opens it and signals")
+	poly.set_slot_open("fx", true)
+	_assert(Array(poly.open_slot_keys()) == ["fx"] and not poly.is_slot_open("note_fx"), "opening FX closes Note FX")
+	poly.toggle_slot("fx")
+	_assert(poly.open_slot_keys().is_empty(), "toggling the open slot closes it")
+	poly.set_slot_open("bogus", true)
+	_assert(poly.open_slot_keys().is_empty(), "an unknown slot key does not open")
+	poly.reveal_child(poly.children[1])
+	_assert(Array(poly.open_slot_keys()) == ["fx"], "revealing a slot chain opens it")
+	var data: Dictionary = JSON.parse_string(JSON.stringify(poly.to_json()))
+	var loaded: Object = _device_instance_script.from_json(data)
+	_assert(Array(loaded.open_slot_keys()) == ["fx"], "the open slot is saved and loaded")
+
+
+func _test_slot_role_colors() -> void:
+	var poly := _inst(POLY_ID)
+	var secondary: Color = UiColors.role(&"accent_secondary")
+	var primary: Color = UiColors.role(&"accent_primary")
+	_assert(poly.slot_color("note_fx") == secondary, "the Note FX slot uses the secondary accent")
+	_assert(poly.slot_color("fx") == primary, "the FX slot uses the primary accent")
+	_assert(_inst(DELAY_ID).slot_color("fb_fx") == primary, "a loop slot uses the primary accent")
+	poly.set_slot_color("fx", Color.RED)
+	_assert(poly.slot_color("fx") == primary, "device slot colours cannot be changed")
+	_assert(_slots.role_color("note") == secondary and _slots.role_color("audio") == primary and _slots.role_color("loop") == primary,
+		"role_color maps kinds to accents")
+	_assert(not poly._slots_to_json()["colors"].has("fx"), "device slot colours are not saved")
+
+
+func _test_slot_accessors() -> void:
+	var poly := _inst(POLY_ID)
+	var reverb := _inst(REVERB_ID)
+	_assert(Array(poly.slot_keys()) == ["note_fx", "fx"] and Array(reverb.slot_keys()) == ["tank_fx", "wet_fx"], "slot_keys follow the specs")
+	_assert(poly.has_slot("fx") and not poly.has_slot("tank_fx"), "has_slot knows its own keys only")
+	_assert(poly.slot_chain("fx") == poly.children[1] and poly.slot_chain("zzz") == null, "slot_chain returns the mirrored chain")
+	_assert(poly.slot_title("note_fx") == "Note FX" and reverb.slot_title("wet_fx") == "Wet FX", "slot_title is the spec name")
+	_assert(poly.slot_kind("note_fx") == "note" and poly.slot_kind("fx") == "audio", "slot_kind reads the spec")
+	var delay := _inst(DELAY_ID)
+	poly.children[1].children.append(delay)
+	delay.set_parent_device(poly.children[1])
+	_assert(poly.slot_key_for(delay) == "fx", "slot_key_for finds the slot of a nested device")
+	_assert(poly.slot_devices("fx") == [delay] and poly.slot_devices("note_fx").is_empty(), "slot_devices lists the chain's devices")
+	_assert(_slots.kind_for_host(poly.children[1]) == "audio" and _slots.kind_for_host(delay.children[0]) == "loop" and _slots.kind_for_host(poly) == "",
+		"kind_for_host is the innermost slot kind above the host (the Delay's own loop slot wins inside it)")
