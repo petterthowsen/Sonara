@@ -783,6 +783,8 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 		parent.child_added.emit(device_instance, position)
 	else:
 		device_added.emit(device_instance, position)
+	if DeviceSlots.is_slot_chain(parent):
+		parent.get_parent_device().reveal_child(device_instance)  # a device in a slot opens the slot (spec 040 REQ-022)
 	logger.info("[%d] Device added at %s: %s" % [id, device_instance.osc_path(), device_instance.device.name])
 	AuxReturnSync.on_device_added(get_project(), self, device_instance, parent)
 

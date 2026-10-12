@@ -230,7 +230,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh device_chain_slots note_fx_drop device_drop` passes
   - _Depends on_: T-014
 
-- [ ] **T-017** [REQ-019, REQ-022, REQ-033] Lane and automation.
+- [x?] **T-017** [REQ-019, REQ-022, REQ-033] Lane and automation.
   - Check that opening a slot adds a `DeviceSlotGroup` and that adding into a closed slot
     reveals it (`reveal_child`). Fix whatever doesn't hold.
   - Test that the automation picker lists the parameters of a device in a slot.

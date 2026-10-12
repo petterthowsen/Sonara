@@ -60,6 +60,9 @@ func run_tests() -> void:
 	_test_loop_slot_rejects_plugins()
 	_test_slot_chain_cannot_move_or_be_removed()
 	_test_drop_on_slotted_panel_is_not_a_container_drop()
+	await _test_open_slot_shows_slot_group()
+	_test_add_reveals_slot()
+	_test_automation_lists_slot_devices()
 
 
 ## Registered fake device `device_id`.
@@ -398,3 +401,103 @@ func _test_drop_on_slotted_panel_is_not_a_container_drop() -> void:
 	var before_root: int = ch.devices.size()
 	_add_cmd.new(ch, _inst(POLY_ID, ch), -1, poly).do()
 	_assert(ch.devices.size() == before_root, "a refused add doesn't fall back to the channel root")
+
+
+## Device lane bound to `ch` (headless there is no editor to bind it on channel focus).
+func _lane(ch: Object) -> Control:
+	var lane: Control = (load("res://devices/device_lane/DeviceLane.tscn") as PackedScene).instantiate()
+	lane.size = Vector2(1600, 400)
+	root.add_child(lane)
+	_nodes.append(lane)
+	lane.bind_to_channel(ch)
+	await _settle()
+	return lane
+
+
+func _settle() -> void:
+	await process_frame
+	await process_frame
+
+
+func _test_open_slot_shows_slot_group() -> void:
+	var ch: Object = _fresh_project()
+	var poly := _slotted_on(ch, POLY_ID)
+	var delay := _inst(DELAY_ID, ch)
+	_add_cmd.new(ch, delay, -1, poly.children[1]).do()
+	poly.set_slot_open("fx", false)  # adding revealed it; start from a closed slot
+	var lane := await _lane(ch)
+	var poly_panel: Control = lane.find_device_panel(poly)
+	_assert(poly_panel != null and lane.find_device_panel(delay) == null, "a closed device slot shows nothing")
+	poly.set_slot_open("fx", true)
+	await _settle()
+	var item: Object = poly_panel.get_parent() if poly_panel else null
+	var groups: Array = []
+	for node in lane.find_children("*", "DeviceSlotGroup", true, false):
+		groups.append(node)
+	_assert(groups.size() == 1 and groups[0].key == "fx" and groups[0].container == poly, "opening FX adds one slot group for it")
+	var delay_panel: Control = lane.find_device_panel(delay)
+	_assert(delay_panel != null and delay_panel.get_global_rect().position.x > poly_panel.get_global_rect().end.x,
+		"the device in FX sits right of the PolySynth")
+	_assert(groups[0].slot_color() == _slots.role_color("audio"), "the FX bracket uses the audio role colour")
+	poly.set_slot_open("note_fx", true)
+	await _settle()
+	groups = lane.find_children("*", "DeviceSlotGroup", true, false)
+	_assert(groups.size() == 1 and groups[0].key == "note_fx" and lane.find_device_panel(delay) == null,
+		"opening Note FX replaces the FX group, and it shows the empty drop zone")
+	_assert(groups[0]._empty_hint.visible and groups[0].slot_color() == _slots.role_color("note"), "an empty note slot shows its drop zone in the note colour")
+	poly.set_slot_open("note_fx", false)
+	await _settle()
+	_assert(lane.find_children("*", "DeviceSlotGroup", true, false).is_empty(), "closing the slot removes its group")
+
+
+func _test_add_reveals_slot() -> void:
+	var ch: Object = _fresh_project()
+	var poly := _slotted_on(ch, POLY_ID)
+	_assert(poly.open_slot_keys().is_empty(), "slots start closed")
+	var transpose := _inst("sonara.builtin.transpose", ch)
+	_add_cmd.new(ch, transpose, -1, poly.children[0]).do()
+	_assert(Array(poly.open_slot_keys()) == ["note_fx"], "adding a Transpose into Note FX opens it")
+	var delay := _inst(DELAY_ID, ch)
+	_add_cmd.new(ch, delay, -1, poly.children[1]).do()
+	_assert(Array(poly.open_slot_keys()) == ["fx"], "adding a Delay into FX opens FX and closes Note FX")
+	# A device nested in a slot's Chain reveals the slot too.
+	poly.set_slot_open("fx", false)
+	var chain := _inst(CHAIN_ID, ch)
+	_add_cmd.new(ch, chain, -1, poly.children[1]).do()
+	poly.set_slot_open("fx", false)
+	_add_cmd.new(ch, _inst(DELAY_ID, ch), -1, chain).do()
+	_assert(poly.open_slot_keys().is_empty(), "adding into a nested Chain leaves the slot as it was")
+
+
+func _texts_of_paths(picker: Object) -> Dictionary:
+	var out := {}
+	for submenu in picker._submenu_paths:
+		var texts: Array = []
+		for i in range(submenu.get_item_count()):
+			texts.append(submenu.get_item_text(i))
+		out[str(picker._submenu_paths[submenu])] = texts
+	return out
+
+
+func _test_automation_lists_slot_devices() -> void:
+	var made: Dictionary = _project_script.new().create_instrument_track("Auto")
+	var ch: Object = made.channel
+	var delay_device: Object = _inst(DELAY_ID, ch).device
+	if delay_device.parameters.is_empty():
+		delay_device.add_parameter(load("res://data/DeviceParameter.gd").new(7, "Mix"))
+	var poly := _slotted_on(ch, POLY_ID)
+	poly.device.parameters.clear()
+	poly.device.add_parameter(load("res://data/DeviceParameter.gd").new(1, "Cutoff"))
+	var delay := _inst(DELAY_ID, ch)
+	_add_cmd.new(ch, delay, -1, poly.children[1]).do()
+	var picker: Object = load("res://arranger/tracklist/AutomationParameterPicker.gd").new()
+	picker.track = made.track
+	picker.channel = ch
+	picker._rebuild()
+	var by_path := _texts_of_paths(picker)
+	_assert(by_path.has("[0]") and by_path.has("[0, 1, 0]"), "the picker has submenus for the PolySynth and the Delay in its FX slot: %s" % str(by_path.keys()))
+	_assert(by_path.get("[0, 1, 0]", []).has("Mix"), "the slot device lists its parameters")
+	_assert(not by_path.has("[0, 1]"), "an empty-parameter slot chain adds no entry")
+	var target := AutomationTarget.device_param([0, 1, 0], 7)
+	_assert(target != null, "an automation target can address a device in a slot")
+	picker.free()
