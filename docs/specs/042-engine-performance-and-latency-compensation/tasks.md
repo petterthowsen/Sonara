@@ -211,7 +211,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test layer_aligns_slots drum_machine_aligns_pads` passes
   - _Depends on_: T-019
 
-- [ ] **T-023** [REQ-014] Slotted devices and Multiband
+- [x?] **T-023** [REQ-014] Slotted devices and Multiband
   - _Files_: `Engine/src/audio/devices/effects/multiband.rs`, `Engine/src/audio/devices/effects/reverb.rs`, `Engine/src/audio/devices/instruments/polysynth/mod.rs`
   - _Output_:
     - Multiband: per-band delays, and the disabled path delayed.

@@ -76,6 +76,8 @@ pub(crate) struct LatencyDevice {
     /// Interleaved history, `delay` frames long, used as a ring.
     history: Vec<f32>,
     pos: usize,
+    /// Only reported (`is_enabled`); processing ignores it.
+    enabled: bool,
 }
 
 impl LatencyDevice {
@@ -85,6 +87,7 @@ impl LatencyDevice {
             delay,
             history: vec![0.0; delay * 2],
             pos: 0,
+            enabled: true,
         }
     }
 }
@@ -131,6 +134,12 @@ impl AudioDevice for LatencyDevice {
         Vec::new()
     }
     fn reset(&mut self) {}
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

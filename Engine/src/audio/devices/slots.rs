@@ -149,6 +149,11 @@ impl DeviceSlots {
         self.loop_out.fill(0.0);
     }
 
+    /// The slot chain `index` as a device, read-only (its `latency_frames`).
+    pub fn chain(&self, index: usize) -> Option<&dyn AudioDevice> {
+        self.chains.get(index).map(|c| c.as_ref())
+    }
+
     /// The slot chain `index` as a device (run it with `process_block`).
     pub fn chain_mut(&mut self, index: usize) -> Option<&mut dyn AudioDevice> {
         self.chains.get_mut(index).map(|c| c.as_mut() as _)

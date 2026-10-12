@@ -756,6 +756,25 @@ impl AudioDevice for PolySynthDevice {
         self.slots.has_async(FX_SLOT)
     }
 
+    /// The FX slot runs in series after the voices: its latency while it runs (an empty or
+    /// all-bypassed slot is skipped). Note FX carry notes, not audio.
+    fn latency_frames(&self) -> u32 {
+        if self.slots.is_live(FX_SLOT) {
+            self.slots
+                .chain(FX_SLOT)
+                .map_or(0, |chain| chain.latency_frames())
+        } else {
+            0
+        }
+    }
+
+    fn update_latency(&mut self, sample_rate: f32) -> u32 {
+        if let Some(chain) = self.slots.chain_mut(FX_SLOT) {
+            chain.update_latency(sample_rate);
+        }
+        self.latency_frames()
+    }
+
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         if self.is_enabled && self.slots.len(NOTE_FX_SLOT) > 0 {
             if let Some(children) = self.slots.children_mut(NOTE_FX_SLOT) {
@@ -2771,5 +2790,28 @@ mod slot_tests {
         for (g, w) in got.iter().zip(&want) {
             assert!((g - w).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn polysynth_reports_its_fx_slot_latency() {
+        use crate::audio::mixing::test_support::LatencyDevice;
+        let mut synth = PolySynthDevice::new(48_000.0);
+        assert_eq!(synth.latency_frames(), 0);
+        let mut fx = LatencyDevice::new(256, 1.0);
+        synth
+            .slots
+            .children_mut(FX_SLOT)
+            .unwrap()
+            .push(Box::new(LatencyDevice::new(128, 1.0)));
+        assert_eq!(synth.update_latency(48_000.0), 128);
+        fx.set_enabled(false);
+        let children = synth.slots.children_mut(FX_SLOT).unwrap();
+        children.clear();
+        children.push(Box::new(fx));
+        assert_eq!(
+            synth.latency_frames(),
+            0,
+            "an all-bypassed FX slot is skipped"
+        );
     }
 }

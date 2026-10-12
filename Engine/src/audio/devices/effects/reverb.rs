@@ -23,12 +23,14 @@ use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceContainer, DeviceSlots, DeviceVariant, ParamId, ParamInfo,
     ParamValue, SlotKind, SlotSpec, LOOP_BLOCK,
 };
+use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::modulation::lfo::{Lfo, LfoShape};
+use crate::audio::stream::MAX_BLOCK_FRAMES;
 
 // === Parameter table ===
 
@@ -833,6 +835,11 @@ pub struct ReverbDevice {
     whole_buf: Vec<f32>,
     /// The frames `begin_block` rendered into `whole_buf`, until `finish_block` copies them.
     whole_pending: usize,
+    /// Latency compensation (spec 042 part D): the dry input delayed by the Wet FX latency, so
+    /// it meets the wet signal; also the bypassed output. Fed every block.
+    dry: AlignDelay,
+    /// The delayed dry of one Wet FX chunk.
+    dry_buf: Vec<f32>,
     /// Shortest line read in samples: `LOOP_MIN_DELAY` while Tank FX is live, else 0.
     loop_floor: f32,
     /// Tank FX scratch for one sub-block: the FDN feedback vectors and injections, the plate's
@@ -916,6 +923,8 @@ impl ReverbDevice {
             slots: DeviceSlots::new(&REVERB_SLOTS, DEFAULT_SLOT_FRAMES),
             whole_buf: vec![0.0; DEFAULT_SLOT_FRAMES * 2],
             whole_pending: 0,
+            dry: AlignDelay::default(),
+            dry_buf: vec![0.0; DEFAULT_SLOT_FRAMES * 2],
             loop_floor: 0.0,
             fdn_f: [[0.0; 8]; LOOP_BLOCK],
             fdn_inj: [[0.0; 8]; LOOP_BLOCK],
@@ -1218,6 +1227,10 @@ impl ReverbDevice {
         let wet_fx = self.slots.is_live(1);
         self.loop_floor = if tank { LOOP_MIN_DELAY } else { 0.0 };
 
+        if !wet_fx {
+            // Keep the dry delay's history current for when Wet FX turns live
+            self.dry.write(inputs, frames);
+        }
         if !tank && !wet_fx {
             for f in 0..frames {
                 let in_l = inputs[f * 2];
@@ -1269,11 +1282,14 @@ impl ReverbDevice {
                 if let Some(chain) = self.slots.chain_mut(1) {
                     chain.process_block(&wet_buf[..n * 2], out, n);
                 }
+                // The dry waits for the Wet FX chain's latency
+                let input = &inputs[base * 2..(base + n) * 2];
+                self.dry.process(input, &mut self.dry_buf[..n * 2], n);
                 let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
                 for i in 0..n {
                     let f = base + i;
-                    outputs[f * 2] = inputs[f * 2] * dry + outputs[f * 2] * wet;
-                    outputs[f * 2 + 1] = inputs[f * 2 + 1] * dry + outputs[f * 2 + 1] * wet;
+                    outputs[f * 2] = self.dry_buf[i * 2] * dry + outputs[f * 2] * wet;
+                    outputs[f * 2 + 1] = self.dry_buf[i * 2 + 1] * dry + outputs[f * 2 + 1] * wet;
                 }
             }
             base += n;
@@ -1377,6 +1393,12 @@ fn early_taps(algorithm: Algorithm) -> &'static [(f32, f32, f32)] {
 
 impl AudioDevice for ReverbDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        if !self.is_enabled && self.dry.frames() > 0 {
+            // Bypass keeps the Wet FX latency
+            self.dry.process(inputs, outputs, sample_count);
+            self.sleep.on_block(sample_count);
+            return;
+        }
         if !self.is_active || !self.is_enabled {
             pass_through(inputs, outputs, sample_count);
             self.sleep.on_block(sample_count);
@@ -1416,6 +1438,27 @@ impl AudioDevice for ReverbDevice {
 
     fn has_async_blocks(&self) -> bool {
         self.slots.has_async(1)
+    }
+
+    /// The Wet FX chain's latency while it runs (an empty or all-bypassed slot is skipped).
+    /// Tank FX is a loop slot and takes no plugins.
+    fn latency_frames(&self) -> u32 {
+        if self.slots.is_live(1) {
+            self.slots
+                .chain(1)
+                .map_or(0, |chain| chain.latency_frames())
+        } else {
+            0
+        }
+    }
+
+    fn update_latency(&mut self, sample_rate: f32) -> u32 {
+        if let Some(chain) = self.slots.chain_mut(1) {
+            chain.update_latency(sample_rate);
+        }
+        let latency = self.latency_frames();
+        self.dry.set(latency as usize, MAX_BLOCK_FRAMES);
+        latency
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -1505,6 +1548,9 @@ impl AudioDevice for ReverbDevice {
         self.slots.prepare(sample_rate, max_frames);
         if self.whole_buf.len() < max_frames * 2 {
             self.whole_buf.resize(max_frames * 2, 0.0);
+        }
+        if self.dry_buf.len() < self.slots.slot_buf.len() {
+            self.dry_buf.resize(self.slots.slot_buf.len(), 0.0);
         }
         self.predelay_l.prepare_seconds(0.5, sample_rate);
         self.predelay_r.prepare_seconds(0.5, sample_rate);
@@ -2212,6 +2258,39 @@ mod tests {
         // Without a plugin in Wet FX the wrapper still splits blocks.
         let plain = busy(1);
         assert!(!plain.has_async_blocks());
+    }
+
+    /// A Wet FX device with latency delays the dry to match: at any Mix the output is the
+    /// zero-latency Wet FX reverb's, `DELAY` frames late. Bypassed, the input comes out late too.
+    #[test]
+    fn wet_fx_latency_keeps_dry_and_wet_aligned() {
+        use crate::audio::mixing::test_support::LatencyDevice;
+        const DELAY: usize = 700;
+        let input = noise_burst(16_384);
+        let build = |delay: usize, mix: f32| {
+            let mut d = busy(0);
+            put(&mut d, WET, Box::new(LatencyDevice::new(delay, 1.0)));
+            set_real(&mut d, MIX, mix);
+            assert_eq!(d.update_latency(48_000.0), delay as u32);
+            render(&mut d, &vec![0.0; 8192 * 2], &[512]);
+            d
+        };
+        let late = |x: &[f32]| -> Vec<f32> {
+            let mut out = vec![0.0; DELAY * 2];
+            out.extend_from_slice(&x[..x.len() - DELAY * 2]);
+            out
+        };
+        for mix in [0.0, 40.0, 100.0] {
+            let expected = late(&render(&mut build(0, mix), &input, &[512]));
+            let actual = render(&mut build(DELAY, mix), &input, &[512]);
+            for (i, (a, e)) in actual.iter().zip(&expected).enumerate() {
+                assert!((a - e).abs() < 1e-5, "mix {mix}: sample {i}: {a} vs {e}");
+            }
+        }
+
+        let mut bypassed = build(DELAY, 40.0);
+        bypassed.set_enabled(false);
+        assert_eq!(render(&mut bypassed, &input, &[512]), late(&input));
     }
 }
 

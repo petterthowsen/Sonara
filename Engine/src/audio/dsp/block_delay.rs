@@ -152,6 +152,15 @@ impl AlignDelay {
         }
     }
 
+    /// Read the delayed version of the block last `write`n into `out`. At 0 it reads nothing
+    /// (there is no history); callers copy the block themselves.
+    #[inline]
+    pub fn read(&self, out: &mut [f32], frames: usize) {
+        if self.frames > 0 {
+            self.line.read_interleaved(self.frames, frames, out);
+        }
+    }
+
     /// Write `input` and read it back delayed into `out`. At 0 this is a plain copy.
     #[inline]
     pub fn process(&mut self, input: &[f32], out: &mut [f32], frames: usize) {

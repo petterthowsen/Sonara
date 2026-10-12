@@ -22,18 +22,18 @@
 //! state (ADR 0008).
 
 use crate::audio::devices::container::DeviceContainer;
-use crate::audio::devices::container::{
-    copy_interleaved, insert_into_vec, move_in_vec, remove_from_vec,
-};
+use crate::audio::devices::container::{insert_into_vec, move_in_vec, remove_from_vec};
 use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
 };
+use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::dsp::crossover::{MultibandSplitter, MAX_BANDS};
 use crate::audio::dsp::gain::db_to_gain;
 use crate::audio::dsp::smoothing::SmoothedParam;
+use crate::audio::stream::MAX_BLOCK_FRAMES;
 use tracing::warn;
 
 // === Parameters ===
@@ -220,6 +220,14 @@ pub struct MultibandDevice {
     sm_mix: SmoothedParam,
     sm_out: SmoothedParam,
     enabled: bool,
+    /// Latency compensation (spec 042 part D): each band position is delayed up to the slowest
+    /// child, so the bands sum aligned.
+    align: [AlignDelay; BAND_COUNT],
+    /// The splitter's dry, delayed to meet the bands for a Mix below 100 %.
+    dry_align: AlignDelay,
+    /// The input, delayed by the latency, for the paths that skip the bands (fewer than two
+    /// active, or bypassed). Fed every block so a switch between paths plays on.
+    thru: AlignDelay,
 }
 
 impl MultibandDevice {
@@ -257,6 +265,9 @@ impl MultibandDevice {
             sm_mix: smoother(1.0),
             sm_out: smoother(1.0),
             enabled: true,
+            align: std::array::from_fn(|_| AlignDelay::default()),
+            dry_align: AlignDelay::default(),
+            thru: AlignDelay::default(),
         };
         for spec in TABLE.specs {
             device.apply(spec.id, spec.default);
@@ -391,25 +402,40 @@ impl MultibandDevice {
     /// Process `frames` frames (at most `capacity`) on the current topology.
     fn process_segment(&mut self, input: &[f32], output: &mut [f32], frames: usize) {
         let n2 = frames * 2;
+        self.thru.write(input, frames);
         if self.applied_len < 2 {
+            let src: &[f32] = if self.thru.frames() > 0 {
+                self.thru.read(&mut self.child_out[..n2], frames);
+                &self.child_out[..n2]
+            } else {
+                input
+            };
             for f in 0..frames {
                 let g = self.fade_gain(f);
-                output[f * 2] = input[f * 2] * g;
-                output[f * 2 + 1] = input[f * 2 + 1] * g;
+                output[f * 2] = src[f * 2] * g;
+                output[f * 2 + 1] = src[f * 2 + 1] * g;
             }
             return;
         }
 
         self.splitter
             .split(input, &mut self.band_bufs, &mut self.dry[..n2], frames);
+        self.dry_align.apply(&mut self.dry[..n2], frames);
         self.sum[..n2].fill(0.0);
 
         for j in 0..self.applied_len {
             let p = self.applied[j] as usize;
             let band = &self.band_bufs[j][..n2];
+            let aligned = self.align[p].frames() > 0;
             let src: &[f32] = match self.children.get_mut(p) {
                 Some(child) => {
                     child.process_block(band, &mut self.child_out[..n2], frames);
+                    self.align[p].apply(&mut self.child_out[..n2], frames);
+                    &self.child_out[..n2]
+                }
+                None if aligned => {
+                    self.child_out[..n2].copy_from_slice(band);
+                    self.align[p].apply(&mut self.child_out[..n2], frames);
                     &self.child_out[..n2]
                 }
                 None => band,
@@ -481,7 +507,7 @@ impl DeviceContainer for MultibandDevice {
 impl AudioDevice for MultibandDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         if !self.enabled {
-            copy_interleaved(inputs, outputs, sample_count);
+            self.thru.process(inputs, outputs, sample_count);
             return;
         }
         let frames = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
@@ -524,6 +550,34 @@ impl AudioDevice for MultibandDevice {
             }
             done += seg;
         }
+    }
+
+    /// The bands run in parallel and are aligned to the slowest band's child.
+    fn latency_frames(&self) -> u32 {
+        self.children
+            .iter()
+            .map(|child| child.latency_frames())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn update_latency(&mut self, sample_rate: f32) -> u32 {
+        let latency = self
+            .children
+            .iter_mut()
+            .map(|child| child.update_latency(sample_rate))
+            .max()
+            .unwrap_or(0);
+        for (p, align) in self.align.iter_mut().enumerate() {
+            let own = self
+                .children
+                .get(p)
+                .map_or(0, |child| child.latency_frames().min(latency));
+            align.set((latency - own) as usize, MAX_BLOCK_FRAMES);
+        }
+        self.dry_align.set(latency as usize, MAX_BLOCK_FRAMES);
+        self.thru.set(latency as usize, MAX_BLOCK_FRAMES);
+        latency
     }
 
     fn choke(&mut self, frame_offset: usize) {
@@ -956,5 +1010,63 @@ mod tests {
         dev.set_enabled(false);
         let input = stereo(&white_noise(256, 0.3, 5));
         assert_eq!(run(&mut dev, &input, BLOCK), input);
+    }
+
+    /// One band's child adds 300 frames: every band, the Mix dry and the passthrough paths come
+    /// out exactly like a zero-latency Multiband, 300 frames late.
+    #[test]
+    fn multiband_aligns_bands() {
+        use crate::audio::mixing::test_support::LatencyDevice;
+        const DELAY: usize = 300;
+        let input: Vec<f32> = (0..4096)
+            .flat_map(|n| {
+                let x = ((n * 7919) % 1013) as f32 / 1013.0 - 0.5;
+                [x, x * 0.5]
+            })
+            .collect();
+        let build = |slow: usize, mix: f32, bands: &[usize]| {
+            let mut dev = device();
+            for p in 0..BAND_COUNT {
+                let delay = if p == 2 { slow } else { 0 };
+                dev.insert_child(p, Box::new(LatencyDevice::new(delay, 1.0)));
+            }
+            set_active(&mut dev, bands);
+            set_real(&mut dev, MIX, mix);
+            dev.update_latency(SR);
+            // Settle the band-set fade and the smoothers first: a fade's gain is applied at
+            // output time, so it isn't delayed with the audio.
+            run(&mut dev, &vec![0.0; 8192], 256);
+            dev
+        };
+        let delayed = |out: &[f32]| -> Vec<f32> {
+            let mut late = vec![0.0; DELAY * 2];
+            late.extend_from_slice(&out[..out.len() - DELAY * 2]);
+            late
+        };
+        let check = |what: &str, actual: &[f32], expected: &[f32]| {
+            for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+                assert!((a - e).abs() < 1e-5, "{what}: sample {i}: {a} vs {e}");
+            }
+        };
+
+        for (mix, bands) in [
+            (100.0, &[1, 3, 5][..]),
+            (50.0, &[1, 3, 5][..]),
+            (100.0, &[3][..]),
+        ] {
+            let mut slow = build(DELAY, mix, bands);
+            assert_eq!(slow.latency_frames(), DELAY as u32);
+            let expected = delayed(&run(&mut build(0, mix, bands), &input, 256));
+            let what = format!("mix {mix}, bands {bands:?}");
+            check(&what, &run(&mut slow, &input, 256), &expected);
+        }
+
+        let mut bypassed = build(DELAY, 100.0, &[1, 3, 5]);
+        bypassed.set_enabled(false);
+        check(
+            "bypassed",
+            &run(&mut bypassed, &input, 256),
+            &delayed(&input),
+        );
     }
 }
