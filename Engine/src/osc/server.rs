@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use super::audio_files::{PendingClip, PendingDevice};
+use super::audio_files::{PendingClip, PendingDevice, PreviewTracker};
 use super::status;
 use crate::audio::devices::DevicePath;
 use crate::audio::io::AudioFileService;
@@ -108,6 +108,8 @@ pub struct OscServer {
     pub(super) audio_file_service: Arc<Mutex<AudioFileService>>,
     pub(super) pending_clip_loads: Arc<Mutex<HashMap<String, PendingClip>>>,
     pub(super) pending_device_loads: Arc<Mutex<HashMap<String, PendingDevice>>>,
+    /// The browser preview decode in flight, and the file whose PCM the engine holds (spec 037).
+    pub(super) preview: Arc<Mutex<PreviewTracker>>,
 }
 
 impl OscServer {
@@ -128,6 +130,7 @@ impl OscServer {
             audio_file_service,
             pending_clip_loads: Arc::new(Mutex::new(HashMap::new())),
             pending_device_loads: Arc::new(Mutex::new(HashMap::new())),
+            preview: Arc::new(Mutex::new(PreviewTracker::default())),
         })
     }
 

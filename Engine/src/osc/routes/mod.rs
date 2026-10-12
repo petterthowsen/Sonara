@@ -9,6 +9,7 @@ mod clip;
 mod device;
 mod device_slots;
 mod plugin;
+mod preview;
 mod project;
 mod render;
 mod track;
@@ -124,6 +125,7 @@ impl OscServer {
             Some("audio") => warn_on_arg_error(audio::route(&parts, args, &mut cx))?,
             Some("render") => warn_on_arg_error(render::route(&parts, args, &mut cx))?,
             Some("audiofile") => warn_on_arg_error(audiofile::route(&parts, args, &cx))?,
+            Some("preview") => warn_on_arg_error(preview::route(&parts, args, &cx))?,
             _ => false,
         };
 
@@ -376,6 +378,29 @@ mod tests {
             sent.as_slice(),
             [AudioCommand::SetChannelMute { id: 3, mute: true }]
         ));
+    }
+
+    #[test]
+    fn preview_routes_send_the_preview_commands() {
+        let mut h = Harness::new();
+        let sent = h.send("/preview/play", vec![Str("/s/kick.wav".into()), Float(0.5)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::BeginPreview { req_id, path, start_s }]
+                if req_id.starts_with("preview:") && path == "/s/kick.wav" && *start_s == 0.5
+        ));
+        let sent = h.send("/preview/seek", vec![Float(1.25)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SeekPreview { pos_s }] if *pos_s == 1.25
+        ));
+        let sent = h.send("/preview/stop", vec![]);
+        assert!(matches!(sent.as_slice(), [AudioCommand::StopPreview]));
+        // Missing arguments are dropped, not an error.
+        assert!(h
+            .send("/preview/play", vec![Str("/s/kick.wav".into())])
+            .is_empty());
+        assert!(h.send("/preview/seek", vec![]).is_empty());
     }
 
     #[test]

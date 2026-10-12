@@ -6,6 +6,7 @@ use crate::audio::channel::Channel;
 use crate::audio::clip::Clip;
 use crate::audio::devices::{AudioDevice, DevicePath};
 use crate::audio::mixing::sidechain::SidechainTaps;
+use crate::audio::preview::PreviewPlayer;
 use crate::audio::project::ProjectSettings;
 use crate::audio::render_scratch::RenderScratch;
 use crate::audio::scale_map::ScaleMap;
@@ -96,6 +97,8 @@ pub struct EngineState {
     /// channels, fed to subscribing `sidechain` modulators one block later. Rebuilt only by
     /// the command thread; the callback only snapshots (end of mix) and feeds (block start).
     pub sc_taps: SidechainTaps,
+    /// Browser sample preview (spec 037), mixed into the hardware output after the master.
+    pub preview: PreviewPlayer,
 }
 
 impl EngineState {
@@ -220,6 +223,7 @@ impl Default for EngineState {
             block_clock: Arc::new(BlockClock::new()),
             rendering: Arc::new(AtomicBool::new(false)),
             sc_taps: SidechainTaps::default(),
+            preview: PreviewPlayer::default(),
         }
     }
 }

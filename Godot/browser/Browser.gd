@@ -4,7 +4,7 @@
 class_name Browser extends VBoxContainer
 
 enum DisplayMode {
-	FLAT_LIST,  # ItemList - flat display
+	FLAT_LIST,  # Folder tree on top, contents of the selected folder below
 	TREE_VIEW   # Tree - hierarchical display
 }
 
@@ -18,6 +18,10 @@ enum DisplayMode {
 @onready var options_container: HBoxContainer = $Content/VBox/Options
 @onready var mode_toggle_button: Button = $Content/VBox/Options/ModeToggle
 @onready var search_text: LineEdit = $Content/VBox/Options/SearchText
+@onready var audition_toggle: Button = $Content/VBox/Options/AuditionToggle
+
+# info panel under the content (selected item, waveform, play/stop)
+@onready var info_panel: BrowserInfoPanel = $InfoPanel
 
 # Debounce timer for search input, created in _setup_ui()
 var _search_debounce_timer: Timer = null
@@ -51,8 +55,24 @@ var _expanded_folders: Dictionary = {}
 const GROUP := "browser"
 
 var _current_tab: Asset.TYPE = Asset.TYPE.Audio
-var _item_lists: Dictionary = {}  # Asset.TYPE -> ItemList
-var _trees: Dictionary = {}  # Asset.TYPE -> Tree
+var _splits: Dictionary = {}  # Asset.TYPE -> VSplitContainer (list mode)
+var _folder_trees: Dictionary = {}  # Asset.TYPE -> Tree (folders only, top of the split)
+var _content_trees: Dictionary = {}  # Asset.TYPE -> Tree (flat contents of the selected folder)
+var _trees: Dictionary = {}  # Asset.TYPE -> Tree (tree view mode)
+# Asset.TYPE -> {folder key -> {label, parent, children, assets}}, rebuilt with the folder tree.
+var _folder_models: Dictionary = {}
+# Asset.TYPE -> every search match in ranked order (what the content tree shows while searching).
+var _ranked_assets: Dictionary = {}
+# Asset.TYPE -> key of the selected folder ("" is "All"), and path of the selected content row.
+var _selected_folder: Dictionary = {}
+var _selected_content: Dictionary = {}
+# Asset.TYPE key -> split offset of the folder/contents split.
+var _split_offsets: Dictionary = {}
+
+## Browser preview model (spec 037); the engine plays the sample.
+var preview: PreviewPlayer = null
+## While on, selecting an audio row on the Samples tab plays it.
+var _audition_enabled := false
 var _tab_buttons: Dictionary = {}  # Asset.TYPE -> Button
 
 # Asset tracking
@@ -75,7 +95,7 @@ const MENU_OPEN_FOLDER_ID := 1
 var _context_menu: PopupMenu = null
 var _context_menu_asset: Asset = null
 
-# Tabs whose ItemList/Tree contents are stale relative to `_audio_assets` etc.
+# Tabs whose folder/content/tree contents are stale relative to `_audio_assets` etc.
 # (or the current `_search_filter`). Populated lazily when a tab becomes visible.
 var _dirty_tabs: Dictionary = {}
 
@@ -99,6 +119,16 @@ func _setup_ui() -> void:
 	# Connect mode toggle button
 	mode_toggle_button.pressed.connect(_on_mode_toggle_pressed)
 	_sync_mode_toggle_text()
+
+	# Preview: the model, the info panel that shows it, and the audition toggle
+	preview = PreviewPlayer.new()
+	preview.name = "PreviewPlayer"
+	add_child(preview)
+	info_panel.setup(preview)
+	asset_selected.connect(info_panel.show_asset)
+	audition_toggle.icon = preload("res://assets/icons/headphones.svg")
+	audition_toggle.set_pressed_no_signal(_audition_enabled)
+	audition_toggle.toggled.connect(_on_audition_toggled)
 	
 	# Setup tab buttons
 	_create_tab_button("", "Samples", Asset.TYPE.Audio, preload("res://assets/icons/audio-waveform.svg"))
@@ -106,11 +136,11 @@ func _setup_ui() -> void:
 	_create_tab_button("SFZ", "SFZ", Asset.TYPE.SFZ)
 	_create_tab_button("", "Presets", Asset.TYPE.Preset, preload("res://assets/icons/star.svg"))
 
-	# Create ItemLists for each category
-	_create_item_list(Asset.TYPE.Audio)
-	_create_item_list(Asset.TYPE.Device)
-	_create_item_list(Asset.TYPE.SFZ)
-	_create_item_list(Asset.TYPE.Preset)
+	# Create the folder/contents split for each category
+	_create_split(Asset.TYPE.Audio)
+	_create_split(Asset.TYPE.Device)
+	_create_split(Asset.TYPE.SFZ)
+	_create_split(Asset.TYPE.Preset)
 	
 	# Create Tree controls for each category
 	_create_tree(Asset.TYPE.Audio)
@@ -145,36 +175,76 @@ func _create_tab_button(text: String, tooltip: String, asset_type: Asset.TYPE, i
 	_tab_buttons[asset_type] = btn
 
 
-func _create_item_list(asset_type: Asset.TYPE) -> void:
-	var item_list = ItemList.new()
-	item_list.name = "ItemList_%s" % Asset.TYPE.keys()[asset_type]
-	# Connect with bind to pass asset_type as last parameter
-	item_list.item_clicked.connect(_on_item_clicked.bind(asset_type))
-	item_list.set_drag_forwarding(
-		Callable(self, "_get_drag_data"),
+## List mode of one tab: folders on top, the selected folder's contents below.
+func _create_split(asset_type: Asset.TYPE) -> void:
+	var type_name: String = Asset.TYPE.keys()[asset_type]
+	var split := VSplitContainer.new()
+	split.name = "Split_%s" % type_name
+	split.visible = false  # Hidden by default, shown when tab is active
+	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	var folder_tree := Tree.new()
+	folder_tree.name = "Folders_%s" % type_name
+	folder_tree.hide_root = false
+	folder_tree.select_mode = Tree.SELECT_SINGLE
+	folder_tree.allow_reselect = true
+	folder_tree.custom_minimum_size = Vector2(0, 60)
+	folder_tree.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	folder_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	folder_tree.size_flags_stretch_ratio = 0.8
+	folder_tree.item_selected.connect(_on_folder_selected.bind(asset_type))
+	folder_tree.item_collapsed.connect(_on_folder_collapsed.bind(asset_type))
+	split.add_child(folder_tree)
+
+	var content_tree := Tree.new()
+	content_tree.name = "Contents_%s" % type_name
+	content_tree.hide_root = true
+	_configure_asset_tree(content_tree, asset_type)
+	content_tree.custom_minimum_size = Vector2(0, 60)
+	content_tree.size_flags_stretch_ratio = 1.2
+	content_tree.item_activated.connect(_on_content_activated.bind(content_tree, asset_type))
+	split.add_child(content_tree)
+
+	var saved: Variant = _split_offsets.get(type_name, null)
+	if saved != null:
+		split.split_offset = int(saved)
+	split.dragged.connect(_on_split_dragged.bind(split, type_name))
+
+	tabs.add_child(split)
+	_splits[asset_type] = split
+	_folder_trees[asset_type] = folder_tree
+	_content_trees[asset_type] = content_tree
+
+
+## Shared setup of the Trees that list assets (tree view and the content tree).
+func _configure_asset_tree(tree: Tree, asset_type: Asset.TYPE) -> void:
+	if asset_type == Asset.TYPE.Device:
+		# Column 1 carries the dim CLAP/VST3 tag of plugins installed in both formats.
+		tree.columns = 2
+		tree.set_column_expand(0, true)
+		tree.set_column_expand(1, false)
+		tree.set_column_custom_minimum_width(1, 48)
+
+	# Configure Tree appearance and behavior
+	tree.allow_reselect = true
+	tree.allow_rmb_select = true
+	tree.select_mode = Tree.SELECT_MULTI
+
+	# Make Tree fill the parent ScrollContainer
+	tree.custom_minimum_size = Vector2(0, 0)
+	tree.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	# SELECT_MULTI trees emit multi_selected, never item_selected. React only to the cursor
+	# row, so a Shift range select doesn't audition every row in it.
+	tree.multi_selected.connect(_on_tree_multi_selected.bind(tree, asset_type))
+	tree.item_mouse_selected.connect(_on_tree_item_context_menu.bind(tree))
+	tree.set_drag_forwarding(
+		Callable(self, "_get_drag_data_tree").bind(tree),
 		Callable(self, "_can_drop_data"),
 		Callable(self, "_drop_data")
 	)
-	item_list.visible = false  # Hidden by default, shown when tab is active
-
-	# Configure ItemList appearance and behavior
-	item_list.select_mode = ItemList.SELECT_MULTI
-	item_list.allow_reselect = true
-	item_list.allow_search = true
-	item_list.allow_rmb_select = true
-	item_list.auto_height = false  # Let parent ScrollContainer handle scrolling
-	item_list.max_text_lines = 1
-	item_list.max_columns = 2
-	item_list.same_column_width = true
-	item_list.wraparound_items = true
-
-	# Make ItemList fill the parent ScrollContainer
-	item_list.custom_minimum_size = Vector2(0, 0)  # Use parent size
-	item_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	item_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-
-	tabs.add_child(item_list)
-	_item_lists[asset_type] = item_list
 
 
 func _create_tree(asset_type: Asset.TYPE) -> void:
@@ -182,33 +252,8 @@ func _create_tree(asset_type: Asset.TYPE) -> void:
 	tree.name = "Tree_%s" % Asset.TYPE.keys()[asset_type]
 	tree.hide_root = true
 	tree.visible = false  # Hidden by default
-	if asset_type == Asset.TYPE.Device:
-		# Column 1 carries the dim CLAP/VST3 tag of plugins installed in both formats.
-		tree.columns = 2
-		tree.set_column_expand(0, true)
-		tree.set_column_expand(1, false)
-		tree.set_column_custom_minimum_width(1, 48)
-	
-	# Configure Tree appearance and behavior
-	tree.allow_reselect = true
-	tree.allow_rmb_select = true
-	tree.select_mode = Tree.SELECT_MULTI
-	
-	# Make Tree fill the parent ScrollContainer
-	tree.custom_minimum_size = Vector2(0, 0)
-	tree.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	
-	# Connect signals
-	tree.item_selected.connect(func(): _on_tree_item_selected(asset_type))
+	_configure_asset_tree(tree, asset_type)
 	tree.item_collapsed.connect(func(item: TreeItem): _on_tree_item_collapsed(item, asset_type))
-	tree.item_mouse_selected.connect(_on_tree_item_context_menu.bind(asset_type))
-	tree.set_drag_forwarding(
-		Callable(self, "_get_drag_data_tree"),
-		Callable(self, "_can_drop_data"),
-		Callable(self, "_drop_data")
-	)
-	
 	tabs.add_child(tree)
 	_trees[asset_type] = tree
 
@@ -270,9 +315,9 @@ func _rebuild_asset_partitions() -> void:
 
 
 ## Called when the underlying asset data changed. Rebuilds the cheap partitions,
-## marks every tab dirty, and only rebuilds the ItemList/Tree UI for the tab
-## that's actually visible right now. Other tabs get rebuilt lazily on switch
-## (see `_switch_tab`), avoiding wasted work on hidden tabs.
+## marks every tab dirty, and only rebuilds the UI for the tab that's actually
+## visible right now. Other tabs get rebuilt lazily on switch (see
+## `_switch_tab`), avoiding wasted work on hidden tabs.
 func _refresh_asset_list() -> void:
 	if not AssetService:
 		logger.warn("AssetService not available")
@@ -280,37 +325,29 @@ func _refresh_asset_list() -> void:
 
 	_rebuild_asset_partitions()
 
-	for asset_type in _item_lists.keys():
+	for asset_type in _splits.keys():
 		_dirty_tabs[asset_type] = true
 
 	_populate_tab_for(_current_tab)
 
 
-## Rebuild the ItemList and Tree contents for a single tab and clear its dirty flag.
+## Rebuild the folder/content split and the Tree for a single tab and clear its dirty flag.
+## The selected folder and content row survive when they still exist.
 func _populate_tab_for(asset_type: Asset.TYPE) -> void:
 	_applying_tree_state = true
+	_trees[asset_type].clear()
 	match asset_type:
 		Asset.TYPE.Audio:
-			_item_lists[Asset.TYPE.Audio].clear()
-			_trees[Asset.TYPE.Audio].clear()
-			_populate_samples_tab()
 			_populate_samples_tree()
 		Asset.TYPE.Device:
-			_item_lists[Asset.TYPE.Device].clear()
-			_trees[Asset.TYPE.Device].clear()
-			_populate_devices_tab()
 			_populate_devices_tree()
 		Asset.TYPE.SFZ:
-			_item_lists[Asset.TYPE.SFZ].clear()
-			_trees[Asset.TYPE.SFZ].clear()
-			_populate_sfz_tab()
 			_populate_sfz_tree()
 		Asset.TYPE.Preset:
-			_item_lists[Asset.TYPE.Preset].clear()
-			_trees[Asset.TYPE.Preset].clear()
-			_populate_presets_tab()
 			_populate_presets_tree()
+	_populate_folder_tree(asset_type)
 	_applying_tree_state = false
+	_populate_contents(asset_type)
 	_dirty_tabs[asset_type] = false
 
 
@@ -319,90 +356,338 @@ func _filter_and_score_assets(assets: Array[Asset]) -> Array[Dictionary]:
 	return AssetSearch.rank(assets, _search_filter)
 
 
-func _populate_samples_tab() -> void:
-	var item_list = _item_lists[Asset.TYPE.Audio]
+# ============================================================================
+# FOLDER / CONTENTS SPLIT (LIST MODE)
+# ============================================================================
 
-	# Filter and score assets based on fuzzy search
-	var scored_audio = _filter_and_score_assets(_audio_assets)
-	var scored_midi = _filter_and_score_assets(_midi_assets)
-
-	# Add Audio section
-	if not scored_audio.is_empty():
-		var header_idx = item_list.add_item("Audio Files")
-		item_list.set_item_custom_fg_color(header_idx, UiColors.role(&"accent_primary"))
-		item_list.set_item_disabled(header_idx, true)
-
-		for result in scored_audio:
-			var asset = result.asset
-			var idx = item_list.add_item(asset.get_display_name())
-			item_list.set_item_metadata(idx, asset)
-
-	# Add MIDI section
-	if not scored_midi.is_empty():
-		var header_idx = item_list.add_item("MIDI Files")
-		item_list.set_item_custom_fg_color(header_idx, UiColors.role(&"accent_primary"))
-		item_list.set_item_disabled(header_idx, true)
-
-		for result in scored_midi:
-			var asset = result.asset
-			var idx = item_list.add_item(asset.get_display_name())
-			item_list.set_item_metadata(idx, asset)
+## The "All" row of the folder tree; it lists everything.
+const FOLDER_ALL := ""
+const SECTION_AUDIO := "audio:"
+const SECTION_MIDI := "midi:"
 
 
-func _populate_sfz_tab() -> void:
-	var item_list = _item_lists[Asset.TYPE.SFZ]
+## Ranked search matches of `assets`, best first, as a plain Asset array.
+func _ranked(assets: Array[Asset]) -> Array[Asset]:
+	var out: Array[Asset] = []
+	for result in _filter_and_score_assets(assets):
+		out.append(result.asset)
+	return out
 
-	# Filter and score assets based on fuzzy search
-	var scored_sfz = _filter_and_score_assets(_sfz_assets)
 
-	if scored_sfz.is_empty():
-		var message = "(No matches)" if not _search_filter.is_empty() else "(No SFZ instruments)"
-		var idx = item_list.add_item(message)
-		item_list.set_item_disabled(idx, true)
+## Add folder `key` to `model` under `parent` (created once).
+func _model_node(model: Dictionary, key: String, label: String, parent: String) -> Dictionary:
+	if model.has(key):
+		return model[key]
+	var node := {"label": label, "parent": parent, "children": [], "assets": []}
+	model[key] = node
+	if model.has(parent):
+		model[parent].children.append(key)
+	return node
+
+
+## Fold `assets` into `model` by directory. Keys are the absolute folder paths
+## (prefixed with `prefix` so Audio and MIDI sections can't collide); a non-empty
+## `section_label` puts the folders under a section row, like the tree view's
+## "Audio Files" / "MIDI Files".
+func _add_assets_to_folder_model(model: Dictionary, assets: Array[Asset], prefix: String, section_label: String) -> void:
+	if assets.is_empty():
 		return
+	var base_key := FOLDER_ALL
+	if not section_label.is_empty():
+		base_key = prefix
+		_model_node(model, base_key, section_label, FOLDER_ALL)
+	var search_paths := _get_search_paths_for_assets(assets)
+	for asset in assets:
+		var relative := _strip_search_path_prefix(asset.path, search_paths)
+		var parts: Array[String] = []
+		for part in relative.split("/"):
+			if not part.is_empty():
+				parts.append(part)
+		parts.resize(maxi(parts.size() - 1, 0))  # drop the filename
+		var folder_abs := asset.path.get_base_dir()
+		for _i in parts.size():
+			folder_abs = folder_abs.get_base_dir()
+		var parent := base_key
+		for part in parts:
+			folder_abs = folder_abs.path_join(part)
+			var key := prefix + folder_abs
+			_model_node(model, key, part, parent)
+			parent = key
+		model[parent].assets.append(asset)
 
-	for result in scored_sfz:
-		var asset = result.asset
-		var idx = item_list.add_item(asset.get_display_name())
-		item_list.set_item_metadata(idx, asset)
+
+## Folder model of tab `asset_type` for the current search; also fills `_ranked_assets`.
+func _build_folder_model(asset_type: Asset.TYPE) -> Dictionary:
+	var model := {FOLDER_ALL: {"label": "All", "parent": "", "children": [], "assets": []}}
+	var ranked: Array[Asset] = []
+	match asset_type:
+		Asset.TYPE.Audio:
+			var audio := _ranked(_audio_assets)
+			var midi := _ranked(_midi_assets)
+			ranked.append_array(audio)
+			ranked.append_array(midi)
+			_add_assets_to_folder_model(model, audio, SECTION_AUDIO, "Audio Files")
+			_add_assets_to_folder_model(model, midi, SECTION_MIDI, "MIDI Files")
+		Asset.TYPE.SFZ:
+			ranked = _ranked(_sfz_assets)
+			_add_assets_to_folder_model(model, ranked, "", "")
+		Asset.TYPE.Preset:
+			ranked = _ranked(_preset_assets)
+			_add_assets_to_folder_model(model, ranked, "", "")
+		Asset.TYPE.Device:
+			ranked = _ranked(_device_assets)
+			_add_devices_to_folder_model(model, ranked)
+	_ranked_assets[asset_type] = ranked
+	return model
 
 
-func _populate_presets_tab() -> void:
-	var item_list = _item_lists[Asset.TYPE.Preset]
-	var scored := _filter_and_score_assets(_preset_assets)
+## Devices: the folders are the Category / Vendor hierarchy of the tree view.
+func _add_devices_to_folder_model(model: Dictionary, devices: Array[Asset]) -> void:
+	for asset in devices:
+		var device = AssetService.get_device(asset.path)
+		if not device:
+			continue
+		var category: String = device.get_browser_group()
+		var vendor: String = device.author if device.author != "" else "Unknown"
+		_model_node(model, category, category, FOLDER_ALL)
+		var vendor_key := category + "/" + vendor
+		_model_node(model, vendor_key, vendor, category)
+		model[vendor_key].assets.append(asset)
 
-	if scored.is_empty():
-		var message = "(No matches)" if not _search_filter.is_empty() else "(No presets)"
-		var idx = item_list.add_item(message)
-		item_list.set_item_disabled(idx, true)
+
+## Child keys of `key`, sorted by label (case-insensitive).
+func _sorted_folder_children(model: Dictionary, key: String) -> Array:
+	var children: Array = model[key].children.duplicate()
+	children.sort_custom(func(a: String, b: String) -> bool:
+		return model[a].label.to_lower() < model[b].label.to_lower())
+	return children
+
+
+## Assets of `key` and everything below it, folder by folder.
+func _collect_folder_assets(model: Dictionary, key: String, out: Array[Asset]) -> void:
+	out.append_array(_sorted_by_name(model[key].assets))
+	for child in _sorted_folder_children(model, key):
+		_collect_folder_assets(model, child, out)
+
+
+func _sorted_by_name(assets: Array) -> Array[Asset]:
+	var out: Array[Asset] = []
+	out.assign(assets)
+	out.sort_custom(func(a: Asset, b: Asset) -> bool:
+		return a.get_display_name().to_lower() < b.get_display_name().to_lower())
+	return out
+
+
+func _populate_folder_tree(asset_type: Asset.TYPE) -> void:
+	var tree: Tree = _folder_trees[asset_type]
+	tree.clear()
+	var model := _build_folder_model(asset_type)
+	_folder_models[asset_type] = model
+	var root := tree.create_item()
+	root.set_text(0, "All")
+	root.set_metadata(0, FOLDER_ALL)
+	_add_folder_items(tree, root, model, FOLDER_ALL)
+	_restore_or_expand_folder_tree(tree, asset_type)
+	_select_folder(asset_type, _selected_folder.get(asset_type, FOLDER_ALL))
+
+
+func _add_folder_items(tree: Tree, parent: TreeItem, model: Dictionary, key: String) -> void:
+	for child_key in _sorted_folder_children(model, key):
+		var node: Dictionary = model[child_key]
+		var item := tree.create_item(parent)
+		item.set_text(0, node.label)
+		item.set_metadata(0, child_key)
+		if child_key == SECTION_AUDIO or child_key == SECTION_MIDI:
+			item.set_custom_color(0, UiColors.role(&"accent_primary"))
+		else:
+			var folder_path: String = child_key.trim_prefix(SECTION_AUDIO).trim_prefix(SECTION_MIDI)
+			if folder_path.begins_with("/"):
+				item.set_tooltip_text(0, folder_path)
+		item.set_collapsed(true)
+		_add_folder_items(tree, item, model, child_key)
+
+
+## Folder-tree item whose metadata is `key`, or null.
+func _find_folder_item(item: TreeItem, key: String) -> TreeItem:
+	if item == null:
+		return null
+	if item.get_metadata(0) == key:
+		return item
+	var child := item.get_first_child()
+	while child:
+		var found := _find_folder_item(child, key)
+		if found:
+			return found
+		child = child.get_next()
+	return null
+
+
+## Select folder `key` of tab `asset_type` (falling back to "All") without
+## triggering the selection handler, and make its ancestors visible.
+func _select_folder(asset_type: Asset.TYPE, key: String) -> void:
+	var tree: Tree = _folder_trees[asset_type]
+	var item := _find_folder_item(tree.get_root(), key)
+	# While searching, folders without a match are missing: show All but remember the folder.
+	var remember := item != null or _search_filter.is_empty()
+	if item == null:
+		item = tree.get_root()
+	var was_applying := _applying_tree_state
+	_applying_tree_state = true
+	var parent := item.get_parent()
+	while parent:
+		parent.set_collapsed(false)
+		parent = parent.get_parent()
+	item.select(0)
+	tree.scroll_to_item(item)
+	_applying_tree_state = was_applying
+	if remember:
+		_selected_folder[asset_type] = str(item.get_metadata(0))
+
+
+## Fill the content tree for the selected folder: its subfolders first (double-click
+## to enter), then its direct assets. "All" and a non-empty search list every asset.
+func _populate_contents(asset_type: Asset.TYPE) -> void:
+	var tree: Tree = _content_trees[asset_type]
+	tree.clear()
+	var root := tree.create_item()
+	var model: Dictionary = _folder_models.get(asset_type, {})
+	var key: String = _selected_folder.get(asset_type, FOLDER_ALL)
+	if not model.has(key):
+		key = FOLDER_ALL
+	var searching := not _search_filter.is_empty()
+	var assets: Array[Asset] = []
+	if model.is_empty():
+		pass
+	elif searching:
+		assets = _ranked_assets.get(asset_type, [])
+	elif key == FOLDER_ALL:
+		_collect_folder_assets(model, FOLDER_ALL, assets)
+	else:
+		for child_key in _sorted_folder_children(model, key):
+			var row := tree.create_item(root)
+			row.set_text(0, model[child_key].label)
+			row.set_custom_color(0, UiColors.role(&"text_dim"))
+			row.set_meta("folder_key", child_key)
+		assets = _sorted_by_name(model[key].assets)
+
+	for asset in assets:
+		_add_asset_row(tree, root, asset, asset_type)
+
+	if root.get_child_count() == 0:
+		var item := tree.create_item(root)
+		item.set_text(0, _empty_message(asset_type))
+		item.set_selectable(0, false)
 		return
-
-	for result in scored:
-		var asset: Asset = result.asset
-		var device_label := asset.device_name if not asset.device_name.is_empty() else asset.device_id
-		var idx = item_list.add_item("%s — %s" % [asset.get_display_name(), device_label])
-		item_list.set_item_metadata(idx, asset)
-		item_list.set_item_tooltip(idx, asset.get_preset_tooltip())
-		if asset.is_unavailable():
-			item_list.set_item_custom_fg_color(idx, UNAVAILABLE_COLOR)
+	_restore_content_selection(asset_type)
 
 
-func _populate_devices_tab() -> void:
-	var item_list = _item_lists[Asset.TYPE.Device]
+func _empty_message(asset_type: Asset.TYPE) -> String:
+	if not _search_filter.is_empty():
+		return "(No matches)"
+	match asset_type:
+		Asset.TYPE.Audio:
+			return "(No samples)"
+		Asset.TYPE.Device:
+			return "(No devices)"
+		Asset.TYPE.SFZ:
+			return "(No SFZ instruments)"
+		Asset.TYPE.Preset:
+			return "(No presets)"
+	return "(Empty)"
 
-	# Filter and score assets based on fuzzy search
-	var scored_devices = _filter_and_score_assets(_device_assets)
 
-	if scored_devices.is_empty():
-		var message = "(No matches)" if not _search_filter.is_empty() else "(No devices)"
-		var idx = item_list.add_item(message)
-		item_list.set_item_disabled(idx, true)
+## One asset row of the content tree. Metadata is the Asset, like in the tree view.
+func _add_asset_row(tree: Tree, parent: TreeItem, asset: Asset, asset_type: Asset.TYPE) -> TreeItem:
+	var item := tree.create_item(parent)
+	item.set_text(0, asset.get_display_name())
+	item.set_metadata(0, asset)
+	match asset_type:
+		Asset.TYPE.Preset:
+			var device_label := asset.device_name if not asset.device_name.is_empty() else asset.device_id
+			item.set_text(0, "%s — %s" % [asset.get_display_name(), device_label])
+			item.set_tooltip_text(0, asset.get_preset_tooltip())
+			if asset.is_unavailable():
+				item.set_custom_color(0, UNAVAILABLE_COLOR)
+		Asset.TYPE.Device:
+			var device = AssetService.get_device(asset.path)
+			if device and device.is_plugin():
+				item.set_tooltip_text(0, "%s plugin\n%s" % [device.format_tag(), device.plugin_path])
+				if AssetService.device_registry.has_other_format(device):
+					item.set_text(1, device.format_tag())
+					item.set_custom_color(1, UiColors.role(&"text_dim"))
+					item.set_tooltip_text(1, item.get_tooltip_text(0))
+	return item
+
+
+## Reselect the row of the previously selected asset (by path) if it is still listed.
+func _restore_content_selection(asset_type: Asset.TYPE) -> void:
+	var path: String = _selected_content.get(asset_type, "")
+	if path.is_empty():
 		return
+	var tree: Tree = _content_trees[asset_type]
+	var item := tree.get_root().get_first_child()
+	while item:
+		var asset = item.get_metadata(0)
+		if asset is Asset and asset.path == path:
+			var was_applying := _applying_tree_state
+			_applying_tree_state = true
+			item.select(0)
+			tree.scroll_to_item(item)
+			_applying_tree_state = was_applying
+			return
+		item = item.get_next()
 
-	for result in scored_devices:
-		var asset = result.asset
-		var idx = item_list.add_item(asset.get_display_name())
-		item_list.set_item_metadata(idx, asset)
+
+func _on_folder_selected(asset_type: Asset.TYPE) -> void:
+	if _applying_tree_state:
+		return
+	var selected: TreeItem = _folder_trees[asset_type].get_selected()
+	if selected == null:
+		return
+	_selected_folder[asset_type] = str(selected.get_metadata(0))
+	_selected_content.erase(asset_type)
+	_populate_contents(asset_type)
+	_clear_selection_preview()
+	_save_ui_state()
+
+
+## Double-click on a subfolder row enters that folder.
+func _on_content_activated(tree: Tree, asset_type: Asset.TYPE) -> void:
+	var item := tree.get_selected()
+	if item == null or not item.has_meta("folder_key"):
+		return
+	_selected_content.erase(asset_type)
+	_select_folder(asset_type, str(item.get_meta("folder_key")))
+	_populate_contents(asset_type)
+	_clear_selection_preview()
+	_save_ui_state()
+
+
+func _on_audition_toggled(on: bool) -> void:
+	_audition_enabled = on
+	if not on:
+		preview.stop()
+	_save_ui_state()
+
+
+## Selecting an audio row on the Samples tab plays it while audition is on; any other selection
+## stops the preview.
+func _audition(asset: Asset) -> void:
+	if _audition_enabled and _current_tab == Asset.TYPE.Audio and asset.is_audio():
+		preview.play(asset.path)
+	else:
+		preview.stop()
+
+
+## Nothing is selected any more (a folder was picked or the tab changed): stop and hide the info panel.
+func _clear_selection_preview() -> void:
+	preview.stop()
+	info_panel.clear_asset()
+
+
+func _on_split_dragged(offset: int, _split: VSplitContainer, type_name: String) -> void:
+	_split_offsets[type_name] = offset
+	_save_ui_state()
 
 
 # ============================================================================
@@ -789,7 +1074,7 @@ func _sort_tree_items(parent: TreeItem) -> void:
 # UI STATE PERSISTENCE
 # ============================================================================
 
-## Load list/tree mode and expanded folder paths from Sonara config.
+## Load list/tree mode, expanded folder paths, selected folders and split offsets from Sonara config.
 func _load_ui_state() -> void:
 	var saved: Variant = Sonara.get_config(CONFIG_KEY, {})
 	if not saved is Dictionary:
@@ -799,6 +1084,17 @@ func _load_ui_state() -> void:
 		_display_mode = DisplayMode.TREE_VIEW
 	else:
 		_display_mode = DisplayMode.FLAT_LIST
+	_audition_enabled = bool(data.get("audition", false))
+	var folder: Variant = data.get("folder", {})
+	if folder is Dictionary:
+		for type_key in folder:
+			var type_index: int = Asset.TYPE.keys().find(str(type_key))
+			if type_index >= 0:
+				_selected_folder[type_index] = str(folder[type_key])
+	var split: Variant = data.get("split", {})
+	if split is Dictionary:
+		for type_key in split:
+			_split_offsets[str(type_key)] = int(split[type_key])
 	var expanded: Variant = data.get("expanded", {})
 	if not expanded is Dictionary:
 		return
@@ -811,15 +1107,23 @@ func _load_ui_state() -> void:
 		_expanded_folders[str(type_key)] = paths
 
 
-## Write display mode and expanded folders to config.json.
+## Write display mode, expanded folders, selected folders and split offsets to config.json.
 func _save_ui_state() -> void:
 	var expanded_out := {}
 	for type_key in _expanded_folders:
 		expanded_out[type_key] = _expanded_folders[type_key].keys()
-	Sonara.set_config(CONFIG_KEY, {
-		"display_mode": "tree" if _display_mode == DisplayMode.TREE_VIEW else "list",
-		"expanded": expanded_out,
-	})
+	var folder_out := {}
+	for asset_type in _selected_folder:
+		folder_out[_type_key(asset_type)] = _selected_folder[asset_type]
+	# Merge into the stored dictionary: the info panel keeps its own `info_collapsed` there.
+	var stored: Variant = Sonara.get_config(CONFIG_KEY, {})
+	var out: Dictionary = (stored as Dictionary).duplicate() if stored is Dictionary else {}
+	out["display_mode"] = "tree" if _display_mode == DisplayMode.TREE_VIEW else "list"
+	out["expanded"] = expanded_out
+	out["folder"] = folder_out
+	out["split"] = _split_offsets
+	out["audition"] = _audition_enabled
+	Sonara.set_config(CONFIG_KEY, out)
 	Sonara.save_config()
 
 
@@ -835,7 +1139,15 @@ func _type_key(asset_type: Asset.TYPE) -> String:
 
 ## Expanded-path set for `asset_type`, creating it if missing.
 func _expanded_for(asset_type: Asset.TYPE) -> Dictionary:
-	var key := _type_key(asset_type)
+	return _expanded_set(_type_key(asset_type))
+
+
+## Expanded set of the folder tree (list mode) of `asset_type`; its keys are folder keys.
+func _expanded_for_folders(asset_type: Asset.TYPE) -> Dictionary:
+	return _expanded_set(_type_key(asset_type) + "/folders")
+
+
+func _expanded_set(key: String) -> Dictionary:
 	if not _expanded_folders.has(key):
 		_expanded_folders[key] = {}
 	return _expanded_folders[key]
@@ -866,6 +1178,45 @@ func _restore_or_expand_tree(tree: Tree, asset_type: Asset.TYPE) -> void:
 		else:
 			_expand_all_tree_items(root)
 	_applying_tree_state = was_applying
+
+
+## Expand everything while searching; otherwise restore the persisted folds of the folder tree.
+func _restore_or_expand_folder_tree(tree: Tree, asset_type: Asset.TYPE) -> void:
+	var was_applying := _applying_tree_state
+	_applying_tree_state = true
+	var root := tree.get_root()
+	if root:
+		root.set_collapsed(false)
+		if _search_filter.is_empty():
+			var expanded := _expanded_for_folders(asset_type)
+			_apply_expanded_folder_keys(root, expanded)
+		else:
+			_expand_all_tree_items(root)
+	_applying_tree_state = was_applying
+
+
+func _apply_expanded_folder_keys(item: TreeItem, expanded: Dictionary) -> void:
+	var child := item.get_first_child()
+	while child:
+		if child.get_child_count() > 0:
+			child.set_collapsed(not expanded.has(str(child.get_metadata(0))))
+			_apply_expanded_folder_keys(child, expanded)
+		child = child.get_next()
+
+
+## Record a user fold/unfold of the folder tree; ignored during rebuild and while searching.
+func _on_folder_collapsed(item: TreeItem, asset_type: Asset.TYPE) -> void:
+	if _applying_tree_state or not _search_filter.is_empty():
+		return
+	var key := str(item.get_metadata(0))
+	if key == FOLDER_ALL:
+		return
+	var expanded := _expanded_for_folders(asset_type)
+	if item.is_collapsed():
+		expanded.erase(key)
+	else:
+		expanded[key] = true
+	_save_ui_state()
 
 
 ## Recursively collapse folders unless their path is in the saved expanded set.
@@ -901,9 +1252,9 @@ func _on_tree_item_collapsed(item: TreeItem, asset_type: Asset.TYPE) -> void:
 # ============================================================================
 
 func _switch_tab(asset_type: Asset.TYPE) -> void:
-	# Hide all ItemLists and Trees
-	for item_list in _item_lists.values():
-		item_list.visible = false
+	# Hide all splits and Trees
+	for split in _splits.values():
+		split.visible = false
 	for tree in _trees.values():
 		tree.visible = false
 
@@ -914,9 +1265,14 @@ func _switch_tab(asset_type: Asset.TYPE) -> void:
 
 	# Show selected tab based on current display mode
 	if _display_mode == DisplayMode.FLAT_LIST:
-		_item_lists[asset_type].visible = true
+		_splits[asset_type].visible = true
 	else:
 		_trees[asset_type].visible = true
+
+	# Switching tabs ends the preview; audition is a Samples tab feature.
+	if asset_type != _current_tab and preview:
+		_clear_selection_preview()
+	audition_toggle.visible = asset_type == Asset.TYPE.Audio
 
 	# Update button states
 	for type in _tab_buttons.keys():
@@ -954,40 +1310,6 @@ func _on_mode_toggle_pressed() -> void:
 # DRAG AND DROP
 # ============================================================================
 
-func _get_drag_data(at_position: Vector2) -> Variant:
-	var item_list = _item_lists[_current_tab]
-	var clicked_idx = item_list.get_item_at_position(at_position)
-	if clicked_idx < 0:
-		return null
-
-	# Get all selected items
-	var selected_indices = item_list.get_selected_items()
-	
-	# If nothing is selected, or the clicked item isn't selected, just drag the clicked item
-	if selected_indices.is_empty() or not clicked_idx in selected_indices:
-		var asset = item_list.get_item_metadata(clicked_idx)
-		if not asset is Asset or asset.is_unavailable():
-			return null
-		asset_requested_drag.emit(asset)
-		return asset
-	
-	# Multiple items selected - collect all assets
-	var assets: Array[Asset] = []
-	for idx in selected_indices:
-		var asset = item_list.get_item_metadata(idx)
-		if asset is Asset and not asset.is_unavailable():
-			assets.append(asset)
-			asset_requested_drag.emit(asset)
-	
-	# Return array if multiple, single asset if only one
-	if assets.size() == 1:
-		return assets[0]
-	elif assets.size() > 1:
-		return assets
-	
-	return null
-
-
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	return data is Asset
 
@@ -999,11 +1321,10 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		logger.info("Drop event for asset: %s" % data.path)
 
 
-func _get_drag_data_tree(at_position: Vector2) -> Variant:
-	var tree = _trees[_current_tab]
+func _get_drag_data_tree(at_position: Vector2, tree: Tree) -> Variant:
 	var clicked: TreeItem = tree.get_item_at_position(at_position)
 
-	# Collect every selected asset (the tree is multi-select), like the list view does.
+	# Collect every selected asset (the tree is multi-select).
 	var assets: Array[Asset] = []
 	var item: TreeItem = tree.get_next_selected(null)
 	var clicked_is_selected := false
@@ -1031,16 +1352,28 @@ func _get_drag_data_tree(at_position: Vector2) -> Variant:
 	return null
 
 
-func _on_tree_item_selected(asset_type: Asset.TYPE) -> void:
-	var tree = _trees[asset_type]
+func _on_tree_multi_selected(item: TreeItem, _column: int, selected: bool, tree: Tree, asset_type: Asset.TYPE) -> void:
+	if selected and item == tree.get_selected():
+		_on_tree_item_selected(tree, asset_type)
+
+
+func _on_tree_item_selected(tree: Tree, asset_type: Asset.TYPE) -> void:
+	if _applying_tree_state:
+		return
 	var selected = tree.get_selected()
 	if not selected:
 		return
 
 	var asset = selected.get_metadata(0)
 	if asset is Asset:
+		if tree == _content_trees.get(asset_type):
+			_selected_content[asset_type] = asset.path
 		asset_selected.emit(asset)
+		_audition(asset)
 		AssetService.mark_asset_used(asset.path)
+	else:
+		# A subfolder row of the content tree.
+		_clear_selection_preview()
 
 
 # ============================================================================
@@ -1067,23 +1400,12 @@ func _prepare_asset_context_menu(asset: Asset) -> bool:
 	return true
 
 
-## Right-click on an ItemList row: the context menu; any other button selects like before.
-func _on_item_clicked(index: int, _at_position: Vector2, button: int, asset_type: Asset.TYPE) -> void:
-	if button == MOUSE_BUTTON_RIGHT:
-		var asset = _item_lists[asset_type].get_item_metadata(index)
-		if _prepare_asset_context_menu(asset):
-			_context_menu.popup(Rect2(_item_lists[asset_type].get_global_mouse_position(), Vector2.ZERO))
-		return
-	_on_asset_selected(index, asset_type)
-
-
 ## Right-click on a tree row (allow_rmb_select): the context menu for its asset.
 ## Godot 4.7's `item_mouse_selected` carries (local mouse position, button
 ## index) - not the clicked item - so resolve the row from the position.
-func _on_tree_item_context_menu(mouse_position: Vector2, id: int, asset_type: Asset.TYPE) -> void:
+func _on_tree_item_context_menu(mouse_position: Vector2, id: int, tree: Tree) -> void:
 	if id != MOUSE_BUTTON_RIGHT:
 		return
-	var tree: Tree = _trees[asset_type]
 	var item: TreeItem = tree.get_item_at_position(mouse_position)
 	if item == null:
 		return
@@ -1105,14 +1427,6 @@ func _on_context_menu_id_pressed(id: int) -> void:
 # ============================================================================
 # CALLBACKS
 # ============================================================================
-
-func _on_asset_selected(index: int, asset_type: Asset.TYPE) -> void:
-	var item_list = _item_lists[asset_type]
-	var asset = item_list.get_item_metadata(index)
-	if asset is Asset:
-		asset_selected.emit(asset)
-		AssetService.mark_asset_used(asset.path)
-
 
 func _on_assets_updated() -> void:
 	# Coalesce: a batch of N added/removed/modified assets fires this once per
@@ -1138,6 +1452,6 @@ func _on_search_debounce_timeout() -> void:
 
 	# The filter affects every tab; mark them all dirty but only rebuild the
 	# one that's currently visible. Others catch up lazily on switch.
-	for asset_type in _item_lists.keys():
+	for asset_type in _splits.keys():
 		_dirty_tabs[asset_type] = true
 	_populate_tab_for(_current_tab)

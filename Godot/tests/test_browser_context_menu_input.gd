@@ -25,7 +25,7 @@ func run_tests() -> void:
 	_assert(browser != null, "Browser node found in the Editor scene")
 
 	await _test_tree_right_click(browser)
-	await _test_item_list_right_click(browser)
+	await _test_content_tree_right_click(browser)
 
 	editor.queue_free()
 	await process_frame
@@ -57,21 +57,22 @@ func _test_tree_right_click(browser: Node) -> void:
 	await process_frame
 
 
-## Right-click an ItemList row through real event routing -> popup visible.
-func _test_item_list_right_click(browser: Node) -> void:
-	var list: ItemList = browser._item_lists[0]
-	list.show()
-	list.add_item("kick.wav")
-	list.set_item_metadata(0, _make_file_asset())
+## Right-click a content-tree row (list mode) through real event routing -> popup visible.
+func _test_content_tree_right_click(browser: Node) -> void:
+	var tree: Tree = browser._content_trees[0]
+	tree.show()
+	tree.clear()
+	var ti: TreeItem = tree.create_item()
+	var row: TreeItem = tree.create_item(ti)
+	row.set_text(0, "kick.wav")
+	row.set_metadata(0, _make_file_asset())
 	await process_frame
-	var reached: bool = await _rmb_click(list, Vector2(20, 10))
-	_assert(reached, "RMB reaches the list row")
+	var reached: bool = await _rmb_click(tree, Vector2(20, 10))
+	_assert(reached, "RMB reaches the content row")
 	var menu: PopupMenu = browser._context_menu
-	_assert(menu != null and menu.visible, "item list right-click pops the context menu")
+	_assert(menu != null and menu.visible, "content tree right-click pops the context menu")
 	if menu:
 		menu.hide()
-	list.queue_free()
-	await process_frame
 
 
 ## Send a RMB press at an offset inside `control` and report whether its

@@ -43,6 +43,10 @@ Location: `Engine/src/audio/processing/` (`mod.rs` orders the stages; `live_midi
 - Waveform levels (`AfsEvent::WaveformLevel`) and progress/errors (`AfsEvent::Progress`/`Error`) stay on the main/OSC threads; the audio thread only needs the final PCM buffer and cache key.
 - Always guard against stale `req_id`s when handling `LoadAudioClip`; reject outdated events so retries do not clobber newer audio.
 
+### Browser Preview (spec 037)
+- `audio/preview.rs` holds `PreviewPlayer` (`EngineState::preview`): one preallocated-by-the-command-thread PCM buffer, a position and a 3 ms fade. `run_live_block` calls `mix_into` right after `mix_and_output`, so the preview is added to hardware outputs 1/2 after the master (fixed -6 dB, no fader or FX). The callback only reads the buffer and advances the position; a rendering run already outputs silence before this point.
+- The command thread owns every state change (`audio/commands/preview.rs`); the buffer swap and the replaced buffer, request id and path go through `CommandEffects` so nothing is freed under the lock. The audio thread reports only the end of the file, with an `Arc<str>` path so the status needs no allocation. The OSC thread (`osc/audio_files.rs`, `PreviewTracker`) submits the decode and drops results whose `preview:` request id is no longer the newest.
+
 ## Sample-Accurate MIDI Dispatch
 
 - `process_audio()` builds a `Vec<(Tick, frame_offset)>` so every note on/off from clip instances is tied to an exact sample index inside the upcoming block.

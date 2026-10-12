@@ -485,6 +485,8 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 	if args.is_empty():
 		return
 	var req_id := str(args[0])
+	if _is_browser_request(req_id):
+		return
 	var source := _waveform_for_req(req_id)
 	if source == null:
 		logger.warn("[Project] decode/ready for untracked req %s dropped" % req_id)
@@ -495,6 +497,11 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 	var clip := _get_clip_by_req_id(req_id)
 	if clip:
 		clip.update_content_length_from_metadata(tempo, ppq)
+
+
+## Requests of the Browser's preview and info panel (PreviewPlayer); they belong to no clip or device.
+func _is_browser_request(req_id: String) -> bool:
+	return req_id.begins_with(PreviewPlayer.INFO_REQ_PREFIX) or req_id.begins_with("preview:")
 
 
 ## Audio source for an AudioFileService request: the clip's, or the device's (created on demand).
@@ -517,6 +524,8 @@ func _on_audiofile_waveform_ready(args: Array) -> void:
 	"""
 	if args.size() < 2:
 		push_error("[Project] Waveform ready: need 2 args, got %d" % args.size())
+		return
+	if _is_browser_request(str(args[0])):
 		return
 	var source := _waveform_for_req(str(args[0]))
 	if source == null:

@@ -11,6 +11,7 @@ mod device_data;
 mod layer;
 mod modulation;
 mod plugin;
+mod preview;
 mod sampler;
 mod status;
 mod track;
@@ -412,6 +413,33 @@ pub enum AudioCommand {
         zone_id: Option<u32>,
         req_id: String,
         message: String,
+    },
+    // Browser sample preview (spec 037). `req_id` names the AudioFileService decode of `path`.
+    /// A play that needs decoding: stop the current preview and wait for `req_id`.
+    BeginPreview {
+        req_id: String,
+        path: String,
+        start_s: f32,
+    },
+    /// Decoded PCM for a `BeginPreview`; a stale `req_id` is dropped.
+    LoadPreview {
+        req_id: String,
+        samples: Vec<f32>,
+        sample_rate: u32,
+        channels: usize,
+    },
+    FailPreview {
+        req_id: String,
+        message: String,
+    },
+    /// A play of the file whose PCM is already loaded.
+    PlayLoadedPreview {
+        path: String,
+        start_s: f32,
+    },
+    StopPreview,
+    SeekPreview {
+        pos_s: f32,
     },
     /// Switch a Sampler between single-sample and multisample mode (spec 023).
     SetSamplerMode {
@@ -1115,6 +1143,25 @@ fn dispatch(
             req_id,
             message,
         ),
+        AudioCommand::BeginPreview {
+            req_id,
+            path,
+            start_s,
+        } => return preview::begin(state, req_id, &path, start_s, effects),
+        AudioCommand::LoadPreview {
+            req_id,
+            samples,
+            sample_rate,
+            channels,
+        } => return preview::load(state, &req_id, samples, channels, sample_rate, effects),
+        AudioCommand::FailPreview { req_id, message } => {
+            return preview::fail(state, &req_id, &message)
+        }
+        AudioCommand::PlayLoadedPreview { path, start_s } => {
+            return preview::play_loaded(state, &path, start_s)
+        }
+        AudioCommand::StopPreview => return preview::stop(state, effects),
+        AudioCommand::SeekPreview { pos_s } => return preview::seek(state, pos_s),
         AudioCommand::SetSamplerMode {
             channel_id,
             device_path,

@@ -68,6 +68,14 @@ pub struct AudioConfigReport {
 pub enum EngineStatus {
     PlayheadUpdate(Tick),
     PlayingStateChanged(bool),
+    /// The browser preview's state (spec 037): on every change, and at the status rate while
+    /// playing. The path is shared so the audio thread can send it without allocating.
+    PreviewStatus {
+        path: std::sync::Arc<str>,
+        state: crate::audio::preview::PreviewState,
+        pos_s: f32,
+        duration_s: f32,
+    },
     /// An offline render's progress, 0.0–1.0 (estimated while the tail renders until silent).
     RenderProgress {
         job_id: String,

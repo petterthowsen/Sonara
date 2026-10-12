@@ -76,6 +76,9 @@ pub struct AudioFileService {
     /// Rate files are decoded to: the device rate. Read per job, so a rate change (Phase 7)
     /// applies to the next load.
     project_sample_rate: Arc<AtomicU32>,
+    /// A service without workers keeps its job queue open, so submitting a job succeeds and
+    /// the job just waits (tests).
+    _idle_jobs: Option<Receiver<AfsJob>>,
 }
 
 impl AudioFileService {
@@ -132,6 +135,7 @@ impl AudioFileService {
             samples_tx,
             event_rx,
             project_sample_rate,
+            _idle_jobs: (num_workers == 0).then_some(job_rx),
         })
     }
 

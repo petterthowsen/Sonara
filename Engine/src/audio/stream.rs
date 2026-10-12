@@ -808,6 +808,13 @@ fn run_live_block(
         mix_and_output(&mut state, data, channels, frames, status_tx)
     });
 
+    // The browser preview goes straight to the output, after the master (spec 037).
+    rt_debug::section("preview", || {
+        if state.preview.mix_into(data, channels, sample_rate) {
+            let _ = status_tx.try_send(state.preview.status());
+        }
+    });
+
     rt_debug::section("update_peaks", || {
         for channel in state.channels.values_mut() {
             channel.update_peaks(frames, sample_rate);
@@ -822,6 +829,10 @@ fn run_live_block(
 fn send_meters(state: &mut EngineState, status_tx: &Sender<EngineStatus>) {
     if state.get_is_playing() {
         let _ = status_tx.try_send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
+    }
+
+    if state.preview.is_playing() {
+        let _ = status_tx.try_send(state.preview.status());
     }
 
     // Draining the peaks starts a fresh max for the next interval, so a transient
@@ -917,6 +928,80 @@ mod tests {
         assert_eq!(run(&mut data), LiveBlock::Rendered);
         assert!(data.iter().any(|&s| s.abs() > 0.001), "the held note plays");
         assert!(state.lock().unwrap().get_current_tick() > 0);
+    }
+
+    #[test]
+    fn preview_plays_after_the_master_and_is_silent_while_rendering() {
+        use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
+        use crate::audio::preview::{PreviewState, PREVIEW_GAIN};
+
+        let mut state = EngineState::default();
+        state.ensure_master_channel(MAX_BLOCK_FRAMES);
+        let mut effects = CommandEffects::default();
+        let command = |state: &mut EngineState, effects: &mut CommandEffects, cmd| {
+            process_command(state, cmd, MAX_BLOCK_FRAMES, effects)
+        };
+        command(
+            &mut state,
+            &mut effects,
+            AudioCommand::BeginPreview {
+                req_id: "preview:1".into(),
+                path: "/s/a.wav".into(),
+                start_s: 0.0,
+            },
+        );
+        command(
+            &mut state,
+            &mut effects,
+            AudioCommand::LoadPreview {
+                req_id: "preview:1".into(),
+                samples: vec![1.0; 2 * 2000],
+                sample_rate: 48_000,
+                channels: 2,
+            },
+        );
+        assert!(
+            matches!(effects.statuses.last(), Some(EngineStatus::PreviewStatus { state, .. }) if *state == PreviewState::Playing),
+            "loading answers with a playing status"
+        );
+        let rendering = state.rendering.clone();
+        let block_clock = state.block_clock.clone();
+        let state = Mutex::new(state);
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let run = |data: &mut [f32]| {
+            run_live_block(
+                &state,
+                &rendering,
+                &block_clock,
+                data,
+                2,
+                48_000.0,
+                Instant::now(),
+                &status_tx,
+                |_| {},
+            )
+        };
+
+        rendering.store(true, Ordering::Release);
+        let mut data = vec![0.0; 1024];
+        run(&mut data);
+        assert!(data.iter().all(|&s| s == 0.0), "muted while rendering");
+        rendering.store(false, Ordering::Release);
+
+        run(&mut data);
+        assert!(
+            (data[2 * 400] - PREVIEW_GAIN).abs() < 1e-4,
+            "plays with no project loaded"
+        );
+        // 2000 frames: the file ends in the fourth block and the audio thread says so.
+        let mut finished = false;
+        for _ in 0..4 {
+            run(&mut data);
+            finished |= status_rx.try_iter().any(|status| {
+                matches!(status, EngineStatus::PreviewStatus { state, .. } if state == PreviewState::Stopped)
+            });
+        }
+        assert!(finished, "the end of the file sends a stopped status");
     }
 
     #[test]

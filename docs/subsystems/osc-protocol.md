@@ -988,6 +988,20 @@ The AudioFileService decodes audio files to interleaved f32 PCM at the project s
 
 Sample requests run on their own AudioFileService thread, so they never wait behind a decode. The engine re-reads the source file (seek plus a short decode) and keeps the last 64k-frame window per file, so neighbouring chunks and the other channel come from memory. Godot's UDP peer buffers about 64 KB per frame, so `WaveformSampleWindow` keeps at most two requests in flight.
 
+### Browser Sample Preview (Godot <-> Rust, spec 037)
+
+The engine plays one preview file straight to hardware outputs 1/2, after the master (no fader, no master FX), at a fixed -6 dB with 3 ms fades on start, stop and seek. It plays while the transport is stopped, and is silent while an offline render runs. Decoding goes through the AudioFileService (request ids start with `preview:`); the engine drops a decode result that a newer play or a stop replaced.
+
+| Address | Args | Meaning |
+|---|---|---|
+| `/preview/play` | `s:abs_path, f:start_s` | Decode if needed (not when that file's PCM is already loaded), then play from `start_s`. Replaces any current preview |
+| `/preview/stop` | - | Stop (3 ms fade). A decode in flight is dropped |
+| `/preview/seek` | `f:pos_s` | Jump while playing or stopped. A stopped player keeps the position for the next play |
+
+| Address | Args | Meaning |
+|---|---|---|
+| `/preview/status` | `s:abs_path, i:state, f:pos_s, f:duration_s` | `state`: 0 stopped, 1 loading, 2 playing, 3 failed. Sent on every state change and at the ~20 Hz status rate while playing. A play that reaches the end sends one `stopped` with `pos_s = duration_s`. While loading, `pos_s` is the requested start and `duration_s` is 0 |
+
 ### Waveform Cache Format
 
 Peak files live in `$XDG_CACHE_HOME/sonara/waveforms/<key>.swp` (`~/.cache/...` without XDG). `<key>` is a 64-bit FNV-1a hash (16 hex digits) over the absolute path, the source file size, its mtime in nanoseconds and the format version. Files are written to `<key>.<pid>.<req_id>.tmp`, fsynced and renamed, so a partial file is never used. Stale `*.tmp` files older than an hour are deleted at startup. A cached file is used only if its magic, version and `complete` flag are right and its `src_size`/`src_mtime_ns` match the file on disk.

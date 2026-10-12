@@ -1,0 +1,42 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://browser/BrowserInfoPanel.gd" id="1_info"]
+
+[node name="BrowserInfoPanel" type="PanelContainer"]
+visible = false
+size_flags_horizontal = 3
+script = ExtResource("1_info")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Header" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+
+[node name="NameLabel" type="Label" parent="VBox/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="TypeLabel" type="Label" parent="VBox/Header"]
+layout_mode = 2
+
+[node name="CollapseButton" type="Button" parent="VBox/Header"]
+layout_mode = 2
+
+[node name="Body" type="VBoxContainer" parent="VBox"]
+layout_mode = 2
+
+[node name="DetailsLabel" type="Label" parent="VBox/Body"]
+layout_mode = 2
+
+[node name="AudioRow" type="HBoxContainer" parent="VBox/Body"]
+layout_mode = 2
+
+[node name="PlayButton" type="Button" parent="VBox/Body/AudioRow"]
+layout_mode = 2
+toggle_mode = true
+
+[node name="WaveHolder" type="Control" parent="VBox/Body/AudioRow"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_horizontal = 3

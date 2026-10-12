@@ -20,6 +20,20 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
             "/status/playing".to_string(),
             vec![OscType::Int(if playing { 1 } else { 0 })],
         ),
+        EngineStatus::PreviewStatus {
+            path,
+            state,
+            pos_s,
+            duration_s,
+        } => (
+            "/preview/status".to_string(),
+            vec![
+                OscType::String(path.to_string()),
+                OscType::Int(state.osc_value()),
+                OscType::Float(pos_s),
+                OscType::Float(duration_s),
+            ],
+        ),
         EngineStatus::RenderProgress { job_id, fraction } => (
             "/render/progress".to_string(),
             vec![OscType::String(job_id), OscType::Float(fraction)],
@@ -634,6 +648,23 @@ mod tests {
         let msg = messages.remove(0);
         let tags = osc_arg_types(&msg.args);
         (msg.addr, tags, msg.args)
+    }
+
+    #[test]
+    fn preview_status_is_path_state_position_duration() {
+        use crate::audio::preview::PreviewState;
+        let (addr, tags, args) = wire(EngineStatus::PreviewStatus {
+            path: "/s/kick.wav".into(),
+            state: PreviewState::Playing,
+            pos_s: 0.25,
+            duration_s: 1.5,
+        });
+        assert_eq!(addr, "/preview/status");
+        assert_eq!(tags, "s i f f");
+        assert_eq!(args[0], string("/s/kick.wav"));
+        assert_eq!(args[1], OscType::Int(2));
+        assert_eq!(args[2], OscType::Float(0.25));
+        assert_eq!(args[3], OscType::Float(1.5));
     }
 
     fn param(id: u32, name: &str, param_type: ParamType) -> BuiltinParamInfo {

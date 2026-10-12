@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://8vyptyjju6y8"]
+[gd_scene load_steps=4 format=3 uid="uid://8vyptyjju6y8"]
 
 [ext_resource type="Script" uid="uid://bc01lde4l6svk" path="res://browser/Browser.gd" id="1_ugyrj"]
+[ext_resource type="PackedScene" path="res://browser/BrowserInfoPanel.tscn" id="2_info"]
 
 [sub_resource type="StyleBoxLine" id="StyleBoxLine_ugyrj"]
 content_margin_left = 4.0
@@ -45,6 +46,12 @@ backspace_deletes_composite_character_enabled = true
 clear_button_enabled = true
 select_all_on_focus = true
 
+[node name="AuditionToggle" type="Button" parent="Content/VBox/Options"]
+visible = false
+layout_mode = 2
+tooltip_text = "Audition: play a sample as soon as it is selected"
+toggle_mode = true
+
 [node name="ModeToggle" type="Button" parent="Content/VBox/Options"]
 layout_mode = 2
 text = "List"
@@ -60,3 +67,6 @@ layout_mode = 2
 size_flags_vertical = 3
 follow_focus = true
 horizontal_scroll_mode = 0
+
+[node name="InfoPanel" parent="." instance=ExtResource("2_info")]
+layout_mode = 2
