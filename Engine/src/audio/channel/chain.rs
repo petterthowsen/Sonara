@@ -290,12 +290,41 @@ impl Channel {
         });
     }
 
+    /// If `list_path` is a Note slot of a slotted device, hand the release to that device (its
+    /// slot chain feeds the device itself, which the plain release can't reach). `index` is the
+    /// note effect to release, or `None` for all of them. Returns true when it was a note slot.
+    fn release_in_note_slot(
+        &mut self,
+        list_path: &crate::audio::devices::DevicePath,
+        index: Option<usize>,
+    ) -> bool {
+        use crate::audio::devices::SlotKind;
+        let Some(slot) = list_path.leaf_index() else {
+            return false;
+        };
+        let host_path = list_path.parent();
+        if host_path.is_empty() {
+            return false;
+        }
+        let Some(host) = self.device_at_path_mut(&host_path) else {
+            return false;
+        };
+        if host.device_slots().get(slot).map(|s| s.kind) != Some(SlotKind::Note) {
+            return false;
+        }
+        host.release_slot_notes(slot, index);
+        true
+    }
+
     /// Command thread, before a device at `path` is removed: if it is a note effect, its
     /// sounding notes are released to the devices after it, so none is left hanging (REQ-006).
     pub fn release_note_effect_at(&mut self, path: &crate::audio::devices::DevicePath) {
         let Some(index) = path.leaf_index() else {
             return;
         };
+        if self.release_in_note_slot(&path.parent(), Some(index)) {
+            return;
+        }
         if let Some(list) = self.chain_list_mut(&path.parent()) {
             crate::audio::devices::note_fx::routing::release_note_effect_at(list, index);
         }
@@ -304,6 +333,9 @@ impl Channel {
     /// Command thread, before devices in the list at `parent_path` move: every note effect in
     /// it releases its sounding notes, since its downstream devices are about to change.
     pub fn release_note_effects_in(&mut self, parent_path: &crate::audio::devices::DevicePath) {
+        if self.release_in_note_slot(parent_path, None) {
+            return;
+        }
         if let Some(list) = self.chain_list_mut(parent_path) {
             crate::audio::devices::note_fx::routing::release_note_effects(list);
         }

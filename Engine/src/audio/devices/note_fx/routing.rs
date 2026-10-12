@@ -82,21 +82,39 @@ pub fn run_note_phase(
 /// sends note-offs for what it has sounding to the devices after it, and drops its schedule
 /// (REQ-006). Returns how many note effects were released.
 pub fn release_note_effects(devices: &mut [Box<dyn AudioDevice>]) -> usize {
+    release_note_effects_into(devices, None)
+}
+
+/// Like [`release_note_effects`], with note-offs that fall off the end of `devices` going to
+/// `sink` (a note slot hands them to the device that owns it).
+pub fn release_note_effects_into(
+    devices: &mut [Box<dyn AudioDevice>],
+    mut sink: Option<&mut NoteBuffer>,
+) -> usize {
     let mut released = 0;
     for i in 0..devices.len() {
-        released += release_note_effect_at(devices, i) as usize;
+        released += release_note_effect_at_into(devices, i, sink.as_deref_mut()) as usize;
     }
     released
 }
 
 /// Like [`release_note_effects`] for the one device at `index`, if it is a note effect.
 pub fn release_note_effect_at(devices: &mut [Box<dyn AudioDevice>], index: usize) -> bool {
+    release_note_effect_at_into(devices, index, None)
+}
+
+/// Like [`release_note_effect_at`], with note-offs that fall off the end going to `sink`.
+pub fn release_note_effect_at_into(
+    devices: &mut [Box<dyn AudioDevice>],
+    index: usize,
+    mut sink: Option<&mut NoteBuffer>,
+) -> bool {
     if index >= devices.len() || !devices[index].is_note_effect() {
         return false;
     }
     let (head, downstream) = devices.split_at_mut(index + 1);
     let notes = head[index].release_notes_now();
-    route_output(notes, downstream, &mut None);
+    route_output(notes, downstream, &mut sink);
     true
 }
 
@@ -317,6 +335,7 @@ pub mod test_devices {
 mod tests {
     use super::test_devices::{on_keys, CcRecorder, Recorder, Shift};
     use super::*;
+    use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
     use crate::audio::midi_types::NoteEvent;
     use std::sync::atomic::Ordering;
 
@@ -430,5 +449,91 @@ mod tests {
         );
         assert_eq!(wakes_recorder.load(Ordering::Relaxed), 0);
         assert!(log_recorder.lock().unwrap().is_empty());
+    }
+
+    /// A note effect that has one note sounding downstream: it releases it on request.
+    struct Holder {
+        out: NoteBuffer,
+    }
+
+    impl AudioDevice for Holder {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            crate::audio::devices::container::copy_interleaved(inputs, outputs, n);
+        }
+        fn is_note_effect(&self) -> bool {
+            true
+        }
+        fn release_notes_now(&mut self) -> &[TimedNote] {
+            self.out.clear();
+            self.out.push(TimedNote {
+                frame: 0,
+                event: NoteEvent::Off {
+                    note_id: 9,
+                    key: 64,
+                    release: 0.0,
+                },
+            });
+            self.out.as_slice()
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.holder"
+        }
+        fn device_name(&self) -> &str {
+            "Holder"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::NoteEffect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Note-offs that fall off the end of the list reach the sink instead of being dropped;
+    /// the plain functions still drop them but release downstream devices.
+    #[test]
+    fn release_into_sink_collects_notes_that_fall_off_the_end() {
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(Holder {
+            out: NoteBuffer::new(8),
+        })];
+        let mut sink = NoteBuffer::new(8);
+        assert!(release_note_effect_at_into(
+            &mut devices,
+            0,
+            Some(&mut sink)
+        ));
+        assert_eq!(sink.len(), 1);
+        assert!(!release_note_effect_at_into(
+            &mut devices,
+            5,
+            Some(&mut sink)
+        ));
+
+        sink.clear();
+        assert_eq!(release_note_effects_into(&mut devices, Some(&mut sink)), 1);
+        assert_eq!(sink.len(), 1);
+
+        // Without a sink the note is dropped.
+        assert_eq!(release_note_effects(&mut devices), 1);
+        assert!(release_note_effect_at(&mut devices, 0));
+
+        // A device after the effect receives the note-off too; it still falls off the end.
+        let (rec, log) = Recorder::new();
+        devices.push(Box::new(rec));
+        sink.clear();
+        release_note_effects_into(&mut devices, Some(&mut sink));
+        assert_eq!(sink.len(), 1);
+        assert_eq!(log.lock().unwrap().len(), 1);
     }
 }

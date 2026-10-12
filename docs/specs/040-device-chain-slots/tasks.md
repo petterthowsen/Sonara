@@ -51,7 +51,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test insert_into_slot` passes
   - _Depends on_: T-002
 
-- [ ] **T-004** [REQ-004] Release note effects into a sink.
+- [x?] **T-004** [REQ-004] Release note effects into a sink.
   - In `routing.rs`, add `release_note_effects_into` and `release_note_effect_at_into`, which take
     `Option<&mut NoteBuffer>`. The existing functions call them with `None`.
   - `Channel::release_note_effect_at` and `release_note_effects_in` call the slotted device's
