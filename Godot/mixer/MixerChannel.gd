@@ -86,6 +86,19 @@ func _apply_border_unguarded() -> void:
 		stylebox.border_width_top = card.border_width_top
 		stylebox.border_width_right = card.border_width_right
 		stylebox.border_width_bottom = card.border_width_bottom
+	# A nested strip ends on its parent's content bottom, so a bottom margin would lift its
+	# controls above the parent's. Its bottom border draws over its own content instead.
+	stylebox.content_margin_bottom = 0.0 if _is_nested() else -1.0
+
+
+## True when this strip sits inside another strip's fold-out.
+func _is_nested() -> bool:
+	var n := get_parent()
+	while n:
+		if n is MixerChannelChildren:
+			return true
+		n = n.get_parent()
+	return false
 
 
 func _notification(what: int) -> void:
@@ -149,9 +162,13 @@ var devices_visible := true
 var _children_reveal := 0.0
 var _children_tween: Tween
 
-## Main/SidePane VSplit offset (device list vs sends/meter divider), shared across every strip.
-## Dragging it on one strip applies to all others. -1 means "use the scene default".
-static var _shared_vsplit_offset := -1
+## Main/SidePane VSplit divider (device list vs sends), shared across every strip as the
+## divider's distance from the VSplit bottom, i.e. the sends height. Strips differ in height (a
+## nested strip sits inside its parent's fold-out), so sharing a top offset would give them
+## different sends heights and the shared sends scroll would cut rows on some. -1 means unset.
+static var _shared_sends_span := -1
+## The VSplit offset from the scene, which sets the shared span until the first drag.
+var _scene_vsplit_offset := -1
 
 ## Sends list scroll position, shared across every strip so the same bus row lines up.
 static var _shared_sends_scroll := 0
@@ -205,10 +222,13 @@ func _ready():
 	if sends_panel:
 		sends_panel.visibility_changed.connect(_update_main_vsplit_visibility)
 	if main_vsplit:
+		_scene_vsplit_offset = main_vsplit.split_offset
 		main_vsplit.dragged.connect(_on_vsplit_dragged)
+		main_vsplit.resized.connect(_apply_shared_vsplit_offset)
 		main_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
 	if side_vsplit:
 		side_vsplit.dragged.connect(_on_vsplit_dragged)
+		side_vsplit.resized.connect(_apply_shared_vsplit_offset)
 		side_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
 	_apply_shared_vsplit_offset()
 	# SendsPanel isn't a @tool script, so in the editor it is only a placeholder instance.
@@ -217,6 +237,7 @@ func _ready():
 		# makes the correction overshoot and the divider jump back while dragging.
 		sends_panel.resized.connect(_clamp_vsplit_to_sends)
 		sends_panel.minimum_size_changed.connect(_queue_clamp_vsplit_to_sends)
+		sends_panel.sends_rebuilt.connect(_queue_vsplit_revalidate)
 		sends_panel.scroll_container.get_v_scroll_bar().value_changed.connect(_on_sends_scrolled)
 		# Adopt the shared position once the sends have content to scroll.
 		sends_panel.scroll_container.get_v_scroll_bar().changed.connect(_apply_shared_sends_scroll)
@@ -297,6 +318,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 	_update_from_channel()
 	_rebuild_output_menu()
 	_apply_nested_header_height()
+	_apply_shared_vsplit_offset()
 	_sync_children_slide()
 
 
@@ -637,6 +659,7 @@ func set_size_mode(m: SizeMode) -> void:
 	size_mode = m
 	_update_device_list_visibility()
 	_update_size_for_mode()
+	_refresh_sends_pager()
 
 
 ## Switch Tall/Compact layout: Compact moves DeviceList/Sends into the SidePane, which only
@@ -646,6 +669,40 @@ func set_strip_layout_mode(m: LayoutMode) -> void:
 	if is_inside_tree():
 		_apply_layout_mode()
 	_update_size_for_mode()
+	_refresh_sends_pager()
+
+
+## A new strip width re-wraps the send knobs; have the pager re-fit to the new rows, and the
+## divider to whole rows.
+func _refresh_sends_pager() -> void:
+	if sends_panel and not Engine.is_editor_hint() and sends_panel.is_node_ready():
+		sends_panel.scroll_container.refresh()
+		_queue_vsplit_revalidate()
+
+
+## Frame of the last queued revalidation. Every strip asks at once (a bus is added, the width
+## mode changes) and the divider is shared, so the first strip in a frame does it for all.
+static var _vsplit_revalidate_frame := -1
+
+## Once layout has settled, snap the shared divider to whole send rows (as letting go of a drag
+## does) after the rows changed: new or removed send knobs, or a re-wrap at a new width.
+func _queue_vsplit_revalidate() -> void:
+	if Engine.is_editor_hint() or not is_inside_tree():
+		return
+	if _vsplit_revalidate_frame == Engine.get_process_frames():
+		return
+	_vsplit_revalidate_frame = Engine.get_process_frames()
+	var tree := get_tree()
+	# Two frames: the knobs wrap first, then the divider clamp to what they need runs deferred.
+	await tree.process_frame
+	await tree.process_frame
+	# The asking strip may be a fresh one whose sends the mixer has since hidden (a new bus, the
+	# master), so snap from any strip that shows them.
+	for node in tree.get_nodes_in_group("mixer_channel"):
+		var strip := node as MixerChannel
+		if strip and strip.sends_panel and strip.sends_panel.is_visible_in_tree():
+			strip._snap_vsplit_to_send_rows()
+			return
 
 
 ## Propagate a manual VSplit drag (MainPane or SidePane) to every mixer strip.
@@ -655,11 +712,22 @@ func _on_vsplit_dragged(offset: int) -> void:
 	_set_shared_vsplit_offset(offset)
 
 
-## Dragging past the top gives a negative raw offset; keep the shared one at 0 or more, since
-## a negative value means "unset" to _apply_shared_vsplit_offset.
+## Share this strip's divider at `offset` (its own VSplit's split_offset) with every strip.
+## The device list doesn't expand, so the offset places the divider from the top and the
+## sends get the rest: the span below it is what all strips match.
 func _set_shared_vsplit_offset(offset: int) -> void:
-	_shared_vsplit_offset = maxi(offset, 0)
+	var vsplit := _sends_vsplit()
+	if vsplit == null or vsplit.size.y <= 0.0:
+		return
+	_shared_sends_span = maxi(roundi(vsplit.size.y) - offset, 0)
 	get_tree().call_group("mixer_channel", "_apply_shared_vsplit_offset")
+
+
+## The VSplit currently holding the sends (MainPane in Tall, SidePane in Compact layout).
+func _sends_vsplit() -> VSplitContainer:
+	if sends_panel == null:
+		return null
+	return sends_panel.get_parent() as VSplitContainer
 
 
 var _volume_max_height := 300.0
@@ -745,14 +813,34 @@ func _clamp_vsplit_to_sends() -> void:
 	_set_shared_vsplit_offset(vsplit.split_offset)
 
 
-## Apply the shared VSplit offset (from whichever strip was last dragged) to this strip.
+## Place this strip's dividers so the sends get the shared span (from whichever strip was last
+## dragged). Re-run when a VSplit resizes, since the offset depends on its height.
 func _apply_shared_vsplit_offset() -> void:
-	if _shared_vsplit_offset < 0:
+	var span := _shared_sends_span if _shared_sends_span >= 0 else _default_sends_span()
+	if span < 0:
 		return
-	if main_vsplit and main_vsplit.split_offset != _shared_vsplit_offset:
-		main_vsplit.split_offset = _shared_vsplit_offset
-	if side_vsplit and side_vsplit.split_offset != _shared_vsplit_offset:
-		side_vsplit.split_offset = _shared_vsplit_offset
+	for vsplit: VSplitContainer in [main_vsplit, side_vsplit]:
+		if vsplit == null or vsplit.size.y <= 0.0:
+			continue
+		var local := roundi(vsplit.size.y) - span
+		if vsplit.split_offset != local:
+			vsplit.split_offset = local
+
+
+## Before any drag: the span the scene default offset gives on the tallest VSplit, so that
+## strip keeps the scene's device list height and shorter (nested) strips match its sends.
+func _default_sends_span() -> int:
+	if _scene_vsplit_offset < 0 or not is_inside_tree():
+		return -1
+	var tallest := 0.0
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		var strip := node as MixerChannel
+		var vsplit := strip._sends_vsplit() if strip else null
+		if vsplit and vsplit.is_visible_in_tree():
+			tallest = maxf(tallest, vsplit.size.y)
+	if tallest <= 0.0:
+		return -1
+	return maxi(roundi(tallest) - _scene_vsplit_offset, 0)
 
 
 ## Propagate a sends scroll on this strip to every mixer strip.
@@ -768,6 +856,8 @@ func _apply_shared_sends_scroll() -> void:
 	if sends_panel == null or sends_panel.scroll_container.scroll_vertical == _shared_sends_scroll:
 		return
 	_applying_sends_scroll = true
+	# A page animation of this strip's own would otherwise fight the strip being scrolled.
+	sends_panel.scroll_container.stop_animation()
 	sends_panel.scroll_container.scroll_vertical = _shared_sends_scroll
 	_applying_sends_scroll = false
 
@@ -939,6 +1029,8 @@ func _update_output_button_text() -> void:
 	if not output_menu_buttton or not channel:
 		return
 	output_menu_buttton.text = ChannelOutputMenu.label(channel, project)
+	# The label is one line, cut with an ellipsis; hover shows the full name.
+	output_menu_buttton.tooltip_text = output_menu_buttton.text
 
 
 func _on_channel_route_changed(output_id: int) -> void:

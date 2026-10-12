@@ -19,37 +19,23 @@ expand_margin_right = 2.0
 shadow_size = 1
 shadow_offset = Vector2(-2, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ob6v3"]
-resource_local_to_scene = true
-bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 2
-border_width_bottom = 1
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6eek7"]
 resource_local_to_scene = true
 bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
 border_width_left = 1
 border_width_top = 1
-border_width_right = 2
+border_width_right = 1
 border_width_bottom = 1
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
+border_color = Color(0.26839215, 0.26839215, 0.26839215, 1)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yu81n"]
-content_margin_left = 4.0
-content_margin_top = 2.0
-content_margin_right = 4.0
-content_margin_bottom = 2.0
-bg_color = Color(0.2, 0.2, 0.2, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-shadow_size = 1
-shadow_offset = Vector2(0, -1)
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ob6v3"]
+resource_local_to_scene = true
+bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.26839215, 0.26839215, 0.26839215, 1)
 
 [node name="Mixer" type="VBoxContainer" unique_id=1629860099]
 anchors_preset = 15
@@ -85,7 +71,7 @@ script = ExtResource("2_64am7")
 
 [node name="MixerChannel" parent="HSplit/LeftPane/HBox/Channels" unique_id=381553760 instance=ExtResource("3_6eek7")]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_ob6v3")
+theme_override_styles/panel = SubResource("StyleBoxFlat_6eek7")
 
 [node name="Options" type="CenterContainer" parent="HSplit/LeftPane/HBox" unique_id=1449261426]
 layout_mode = 2
@@ -125,11 +111,11 @@ script = ExtResource("2_64am7")
 
 [node name="MixerChannel2" parent="HSplit/RightPane/HBox/Channels" unique_id=1911403220 instance=ExtResource("3_6eek7")]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_6eek7")
+theme_override_styles/panel = SubResource("StyleBoxFlat_ob6v3")
 
 [node name="Toolbar" type="PanelContainer" parent="." unique_id=209310589]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_yu81n")
+theme_type_variation = &"SectionHeader"
 
 [node name="HBox" type="HBoxContainer" parent="Toolbar" unique_id=1910975513]
 layout_mode = 2

@@ -1,5 +1,8 @@
 class_name SendsPanel extends PanelContainer
 
+## The send knobs were rebuilt (a bus appeared or went away), so the rows may have changed.
+signal sends_rebuilt
+
 var logger : Log = Log.make("SendsPanel")
 
 ## SendsPanel - Manages send controls for a channel
@@ -67,8 +70,8 @@ class SendControl extends LabeledKnob:
 const MIN_SEND_DB := -60.0
 const MAX_SEND_DB := 12.0
 
-@onready var scroll_container: ChevronScrollContainer = $ChevronScrollContainer
-@onready var flow_container: FlowContainer = $ChevronScrollContainer/FlowContainer
+@onready var scroll_container: PagedContainer = $PagedContainer
+@onready var flow_container: FlowContainer = $PagedContainer/FlowContainer
 
 # Data binding
 var channel: Channel = null
@@ -219,6 +222,7 @@ func _rebuild_sends_ui() -> void:
 	for bus_ch in bus_channels:
 		var send_config = channel.get_send(bus_ch.id)
 		_create_send_control(bus_ch, send_config)
+	sends_rebuilt.emit()
 
 
 ## Create a send control UI element for a BUS channel.

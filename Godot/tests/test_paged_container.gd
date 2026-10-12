@@ -2,11 +2,11 @@ extends TestBase
 
 
 func suite_name() -> String:
-	return "ChevronScrollContainer tests"
+	return "PagedContainer tests"
 
 
 func run_tests() -> void:
-	var sc := ChevronScrollContainer.new()
+	var sc := PagedContainer.new()
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	sc.custom_minimum_size = Vector2(100, 100)
@@ -29,10 +29,10 @@ func run_tests() -> void:
 	_assert(sc._button_down.visible and sc._button_down.size == Vector2(100, 16) and sc._button_down.position == Vector2(0, 84), "down button shown on the bottom edge")
 	_assert(not sc._button_up.visible, "up button hidden at the top")
 
-	# Items are 60 tall in a 100 view: the second is cut off, so a step ends on its bottom edge.
-	_assert(is_equal_approx(sc._step_target(true, 1), 24.0), "down snaps to next item end")
-	sc.scroll_vertical = 24
-	_assert(is_equal_approx(sc._step_target(true, -1), 0.0), "up snaps to item start")
+	# Items are 60 tall in a 100 view: the second is cut off, so a page starts with it.
+	_assert(is_equal_approx(sc._step_target(true, 1), 64.0), "down pages to the first item not wholly in view")
+	sc.scroll_vertical = 64
+	_assert(is_equal_approx(sc._step_target(true, -1), 0.0), "up pages back to the item start")
 	sc.scroll_vertical = 1000
 	_assert(is_equal_approx(sc._step_target(true, 1), sc._max_scroll(true)), "down clamps at the end")
 
@@ -89,13 +89,30 @@ func run_tests() -> void:
 	# View is 68 (100 minus the strips): one 60-tall item at a time.
 	_assert(sc.scroll_vertical == 0, "wheel test starts at the top")
 	await _wheel(sc, MOUSE_BUTTON_WHEEL_DOWN)
-	_assert(sc.scroll_vertical == 56, "wheel down lands on the next item's end (got %d)" % sc.scroll_vertical)
+	_assert(sc.scroll_vertical == 64, "wheel down pages to the next item's start (got %d)" % sc.scroll_vertical)
 	_assert(is_equal_approx(box.get_child(1).modulate.a, 1.0), "wheel down reveals the next item")
 	_assert(is_equal_approx(box.get_child(0).modulate.a, 0.0), "wheel down fades the item scrolled past")
 	_assert(not sc._button_up.disabled, "wheel down enables the up button")
 	await _wheel(sc, MOUSE_BUTTON_WHEEL_UP)
 	_assert(sc.scroll_vertical == 0, "wheel up lands on the previous item's start (got %d)" % sc.scroll_vertical)
 	_assert(sc._button_up.disabled, "back at the top disables the up button")
+
+	# Hover-only buttons: hidden until the mouse is over the container, and over a button too.
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "buttons always shown by default")
+	await _move_mouse(Vector2(190, 190))
+	sc.show_buttons_on_hover = true
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 0.0), "hover-only buttons hide while the mouse is away")
+	await _move_mouse(sc.get_global_rect().get_center())
+	await root.get_tree().create_timer(sc.hover_fade_duration + 0.1).timeout
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "hover-only buttons fade in on hover")
+	await _move_mouse(sc._button_down.get_global_rect().get_center())
+	await root.get_tree().create_timer(sc.hover_fade_duration + 0.1).timeout
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "buttons stay while hovering a button")
+	await _move_mouse(Vector2(190, 190))
+	await root.get_tree().create_timer(sc.hover_fade_duration + 0.1).timeout
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 0.0), "hover-only buttons fade out on leaving")
+	sc.show_buttons_on_hover = false
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "turning the option off shows the buttons")
 
 	# Content that fits takes no reserve, so the whole area is used.
 	for i in 4:
@@ -105,10 +122,43 @@ func run_tests() -> void:
 	_assert(is_equal_approx(box.position.y, 0.0), "no reserve when content fits")
 	_assert(not sc._button_up.visible and not sc._button_down.visible, "no buttons when content fits")
 	sc.free()
+	await _test_items_taller_than_view()
+
+
+## Items longer than the view can't show whole: paging lands on their starts, never cutting
+## the top off an item to show its end.
+func _test_items_taller_than_view() -> void:
+	var sc := PagedContainer.new()
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.size = Vector2(100, 40)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	for i in 6:
+		var item := Control.new()
+		item.custom_minimum_size = Vector2(100, 60)
+		box.add_child(item)
+	sc.add_child(box)
+	root.add_child(sc)
+	sc.size = Vector2(100, 40)
+	await root.get_tree().process_frame
+	await root.get_tree().process_frame
+	_assert(is_equal_approx(sc._step_target(true, 1), 64.0), "tall items: down pages to the next item start (got %s)" % sc._step_target(true, 1))
+	sc.scroll_vertical = 64
+	_assert(is_equal_approx(sc._step_target(true, 1), 128.0), "tall items: next page is the following item start (got %s)" % sc._step_target(true, 1))
+	_assert(is_equal_approx(sc._step_target(true, -1), 0.0), "tall items: up pages to the previous item start")
+
+	# A view of two whole rows pages two rows at a time, both ways.
+	sc.size = Vector2(100, 140)
+	sc.scroll_vertical = 0
+	await root.get_tree().process_frame
+	_assert(is_equal_approx(sc._step_target(true, 1), 128.0), "a two-row view pages two rows (got %s)" % sc._step_target(true, 1))
+	sc.scroll_vertical = 128
+	_assert(is_equal_approx(sc._step_target(true, -1), 0.0), "a two-row view pages back two rows (got %s)" % sc._step_target(true, -1))
+	sc.free()
 
 
 ## One wheel notch over the middle of `sc`, then wait out the scroll and fade animations.
-func _wheel(sc: ChevronScrollContainer, button: MouseButton) -> void:
+func _wheel(sc: PagedContainer, button: MouseButton) -> void:
 	var at := sc.get_global_rect().get_center()
 	for pressed in [true, false]:
 		var ev := InputEventMouseButton.new()
@@ -119,3 +169,11 @@ func _wheel(sc: ChevronScrollContainer, button: MouseButton) -> void:
 		ev.global_position = at
 		root.push_input(ev)
 	await root.get_tree().create_timer(sc.animation_duration + sc.fade_duration + 0.1).timeout
+
+
+func _move_mouse(at: Vector2) -> void:
+	var ev := InputEventMouseMotion.new()
+	ev.position = at
+	ev.global_position = at
+	root.push_input(ev)
+	await root.get_tree().process_frame

@@ -1,10 +1,10 @@
-## ChevronScrollContainer - a ScrollContainer without scrollbars.
+## PagedContainer - a ScrollContainer without scrollbars.
 ##
 ## Chevron buttons sit on the edges of each scrollable axis (top/bottom, left/right). Pressing one
-## animates the scroll to reveal the next item(s). A button only shows while there is more content
-## in its direction. The usual ScrollContainer API
-## (scroll_vertical, get_v_scroll_bar(), ...) keeps working.
-## The mouse wheel steps like the buttons, one item edge per notch, so it never parks an item
+## animates the scroll by a page: the first item line not wholly in view becomes the first shown.
+## A button only shows while there is more content in its direction. The usual ScrollContainer
+## API (scroll_vertical, get_v_scroll_bar(), ...) keeps working.
+## The mouse wheel pages like the buttons, one page per notch, so it never parks an item
 ## half in view (which `fade_hidden_items` would hide). Shift+wheel scrolls horizontally.
 ##
 ## Items are the children of the content's first branching node (e.g. the FlowContainer inside a
@@ -18,7 +18,10 @@
 ##
 ## With `fade_hidden_items`, items not wholly inside the view fade to `hidden_item_alpha`, so
 ## the view never shows a half-cut item.
-class_name ChevronScrollContainer extends ScrollContainer
+##
+## With `show_buttons_on_hover`, the buttons fade in only while the mouse is over the container.
+## Reserved space stays reserved, so the content never shifts when they appear.
+class_name PagedContainer extends ScrollContainer
 
 const ICON_UP: Texture2D = preload("res://assets/icons/chevron-up.svg")
 const ICON_DOWN: Texture2D = preload("res://assets/icons/chevron-down.svg")
@@ -50,6 +53,13 @@ const ICON_RIGHT: Texture2D = preload("res://assets/icons/chevron-right.svg")
 @export_range(0.0, 1.0) var hidden_item_alpha := 0.0
 ## Seconds an item takes to fade in or out.
 @export var fade_duration := 0.12
+## Show the page buttons only while the mouse is over the container.
+@export var show_buttons_on_hover := false:
+	set(value):
+		show_buttons_on_hover = value
+		_update_hover(false)
+## Seconds the buttons take to fade in or out with `show_buttons_on_hover`.
+@export var hover_fade_duration := 0.1
 @export var button_color := Color(0.1, 0.1, 0.1, 0.8)
 @export var button_hover_color := Color(0.25, 0.25, 0.25, 0.9)
 
@@ -65,6 +75,10 @@ var _tween_vertical := true
 ## Holds the buttons. ScrollContainer lays out every Control child (internal ones too) as
 ## content, so the buttons live under a Node2D, which it leaves alone.
 var _button_layer: Node2D
+var _hover_tween: Tween
+var _refresh_queued := false
+## Whether the mouse was over the container at the last motion event.
+var _hovered := false
 ## The theme's own panel style, and the copy whose margins make room for reserved buttons.
 var _base_panel: StyleBox
 var _reserve_panel: StyleBox
@@ -86,15 +100,49 @@ func _ready() -> void:
 	resized.connect(_update_buttons)
 	sort_children.connect(_update_buttons)
 	gui_input.connect(_on_gui_input)
+	_update_hover(false)
 	for bar in [get_v_scroll_bar(), get_h_scroll_bar()]:
 		bar.changed.connect(_update_buttons)
 		bar.value_changed.connect(_update_buttons.unbind(1))
 		bar.value_changed.connect(_update_item_fades.unbind(1))
 	sort_children.connect(_update_item_fades)
+	sort_children.connect(_watch_item_root)
 	_update_buttons.call_deferred()
 
 
-## Scroll one step toward the end (`direction` 1) or start (-1) of an axis, animated.
+## Re-fit to the current item layout after the owner changed it (e.g. a new width that re-wraps
+## the lines): once layout has settled, the scroll moves to the nearest line start and the
+## buttons and fades update. Calls in the same frame coalesce.
+func refresh() -> void:
+	if _refresh_queued or not is_inside_tree():
+		return
+	_refresh_queued = true
+	# Wait out the deferred sorts, so a FlowContainer has wrapped its lines at the new width.
+	await get_tree().process_frame
+	_refresh_queued = false
+	if not is_inside_tree():
+		return
+	for vertical in [true, false]:
+		if (vertical_scroll_mode if vertical else horizontal_scroll_mode) == SCROLL_MODE_DISABLED:
+			continue
+		var target := _nearest_line_start(vertical)
+		if absf(target - _current(vertical)) >= 1.0:
+			_kill_tween()
+			if vertical:
+				scroll_vertical = roundi(target)
+			else:
+				scroll_horizontal = roundi(target)
+	_update_buttons()
+	_update_item_fades()
+
+
+## Stop a running scroll animation, e.g. before setting the scroll position from outside.
+func stop_animation() -> void:
+	_kill_tween()
+
+
+## Scroll one page toward the end (`direction` 1) or start (-1) of an axis, animated. With
+## items, the page lands on a line start, so no line is cut off at the near edge.
 func scroll_step(vertical: bool, direction: int) -> void:
 	var target := _step_target(vertical, direction)
 	_animate_to(vertical, target)
@@ -102,6 +150,13 @@ func scroll_step(vertical: bool, direction: int) -> void:
 
 ## Animate the scroll to the nearest line start, so no line is cut off at the near edge.
 func snap_scroll(vertical: bool) -> void:
+	var best := _nearest_line_start(vertical)
+	if absf(best - _current(vertical)) >= 1.0:
+		_animate_to(vertical, best)
+
+
+## The line start (clamped to the scroll range) nearest the current scroll.
+func _nearest_line_start(vertical: bool) -> float:
 	var current := _current(vertical)
 	var max_scroll := _max_scroll(vertical)
 	var best := current
@@ -111,8 +166,7 @@ func snap_scroll(vertical: bool) -> void:
 		if absf(start - current) < best_distance:
 			best_distance = absf(start - current)
 			best = start
-	if absf(best - current) >= 1.0:
-		_animate_to(vertical, best)
+	return best
 
 
 ## The outer length (height if `vertical`) nearest to `length` that shows a whole number of
@@ -159,6 +213,38 @@ func _make_button(icon: Texture2D, vertical: bool, direction: int) -> Button:
 	button.visible = false
 	_button_layer.add_child(button)
 	return button
+
+
+## Hover comes from the motion position against the container's rect, not from
+## mouse_entered/exited: the content's own controls and the buttons (which sit under a Node2D)
+## take the hover from the container. Only listens while `show_buttons_on_hover` is on.
+func _input(event: InputEvent) -> void:
+	var motion := event as InputEventMouseMotion
+	if motion == null:
+		return
+	var local := get_global_transform_with_canvas().affine_inverse() * motion.position
+	var over := is_visible_in_tree() and Rect2(Vector2.ZERO, size).has_point(local)
+	if over != _hovered:
+		_hovered = over
+		_update_hover()
+
+
+## With `show_buttons_on_hover`, fade the buttons in while the mouse is over the container
+## and out otherwise. Without `animate` (switching the option) the buttons jump there.
+func _update_hover(animate := true) -> void:
+	set_process_input(show_buttons_on_hover)
+	if _button_layer == null:
+		return
+	var target := 1.0
+	if show_buttons_on_hover:
+		target = 1.0 if _hovered else 0.0
+	if _hover_tween and _hover_tween.is_valid():
+		_hover_tween.kill()
+	if not animate or not is_inside_tree() or is_equal_approx(_button_layer.modulate.a, target):
+		_button_layer.modulate.a = target
+		return
+	_hover_tween = create_tween()
+	_hover_tween.tween_property(_button_layer, "modulate:a", target, hover_fade_duration)
 
 
 ## Scrollbars are replaced by the buttons. Disabled axes stay disabled.
@@ -268,38 +354,68 @@ func _step_target(vertical: bool, direction: int) -> float:
 		current = _tween_target
 	var max_scroll := _max_scroll(vertical)
 	var page := _bar(vertical).page
-	var edges: Array[Vector2] = []
+	var lines: Array[Vector2] = []
 	if snap_to_items:
-		edges = _item_edges(vertical)
+		lines = _line_edges(vertical)
 
-	if edges.is_empty():
+	if lines.is_empty():
 		return clampf(current + direction * page * page_fraction, 0.0, max_scroll)
 
 	var target := max_scroll if direction > 0 else 0.0
 	if direction > 0:
-		# First item cut off at the far edge: bring its end into view.
-		for edge: Vector2 in edges:
-			if edge.y > current + page + 0.5:
-				target = minf(edge.y - page, max_scroll)
+		# A whole page on: the first line not wholly in view becomes the first line shown. A line
+		# longer than the view already starting at the top moves on to the next line.
+		for line: Vector2 in lines:
+			if line.y > current + page + 0.5 and line.x > current + 0.5:
+				target = minf(line.x, max_scroll)
 				break
 	else:
-		# Last item cut off at the near edge: bring its start into view.
-		for i in range(edges.size() - 1, -1, -1):
-			if edges[i].x < current - 0.5:
-				target = maxf(edges[i].x, 0.0)
+		# A whole page back: the earliest line start that still keeps the current first line in
+		# view, so the old first line ends up last. Without one (a line longer than the view),
+		# the previous line start.
+		var found := false
+		for line: Vector2 in lines:
+			if line.x >= current - page - 0.5 and line.x < current - 0.5:
+				target = line.x
+				found = true
 				break
+		if not found:
+			for i in range(lines.size() - 1, -1, -1):
+				if lines[i].x < current - 0.5:
+					target = maxf(lines[i].x, 0.0)
+					break
 	return target
+
+
+## The node holding the items: the content's first node with more than one child.
+func _item_root() -> Control:
+	var root := _content()
+	if root == null:
+		return null
+	while root.get_child_count() == 1 and root.get_child(0) is Control:
+		root = root.get_child(0)
+	return root
+
+
+## The item root (e.g. a FlowContainer) lays its items out after this container sorts, so
+## re-wrapped lines would leave the buttons and fades stale. Follow its sorts too.
+func _watch_item_root() -> void:
+	var root := _item_root()
+	if root is Container and not (root as Container).sort_children.is_connected(_on_items_sorted):
+		(root as Container).sort_children.connect(_on_items_sorted)
+
+
+func _on_items_sorted() -> void:
+	_update_buttons()
+	_update_item_fades()
 
 
 ## The visible items: children of the content's first node with more than one child.
 func _items() -> Array[Control]:
 	var items: Array[Control] = []
-	var content := _content()
-	if content == null:
+	var root := _item_root()
+	if root == null:
 		return items
-	var root: Control = content
-	while root.get_child_count() == 1 and root.get_child(0) is Control:
-		root = root.get_child(0)
 	for child in root.get_children():
 		var item := child as Control
 		if item and item.visible:

@@ -39,7 +39,7 @@ func run_tests() -> void:
 	await _test_nested_context_menu()
 	await _test_selection_border()
 	await _test_modulators_toggle_and_scroll()
-	await _test_chevron_scroll()
+	await _test_paged_container()
 	await _test_panes_slide_and_fade()
 	await _test_note_fx_stripe()
 
@@ -347,10 +347,10 @@ func _test_panes_slide_and_fade() -> void:
 	_assert(wrap.visible and is_equal_approx(wrap.reveal, 1.0), "a shown pane ends revealed")
 
 
-## ChevronScrollContainer regression: paging with `snap_to_items` must not hit a typed-array
+## PagedContainer regression: paging with `snap_to_items` must not hit a typed-array
 ## error, and an item too wide for the view must stay visible instead of fading to nothing.
-func _test_chevron_scroll() -> void:
-	var scroll: Control = load("res://components/ChevronScrollContainer.gd").new()
+func _test_paged_container() -> void:
+	var scroll: Control = load("res://components/PagedContainer.gd").new()
 	scroll.custom_minimum_size = Vector2(200, 80)
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.snap_to_items = true

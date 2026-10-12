@@ -18,12 +18,12 @@
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
-bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
+bg_color = Color(0.14406255, 0.14406255, 0.14406255, 1)
 border_width_left = 1
 border_width_top = 1
-border_width_right = 2
+border_width_right = 1
 border_width_bottom = 1
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
+border_color = Color(0.26839215, 0.26839215, 0.26839215, 1)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yexk5"]
 resource_local_to_scene = true
@@ -87,12 +87,11 @@ shadow_size = 2
 shadow_color = Color(0, 0, 0, 0.6745098)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ghf7e"]
-content_margin_left = 3.0
+content_margin_left = 0.0
 content_margin_top = 0.0
-content_margin_right = 3.0
-content_margin_bottom = 2.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
-corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ea3ft"]
 resource_local_to_scene = true
@@ -110,7 +109,7 @@ custom_minimum_size = Vector2(80, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_top = 1.0
-offset_right = 115.0
+offset_right = 82.0
 grow_vertical = 2
 size_flags_horizontal = 0
 focus_mode = 2
@@ -228,7 +227,6 @@ layout_mode = 2
 text = "Master"
 flat = false
 text_overrun_behavior = 3
-autowrap_mode = 2
 clip_text = true
 item_count = 1
 popup/item_0/text = "Master"
@@ -369,6 +367,7 @@ text = "-6.0dB"
 label_settings = SubResource("LabelSettings_xa46q")
 
 [node name="SidePane" type="Control" parent="HBox/VBox/MainAndSideBox" unique_id=2080402458]
+visible = false
 clip_contents = true
 layout_mode = 2
 
@@ -379,11 +378,10 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-split_offsets = PackedInt32Array(190)
-split_offset = 190
+split_offsets = PackedInt32Array(902)
+split_offset = 902
 
 [node name="ChildrenClip" type="Control" parent="HBox" unique_id=470089134]
-visible = false
 clip_contents = true
 layout_mode = 2
 
