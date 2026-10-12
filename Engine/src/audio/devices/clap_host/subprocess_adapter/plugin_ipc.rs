@@ -6,6 +6,7 @@ use crate::audio::ipc::{
     HostCrash, InstanceConnection, InstanceId, PluginCommand, PluginEvent, PluginResponse,
     ProcessManager, REQUEST_TIMEOUT,
 };
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -216,6 +217,19 @@ impl PluginIpcHandle {
         if let Ok(connection) = self.connection() {
             connection.kill_host();
         }
+    }
+
+    /// Whether the host's audio thread got realtime scheduling: 0 unknown, 1 granted, 2 denied
+    /// (`RealtimeState::as_u32`). 0 when the instance is gone.
+    pub fn host_realtime(&self) -> u32 {
+        self.connection()
+            .map(|connection| {
+                connection
+                    .host_shared()
+                    .audio_realtime()
+                    .load(Ordering::Relaxed)
+            })
+            .unwrap_or(0)
     }
 
     /// The host process this instance runs in, if any.

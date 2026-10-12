@@ -56,6 +56,8 @@ pub(super) struct PluginStatsReport {
     total_misses: u64,
     /// Blocks in the last report, so an idle plugin is reported once and then left alone.
     last_blocks: u64,
+    /// The host audio thread's realtime state at the last poll: 0 unknown, 1 granted, 2 denied.
+    host_realtime: u32,
     /// Seen in this reporting interval; entries of removed devices are dropped.
     seen: bool,
 }
@@ -300,6 +302,7 @@ impl CommandWorker {
             .or_default();
         report.window.merge(&s);
         report.total_misses += s.deadline_misses;
+        report.host_realtime = plugin.handle.host_realtime();
         report.seen = true;
 
         // Keep the whole window, so the log can show process times next to the misses.
@@ -347,6 +350,7 @@ impl CommandWorker {
                 deadline_misses: window.deadline_misses,
                 total_misses: report.total_misses,
                 struggling: window.is_struggling(),
+                host_realtime: report.host_realtime,
             });
         }
         for status in statuses {

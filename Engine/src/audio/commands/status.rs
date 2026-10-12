@@ -181,6 +181,8 @@ pub enum EngineStatus {
         deadline_misses: u64,
         total_misses: u64,
         struggling: bool,
+        /// The host audio thread's realtime state: 0 unknown, 1 granted, 2 denied.
+        host_realtime: u32,
     },
     /// A plugin finished loading into a host process: the hosting mode that chose the host, its
     /// key and its pid. Sent on every load, reload and move. Phase 5.

@@ -78,7 +78,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
     - `./test_plugin_osc.sh` passes with rtkit running and with rtkit stopped.
   - _Depends on_: —
 
-- [ ] **T-008** [REQ-006] Report host realtime state
+- [x?] **T-008** [REQ-006] Report host realtime state
   - _Files_: `Engine/src/audio/devices/clap_host/subprocess_adapter/plugin_ipc.rs`, `Engine/src/audio/command_worker/device_tick.rs`, `Engine/src/audio/commands/status.rs`, `Engine/src/osc/encode.rs`, `Godot/data/DeviceInstance.gd`, `Godot/editor/EnginePanel.gd`, `Godot/tests/test_plugin_stats.gd`
   - _Output_:
     - `PluginIpcHandle::host_realtime()`.

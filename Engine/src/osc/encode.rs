@@ -194,6 +194,7 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
             deadline_misses,
             total_misses,
             struggling,
+            host_realtime,
         } => (
             device_path.to_osc_addr(channel_id, "stats"),
             vec![
@@ -205,6 +206,7 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
                 OscType::Int(osc_count(deadline_misses)),
                 OscType::Int(osc_count(total_misses)),
                 OscType::Int(struggling as i32),
+                OscType::Int(host_realtime as i32),
             ],
         ),
         EngineStatus::PluginHost {
@@ -703,6 +705,27 @@ mod tests {
         let msg = messages.remove(0);
         let tags = osc_arg_types(&msg.args);
         (msg.addr, tags, msg.args)
+    }
+
+    #[test]
+    fn plugin_stats_encodes_host_realtime_as_the_ninth_argument() {
+        let (addr, tags, args) = wire(EngineStatus::PluginStats {
+            channel_id: 2,
+            device_path: DevicePath::root(0),
+            load_avg: 0.1,
+            load_peak: 0.2,
+            process_avg_us: 40.0,
+            process_max_us: 120.0,
+            blocks: 47,
+            deadline_misses: 1,
+            total_misses: 3,
+            struggling: false,
+            host_realtime: 2,
+        });
+        assert!(addr.ends_with("/stats"), "{addr}");
+        assert_eq!(tags, "f f f f i i i i i");
+        assert_eq!(args[7], OscType::Int(0));
+        assert_eq!(args[8], OscType::Int(2));
     }
 
     #[test]

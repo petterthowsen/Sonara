@@ -250,6 +250,9 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 			WORST_PLUGINS_IN_TOOLTIP)
 	if not ranked.is_empty() and _is_plugin_notable(ranked[0]):
 		parts.append(_plugin_text(ranked[0]))
+	var denied := realtime_denied_names(collect_devices(project.channels if project else []), now)
+	if not denied.is_empty():
+		parts.append(_colored("No realtime priority: %s" % ", ".join(denied), COLOR_WARN))
 	var channel_table := _channels_text(project.channels if project else [], now)
 	performance_text.text = "\n".join(parts) + channel_table
 	_set_load_text("%.0f%%" % (stats.load_avg * 100.0))
@@ -356,6 +359,16 @@ static func rank_plugins(devices: Array[DeviceInstance], now_msec: int, limit: i
 			return a.plugin_stats.deadline_misses > b.plugin_stats.deadline_misses
 		return a.plugin_stats.load_peak > b.plugin_stats.load_peak)
 	return ranked.slice(0, limit)
+
+
+## Display names of plugins with fresh stats whose host was denied realtime scheduling.
+static func realtime_denied_names(devices: Array[DeviceInstance], now_msec: int) -> PackedStringArray:
+	var names := PackedStringArray()
+	for dev in devices:
+		var s: DeviceInstance.PluginStats = dev.plugin_stats
+		if s != null and s.is_fresh(now_msec) and s.host_realtime == DeviceInstance.PluginStats.HOST_RT_DENIED:
+			names.append(dev.get_display_name())
+	return names
 
 
 ## Worth naming in the panel: dropping out, or taking a large share of the block.

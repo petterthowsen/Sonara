@@ -727,6 +727,7 @@ its host, so they exclude the IPC handshake.
 | 5 | i | `deadline_misses`: blocks it didn't finish before the callback deadline (dropouts) |
 | 6 | i | `total_misses`: deadline misses since the device loaded |
 | 7 | i | `struggling`: 1 when it missed 8 or more deadlines in a row in this interval |
+| 8 | i | `host_realtime`: the host audio thread's realtime scheduling, 0 unknown, 1 granted, 2 denied. Optional: older engines send 8 arguments |
 
 ### Device Data Subscriptions
 

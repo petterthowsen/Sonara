@@ -21,6 +21,7 @@ func run_tests() -> void:
 
 	_test_stats_status()
 	_test_crash_drops_stats_and_keeps_log_path()
+	_test_host_realtime()
 	_test_ranking()
 
 
@@ -59,6 +60,24 @@ func _test_stats_status() -> void:
 	_assert(not dev.is_struggling(), "a clean report clears the flag")
 	dev.plugin_stats.received_msec -= _instance_script.PluginStats.FRESH_MSEC + 1
 	_assert(not dev.plugin_stats.is_fresh(Time.get_ticks_msec()), "old stats go stale")
+
+
+func _test_host_realtime() -> void:
+	var dev = _make_instance("test.clap", "Test Plugin", 2)
+	dev._on_stats_received([0.01, 0.02, 10.0, 20.0, 47, 0, 0, 0])
+	_assert(dev.plugin_stats.host_realtime == 0, "the 8-argument form leaves host_realtime unknown")
+	_assert(not dev.plugin_stats.describe().contains("realtime"), "unknown realtime is not mentioned")
+	dev._on_stats_received([0.01, 0.02, 10.0, 20.0, 47, 0, 0, 0, 1])
+	_assert(dev.plugin_stats.host_realtime == 1, "granted is parsed from the 9th argument")
+	dev._on_stats_received([0.01, 0.02, 10.0, 20.0, 47, 0, 0, 0, 2])
+	_assert(dev.plugin_stats.host_realtime == 2, "denied is parsed from the 9th argument")
+	_assert(dev.plugin_stats.describe().contains("no realtime priority"), "tooltip mentions a denied host")
+
+	var ok = _make_instance("ok.clap", "Fine", 3)
+	ok._on_stats_received([0.01, 0.02, 10.0, 20.0, 47, 0, 0, 0, 1])
+	var devices := Array([dev, ok], TYPE_OBJECT, &"RefCounted", _instance_script)
+	var denied: PackedStringArray = _panel_script.realtime_denied_names(devices, Time.get_ticks_msec())
+	_assert(denied == PackedStringArray(["Test Plugin"]), "the panel names only denied hosts: %s" % [denied])
 
 
 func _test_crash_drops_stats_and_keeps_log_path() -> void:

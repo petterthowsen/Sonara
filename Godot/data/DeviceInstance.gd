@@ -228,8 +228,14 @@ class PluginStats:
 	var total_misses: int = 0
 	## Missed several deadlines in a row: its audio is dropping out.
 	var struggling: bool = false
+	## The plugin host's audio thread realtime scheduling: HOST_RT_*. Unknown from an older engine.
+	var host_realtime: int = HOST_RT_UNKNOWN
 	## Time.get_ticks_msec() when it arrived.
 	var received_msec: int = 0
+
+	const HOST_RT_UNKNOWN := 0
+	const HOST_RT_GRANTED := 1
+	const HOST_RT_DENIED := 2
 
 	static func from_osc(values: Array, now_msec: int) -> PluginStats:
 		var stats := PluginStats.new()
@@ -241,6 +247,8 @@ class PluginStats:
 		stats.deadline_misses = int(values[5])
 		stats.total_misses = int(values[6])
 		stats.struggling = int(values[7]) != 0
+		if values.size() > 8:
+			stats.host_realtime = int(values[8])
 		stats.received_msec = now_msec
 		return stats
 
@@ -254,6 +262,8 @@ class PluginStats:
 		text += "\nDropouts: %d in the last second, %d since loaded" % [deadline_misses, total_misses]
 		if struggling:
 			text += "\nMissing its processing deadline repeatedly: its audio drops out"
+		if host_realtime == HOST_RT_DENIED:
+			text += "\nHost audio thread has no realtime priority"
 		return text
 
 
