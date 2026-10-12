@@ -332,6 +332,20 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
   - `1`: Speed (enum: Freeze, Slow, Medium, Fast)
   - UI-only (not synced): Scale (enum: Log, Linear), Style (enum: Bars, Line)
 
+**Saturator (`sonara.builtin.saturator`)** (spec 031)
+- **Type:** Effect
+- A four-character waveshaper (Soft / Tube / Tape / Hard) with oversampling, tone and a tape
+  stage group; data stream `"curve"` (see the Saturator curve stream below).
+- **Params (typed):** IDs are grouped ten per module (`ParamInfo.module`); the source of truth
+  is `audio/devices/effects/saturator.rs`. Real ranges travel in `/builtin/info`.
+  - `0` Type (enum: Soft, Tube, Tape, Hard), `1` Drive (0–36 dB), `2` Bias (−1…+1),
+    `3` Dynamics (0–100 %, level dependence), `4` Input (±24 dB),
+    `5` Quality (enum: 1x, 2x, 4x; not automatable)
+  - `10` Low Cut (Hz; 0 = Off), `11` High Cut (1–20 kHz; 20 kHz = Off), `12` Tone (±6 dB)
+  - `20` HF Loss (0–100 %), `21` Head Bump (0–6 dB), `22` Squash (0–100 %),
+    `23` Wow (0–100 %), `24` Noise (dBFS amount; 0 = Off, 50 = −40 dBFS)
+  - `30` Mix (0–100 %), `31` Output (±24 dB), `32` Auto Gain (bool)
+
 **Chain (`sonara.builtin.chain`)**
 - **Type:** Utility container (`is_container: true`, accepts MIDI)
 - Serial child processing, then a single Volume. Empty chain is audio pass-through. Bypass skips children.
@@ -723,6 +737,8 @@ after subscribing.
 - `"lufs"` - Integrated loudness (future)
 - `"modulation"` - Live modulation values (spec 018 Phase 9), produced by the
   `ModulatedDevice` wrapper of a device that carries modulators, not the device itself
+- `"curve"` - Saturator transfer curve, operating point and harmonics (spec 031, one
+  fixed-size 584-byte record per poll; see the Saturator curve stream below)
 
 **Device Data Stream (Rust → Godot):**
 ```
@@ -830,6 +846,34 @@ history behind the compressor's meters and scrolling display. It arrives through
   silence.
 - `CompressorData.decode()` in Godot splits the blob into `{count, in_peak_db, out_peak_db,
   gr_db, summary}`. `summary` maps the names above to dB, and is empty when the blob has none.
+
+#### Saturator curve stream (`sonara.builtin.saturator`) (spec 031)
+
+Data type `"curve"`. Like `"dynamics"` this is not a spectrum: it is the shaper's transfer
+curve, its operating point and its harmonic content for the device's curve display. It arrives
+through `device_data_received` as a `PackedByteArray`, little-endian, and is **always exactly
+146 f32s (584 bytes)** — the same byte encoding as a `"dynamics"` record, but one fixed-size
+record per poll instead of a counted list:
+
+- `[0]` `effective_drive_db`: the drive the engine actually applied (static Drive plus the
+  level-dependent Dynamics boost at the last control block).
+- `[1]` `env_db`: the pre-shaper envelope level in dBFS (the RMS envelope that drives
+  Dynamics; the silence floor is −120 dB).
+- `[2..130]`: 128 transfer-curve points, evenly spaced over input −1…+1 (point *i* is at
+  `-1 + 2i/127`). Each is the device's own shaper output at the **static** settings (type,
+  Drive, Bias) for that input — Dynamics, tone, tape stages, Mix and Output are not part of
+  the curve.
+- `[130..146]`: the first 16 harmonic magnitudes in dB (bin *k* = harmonic *k+1*), measured by
+  a 16-bin DFT over one period of a −18 dBFS sine through the same curve. A silent harmonic
+  reads the −160 dB floor.
+
+Rate: one record per poll, about 20 Hz while subscribed (the `"dynamics"` poll rate). The curve
+body and the harmonics are a pure function of (type, Drive, Bias) and are rebuilt by the engine
+only when one of those changes; the two header values refresh every record, so the
+operating-point dot moves live. Nothing is built while unsubscribed. While subscribed the
+saturator never sleeps, so the curve keeps its operating point in silence. Unknown data-type
+names are rejected by the engine (like the compressor's); `SaturatorData.decode()` in Godot
+splits the blob into `{valid, effective_drive_db, env_db, curve, harmonics}`.
 
 #### Sampler playheads stream (`sonara.builtin.sampler`)
 

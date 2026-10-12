@@ -13,6 +13,7 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.compressor": preload("res://devices/builtin/CompressorDefaultView.tscn"),
 	"sonara.builtin.multiband": preload("res://devices/builtin/MultibandDefaultView.tscn"),
 	"sonara.builtin.arpeggiator": preload("res://devices/builtin/ArpeggiatorDefaultView.tscn"),
+	"sonara.builtin.saturator": preload("res://devices/builtin/SaturatorDefaultView.tscn"),
 }
 const BUILTIN_WINDOW_SCENES := {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),

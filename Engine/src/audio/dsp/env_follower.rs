@@ -54,6 +54,14 @@ impl EnvFollower {
     /// Feed one sample; returns the envelope (linear amplitude).
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
+        self.track(x);
+        self.value()
+    }
+
+    /// Feed one sample without computing the envelope value; for per-sample callers that only
+    /// read `value()` at control rate (`process` returns it, which costs a sqrt for RMS).
+    #[inline]
+    pub fn track(&mut self, x: f32) {
         let input = match self.detection {
             Detection::Peak => x.abs(),
             Detection::Rms => x * x,
@@ -64,7 +72,6 @@ impl EnvFollower {
             self.release_coef
         };
         self.state = input + coef * (self.state - input);
-        self.value()
     }
 
     /// Current envelope (linear amplitude).

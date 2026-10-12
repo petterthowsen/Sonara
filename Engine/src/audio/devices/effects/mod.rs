@@ -12,6 +12,7 @@ mod filter;
 mod multiband;
 mod phaser;
 mod reverb;
+mod saturator;
 mod spectrum_analyzer;
 mod utility;
 
@@ -22,5 +23,6 @@ pub use filter::FilterDevice;
 pub use multiband::MultibandDevice;
 pub use phaser::PhaserDevice;
 pub use reverb::ReverbDevice;
+pub use saturator::SaturatorDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 pub use utility::UtilityDevice;

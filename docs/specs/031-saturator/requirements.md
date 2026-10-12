@@ -74,16 +74,22 @@ WHILE the input level rises, the device shall add progressively more harmonic co
 character must be level-dependent rather than a fixed transfer curve), and the amount of that
 level dependence shall itself be controllable from none to pronounced.
 
-- **Acceptance:** the same signal at the same drive setting, at −18 dBFS and at −6 dBFS, produces
-  measurably different THD; with level dependence at its minimum the two measurements converge.
-- **Example:** a drum loop at two input gains → harmonic content rises with input; turning level
-  dependence down makes the two results match.
+- **Acceptance:** at the same drive, the THD difference between a −18 dBFS and a −6 dBFS sine is
+  larger with level dependence at maximum than at minimum; with level dependence at minimum the
+  output nulls (bit-exact) against the plain static curve at the same drive.
+- **Example:** a drum loop at two input gains → harmonic content rises with input, and rises more
+  steeply as level dependence is turned up.
+- **Note:** any waveshaper is already somewhat level-dependent (a quiet signal sits on the near-linear
+  part of the curve), so "the two measurements converge" is not a testable claim. The control adds
+  *extra*, envelope-driven drive on top of that; its zero point is the static curve.
 
 ### REQ-005 — Tape character has the behaviours that make tape recognisable
 
 WHEN the type is the tape character, the device shall additionally provide: high-frequency loss that
 increases with signal level, a low-frequency emphasis (head bump), and a program-dependent
-compression of peaks.
+compression of peaks. Each of the three has its own visible amount control (gate decision:
+transparent controls); the controls have no effect while another type is selected, and the view
+shows them as inactive. Switching into or out of Tape fades the tape stages in or out without a click.
 
 - **Acceptance:** with the tape type selected and drive fixed, the measured high-frequency energy of
   a sine sweep falls as input level rises; the low-frequency region shows the bump; peak levels are
@@ -96,10 +102,13 @@ compression of peaks.
 WHERE the tape character is selected, the device shall offer wow-and-flutter modulation and shall
 add no noise whatsoever unless the user explicitly enables it.
 
-- **Acceptance:** with modulation disabled the output is bit-identical across identical runs with
-  the same input; with noise disabled, rendering silence through the device produces digital silence
-  (no added noise floor).
-- **Example:** two renders of the same input → identical samples; silence in → silence out.
+- **Acceptance:** with noise disabled, rendering silence through the device produces digital silence
+  (no added noise floor); with wow & flutter at zero the wet path contains no delay, so the output at
+  Mix 100 % is sample-aligned with the input (no pitch modulation, no comb filtering at partial Mix);
+  with noise enabled, two renders of the same input are still bit-identical (seeded generator).
+- **Example:** silence in → silence out; wow raised from 0 while playing → no click.
+- **Note:** with noise enabled the device still sleeps on silent input under the shared rule
+  (REQ-014), so hiss stops after the idle period. That is accepted, not a bug.
 
 ### REQ-007 — User-visible oversampling with no reported latency
 
@@ -138,7 +147,9 @@ perceptually harshest can be reduced without removing the distortion.
 
 - **Acceptance:** each control measurably changes the intended region of the output spectrum at a
   fixed drive setting; the post controls reach far enough to reduce 2–5 kHz energy by at least 6 dB
-  while THD stays within 1 dB of its unshaped value.
+  while the fundamental and the harmonics below 1 kHz of a 200 Hz test tone stay within 1 dB of their
+  unshaped levels. (Whole-signal THD necessarily drops when the upper harmonics are filtered, so it
+  is not the measure.)
 - **Example:** bright distorted content → with post tilt down, the 2–5 kHz band drops while the
   harmonic count is unchanged.
 
@@ -148,14 +159,16 @@ Every continuous parameter shall be automatable and smoothed; parameters shall c
 boundary as normalized 0.0–1.0 values; changing the type shall not click.
 
 - **Acceptance:** automation recorded on Drive plays back without zipper noise; a type change
-  crosfades rather than stepping; normalized values round-trip through the existing parameter path.
+  crossfades rather than stepping; normalized values round-trip through the existing parameter path.
 - **Example:** an automation lane sweeping Drive 0 → 100 % over two bars → no stepping artefacts.
 
 ### REQ-012 — Visual feedback matches the DSP
 
-The device's custom view shall display the transfer curve the DSP is actually applying, and a live
-harmonic display of the current output, so the user can see odd/even balance and the effect of each
-control.
+The device's custom view shall display the transfer curve the DSP is actually applying, the current
+operating point on it (how far into the curve the input is being driven, including the level-dependent
+boost), and the harmonic series that curve produces at that operating point, so the user can see
+odd/even balance and the effect of each control. A full output spectrum is the Spectrum Analyzer's
+job and is not duplicated here.
 
 - **Acceptance:** the drawn curve matches the shaper's real response — a test that sweeps the input
   range through the DSP and compares it to the curve the view would draw passes within tolerance
@@ -176,7 +189,7 @@ them or produce non-finite output.
 ### REQ-014 — Sleeps and wakes like the other devices
 
 WHEN the device has had no input above silence and no parameter change for the standard idle period,
-the engine shall put it to sleep (spec 008) and wake it on the next signal without an audible click
+the engine shall put it to sleep (ADR 0008, `DeviceSleepState`) and wake it on the next signal without an audible click
 or lost samples.
 
 - **Acceptance:** the device's sleep state follows the shared rule; a wake immediately after a long
@@ -188,8 +201,9 @@ or lost samples.
 The device shall run within the same CPU budget as the existing built-in effects, measured the same
 way, including at 4× oversampling.
 
-- **Acceptance:** measured engine load with one instance, dry and driven, at 1× and 4×, compared
-  against the Filter's drive stage measured identically, with no dropouts.
+- **Acceptance:** a release-build benchmark of `process_block` (512 frames, 48 kHz, stereo) at 1× and
+  4× costs no more than 1.5× the Filter at the same quality, measured with the same harness; plus a
+  live run with no dropouts.
 - **Example:** one instance at 4× on a busy project → load stays within budget, no xruns over a
   one-minute run.
 
@@ -201,6 +215,9 @@ same value, and the device shall ship with a small set of factory presets that d
 - **Acceptance:** save → reopen → parameter values identical (the existing device-parameter
   round trip); factory presets load and audibly demonstrate their named character.
 - **Example:** set Tape + drive 12 dB, save, reopen → still Tape + 12 dB.
+- **Descoped (2026-10-11, v1):** the factory-preset half is descoped — `PresetLibrary.gd` has
+  no bundled-preset mechanism and one was not judged worth building for this spec. Persistence
+  works as specified. Factory presets may return in a follow-up spec.
 
 ## Non-functional
 
@@ -210,6 +227,10 @@ same value, and the device shall ship with a small set of factory presets that d
   its CPU cost must not push a typical project over budget at 4× oversampling.
 - **Compatibility:** additive — older projects are unaffected; a project saved with the device does
   not load in an engine that predates it (documented, not migrated).
+- **Phase at partial Mix:** the oversampler's IIR half-bands, the DC blocker and the pre HPF shift the
+  wet signal's phase while the dry side is untouched, so Mix between 0 and 100 % is not a phase-aligned
+  blend at 2×/4×. This is the same trade spec 012 decision 2 accepts for the Filter; it is documented,
+  not compensated.
 - **Consistency:** the Mix convention (0 % = bit-exact dry), the smoothed-parameter rule and the
   5–10 ms enum crossfade follow the suite conventions from spec 012.
 
@@ -235,9 +256,9 @@ Resolved at the requirements gate (2026-09-18, before design.md):
 
 Still open (do not block the design gate; the design proposes an answer for each):
 
-- [ ] Should changing the type also apply that type's typical tone defaults, or leave the user's tone
-      settings untouched? (Design: leave them untouched; type-typical starting points ship as presets.)
+- [x] Should changing the type also apply that type's typical tone defaults? — No; the user's
+      settings are untouched and type-typical starting points ship as presets (design).
 - [ ] Is the hard-clipping type distinct enough from the soft-clip type at high drive to ship in v1,
       or does it collapse into "startup brightness" of the same curve? (Settled by the type tests.)
-- [ ] User-facing name: **Saturator** (as spec 016 already writes it) or something that hints at the
-      distortion range too?
+- [x] User-facing name — **Saturator**, as spec 016 already writes it; the type list (Hard) covers
+      the distortion end.

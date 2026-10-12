@@ -1,5 +1,16 @@
 # Sonara DAW - Project Status
 
+## Saturator (spec 031)
+
+### Working
+- T-001…T-014 (engine) and T-016…T-018 (Godot view) implemented 2026-10-11 and verified headless: `cargo test saturator` 25 passed, `cargo test effect_conformance` green with no `KNOWN_FAILING`, `cargo test --lib` 1001 passed, `cargo build --release` ok, `Godot/tests/run_all.sh saturator` all passed. CPU bench (release, `saturator_cpu --ignored`): 1× = 1.37× Filter, 4× = 0.68× Filter (limit 1.5×).
+- As-built deviations from design.md (recorded there): bias generalizes to all types as `curve(x + b) − curve(b)`; tilt is a two-pole Butterworth split at 1.3 kHz, law `2^(db/4)` (single-pole can't meet REQ-010's −6 dB/±1 dB figures); NOISE encoded `linear(0..50)` with 0 = Off; Quality switch crossfades two prepared `Oversampler`s (backport candidate for filter.rs); head bump confirmed one-pole low shelf at 100 Hz.
+- Factory presets (REQ-016 preset half) descoped for v1 (2026-10-11) — no bundled-preset mechanism in `PresetLibrary.gd`.
+- `"curve"` stream (584 B = 146 f32: header + 128 curve pts + 16 harmonics dB) documented in `osc-protocol.md`; first poll lags ~0.5 s after subscribing (poll-rate pattern). Status commented on GitHub issue #25.
+
+### Not Working / To do
+- T-015 live check (user; ports are hardcoded 7000/7001 so the running pre-031 engine must be restarted first via `./run_release.sh` + `godot --path Godot`): add the Saturator to a channel, a slot chain and Multiband FX band 2 (only that band distorts); automate Drive over two bars (no zipper noise); switch Type and Quality while a drum loop plays (no clicks); 10 s silence then a hit (intact); watch `/engine/load` with several instances at 4× for a minute (no xruns). Not machine-verifiable: all audible/judgement items and pixel fit of the 350 px panel.
+- T-021 final pass (user): save/reopen persistence round trip (set Tape + drive 12 dB, save, reopen) — parameter round trip is covered by `effect_conformance` but the project-file round trip was not exercised; then update issue #25 with the results.
 
 ## Knob, Sidechain and XY modulators (spec 036)
 

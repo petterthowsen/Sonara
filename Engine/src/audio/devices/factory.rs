@@ -9,7 +9,7 @@ use super::clap_host::SubprocessClapAdapter;
 use super::{
     AudioDevice, ChainDevice, ChorusDevice, DelayDevice, DevicePath, DrumMachineDevice,
     FilterDevice, LayerDevice, MultibandDevice, PolySynthDevice, PortFlow, ReverbDevice,
-    SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice, UtilityDevice,
+    SamplerDevice, SaturatorDevice, SfizzDevice, SpectrumAnalyzerDevice, UtilityDevice,
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
@@ -238,6 +238,7 @@ pub const EFFECT_IDS: &[&str] = &[
     "sonara.builtin.phaser",
     "sonara.builtin.reverb",
     "sonara.builtin.utility",
+    "sonara.builtin.saturator",
 ];
 
 /// Built-in drum instruments (spec 013). Each is made from the sample rate and block size alone.
@@ -333,6 +334,7 @@ pub fn create_effect(
         "sonara.builtin.phaser" => Box::new(super::PhaserDevice::new(sample_rate)),
         "sonara.builtin.reverb" => Box::new(ReverbDevice::new(sample_rate)),
         "sonara.builtin.utility" => Box::new(UtilityDevice::new(sample_rate)),
+        "sonara.builtin.saturator" => Box::new(SaturatorDevice::new(sample_rate)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);
