@@ -283,7 +283,7 @@ with `Godot/tests/run_all.sh <word>`.
 
 ## Phase 5 — Godot: presets and export
 
-- [ ] **T-021** [REQ-029, REQ-031] Presets keep slot contents.
+- [x?] **T-021** [REQ-029, REQ-031] Presets keep slot contents.
   - Tests in `test_device_presets.gd`: `test_slotted_preset_round_trip`,
     `test_pre_spec_preset_empties_slots_one_undo`. Fix `DevicePreset` / `DevicePresetLoadCommand`
     only if the tests fail.
@@ -292,7 +292,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh device_presets preset_load` passes
   - _Depends on_: T-015
 
-- [ ] **T-022** [REQ-034] Report slot contents in DAWproject export.
+- [x?] **T-022** [REQ-034] Report slot contents in DAWproject export.
   - Add `TransferReport.DEVICE_SLOTS` and its message. `DawProjectExporter` adds one entry per
     slotted device whose slots hold devices.
   - Test: `test_export_reports_slot_devices` in `test_dawproject_export.gd`.

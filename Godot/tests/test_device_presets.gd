@@ -42,6 +42,8 @@ func run_tests() -> void:
 	_test_drum_returns()
 	_test_layer_returns()
 	_test_returns_need_project()
+	_test_slotted_preset_round_trip()
+	_test_pre_spec_preset_empties_slots_one_undo()
 	_cleanup(_scratch)
 	_library_script.dir_override = ""
 	_preset_script.roots_override = {}
@@ -397,3 +399,63 @@ func _test_returns_need_project() -> void:
 	var preset: Object = _roundtrip(_preset_script.capture_now(d.drum, "Kit"))
 	var inst: Object = preset.instantiate(d.channel.id)
 	_assert(inst != null and preset.warnings.size() == 1, "without a project the returns are skipped with a warning")
+
+
+## Registered fake slotted device (Note FX + FX, like the PolySynth) or a plain one.
+func _slotted(device_id: String) -> Object:
+	var device: Object = _device(device_id, 0, true)
+	if device.slots.is_empty():
+		device.slots.append({"key": "note_fx", "name": "Note FX", "kind": "note"})
+		device.slots.append({"key": "fx", "name": "FX", "kind": "audio"})
+	return device
+
+
+func _slot_inst(device_id: String, ch: Object) -> Object:
+	return _inst_script.new(_slotted(device_id), ch.id, -1)
+
+
+func _test_slotted_preset_round_trip() -> void:
+	var ch := _channel()
+	var poly := _slot_inst("test.slot.poly", ch)
+	ch.add_device(poly)
+	var transpose: Object = _inst_script.new(_device("test.slot.transpose", 1), ch.id, -1)
+	var delay: Object = _inst_script.new(_device("test.slot.delay", 1), ch.id, -1)
+	ch.add_device(transpose, -1, poly.children[0])
+	ch.add_device(delay, -1, poly.children[1])
+	var preset: Object = _preset_script.capture_now(poly, "Arp Lead")
+	var loaded := _roundtrip(preset)
+	_assert(loaded.device_id == "test.slot.poly", "preset header names the slotted device")
+	var copy: Object = loaded.instantiate(ch.id)
+	_assert(copy != null and copy.children.size() == 2, "the preset instance keeps exactly its two slot chains")
+	if copy == null or copy.children.size() != 2:
+		return
+	_assert(Array(copy.slot_keys()) == ["note_fx", "fx"], "slot chains stay in spec order: %s" % str(copy.slot_keys()))
+	_assert(copy.slot_devices("note_fx").size() == 1 and copy.slot_devices("note_fx")[0].device.device_id == "test.slot.transpose",
+		"Transpose is still in Note FX")
+	_assert(copy.slot_devices("fx").size() == 1 and copy.slot_devices("fx")[0].device.device_id == "test.slot.delay",
+		"Delay is still in FX")
+	_assert(copy.slot_devices("fx")[0].id != delay.id and copy.children[1].id != poly.children[1].id, "slot devices and chains get fresh ids")
+
+
+func _test_pre_spec_preset_empties_slots_one_undo() -> void:
+	var ch := _channel()
+	var cmd_script: GDScript = load("res://history/commands/DevicePresetLoadCommand.gd")
+	# A preset saved before the spec: no children in the device JSON.
+	var source := _slot_inst("test.slot.poly", ch)
+	var preset: Object = _preset_script.capture_now(source, "Old Preset")
+	preset.device.erase("children")
+	var old_preset := _roundtrip(preset)
+	var live := _slot_inst("test.slot.poly", ch)
+	ch.add_device(live)
+	var delay: Object = _inst_script.new(_device("test.slot.delay", 1), ch.id, -1)
+	ch.add_device(delay, -1, live.children[1])
+	var fresh: Object = old_preset.instantiate(ch.id)
+	_assert(fresh != null and fresh.children.size() == 2 and fresh.slot_devices("fx").is_empty() \
+		and fresh.slot_devices("note_fx").is_empty(), "a pre-spec preset instantiates with two empty slots")
+	var cmd: Object = cmd_script.new(ch, live, fresh)
+	cmd.do()
+	_assert(ch.devices.size() == 1 and ch.devices[0] == fresh, "loading replaces the device")
+	_assert(fresh.slot_devices("fx").is_empty(), "the old FX contents are gone after loading")
+	cmd.undo()
+	_assert(ch.devices.size() == 1 and ch.devices[0] == live, "one undo restores the old device")
+	_assert(live.slot_devices("fx").size() == 1 and live.slot_devices("fx")[0] == delay, "one undo brings the Delay back in FX")

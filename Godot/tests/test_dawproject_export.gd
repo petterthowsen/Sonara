@@ -40,6 +40,7 @@ func run_tests() -> void:
 	await _test_clips()
 	await _test_automation()
 	await _test_devices()
+	await _test_export_reports_slot_devices()
 
 
 # ---------------------------------------------------------------------------
@@ -494,3 +495,28 @@ func _test_devices() -> void:
 	var perc_json = JSON.parse_string(exported.entries[perc_dev.child("State").get_attr("path")].get_string_from_utf8())
 	var embedded_path: String = perc_json.get("loaded_file_path", "")
 	_assert(embedded_path.begins_with("files/") and exported.entries.has(embedded_path), "sampler WAV embedded under files/ and JSON points at it")
+
+
+func _test_export_reports_slot_devices() -> void:
+	var project: Object = _project_script.new()
+	_device("sonara.builtin.chain", DawEnums.DEVICE_BUILTIN, DawEnums.CATEGORY_EFFECT).is_container = true
+	var poly := _device("slotpoly", DawEnums.DEVICE_BUILTIN, DawEnums.CATEGORY_INSTRUMENT)
+	poly.is_container = true
+	poly.slots.append({"key": "note_fx", "name": "Note FX", "kind": "note"})
+	poly.slots.append({"key": "fx", "name": "FX", "kind": "audio"})
+	var delay := _device("slotdelay", DawEnums.DEVICE_BUILTIN, DawEnums.CATEGORY_EFFECT)
+	var empty: Dictionary = project.create_instrument_track("Empty")
+	_add_device(empty.channel, poly)
+	var full: Dictionary = project.create_instrument_track("Full")
+	var host: Object = _add_device(full.channel, poly)
+	var inner: Object = _device_instance_script.new(delay, full.channel.id, -1)
+	full.channel.add_device(inner, -1, host.children[1])
+	var exported := await _export(project, "slots.dawproject")
+	_assert(exported.result.ok, "export with a device in a slot succeeds: %s" % exported.result.error)
+	var report = exported.result.report
+	_assert(report.count_of(TransferReport.DEVICE_SLOTS) == 1, "one entry for the slotted device that holds devices, none for the empty one")
+	_assert(report.to_text().contains("slotdelay") or report.to_text().contains(inner.get_display_name()), "the report names the Delay: %s" % report.to_text())
+	var devs: Array = _find_track(exported.xml, "Full").child("Channel").child("Devices").children
+	var state = JSON.parse_string(exported.entries[devs[0].child("State").get_attr("path")].get_string_from_utf8())
+	_assert(state is Dictionary and state.get("children", []).size() == 2 and state.children[1].children.size() == 1,
+		"the slot contents are still in the Sonara state JSON")

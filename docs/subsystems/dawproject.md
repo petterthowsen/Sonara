@@ -86,7 +86,7 @@ Entries are one per `(kind, subject)` with a count (`TransferReport.TEMPLATES` h
   `scene_clip`, `mono_channel`, `bus_clip`, `signature_off_bar`, `send_clamped`,
   `volume_clamped`, `nested_loop`, `audio_missing`, `state_mismatch`.
 - **Export:** `marker_duration`, `clip_transpose`, `clip_gain_offset`, `pan_mode`,
-  `hardware_output`, `phase_invert`, `plugin_no_state`, `file_missing`, `mod_routes` (a built-in's modulation routes travel only in its `sonara.` State JSON).
+  `hardware_output`, `phase_invert`, `plugin_no_state`, `file_missing`, `mod_routes` (a built-in's modulation routes travel only in its `sonara.` State JSON)., `device_slots` (devices inside a slotted device travel only in its `sonara.` State JSON).
 
 Silent by design: Bitwig's default sends (disabled, volume 0, or to their own channel), `rel`
 equal to `vel`, and empty scenes.

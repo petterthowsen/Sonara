@@ -351,6 +351,18 @@ func _safe_file_name(s: String) -> String:
 	return out
 
 
+## Display names of the devices inside `inst`'s slots, nested slotted devices included.
+func _slot_device_names(inst: Object) -> PackedStringArray:
+	var names := PackedStringArray()
+	if not inst.device.has_device_slots():
+		return names
+	for key in inst.slot_keys():
+		for d in inst.slot_devices(key):
+			names.append(d.get_display_name())
+			names.append_array(_slot_device_names(d))
+	return names
+
+
 func _write_device(inst: Object) -> void:
 	var dev: Object = inst.device
 	var is_clap: bool = dev.device_type == DawEnums.DEVICE_CLAP
@@ -374,6 +386,10 @@ func _write_device(inst: Object) -> void:
 		state_bytes = JSON.stringify(_embed_files_in(inst.to_json()), "\t").to_utf8_buffer()
 		if not inst.modulators.is_empty():
 			_report.add(TransferReport.MODULATORS, inst.get_display_name(), "%s (%d modulators)" % [dev.name, inst.modulators.size()])
+		# Devices in a slotted device's slots (spec 040) live only in its Sonara state.
+		var slotted := _slot_device_names(inst)
+		if not slotted.is_empty():
+			_report.add(TransferReport.DEVICE_SLOTS, inst.get_display_name(), "%s (%s)" % [dev.name, ", ".join(slotted)])
 		# Choke targets live only in a Drum Machine's Sonara state; DAWproject has no mapping.
 		var choked := 0
 		for child in inst.children:
