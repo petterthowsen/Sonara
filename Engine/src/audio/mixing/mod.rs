@@ -117,6 +117,9 @@ pub fn mix_and_output(
     let has_solo = channel_map.values().any(|c| c.solo);
     channel_ids.clear();
     channel_ids.extend(channel_map.keys().copied());
+    // HashMap order differs per instance; sort so summation order is deterministic. In place,
+    // no allocation.
+    channel_ids.sort_unstable();
 
     count_route_inputs(channel_map, channel_ids);
     assign_solo_roles(channel_map, channel_ids, has_solo);
@@ -332,6 +335,19 @@ mod tests {
         track.buffer_left.fill(0.5);
         track.buffer_right.fill(0.25);
         state_with(vec![test_channel(1, Some(output), 0.0), track])
+    }
+
+    #[test]
+    fn channel_ids_are_sorted() {
+        let channels = [40, 7, 2, 1, 300, 15, 9, 1000, 63, 5]
+            .iter()
+            .map(|&id| test_channel(id, Some(1), 0.0))
+            .collect();
+        let mut state = state_with(channels);
+        mix(&mut state);
+        let ids = &state.render_scratch.channel_ids;
+        assert_eq!(ids.len(), 10);
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "{:?}", ids);
     }
 
     #[test]
