@@ -124,7 +124,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test delay` passes, including the existing tests
   - _Depends on_: T-003
 
-- [ ] **T-009** [REQ-002, REQ-008, REQ-010] Reverb Tank FX.
+- [x?] **T-009** [REQ-002, REQ-008, REQ-010] Reverb Tank FX.
   - Split FDN `process` and `PlateTank::process` into `read` and `write` halves, keeping
     `process = read + write` so the plain path is unchanged.
   - Add `slots: DeviceSlots` with `REVERB_SLOTS` (`tank_fx` Loop, `wet_fx` Audio), a
@@ -142,7 +142,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test reverb` passes, including the existing tests
   - _Depends on_: T-003
 
-- [ ] **T-010** [REQ-009, REQ-012, REQ-013] Reverb Wet FX and the whole-block path.
+- [x?] **T-010** [REQ-009, REQ-012, REQ-013] Reverb Wet FX and the whole-block path.
   - When Wet FX is live, `process_block` makes two passes: the wet signal goes into `slot_buf`,
     the chain runs on it, then the mix.
   - Add the `has_async_blocks`, `begin_block` and `finish_block` path from T-007, plus the

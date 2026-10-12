@@ -20,7 +20,8 @@ use crate::audio::devices::param_table::{
     flatten, linear, log, skewed, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
 use crate::audio::devices::{
-    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+    AudioDevice, DeviceCategory, DeviceContainer, DeviceSlots, DeviceVariant, ParamId, ParamInfo,
+    ParamValue, SlotKind, SlotSpec, LOOP_BLOCK,
 };
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
@@ -56,6 +57,26 @@ pub const WIDTH: ParamId = 50;
 pub const MIX: ParamId = 51;
 
 const ALGORITHMS: &[&str] = &["Room", "Hall", "Plate"];
+
+/// Spec 040: Tank FX runs inside the decay loop, Wet FX on the finished wet signal.
+static REVERB_SLOTS: [SlotSpec; 2] = [
+    SlotSpec {
+        key: "tank_fx",
+        name: "Tank FX",
+        kind: SlotKind::Loop,
+    },
+    SlotSpec {
+        key: "wet_fx",
+        name: "Wet FX",
+        kind: SlotKind::Audio,
+    },
+];
+
+/// While Tank FX is live no line is read closer than this many samples (see `LOOP_BLOCK`).
+const LOOP_MIN_DELAY: f32 = (LOOP_BLOCK + 2) as f32;
+
+/// Frames of scratch a new device holds before `prepare` sizes it for the stream.
+const DEFAULT_SLOT_FRAMES: usize = 4096;
 
 /// IDs are all below this.
 const ID_SPACE: usize = 60;
@@ -436,6 +457,70 @@ impl Fdn {
         }
     }
 
+    /// Read phase: read the lines, apply the absorbent filters and loop gains. Returns the
+    /// filtered line outputs `y` and the stereo output tap. `pending` is the number of samples
+    /// of the current sub-block whose writes are still to come (0 on the plain path), and
+    /// `floor` the shortest delay a read may use.
+    #[inline]
+    fn read(
+        &mut self,
+        size_scale: f32,
+        mods: &[f32; 8],
+        mod_depth: f32,
+        frozen: bool,
+        sample_rate: f32,
+        pending: f32,
+        floor: f32,
+    ) -> ([f32; 8], f32, f32) {
+        let mut d = [0.0f32; 8];
+        for i in 0..8 {
+            let base = self.base_ms[i] * 0.001 * sample_rate * size_scale;
+            let delay = if frozen {
+                base.round().max(2.0)
+            } else {
+                (base * (1.0 + FDN_MOD_FRACTION * mod_depth * mods[i])).max(2.0)
+            };
+            d[i] = self.lines[i].read_hermite(delay.max(floor) - pending);
+        }
+        let mut y = [0.0f32; 8];
+        for i in 0..8 {
+            y[i] = self.absorb[i].process(d[i]) * self.gain[i];
+        }
+        let mut ol = 0.0;
+        let mut or = 0.0;
+        for i in 0..8 {
+            ol += y[i] * FDN_OUT_L[i];
+            or += y[i] * FDN_OUT_R[i];
+        }
+        (y, ol * self.out_scale, or * self.out_scale)
+    }
+
+    /// Householder: (I − 2/N · 1) y = y − 2·mean(y).
+    #[inline]
+    fn householder_mean(y: &[f32; 8]) -> f32 {
+        y.iter().sum::<f32>() * (2.0 / 8.0)
+    }
+
+    /// What the input injects into line `i`.
+    #[inline]
+    fn injection(&self, i: usize, dl: f32, dr: f32, frozen: bool) -> f32 {
+        if frozen {
+            0.0
+        } else {
+            (dl * FDN_IN_A[i] + dr * FDN_IN_B[i]) * self.inject
+        }
+    }
+
+    /// Write phase: push the feedback vector plus the injection into the lines.
+    #[inline]
+    fn write(&mut self, y: &[f32; 8], dl: f32, dr: f32, frozen: bool) {
+        let mean = Self::householder_mean(y);
+        for i in 0..8 {
+            let injection = self.injection(i, dl, dr, frozen);
+            self.lines[i].push(soft_clip(y[i] - mean + injection));
+        }
+    }
+
     #[inline]
     fn process(
         &mut self,
@@ -447,37 +532,9 @@ impl Fdn {
         frozen: bool,
         sample_rate: f32,
     ) -> (f32, f32) {
-        let mut d = [0.0f32; 8];
-        for i in 0..8 {
-            let base = self.base_ms[i] * 0.001 * sample_rate * size_scale;
-            let delay = if frozen {
-                base.round().max(2.0)
-            } else {
-                (base * (1.0 + FDN_MOD_FRACTION * mod_depth * mods[i])).max(2.0)
-            };
-            d[i] = self.lines[i].read_hermite(delay);
-        }
-        let mut y = [0.0f32; 8];
-        for i in 0..8 {
-            y[i] = self.absorb[i].process(d[i]) * self.gain[i];
-        }
-        // Householder: (I − 2/N · 1) y = y − 2·mean(y).
-        let mean = y.iter().sum::<f32>() * (2.0 / 8.0);
-        for i in 0..8 {
-            let injection = if frozen {
-                0.0
-            } else {
-                (dl * FDN_IN_A[i] + dr * FDN_IN_B[i]) * self.inject
-            };
-            self.lines[i].push(soft_clip(y[i] - mean + injection));
-        }
-        let mut ol = 0.0;
-        let mut or = 0.0;
-        for i in 0..8 {
-            ol += y[i] * FDN_OUT_L[i];
-            or += y[i] * FDN_OUT_R[i];
-        }
-        (ol * self.out_scale, or * self.out_scale)
+        let (y, ol, or) = self.read(size_scale, mods, mod_depth, frozen, sample_rate, 0.0, 0.0);
+        self.write(&y, dl, dr, frozen);
+        (ol, or)
     }
 }
 
@@ -516,6 +573,38 @@ impl PlateTank {
         self.last = 0.0;
     }
 
+    /// Read phase: the tank's output and its decayed (damped, gained) output. See
+    /// [`Fdn::read`] for `pending` and `floor`.
+    #[inline]
+    fn read(
+        &mut self,
+        size_scale: f32,
+        mod_val: f32,
+        mod_depth: f32,
+        frozen: bool,
+        sample_rate: f32,
+        pending: f32,
+        floor: f32,
+    ) -> (f32, f32) {
+        let base = self.len_seconds * size_scale * sample_rate;
+        let delay = if frozen {
+            base.round().max(2.0)
+        } else {
+            (base * (1.0 + PLATE_MOD_FRACTION * mod_depth * mod_val)).max(2.0)
+        };
+        let out = self.line.read_hermite(delay.max(floor) - pending);
+        let decayed = self.absorb.process(out) * self.gain;
+        (out, decayed)
+    }
+
+    /// Write phase. Only the coupled signal (the other tank's decayed output plus the input) is
+    /// stored; the tank's own decayed output travels through the cross-coupling, so the loop is
+    /// a clean orthogonal two-delay network.
+    #[inline]
+    fn write(&mut self, stored: f32) {
+        self.line.push(soft_clip(stored));
+    }
+
     #[inline]
     fn process(
         &mut self,
@@ -526,19 +615,16 @@ impl PlateTank {
         frozen: bool,
         sample_rate: f32,
     ) -> (f32, f32) {
-        let base = self.len_seconds * size_scale * sample_rate;
-        let delay = if frozen {
-            base.round().max(2.0)
-        } else {
-            (base * (1.0 + PLATE_MOD_FRACTION * mod_depth * mod_val)).max(2.0)
-        };
-        let out = self.line.read_hermite(delay);
-        let decayed = self.absorb.process(out) * self.gain;
-        // Only the coupled signal (the other tank's decayed output plus the input) is stored; the
-        // tank's own decayed output travels through the cross-coupling, so the loop is a clean
-        // orthogonal two-delay network.
-        let stored = if frozen { decayed } else { inx };
-        self.line.push(soft_clip(stored));
+        let (out, decayed) = self.read(
+            size_scale,
+            mod_val,
+            mod_depth,
+            frozen,
+            sample_rate,
+            0.0,
+            0.0,
+        );
+        self.write(if frozen { decayed } else { inx });
         (out, decayed)
     }
 }
@@ -615,6 +701,26 @@ impl Plate {
         }
     }
 
+    /// The input diffusion all-passes: the mono signal both tanks are fed.
+    #[inline]
+    fn input(&mut self, dl: f32, dr: f32) -> f32 {
+        let x = (dl + dr) * 0.5;
+        let mut v = x;
+        for i in 0..self.in_ap.len() {
+            v = allpass(&mut self.in_ap[i], v, self.in_len[i].max(2.0), self.in_g[i]);
+        }
+        v
+    }
+
+    /// The stereo output tap from the two tanks' outputs.
+    #[inline]
+    fn taps(&self, y0: f32, y1: f32) -> (f32, f32) {
+        (
+            (y0 * 0.7 + y1 * 0.4) * self.out_scale,
+            (y1 * 0.7 + y0 * 0.4) * self.out_scale,
+        )
+    }
+
     #[inline]
     fn process(
         &mut self,
@@ -626,11 +732,7 @@ impl Plate {
         frozen: bool,
         sample_rate: f32,
     ) -> (f32, f32) {
-        let x = (dl + dr) * 0.5;
-        let mut v = x;
-        for i in 0..self.in_ap.len() {
-            v = allpass(&mut self.in_ap[i], v, self.in_len[i].max(2.0), self.in_g[i]);
-        }
+        let v = self.input(dl, dr);
         let (y0, d0) = self.tanks[0].process(
             v + self.tanks[1].last,
             size_scale,
@@ -649,9 +751,7 @@ impl Plate {
         );
         self.tanks[0].last = d0;
         self.tanks[1].last = d1;
-        let out_l = (y0 * 0.7 + y1 * 0.4) * self.out_scale;
-        let out_r = (y1 * 0.7 + y0 * 0.4) * self.out_scale;
-        (out_l, out_r)
+        self.taps(y0, y1)
     }
 }
 
@@ -726,6 +826,21 @@ pub struct ReverbDevice {
     sleep: TailSleep,
     is_active: bool,
     is_enabled: bool,
+
+    /// Tank FX and Wet FX chains plus scratch (spec 040).
+    slots: DeviceSlots,
+    /// Whole-block output while a plugin sits in Wet FX (`begin_block` / `finish_block`).
+    whole_buf: Vec<f32>,
+    /// The frames `begin_block` rendered into `whole_buf`, until `finish_block` copies them.
+    whole_pending: usize,
+    /// Shortest line read in samples: `LOOP_MIN_DELAY` while Tank FX is live, else 0.
+    loop_floor: f32,
+    /// Tank FX scratch for one sub-block: the FDN feedback vectors and injections, the plate's
+    /// input and decayed outputs.
+    fdn_f: [[f32; 8]; LOOP_BLOCK],
+    fdn_inj: [[f32; 8]; LOOP_BLOCK],
+    plate_v: [f32; LOOP_BLOCK],
+    plate_d: [[f32; 2]; LOOP_BLOCK],
 }
 
 impl ReverbDevice {
@@ -798,6 +913,14 @@ impl ReverbDevice {
             sleep: TailSleep::new(sr),
             is_active: true,
             is_enabled: true,
+            slots: DeviceSlots::new(&REVERB_SLOTS, DEFAULT_SLOT_FRAMES),
+            whole_buf: vec![0.0; DEFAULT_SLOT_FRAMES * 2],
+            whole_pending: 0,
+            loop_floor: 0.0,
+            fdn_f: [[0.0; 8]; LOOP_BLOCK],
+            fdn_inj: [[0.0; 8]; LOOP_BLOCK],
+            plate_v: [0.0; LOOP_BLOCK],
+            plate_d: [[0.0; 2]; LOOP_BLOCK],
         };
         device.prepare(sr, 0);
         device.update_tail();
@@ -902,8 +1025,130 @@ impl ReverbDevice {
         cur
     }
 
+    /// `late` with the current algorithm's loop signal held back for Tank FX (sample `k` of the
+    /// sub-block). A fading algorithm finishes on the plain path.
+    #[inline]
+    fn late_looped(
+        &mut self,
+        dl: f32,
+        dr: f32,
+        size_scale: f32,
+        mods: &[f32; 8],
+        k: usize,
+    ) -> (f32, f32) {
+        let current = self.algorithm;
+        let frozen = self.settings.freeze;
+        let depth = self.depth_s.current();
+        let sr = self.sample_rate;
+        let (pending, floor) = (k as f32, self.loop_floor);
+        let cur = match current {
+            Algorithm::Room | Algorithm::Hall => {
+                let idx = if current == Algorithm::Room { 0 } else { 1 };
+                let fdn = &mut self.fdn[idx];
+                let (y, ol, or) = fdn.read(size_scale, mods, depth, frozen, sr, pending, floor);
+                let mean = Fdn::householder_mean(&y);
+                let (mut pl, mut pr) = (0.0f32, 0.0f32);
+                for i in 0..8 {
+                    let f = y[i] - mean;
+                    self.fdn_f[k][i] = f;
+                    self.fdn_inj[k][i] = fdn.injection(i, dl, dr, frozen);
+                    pl += f * FDN_OUT_L[i];
+                    pr += f * FDN_OUT_R[i];
+                }
+                // The chain sees the loop at output level.
+                self.slots.loop_in[2 * k] = pl * fdn.out_scale;
+                self.slots.loop_in[2 * k + 1] = pr * fdn.out_scale;
+                (ol, or)
+            }
+            Algorithm::Plate => {
+                let v = self.plate.input(dl, dr);
+                let (y0, d0) = self.plate.tanks[0]
+                    .read(size_scale, mods[0], depth, frozen, sr, pending, floor);
+                let (y1, d1) = self.plate.tanks[1]
+                    .read(size_scale, -mods[0], depth, frozen, sr, pending, floor);
+                self.plate_v[k] = v;
+                self.plate_d[k] = [d0, d1];
+                self.slots.loop_in[2 * k] = d0;
+                self.slots.loop_in[2 * k + 1] = d1;
+                self.plate.taps(y0, y1)
+            }
+        };
+        if let Some(prev) = self.prev_algorithm {
+            let p = self.algorithm_wet(prev, dl, dr, size_scale, mods);
+            let t = self.xfade as f32 / self.xfade_frames.max(1) as f32;
+            self.xfade += 1;
+            if self.xfade >= self.xfade_frames {
+                self.prev_algorithm = None;
+            }
+            return (cur.0 + (p.0 - cur.0) * t, cur.1 + (p.1 - cur.1) * t);
+        }
+        cur
+    }
+
+    /// Chain and write phases for the `n` samples read since the last call: run Tank FX on the
+    /// held loop signal and push the result into the lines.
+    fn finish_loop(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        // `take` leaves empty Vecs behind (no allocation) so the slot chain can be borrowed.
+        let loop_in = std::mem::take(&mut self.slots.loop_in);
+        let mut loop_out = std::mem::take(&mut self.slots.loop_out);
+        if let Some(chain) = self.slots.chain_mut(0) {
+            chain.process_block(&loop_in[..2 * n], &mut loop_out[..2 * n], n);
+        }
+        let frozen = self.settings.freeze;
+        match self.algorithm {
+            Algorithm::Room | Algorithm::Hall => {
+                let idx = if self.algorithm == Algorithm::Room {
+                    0
+                } else {
+                    1
+                };
+                let fdn = &mut self.fdn[idx];
+                for k in 0..n {
+                    // Only the difference the chain made goes back into the lines, along the
+                    // two directions it saw. A unity chain leaves the vector untouched.
+                    let dl = (loop_out[2 * k] - loop_in[2 * k]) / fdn.out_scale;
+                    let dr = (loop_out[2 * k + 1] - loop_in[2 * k + 1]) / fdn.out_scale;
+                    for i in 0..8 {
+                        let f = self.fdn_f[k][i]
+                            + dl * FDN_OUT_L[i] * 0.125
+                            + dr * FDN_OUT_R[i] * 0.125;
+                        fdn.lines[i].push(soft_clip(f + self.fdn_inj[k][i]));
+                    }
+                }
+            }
+            Algorithm::Plate => {
+                for k in 0..n {
+                    let (a0, a1) = (loop_out[2 * k], loop_out[2 * k + 1]);
+                    let v = self.plate_v[k];
+                    let [t0, t1] = &mut self.plate.tanks;
+                    let (s0, s1) = if frozen {
+                        (a0, a1)
+                    } else {
+                        (v + t1.last, v + t0.last)
+                    };
+                    t0.write(s0);
+                    t1.write(s1);
+                    t0.last = a0;
+                    t1.last = a1;
+                }
+            }
+        }
+        self.slots.loop_in = loop_in;
+        self.slots.loop_out = loop_out;
+    }
+
     #[inline]
     fn process_sample(&mut self, in_l: f32, in_r: f32) -> (f32, f32) {
+        self.process_sample_at(in_l, in_r, None)
+    }
+
+    /// One sample of the wet signal. `held` is the sample's index in the Tank FX sub-block, or
+    /// `None` on the plain path.
+    #[inline]
+    fn process_sample_at(&mut self, in_l: f32, in_r: f32, held: Option<usize>) -> (f32, f32) {
         // Advance per-sample smoothers exactly once, whichever algorithm runs.
         let size_scale = SIZE_MIN_SCALE + self.size_s.next() * (SIZE_MAX_SCALE - SIZE_MIN_SCALE);
         let pd = (self.predelay_s.next() * 0.001 * self.sample_rate).max(1.0);
@@ -923,7 +1168,10 @@ impl ReverbDevice {
         let (el, er) = self.early(pl, pr);
 
         let (dl, dr) = self.diffuser.process(pl, pr, self.diffusion_s.current());
-        let (ll, lr) = self.late(dl, dr, size_scale, &mods);
+        let (ll, lr) = match held {
+            Some(k) => self.late_looped(dl, dr, size_scale, &mods, k),
+            None => self.late(dl, dr, size_scale, &mods),
+        };
 
         let mut wl = el * early_level + ll;
         let wr_raw = er * early_level + lr;
@@ -960,6 +1208,77 @@ impl ReverbDevice {
             wr = m - s * w;
         }
         (wl, wr)
+    }
+
+    /// The processing core of `process_block`: the plain path when both slots are empty, else
+    /// Tank FX in sub-blocks and/or Wet FX in a second pass over the wet signal.
+    fn render(&mut self, inputs: &[f32], outputs: &mut [f32], frames: usize) {
+        self.update_block(frames);
+        let tank = self.slots.is_live(0);
+        let wet_fx = self.slots.is_live(1);
+        self.loop_floor = if tank { LOOP_MIN_DELAY } else { 0.0 };
+
+        if !tank && !wet_fx {
+            for f in 0..frames {
+                let in_l = inputs[f * 2];
+                let in_r = inputs[f * 2 + 1];
+                let (wl, wr) = self.process_sample(in_l, in_r);
+                let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
+                outputs[f * 2] = in_l * dry + wl * wet;
+                outputs[f * 2 + 1] = in_r * dry + wr * wet;
+            }
+            return;
+        }
+
+        // Wet FX: pass 1 renders the wet signal into `wet_buf`, the chain runs on it (its output
+        // lands in `outputs`, used as scratch), pass 2 mixes. Long blocks go in chunks.
+        let mut wet_buf = std::mem::take(&mut self.slots.slot_buf);
+        let chunk = if wet_fx {
+            (wet_buf.len() / 2).max(1)
+        } else {
+            frames.max(1)
+        };
+        let mut base = 0;
+        while base < frames {
+            let n = (frames - base).min(chunk);
+            let mut held = 0;
+            for i in 0..n {
+                let f = base + i;
+                let in_l = inputs[f * 2];
+                let in_r = inputs[f * 2 + 1];
+                let (wl, wr) = self.process_sample_at(in_l, in_r, tank.then_some(held));
+                if tank {
+                    held += 1;
+                    if held == LOOP_BLOCK {
+                        self.finish_loop(held);
+                        held = 0;
+                    }
+                }
+                if wet_fx {
+                    wet_buf[i * 2] = wl;
+                    wet_buf[i * 2 + 1] = wr;
+                } else {
+                    let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
+                    outputs[f * 2] = in_l * dry + wl * wet;
+                    outputs[f * 2 + 1] = in_r * dry + wr * wet;
+                }
+            }
+            self.finish_loop(held);
+            if wet_fx {
+                let out = &mut outputs[base * 2..(base + n) * 2];
+                if let Some(chain) = self.slots.chain_mut(1) {
+                    chain.process_block(&wet_buf[..n * 2], out, n);
+                }
+                let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
+                for i in 0..n {
+                    let f = base + i;
+                    outputs[f * 2] = inputs[f * 2] * dry + outputs[f * 2] * wet;
+                    outputs[f * 2 + 1] = inputs[f * 2 + 1] * dry + outputs[f * 2 + 1] * wet;
+                }
+            }
+            base += n;
+        }
+        self.slots.slot_buf = wet_buf;
     }
 
     fn apply(&mut self, id: ParamId, real: f32) {
@@ -1064,16 +1383,39 @@ impl AudioDevice for ReverbDevice {
             return;
         }
         let frames = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
-        self.update_block(frames);
-        for f in 0..frames {
-            let in_l = inputs[f * 2];
-            let in_r = inputs[f * 2 + 1];
-            let (wl, wr) = self.process_sample(in_l, in_r);
-            let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
-            outputs[f * 2] = in_l * dry + wl * wet;
-            outputs[f * 2 + 1] = in_r * dry + wr * wet;
-        }
+        self.render(inputs, outputs, frames);
         self.sleep.on_block(frames);
+    }
+
+    /// With a plugin in Wet FX the wrapper must not split the block (REQ-013): the whole block
+    /// is rendered here, synchronously, and `finish_block` hands it out.
+    fn begin_block(&mut self, inputs: &[f32], sample_count: usize) -> bool {
+        if !self.has_async_blocks() {
+            return false;
+        }
+        let frames = sample_count.min(inputs.len() / 2);
+        if frames * 2 > self.whole_buf.len() {
+            return false;
+        }
+        let mut out = std::mem::take(&mut self.whole_buf);
+        self.process_block(inputs, &mut out[..frames * 2], frames);
+        self.whole_buf = out;
+        self.whole_pending = frames;
+        true
+    }
+
+    fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        let frames = std::mem::take(&mut self.whole_pending);
+        if frames == 0 {
+            pass_through(inputs, outputs, sample_count);
+            return;
+        }
+        let n = (frames * 2).min(outputs.len());
+        outputs[..n].copy_from_slice(&self.whole_buf[..n]);
+    }
+
+    fn has_async_blocks(&self) -> bool {
+        self.slots.has_async(1)
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -1115,6 +1457,9 @@ impl AudioDevice for ReverbDevice {
     }
 
     fn reset(&mut self) {
+        self.slots.reset();
+        self.whole_buf.fill(0.0);
+        self.whole_pending = 0;
         self.predelay_l.clear();
         self.predelay_r.clear();
         self.early_l.clear();
@@ -1155,8 +1500,12 @@ impl AudioDevice for ReverbDevice {
         self.sleep.wake();
     }
 
-    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+    fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         self.sample_rate = sample_rate;
+        self.slots.prepare(max_frames);
+        if self.whole_buf.len() < max_frames * 2 {
+            self.whole_buf.resize(max_frames * 2, 0.0);
+        }
         self.predelay_l.prepare_seconds(0.5, sample_rate);
         self.predelay_r.prepare_seconds(0.5, sample_rate);
         self.early_l.prepare_seconds(0.25, sample_rate);
@@ -1203,6 +1552,24 @@ impl AudioDevice for ReverbDevice {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    // === Slots (spec 040) ===
+
+    fn device_slots(&self) -> &'static [SlotSpec] {
+        &REVERB_SLOTS
+    }
+
+    fn as_container(&self) -> Option<&dyn DeviceContainer> {
+        Some(&self.slots)
+    }
+
+    fn as_container_mut(&mut self) -> Option<&mut dyn DeviceContainer> {
+        Some(&mut self.slots)
+    }
+
+    fn is_container(&self) -> bool {
+        true
     }
 
     fn is_sleeping(&self) -> bool {
@@ -1469,6 +1836,382 @@ mod tests {
         let one_k = tone_amplitude(segment, 1_000.0, sr);
         let rms_all = rms(segment);
         assert!(one_k < rms_all * 0.5, "tail is dominated by one tone");
+    }
+
+    // === Spec 040: Tank FX and Wet FX ===
+
+    use crate::audio::devices::effects::DelayDevice;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A gain stage that counts its `process_block` calls and can claim async blocks.
+    struct Gain {
+        gain: f32,
+        calls: Arc<AtomicUsize>,
+        enabled: bool,
+        async_blocks: bool,
+    }
+
+    impl Gain {
+        fn boxed(gain: f32) -> (Box<dyn AudioDevice>, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let g = Gain {
+                gain,
+                calls: calls.clone(),
+                enabled: true,
+                async_blocks: false,
+            };
+            (Box::new(g), calls)
+        }
+    }
+
+    impl AudioDevice for Gain {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            for i in 0..n * 2 {
+                outputs[i] = inputs[i] * self.gain;
+            }
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.gain"
+        }
+        fn device_name(&self) -> &str {
+            "Gain"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn has_async_blocks(&self) -> bool {
+            self.async_blocks
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn is_enabled(&self) -> bool {
+            self.enabled
+        }
+        fn set_enabled(&mut self, enabled: bool) {
+            self.enabled = enabled;
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    const TANK: usize = 0;
+    const WET: usize = 1;
+
+    fn put(d: &mut ReverbDevice, slot: usize, device: Box<dyn AudioDevice>) {
+        d.slots.children_mut(slot).unwrap().push(device);
+    }
+
+    fn algo_name(algorithm: usize) -> &'static str {
+        ALGORITHMS[algorithm]
+    }
+
+    /// A busy reverb: modulation and ducking on, so every path is exercised.
+    fn busy(algorithm: usize) -> ReverbDevice {
+        let mut d = make(48_000.0);
+        set_real(&mut d, ALGORITHM, algorithm as f32);
+        set_real(&mut d, MIX, 60.0);
+        set_real(&mut d, DECAY, 3.0);
+        set_real(&mut d, DEPTH, 60.0);
+        set_real(&mut d, DUCKING, 30.0);
+        // Let the smoothers and the algorithm crossfade finish, so block size can't matter.
+        render(&mut d, &vec![0.0; 8192 * 2], &[512]);
+        d
+    }
+
+    fn noise_burst(frames: usize) -> Vec<f32> {
+        let mut x = pink_noise(frames, 0.3, 17);
+        for v in x.iter_mut().skip(frames / 4) {
+            *v = 0.0;
+        }
+        stereo(&x)
+    }
+
+    #[test]
+    fn reverb_has_a_loop_slot_and_an_audio_slot() {
+        let mut d = ReverbDevice::new(48_000.0);
+        let specs = d.device_slots();
+        assert_eq!(specs.len(), 2);
+        assert_eq!((specs[0].key, specs[0].kind), ("tank_fx", SlotKind::Loop));
+        assert_eq!((specs[1].key, specs[1].kind), ("wet_fx", SlotKind::Audio));
+        assert!(d.is_container());
+        assert_eq!(d.as_container().unwrap().child_count(), 2);
+        d.as_container_mut()
+            .unwrap()
+            .insert_child(0, Gain::boxed(1.0).0);
+        assert_eq!(d.as_container().unwrap().child_count(), 2);
+    }
+
+    #[test]
+    fn empty_slots_are_sample_identical() {
+        // Slots holding only bypassed devices stay on the plain path, the code that ran before
+        // the slots existed.
+        for algorithm in 0..3 {
+            let input = noise_burst(30_000);
+            let mut plain = busy(algorithm);
+            let mut slotted = busy(algorithm);
+            let (mut a, calls_a) = Gain::boxed(0.1);
+            let (mut b, calls_b) = Gain::boxed(0.1);
+            a.set_enabled(false);
+            b.set_enabled(false);
+            put(&mut slotted, TANK, a);
+            put(&mut slotted, WET, b);
+            let x = render(&mut plain, &input, &[512, 100, 64, 3]);
+            let y = render(&mut slotted, &input, &[512, 100, 64, 3]);
+            assert_eq!(x, y, "{}", algo_name(algorithm));
+            assert_eq!(calls_a.load(Ordering::Relaxed), 0);
+            assert_eq!(calls_b.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    fn window_rms(signal: &[f32], sr: f32, from: f32, to: f32) -> f32 {
+        rms(&signal[(from * sr) as usize..(to * sr) as usize])
+    }
+
+    #[test]
+    fn tank_fx_shortens_tail_per_algorithm() {
+        let sr = 48_000.0;
+        for algorithm in 0..3 {
+            let input = stereo(&impulse(4 * sr as usize));
+            let run = |gain: Option<f32>| {
+                let mut d = make(sr);
+                set_real(&mut d, ALGORITHM, algorithm as f32);
+                set_real(&mut d, MIX, 100.0);
+                set_real(&mut d, DECAY, 3.0);
+                render(&mut d, &vec![0.0; 8192 * 2], &[512]);
+                if let Some(g) = gain {
+                    put(&mut d, TANK, Gain::boxed(g).0);
+                }
+                left(&render(&mut d, &input, &[512]))
+            };
+            let plain = run(None);
+            let slotted = run(Some(0.5));
+            let before = window_rms(&plain, sr, 1.0, 1.5);
+            let after = window_rms(&slotted, sr, 1.0, 1.5);
+            assert!(before > 1e-5, "{}: no tail", algo_name(algorithm));
+            assert!(
+                after < before * 0.5,
+                "{}: tail {after} vs {before}",
+                algo_name(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn unity_tank_fx_matches_empty() {
+        for algorithm in 0..3 {
+            let input = noise_burst(40_000);
+            let mut plain = busy(algorithm);
+            let mut slotted = busy(algorithm);
+            let (fx, calls) = Gain::boxed(1.0);
+            put(&mut slotted, TANK, fx);
+            let x = render(&mut plain, &input, &[512, 100, 64, 3]);
+            let y = render(&mut slotted, &input, &[512, 100, 64, 3]);
+            assert!(calls.load(Ordering::Relaxed) > 0);
+            let diff = x
+                .iter()
+                .zip(&y)
+                .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+            assert!(
+                diff < 1e-3 * peak(&x).max(1e-3),
+                "{}: unity Tank FX differs by {diff} (peak {})",
+                algo_name(algorithm),
+                peak(&x)
+            );
+        }
+    }
+
+    #[test]
+    fn tank_fx_runs_while_frozen() {
+        let sr = 48_000.0;
+        for algorithm in 0..3 {
+            let input = stereo(&pink_noise(sr as usize / 4, 0.3, 3));
+            let run = |gain: Option<f32>| {
+                let mut d = make(sr);
+                set_real(&mut d, ALGORITHM, algorithm as f32);
+                set_real(&mut d, MIX, 100.0);
+                if let Some(g) = gain {
+                    put(&mut d, TANK, Gain::boxed(g).0);
+                }
+                render(&mut d, &input, &[512]);
+                set_real(&mut d, FREEZE, 1.0);
+                left(&render(&mut d, &vec![0.0; 3 * sr as usize * 2], &[512]))
+            };
+            let plain = run(None);
+            let slotted = run(Some(0.8));
+            let held = window_rms(&plain, sr, 2.0, 2.5) / window_rms(&plain, sr, 0.2, 0.7);
+            let fading = window_rms(&slotted, sr, 2.0, 2.5) / window_rms(&slotted, sr, 0.2, 0.7);
+            assert!(held > 0.7, "{}: frozen plain {held}", algo_name(algorithm));
+            assert!(
+                fading < held * 0.5,
+                "{}: frozen tank {fading} vs {held}",
+                algo_name(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn tank_fx_does_not_depend_on_block_size() {
+        for algorithm in 0..3 {
+            let input = noise_burst(30_000);
+            let mut a = busy(algorithm);
+            let mut b = busy(algorithm);
+            put(&mut a, TANK, Gain::boxed(0.9).0);
+            put(&mut b, TANK, Gain::boxed(0.9).0);
+            let x = render(&mut a, &input, &[512]);
+            let y = render(&mut b, &input, &[37, 64, 200, 1]);
+            let diff = x
+                .iter()
+                .zip(&y)
+                .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+            assert!(
+                diff < 1e-3 * peak(&x).max(1e-3),
+                "{}: {diff}",
+                algo_name(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn wet_fx_never_touches_dry() {
+        let sr = 48_000.0;
+        let input = stereo(&pink_noise(20_000, 0.3, 9));
+        let mut plain = make(sr);
+        let mut silenced = make(sr);
+        let mut doubled = make(sr);
+        for d in [&mut plain, &mut silenced, &mut doubled] {
+            set_real(d, MIX, 50.0);
+            render(d, &vec![0.0; 8192 * 2], &[512]);
+        }
+        put(&mut silenced, WET, Gain::boxed(0.0).0);
+        put(&mut doubled, WET, Gain::boxed(2.0).0);
+        let (dry, _) = dry_wet_gains(0.5, MixLaw::EqualPower);
+        let p = render(&mut plain, &input, &[512]);
+        let s = render(&mut silenced, &input, &[512]);
+        let t = render(&mut doubled, &input, &[512]);
+        for i in 0..input.len() {
+            let dry_part = input[i] * dry;
+            assert!(
+                (s[i] - dry_part).abs() < 1e-6,
+                "silenced wet leaves the dry at {i}"
+            );
+            let wet_plain = p[i] - dry_part;
+            assert!(
+                (t[i] - dry_part - 2.0 * wet_plain).abs() < 1e-5,
+                "doubled wet at {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn bypassed_reverb_skips_slots() {
+        let mut d = make(48_000.0);
+        let (a, calls_a) = Gain::boxed(0.0);
+        let (b, calls_b) = Gain::boxed(0.0);
+        put(&mut d, TANK, a);
+        put(&mut d, WET, b);
+        d.set_enabled(false);
+        let input = stereo(&pink_noise(2000, 0.5, 5));
+        let out = render(&mut d, &input, &[512]);
+        assert_eq!(out, input);
+        assert_eq!(calls_a.load(Ordering::Relaxed), 0);
+        assert_eq!(calls_b.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn sleep_waits_for_wet_fx_tail() {
+        let sr = 48_000.0;
+        const BLOCK: usize = 512;
+        let sleep_time = |with_delay: bool| {
+            let mut d = make(sr);
+            set_real(&mut d, MIX, 100.0);
+            set_real(&mut d, DECAY, 0.3);
+            if with_delay {
+                let mut delay = DelayDevice::new(sr, 5000.0);
+                delay.prepare(sr, BLOCK);
+                use super::super::delay as dl;
+                // Normalised: Mix 100 %, Time 1000 ms (log 1..5000), Sync Off, Feedback 50 %.
+                delay.set_parameter(dl::MIX, 1.0);
+                delay.set_parameter(dl::TIME_L, (1000.0f32).ln() / (5000.0f32).ln());
+                delay.set_parameter(dl::SYNC_L, 0.0);
+                delay.set_parameter(dl::FEEDBACK, 50.0 / 110.0);
+                put(&mut d, WET, Box::new(delay));
+            }
+            let mut input = vec![0.0f32; BLOCK * 2];
+            input[0] = 1.0;
+            input[1] = 1.0;
+            let mut output = vec![0.0f32; BLOCK * 2];
+            for block in 0..((sr as usize * 40) / BLOCK) {
+                let in_activity = peak(&input) > 0.001;
+                d.process_block(&input, &mut output, BLOCK);
+                let out_activity = peak(&output) > 0.001;
+                d.update_sleep_state(in_activity || out_activity);
+                if out_activity {
+                    assert!(!d.is_sleeping(), "slept with a loud tail");
+                }
+                if d.is_sleeping() {
+                    return Some(block * BLOCK);
+                }
+                input.fill(0.0);
+            }
+            None
+        };
+        let plain = sleep_time(false).expect("plain reverb sleeps");
+        let with_fx = sleep_time(true).expect("reverb with Wet FX sleeps once the repeats die");
+        assert!(
+            with_fx > plain + sr as usize * 3,
+            "Wet FX tail ignored: slept at {with_fx} vs {plain}"
+        );
+    }
+
+    #[test]
+    fn whole_block_path_matches_process_block() {
+        let sr = 48_000.0;
+        let input = stereo(&pink_noise(4096, 0.3, 21));
+        let build = || {
+            let mut d = busy(1);
+            let calls;
+            let mut fx = Gain {
+                gain: 0.5,
+                calls: Arc::new(AtomicUsize::new(0)),
+                enabled: true,
+                async_blocks: true,
+            };
+            calls = fx.calls.clone();
+            fx.gain = 0.5;
+            put(&mut d, WET, Box::new(fx));
+            (d, calls)
+        };
+        let (mut a, _) = build();
+        let (mut b, calls) = build();
+        assert!(b.has_async_blocks());
+        let x = render(&mut a, &input, &[512]);
+        let mut y = vec![0.0f32; input.len()];
+        for start in (0..input.len() / 2).step_by(512) {
+            let (i, o) = (
+                &input[start * 2..(start + 512) * 2],
+                &mut y[start * 2..(start + 512) * 2],
+            );
+            assert!(b.begin_block(i, 512));
+            b.finish_block(i, o, 512);
+        }
+        assert_eq!(x, y);
+        assert!(calls.load(Ordering::Relaxed) > 0);
+        let _ = sr;
+        // Without a plugin in Wet FX the wrapper still splits blocks.
+        let plain = busy(1);
+        assert!(!plain.has_async_blocks());
     }
 }
 
