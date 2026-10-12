@@ -192,7 +192,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test bypassed_plugin_keeps_latency` passes; existing adapter tests pass
   - _Depends on_: T-016
 
-- [ ] **T-021** [REQ-015] Runtime latency changes from plugins
+- [x?] **T-021** [REQ-015] Runtime latency changes from plugins
   - _Files_: `Engine/src/plugin_host/host.rs`, `Engine/src/plugin_host/event_loop.rs`, `Engine/src/plugin_host/commands.rs`, `Engine/src/plugin_host/vst3/commands.rs`, `Engine/src/audio/ipc/protocol.rs`, `Engine/src/audio/command_worker/device_tick.rs`
   - _Output_:
     - The CLAP `request_restart` and `latency.changed` callbacks set a flag. The event loop then re-activates the plugin and sends `PluginEvent::LatencyChanged` when the value differs. VST3 sends it after its existing re-activation.
@@ -228,7 +228,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test render_trims_latency` passes (onset at frame 0 ± 1, same length as without the device); existing render tests pass
   - _Depends on_: T-019
 
-- [ ] **T-025** [REQ-016, REQ-017] Engine panel latency display
+- [x?] **T-025** [REQ-016, REQ-017] Engine panel latency display
   - _Files_: `Godot/editor/EnginePanel.gd`, `Godot/tests/test_engine_perf.gd`
   - _Output_:
     - Per-channel latency in samples and ms.

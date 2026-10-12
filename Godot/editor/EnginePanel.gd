@@ -153,6 +153,49 @@ static func threads_header(perf: EngineStatus.EnginePerf) -> String:
 	return text
 
 
+## "Plugin latency: 10.7 ms" header line (plus the over-limit count in the alert colour).
+## Empty without a report or when nothing adds latency.
+static func latency_header(perf: EngineStatus.EnginePerf) -> String:
+	if perf == null or perf.sample_rate <= 0:
+		return ""
+	var parts: PackedStringArray = []
+	if perf.output_latency_frames > 0:
+		parts.append("Plugin latency: %s" % frames_to_ms_text(perf.output_latency_frames, perf.sample_rate))
+	if perf.over_limit_channels > 0:
+		parts.append(_colored_static("%d channel%s over the compensation limit" % [
+			perf.over_limit_channels, "" if perf.over_limit_channels == 1 else "s"], COLOR_ALERT))
+	return " · ".join(parts)
+
+
+static func frames_to_ms_text(frames: int, sample_rate: int) -> String:
+	return "%.1f ms" % (frames * 1000.0 / sample_rate)
+
+
+## "512 smp (10.7 ms)"; empty for 0 frames so channels without latency stay uncluttered.
+static func latency_text(frames: int, sample_rate: int) -> String:
+	if frames <= 0 or sample_rate <= 0:
+		return ""
+	return "%d smp (%s)" % [frames, frames_to_ms_text(frames, sample_rate)]
+
+
+## The engine caps a channel's latency at 1 s (sample_rate frames); one at the cap is over the limit.
+static func is_over_limit(frames: int, sample_rate: int) -> bool:
+	return sample_rate > 0 and frames >= sample_rate
+
+
+## One line of the Channels table, without colour for the load part of a device row.
+static func row_text(row: Dictionary, sample_rate: int) -> String:
+	var latency := latency_text(row.latency_frames, sample_rate)
+	var line := "%s%s%s  %.1f%% (peak %.1f%%)" % [
+		"    " if row.is_device else "", row.name, " " + latency if not latency.is_empty() else "",
+		row.load_avg * 100.0, row.load_peak * 100.0]
+	if row.host_load >= 0.0:
+		line += "  host %.0f%%" % (row.host_load * 100.0)
+	if not row.is_device and (row.load_peak >= 1.0 or is_over_limit(row.latency_frames, sample_rate)):
+		line = _colored_static(line, COLOR_ALERT)
+	return line
+
+
 static func _colored_static(text: String, color: String) -> String:
 	return "[color=%s]%s[/color]" % [color, text]
 
@@ -287,6 +330,9 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 	if not denied.is_empty():
 		parts.append(_colored("No realtime priority: %s" % ", ".join(denied), COLOR_WARN))
 	var channel_table := _channels_text(project.channels if project else [], now)
+	var latency := latency_header(_engine_perf)
+	if not latency.is_empty():
+		parts.insert(0, latency)
 	var header := threads_header(_engine_perf)
 	if not header.is_empty():
 		parts.insert(0, header)
@@ -311,16 +357,12 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 func _channels_text(channels: Array, now_msec: int) -> String:
 	_drop_stale_channel_perf(_channel_perf, now_msec)
 	var rows := build_channel_rows(_channel_perf, channels)
+	var sample_rate := _engine_perf.sample_rate if _engine_perf != null else 0
 	if rows.is_empty():
 		return ""
 	var lines: PackedStringArray = ["", "", "Channels"]
 	for row in rows:
-		var line := "%s%s  %.1f%% (peak %.1f%%)" % [
-			"    " if row.is_device else "", row.name, row.load_avg * 100.0, row.load_peak * 100.0]
-		if row.host_load >= 0.0:
-			line += "  host %.0f%%" % (row.host_load * 100.0)
-		if not row.is_device and row.load_peak >= 1.0:
-			line = _colored(line, COLOR_ALERT)
+		var line := row_text(row, sample_rate)
 		lines.append(line)
 	return "\n".join(lines)
 
@@ -335,7 +377,8 @@ static func _drop_stale_channel_perf(entries: Dictionary, now_msec: int) -> void
 ## Table rows for the Channels section, heaviest channel (by load_avg) first, each followed by
 ## its top-level device rows in chain order. `entries` is {channel_id: {"perf", "msec"}} and
 ## `channels` the project's Channel models, which give the names. A container is one row.
-## Each row: {name, load_avg, load_peak, is_device, host_load} (host_load < 0 = not a plugin).
+## Each row: {name, load_avg, load_peak, is_device, host_load, latency_frames} (host_load < 0 = not a
+## plugin; latency_frames is the channel's path latency, 0 on device rows).
 static func build_channel_rows(entries: Dictionary, channels: Array) -> Array[Dictionary]:
 	var perfs: Array = []
 	for id in entries:
@@ -354,7 +397,8 @@ static func build_channel_rows(entries: Dictionary, channels: Array) -> Array[Di
 		rows.append({
 			"name": channel.name if channel else "Channel %d" % perf.channel_id,
 			"load_avg": perf.load_avg, "load_peak": perf.load_peak,
-			"is_device": false, "host_load": -1.0})
+			"is_device": false, "host_load": -1.0,
+			"latency_frames": perf.out_latency_frames})
 		for i in perf.device_count():
 			var dev: DeviceInstance = null
 			if channel and i < channel.devices.size():
@@ -365,7 +409,7 @@ static func build_channel_rows(entries: Dictionary, channels: Array) -> Array[Di
 			rows.append({
 				"name": dev.get_display_name() if dev else "Device %d" % (i + 1),
 				"load_avg": perf.device_avg[i], "load_peak": perf.device_peak[i],
-				"is_device": true, "host_load": host})
+				"is_device": true, "host_load": host, "latency_frames": 0})
 	return rows
 
 

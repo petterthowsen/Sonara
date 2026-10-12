@@ -33,6 +33,7 @@ func run_tests() -> void:
 	_test_container_is_one_row()
 	_test_stale_dropped()
 	_test_threads_header()
+	_test_latency_display()
 
 
 func _make_instance(id: String, display: String, channel_id: int) -> Object:
@@ -130,3 +131,32 @@ func _test_threads_header() -> void:
 	var one = _EnginePerf.from_osc([1, "granted", 0, 0, 48000])
 	_assert(_panel_script.threads_header(one) == "1 thread · realtime", "1 thread, realtime")
 	_assert(_panel_script.threads_header(null) == "", "no report, no header")
+
+
+func _test_latency_display() -> void:
+	var channels := [_make_channel(2, "Drums", []), _make_channel(3, "Bass", []),
+			_make_channel(4, "Pad", [])]
+	var entries := {
+		2: _entry(_ChannelPerf.from_osc([2, 0.4, 0.5, 512, 0])),
+		3: _entry(_ChannelPerf.from_osc([3, 0.3, 0.4, 0, 0])),
+		4: _entry(_ChannelPerf.from_osc([4, 0.2, 0.3, 48000, 0])),
+	}
+	var rows: Array[Dictionary] = _panel_script.build_channel_rows(entries, channels)
+	var lines := rows.map(func(r: Dictionary) -> String: return _panel_script.row_text(r, 48000))
+	_assert(lines[0].begins_with("Drums 512 smp (10.7 ms)  40.0%"), "latency after the name: %s" % [lines[0]])
+	_assert(lines[1] == "Bass  30.0% (peak 40.0%)", "no latency, nothing shown: %s" % [lines[1]])
+	_assert(not lines[0].contains(_panel_script.COLOR_ALERT), "a normal latency is not alert coloured")
+	_assert(lines[2].contains(_panel_script.COLOR_ALERT) and lines[2].contains("48000 smp (1000.0 ms)"),
+			"a channel at the 1 s cap is alert coloured: %s" % [lines[2]])
+	_assert(_panel_script.row_text(rows[2], 0).find(_panel_script.COLOR_ALERT) < 0,
+			"no sample rate, no over-limit judgement")
+
+	var perf = _EnginePerf.from_osc([4, "granted", 512, 0, 48000])
+	_assert(_panel_script.latency_header(perf) == "Plugin latency: 10.7 ms", "header: %s" % _panel_script.latency_header(perf))
+	var over = _EnginePerf.from_osc([4, "granted", 512, 2, 48000])
+	var over_text: String = _panel_script.latency_header(over)
+	_assert(over_text.begins_with("Plugin latency: 10.7 ms") and over_text.contains("2 channels over")
+			and over_text.contains(_panel_script.COLOR_ALERT), "over-limit count in alert colour: %s" % over_text)
+	_assert(_panel_script.latency_header(_EnginePerf.from_osc([4, "granted", 0, 0, 48000])) == "",
+			"no latency, no header line")
+	_assert(_panel_script.latency_header(null) == "", "no report, no latency header")
