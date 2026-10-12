@@ -17,6 +17,8 @@
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
 resource_local_to_scene = true
 content_margin_left = 12.0
+content_margin_top = 2.0
+content_margin_right = 2.0
 bg_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
 border_color = Color(0, 0, 0, 0)
 corner_detail = 5
@@ -74,7 +76,7 @@ size_flags_vertical = 3
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_left = 2
-theme_override_constants/margin_top = 2
+theme_override_constants/margin_top = 0
 theme_override_constants/margin_right = 2
 theme_override_constants/margin_bottom = 0
 

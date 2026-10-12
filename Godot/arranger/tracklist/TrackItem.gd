@@ -37,7 +37,8 @@ var selected_outline_color: Color:
 		return _border_selected
 var _border_selected := Color.WHITE
 var _border_selected_cached := false
-@export var active_outline_color := Color(1, 1, 1, 0.9)
+## Same weight as the selection outline, just brighter, so a multi-selection still reads as one group.
+@export var active_outline_color := Color(0.85, 0.85, 0.85)
 
 # UI References
 ## Inner layout; its combined minimum size bounds how small a resize can go.
@@ -176,7 +177,7 @@ func _draw() -> void:
 	if r.size.x <= 0.0 or r.size.y <= 0.0:
 		return
 	if is_active:
-		draw_rect(r, active_outline_color, false, 2.0)
+		draw_rect(r, active_outline_color, false, 1.0)
 	else:
 		draw_rect(r, selected_outline_color, false, 1.0)
 
