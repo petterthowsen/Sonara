@@ -1173,6 +1173,31 @@ The device sample rate changed. Audio clips were decoded at the old rate. They k
 right pitch (playback compensates for the clip's rate), and Godot re-sends `load_audio_file` for
 each one so they're resampled properly. Files decode at the new rate from this message on.
 
+## Engine Performance (Godot <-> Rust, spec 042)
+
+The engine times each channel and top-level device only while at least one client has subscribed,
+so an unsubscribed engine pays nothing.
+
+### `/engine/perf/subscribe` and `/engine/perf/unsubscribe` (Godot -> Rust)
+
+No arguments. Counted: two subscribes need two unsubscribes before timing stops. Unsubscribing
+below zero is ignored. The first subscribe starts timing from clean timers.
+
+### `/status/channel_perf [i:channel_id, f:load_avg, f:load_peak, i:out_latency_frames, i:device_count, (f:avg, f:peak) x device_count]` (Rust -> Godot)
+
+Every 500 ms while subscribed, for each channel that ran in the interval. Loads are shares of the
+block time (1.0 = the whole block). The channel's own load covers its work including its devices.
+Each `(avg, peak)` pair is a top-level device by index (a container is one entry); `avg` is the
+device's time over the interval's block time, so a device that slept half the interval shows half
+its running load. A removed channel stops being reported. `out_latency_frames` is 0 until latency
+compensation reports it.
+
+### `/status/engine_perf [i:processing_threads, s:threads_realtime, i:output_latency_frames, i:over_limit_channels, i:sample_rate]` (Rust -> Godot)
+
+Sent after the channel messages of each report. `threads_realtime` is `granted`, `denied`,
+`partial` or `none`. Until the processing-threads phases land, threads are 0, realtime is `none`
+and the latency and over-limit counts are 0.
+
 ## Offline Rendering (Godot <-> Rust)
 
 The engine renders a range offline (`Engine/src/audio/render/`) on a worker thread with its own

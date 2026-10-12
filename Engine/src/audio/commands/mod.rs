@@ -546,6 +546,11 @@ pub enum AudioCommand {
         sample_rate: u32,
         period_frames: u32,
     },
+    /// A perf listener (the engine panel) came or went (spec 042). Counted: timing and the
+    /// 500 ms `ChannelPerf`/`EnginePerf` reports run while any subscriber remains.
+    SetPerfSubscription {
+        subscribe: bool,
+    },
     /// Report the running config (`EngineStatus::AudioConfig`).
     RequestAudioConfig,
     /// List output devices (`AudioDeviceInfo` statuses, then `AudioDevicesComplete`).
@@ -755,6 +760,7 @@ fn dispatch(
         }
         AudioCommand::Play => return transport::play(state),
         AudioCommand::Pause => return transport::pause(state),
+        AudioCommand::SetPerfSubscription { subscribe } => state.set_perf_subscription(subscribe),
         AudioCommand::Stop => return transport::stop(state, effects),
         AudioCommand::Seek(tick) => transport::seek(state, tick),
         AudioCommand::SetLoop {

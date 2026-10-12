@@ -1,4 +1,4 @@
-//! Audio device routes: `/audio/devices/*` and `/audio/config/*`.
+//! Audio device routes: `/audio/devices/*`, `/audio/config/*` and `/engine/perf/*`.
 
 use anyhow::Result;
 use rosc::OscType;
@@ -25,6 +25,15 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             Ok(command) => cx.commands.send(command)?,
             Err(e) => warn!("Ignoring /audio/config/set: {}", e),
         },
+        // Counted: each subscribe needs its own unsubscribe (spec 042).
+        ["engine", "perf", "subscribe"] => {
+            cx.commands
+                .send(AudioCommand::SetPerfSubscription { subscribe: true })?;
+        }
+        ["engine", "perf", "unsubscribe"] => {
+            cx.commands
+                .send(AudioCommand::SetPerfSubscription { subscribe: false })?;
+        }
         _ => return Ok(false),
     }
     Ok(true)

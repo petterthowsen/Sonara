@@ -30,6 +30,7 @@ mod audio_config;
 use device_tick::{PluginStatsLog, PluginStatsReport};
 mod device_tick;
 mod devices;
+mod perf;
 mod plugins;
 mod project;
 mod render;
@@ -74,6 +75,10 @@ pub struct CommandWorker {
     plugin_stats_since: Instant,
     plugin_reports: HashMap<(ChannelId, DevicePath), PluginStatsReport>,
     plugin_reports_since: Instant,
+    /// Start of the perf report interval in progress (`report_perf`).
+    perf_since: Instant,
+    /// Statuses collected by `report_perf`, kept to reuse the allocation.
+    perf_statuses: Vec<EngineStatus>,
     stream: StreamControl,
     audio: AudioSettings,
     block_clock: Arc<BlockClock>,
@@ -116,6 +121,8 @@ impl CommandWorker {
             plugin_stats_since: Instant::now(),
             plugin_reports: HashMap::new(),
             plugin_reports_since: Instant::now(),
+            perf_since: Instant::now(),
+            perf_statuses: Vec::new(),
             stream,
             audio: AudioSettings {
                 opened_period: audio_request.period_frames,
@@ -145,6 +152,7 @@ impl CommandWorker {
             }
             if Instant::now() >= next_poll {
                 self.poll_devices();
+                self.report_perf();
                 next_poll = Instant::now() + DEVICE_POLL_INTERVAL;
             }
         }

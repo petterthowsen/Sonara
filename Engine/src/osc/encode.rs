@@ -148,6 +148,41 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
                 OscType::String(log_path),
             ],
         ),
+        EngineStatus::ChannelPerf {
+            channel_id,
+            load_avg,
+            load_peak,
+            out_latency_frames,
+            devices,
+        } => {
+            let mut args = Vec::with_capacity(5 + devices.len() * 2);
+            args.push(OscType::Int(channel_id as i32));
+            args.push(OscType::Float(load_avg));
+            args.push(OscType::Float(load_peak));
+            args.push(OscType::Int(out_latency_frames as i32));
+            args.push(OscType::Int(devices.len() as i32));
+            for (avg, peak) in devices {
+                args.push(OscType::Float(avg));
+                args.push(OscType::Float(peak));
+            }
+            ("/status/channel_perf".to_string(), args)
+        }
+        EngineStatus::EnginePerf {
+            processing_threads,
+            threads_realtime,
+            output_latency_frames,
+            over_limit_channels,
+            sample_rate,
+        } => (
+            "/status/engine_perf".to_string(),
+            vec![
+                OscType::Int(processing_threads as i32),
+                OscType::String(threads_realtime),
+                OscType::Int(output_latency_frames as i32),
+                OscType::Int(over_limit_channels as i32),
+                OscType::Int(sample_rate as i32),
+            ],
+        ),
         EngineStatus::PluginStats {
             channel_id,
             device_path,
@@ -668,6 +703,48 @@ mod tests {
         let msg = messages.remove(0);
         let tags = osc_arg_types(&msg.args);
         (msg.addr, tags, msg.args)
+    }
+
+    #[test]
+    fn channel_perf_encodes_a_variable_device_count() {
+        let (addr, tags, args) = wire(EngineStatus::ChannelPerf {
+            channel_id: 7,
+            load_avg: 0.25,
+            load_peak: 0.5,
+            out_latency_frames: 128,
+            devices: vec![(0.1, 0.2), (0.3, 0.4)],
+        });
+        assert_eq!(addr, "/status/channel_perf");
+        assert_eq!(tags, "i f f i i f f f f");
+        assert_eq!(args[0], OscType::Int(7));
+        assert_eq!(args[3], OscType::Int(128));
+        assert_eq!(args[4], OscType::Int(2));
+        assert_eq!(args[7], OscType::Float(0.3));
+
+        let (_, tags, args) = wire(EngineStatus::ChannelPerf {
+            channel_id: 2,
+            load_avg: 0.0,
+            load_peak: 0.0,
+            out_latency_frames: 0,
+            devices: Vec::new(),
+        });
+        assert_eq!(tags, "i f f i i");
+        assert_eq!(args[4], OscType::Int(0));
+    }
+
+    #[test]
+    fn engine_perf_is_threads_realtime_latency_over_limit_rate() {
+        let (addr, tags, args) = wire(EngineStatus::EnginePerf {
+            processing_threads: 4,
+            threads_realtime: "granted".into(),
+            output_latency_frames: 256,
+            over_limit_channels: 1,
+            sample_rate: 48_000,
+        });
+        assert_eq!(addr, "/status/engine_perf");
+        assert_eq!(tags, "i s i i i");
+        assert_eq!(args[1], string("granted"));
+        assert_eq!(args[4], OscType::Int(48_000));
     }
 
     #[test]

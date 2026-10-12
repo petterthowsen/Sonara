@@ -28,7 +28,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test timing_off_records_nothing channel_timer_excludes_parked_wait` passes
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-001, REQ-003, REQ-004] Subscription commands, perf report and OSC
+- [x?] **T-003** [REQ-001, REQ-003, REQ-004] Subscription commands, perf report and OSC
   - _Files_: `Engine/src/audio/commands/mod.rs`, `Engine/src/audio/commands/status.rs`, `Engine/src/audio/command_worker/mod.rs`, `Engine/src/audio/command_worker/perf.rs` (new), `Engine/src/osc/routes/audio.rs`, `Engine/src/osc/routes/mod.rs`, `Engine/src/osc/encode.rs`
   - _Output_:
     - `SetPerfSubscription` (counted), with `/engine/perf/subscribe` and `/engine/perf/unsubscribe`.

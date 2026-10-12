@@ -192,6 +192,28 @@ impl EngineState {
     /// Without this, a Godot session that outlives an engine restart still routes tracks to
     /// channel 1, but that channel does not exist: meters stay at zero and the CPAL buffer
     /// stays silent.
+    /// Count a perf subscriber in or out (spec 042). Timing runs while any remains; turning it on
+    /// zeroes every timer so the first report has no stale data. Unsubscribing saturates at 0.
+    pub fn set_perf_subscription(&mut self, subscribe: bool) {
+        if subscribe {
+            self.perf_subscribers = self.perf_subscribers.saturating_add(1);
+            if !self.perf_timing {
+                self.perf_timing = true;
+                for channel in self.channels.values_mut() {
+                    channel.mix.timer.take();
+                    for timer in channel.device_timers.iter_mut() {
+                        timer.take();
+                    }
+                }
+            }
+        } else {
+            self.perf_subscribers = self.perf_subscribers.saturating_sub(1);
+            if self.perf_subscribers == 0 {
+                self.perf_timing = false;
+            }
+        }
+    }
+
     pub fn ensure_master_channel(&mut self, buffer_size: usize) {
         if self.channels.contains_key(&1) {
             return;

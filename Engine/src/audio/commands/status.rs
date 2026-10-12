@@ -147,6 +147,25 @@ pub enum EngineStatus {
         /// The host's log file ("" when unknown).
         log_path: String,
     },
+    /// One channel's processing over the last 500 ms (spec 042), as shares of the block time.
+    /// `devices` has `(avg, peak)` per top-level device, by index. Sent only for a channel that
+    /// ran, and only while a perf subscriber is listening.
+    ChannelPerf {
+        channel_id: ChannelId,
+        load_avg: f32,
+        load_peak: f32,
+        out_latency_frames: u32,
+        devices: Vec<(f32, f32)>,
+    },
+    /// Engine-wide perf figures, sent after the `ChannelPerf`s of each report. `threads_realtime`
+    /// is `granted`, `denied`, `partial` or `none`.
+    EnginePerf {
+        processing_threads: u32,
+        threads_realtime: String,
+        output_latency_frames: u32,
+        over_limit_channels: u32,
+        sample_rate: u32,
+    },
     /// One second of a subprocess plugin's processing (Phase 6): its `process()` time as a share
     /// of real time (average and worst block), the same in microseconds, the blocks it was
     /// given and how many missed the callback deadline. `struggling` when it missed
