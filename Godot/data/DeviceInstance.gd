@@ -322,6 +322,7 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 	child_removed.connect(_on_own_children_removed)
 	child_added.connect(_on_own_child_added)
 	Multiband.ensure_chains(self)
+	DeviceSlots.ensure_chains(self)
 
 
 ## Assign a path-safe, sibling-unique display name. Emits `name_changed` when it differs.
@@ -2731,8 +2732,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 		instance.plugin_state = Marshalls.base64_to_raw(state_b64)
 		instance._plugin_state_restore_pending = not instance.plugin_state.is_empty()
 
-	if Multiband.is_multiband(instance):
-		instance.children.clear()  # `_init` made empty band chains; the saved ones replace them
+	if Multiband.is_multiband(instance) or DeviceSlots.is_slotted(instance):
+		instance.children.clear()  # `_init` made empty chains; the saved ones replace them
 	for child_data in data.get("children", []):
 		if child_data is Dictionary:
 			var child := DeviceInstance.from_json(child_data)
@@ -2744,6 +2745,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	if instance._is_drum_machine():
 		instance._migrate_choke_groups()
 	Multiband.ensure_chains(instance)  # a Multiband FX saved with fewer than six bands
+	DeviceSlots.ensure_chains(instance)  # a slotted device saved before spec 040 has no chains
 
 	return instance
 

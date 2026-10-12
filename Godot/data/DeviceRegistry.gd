@@ -240,7 +240,8 @@ func _on_plugin_scan_complete(args: Array) -> void:
 ##   enum_values:String..., module:String, automatable:Int(0|1), modulatable:Int(0|1)) ...,
 ##  is_container:Int, then optionally the modulation block:
 ##  source_count:Int, (id:String, name:String, bipolar:Int(0|1))..., route_count:Int,
-##  (source:String, param_id:Int, amount:Float)... (the default patch)]
+##  (source:String, param_id:Int, amount:Float)... (the default patch), then the device slots:
+##  slot_count:Int, (key:String, name:String, kind:String)...]
 func _on_builtin_info_received(args: Array) -> void:
 	if args.size() < 10:
 		logger.warn("Invalid /builtin/info message: %s" % str(args))
@@ -287,7 +288,8 @@ func _on_builtin_info_received(args: Array) -> void:
 		device.is_container = int(args[idx]) != 0
 		idx += 1
 
-	_parse_default_modulators(device, args, idx)
+	idx = _parse_default_modulators(device, args, idx)
+	_parse_device_slots(device, args, idx)
 
 	# Batched: devices_changed fires on /builtin/complete.
 	_register(device)
@@ -328,16 +330,17 @@ func _parse_param(args: Array, idx: int, owner_id: String) -> Array:
 
 
 ## Default-modulator block of /builtin/info starting at `idx`. Absent for devices without a
-## default patch. `{kind, name, params: {id: norm}, routes: [{target, amount}]}`.
-func _parse_default_modulators(device: Device, args: Array, idx: int) -> void:
+## default patch. `{kind, name, params: {id: norm}, routes: [{target, amount}]}`. Returns the
+## index after the block (`idx` itself when it is absent, `args.size()` when it is truncated).
+func _parse_default_modulators(device: Device, args: Array, idx: int) -> int:
 	if idx >= args.size():
-		return
+		return idx
 	var count := int(args[idx])
 	idx += 1
 	for _i in range(count):
 		if idx + 2 >= args.size():
 			logger.warn("Truncated default modulators for builtin device %s" % device.device_id)
-			return
+			return args.size()
 		var modulator := {"kind": String(args[idx]), "name": String(args[idx + 1]), "params": {}, "routes": []}
 		idx += 2
 		var param_count := int(args[idx])
@@ -345,7 +348,7 @@ func _parse_default_modulators(device: Device, args: Array, idx: int) -> void:
 		for _p in range(param_count):
 			if idx + 1 >= args.size():
 				logger.warn("Truncated default modulator params for %s" % device.device_id)
-				return
+				return args.size()
 			modulator["params"][int(args[idx])] = float(args[idx + 1])
 			idx += 2
 		var route_count := int(args[idx])
@@ -353,10 +356,27 @@ func _parse_default_modulators(device: Device, args: Array, idx: int) -> void:
 		for _r in range(route_count):
 			if idx + 1 >= args.size():
 				logger.warn("Truncated default modulator routes for %s" % device.device_id)
-				return
+				return args.size()
 			modulator["routes"].append({"target": String(args[idx]), "amount": float(args[idx + 1])})
 			idx += 2
 		device.default_modulators.append(modulator)
+	return idx
+
+
+## Device-slot block of /builtin/info (spec 040) starting at `idx`, after the default modulators:
+## `slot_count:Int`, then `(key:String, name:String, kind:String)` per slot. Absent from older
+## engines, which leaves `device.slots` empty.
+func _parse_device_slots(device: Device, args: Array, idx: int) -> void:
+	if idx >= args.size():
+		return
+	var count := int(args[idx])
+	idx += 1
+	for _i in range(count):
+		if idx + 2 >= args.size():
+			logger.warn("Truncated device slots for builtin device %s" % device.device_id)
+			return
+		device.slots.append({"key": String(args[idx]), "name": String(args[idx + 1]), "kind": String(args[idx + 2])})
+		idx += 3
 
 
 ## ============================================================================

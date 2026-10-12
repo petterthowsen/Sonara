@@ -62,6 +62,10 @@ var audio_out_channels: int = 2
 ## Whether this device can own nested child devices (Chain, Layer).
 var is_container: bool = false
 
+## Device slots this device has (spec 040): `[{key, name, kind}]` in slot order, kind "note",
+## "audio" or "loop". Empty for a device without slots.
+var slots: Array[Dictionary] = []
+
 ## Modulators a fresh instance starts with (spec 018): [{kind: String, name: String,
 ## params: Dictionary, routes: Array[Dictionary]}]. Empty when the device has no default patch.
 var default_modulators: Array[Dictionary] = []
@@ -213,7 +217,12 @@ func extra_stereo_bus_count() -> int:
 
 ## True when dropping this device on an empty tracklist/mixer should create an instrument track.
 func creates_instrument_track() -> bool:
-	return category == DeviceCategory.Instrument or category == DeviceCategory.NoteEffect or (is_container and device_id != "sonara.builtin.multiband")
+	return category == DeviceCategory.Instrument or category == DeviceCategory.NoteEffect or (is_container and not has_device_slots() and device_id != "sonara.builtin.multiband")
+
+
+## True for a slotted device (PolySynth, Delay, Reverb): it owns fixed slot chains (spec 040).
+func has_device_slots() -> bool:
+	return not slots.is_empty()
 
 
 ## True when expanding this container should show one focused child at a time (Layer, Drum Machine,
@@ -288,12 +297,12 @@ func is_note_effect() -> bool:
 
 
 ## True when this device gets a generated Simple View (`devices/simple_view/`, REQ-001): never
-## for a container, and only once there's at least one visible parameter (`ParamClassifier.is_visible`).
+## for a user container (a slotted device keeps it), and only once there's at least one visible parameter (`ParamClassifier.is_visible`).
 ## Pass `params` for an instance's own advertised list (CLAP/SFZ devices, whose parameters live on
 ## `DeviceInstance` rather than this shared registry object) when it's non-empty; otherwise this
 ## falls back to `parameters`, so a plugin with no params advertised yet correctly reports false.
 func uses_simple_view(params: Array = []) -> bool:
-	if is_container:
+	if is_container and not has_device_slots():
 		return false
 	var list: Array = params if not params.is_empty() else parameters
 	for param in list:
