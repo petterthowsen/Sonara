@@ -17,7 +17,7 @@ cargo fmt
 ```
 
 - Two binaries: `engine` (default, `src/main.rs`) and `plugin_host` (`src/bin/plugin_host.rs`). `src/lib.rs` shares the modules between them. The engine spawns `plugin_host` from its own executable directory, so both must be built with the same profile. The run scripts handle this. A bare `cargo run` builds only `engine`, and CLAP plugins will then fail with a "plugin_host binary not found" error.
-- Build prerequisites: CMake and `libsndfile1-dev` (needed by the `sfizz` git dependency).
+- Build prerequisites: CMake and `libsndfile1-dev` (needed by the `sfizz` git dependency), plus `libpipewire-0.3-dev`, `libspa-0.2-dev`, `libdbus-1-dev` and `libclang-dev` (cpal's PipeWire driver and rtkit realtime scheduling).
 - OSC smoke tests make sound. They are `./test_osc.sh`, `./test_plugin_osc.sh` and `./test_sfizz.sh` (which uses `test_kick.sfz`). Send ad-hoc messages with `oscsend localhost 7000 /transport/play` from `liblo-tools`.
 
 Godot UI:

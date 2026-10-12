@@ -45,6 +45,9 @@ I don't build binaries yet, but will soon. If you'd like to try, download the re
 - A C/C++ toolchain, CMake and pkg-config (sfizz builds C++)
 - ALSA and libsndfile headers: `sudo apt install libasound2-dev libsndfile1-dev`
   (Arch: `alsa-lib libsndfile`)
+- PipeWire, D-Bus and libclang headers for the native PipeWire driver and realtime scheduling
+  through rtkit: `sudo apt install libpipewire-0.3-dev libspa-0.2-dev libdbus-1-dev libclang-dev`
+  (Arch: `pipewire dbus clang`)
 - Godot 4.7
 
 Optional: `liblo-tools` (`oscsend`) for OSC debugging, and `libxml2-utils` (`xmllint`) to
@@ -119,7 +122,7 @@ addon's `plugin.cfg`.
 
 | Library | Role |
 |--------|------|
-| [cpal](https://github.com/RustAudio/cpal) | Audio I/O (PipeWire / JACK / ALSA) |
+| [cpal](https://github.com/RustAudio/cpal) | Audio output (PipeWire / ALSA) |
 | [symphonia](https://github.com/pdeljanov/symphonia) | Decode import formats (AAC, MP3, OGG, FLAC, WAV, …) |
 | [rubato](https://github.com/henquist/rubato) | Offline resampling during decode |
 | [realfft](https://github.com/ejmahler/realfft) | Spectrum analyzer FFT |
