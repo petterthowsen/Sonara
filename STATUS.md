@@ -20,7 +20,7 @@
   - No FTZ/DAZ denormal flags are set anywhere today. If they are added later, workers need them too (MXCSR is per thread).
 
 ### Not Working / To do
-- Live observation (user, 2026-10-12, release build after T-014): orchestral project (mostly sfz, some built-ins, one Decent Sampler plugin, Dragonfly Hall Reverb plugin) went from 40% to 38% load. That is far short of REQ-008's < 50% target, but it's not the T-015 benchmark (8 × PolySynth + Reverb). Not yet known: whether the comparison was Processing threads 1 vs Auto (6 threads here), and which channels are on the serial path. Suspects: a reverb bus that every section sends to runs after all its inputs finish, so its plugin round trip is serial; plugin IPC wait counts as callback time; sfizz instances may be cheap enough that the pool's per-pass overhead eats the gain.
+- Live observation (user, 2026-10-12, release build after T-014): orchestral project (mostly sfz, some built-ins, one Decent Sampler plugin, Dragonfly Hall Reverb plugin). At 32 frames: 1 thread 52% avg / 60% peak, Auto (6 threads, realtime granted) 40% / 46%, a 23% cut. At 2048 frames, Auto: 35% / 40%. (An earlier "40 → 38%" was the old build vs this one, not 1 vs Auto.) Reading: at 32 frames each routing sweep's pool wake/wait and each plugin round trip are a large share of a 0.67 ms block. At 2048 those amortize, so 35% suggests a serial critical path (likely the Dragonfly reverb bus, which waits for all its senders, or one heavy channel). To confirm: channel table top rows and load with Dragonfly disabled, at 2048 Auto. REQ-008's ratio is still to be measured on the T-015 benchmark at 256 frames.
 
 ## Saturator (spec 031)
 
