@@ -20,7 +20,8 @@ use crate::audio::devices::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
 use crate::audio::devices::{
-    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+    AudioDevice, DeviceCategory, DeviceContainer, DeviceSlots, DeviceVariant, ParamId, ParamInfo,
+    ParamValue, SlotKind, SlotSpec, LOOP_BLOCK,
 };
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
@@ -55,6 +56,16 @@ pub const MIX: ParamId = 41;
 
 const ROUTINGS: &[&str] = &["Stereo", "Ping-Pong", "Mono"];
 const MODES: &[&str] = &["Clean", "Tape"];
+
+/// Spec 040: the Delay's slot. FB FX runs on the feedback signal, once per repeat.
+static DELAY_SLOTS: [SlotSpec; 1] = [SlotSpec {
+    key: "fb_fx",
+    name: "FB FX",
+    kind: SlotKind::Loop,
+}];
+
+/// While FB FX is live no line is read closer than this many samples (see `LOOP_BLOCK`).
+const LOOP_MIN_DELAY: f32 = (LOOP_BLOCK + 2) as f32;
 
 /// Longest delay time, in seconds.
 pub const MAX_TIME_SECONDS: f32 = 5.0;
@@ -255,7 +266,6 @@ impl ToneStage {
     }
 }
 
-#[derive(Clone)]
 pub struct DelayDevice {
     sample_rate: f32,
     params: ParamValues<COUNT>,
@@ -295,6 +305,14 @@ pub struct DelayDevice {
     tail: TailSleep,
     is_active: bool,
     is_enabled: bool,
+
+    /// The FB FX slot chain and its scratch (spec 040).
+    slots: DeviceSlots,
+    /// Minimum loop delay in samples: `LOOP_MIN_DELAY` while FB FX is live, else 0.
+    loop_floor: SmoothedParam,
+    /// Per-sample line inputs and cross-feed amounts held back until the write phase.
+    loop_line_in: [[f32; 2]; LOOP_BLOCK],
+    loop_cross: [f32; LOOP_BLOCK],
 }
 
 impl std::fmt::Debug for DelayDevice {
@@ -345,6 +363,10 @@ impl DelayDevice {
             tail: TailSleep::new(sample_rate),
             is_active: true,
             is_enabled: true,
+            slots: DeviceSlots::new(&DELAY_SLOTS, 4096),
+            loop_floor: SmoothedParam::new(0.0, sample_rate, ramp),
+            loop_line_in: [[0.0; 2]; LOOP_BLOCK],
+            loop_cross: [0.0; LOOP_BLOCK],
         };
         device.prepare_lines();
         device.gains = dry_wet_gains(device.mix.current(), MixLaw::EqualPower);
@@ -367,7 +389,9 @@ impl DelayDevice {
             Some(s) => s as f32,
             None => self.time_ms[src] * 0.001,
         };
-        (seconds * self.sample_rate).clamp(2.0, MAX_TIME_SECONDS * self.sample_rate)
+        (seconds * self.sample_rate)
+            .max(self.loop_floor.current())
+            .clamp(2.0, MAX_TIME_SECONDS * self.sample_rate)
     }
 
     fn snap_taps(&mut self) {
@@ -447,7 +471,25 @@ impl AudioDevice for DelayDevice {
         self.tail.on_block(frames);
 
         let sr = self.sample_rate;
+        // FB FX in use: the loop delay is held above the sub-block length (it jumps there when
+        // the slot goes live and glides back down when it empties).
+        let live = self.slots.is_live(0);
+        if live {
+            self.loop_floor.snap(LOOP_MIN_DELAY);
+        } else if self.loop_floor.target() != 0.0 {
+            self.loop_floor.set_target(0.0);
+        }
+        if !self.loop_floor.is_settled() {
+            for _ in 0..frames {
+                self.loop_floor.next();
+            }
+        }
         let target = [self.target_samples(0), self.target_samples(1)];
+        // Sub-blocks start only once both taps have moved past the minimum, so the switch from
+        // the plain path never steps the read position.
+        let reached =
+            |t: &TapState| t.cur >= LOOP_MIN_DELAY && (t.fade == 0.0 || t.next >= LOOP_MIN_DELAY);
+        let looped = live && reached(&self.taps[0]) && reached(&self.taps[1]);
         let fade_step = 1.0 / (CROSSFADE_SECONDS * sr);
         let glide = 1.0 - (-1.0 / (TAPE_GLIDE_SECONDS * sr)).exp();
         let mod_inc = self.mod_rate / sr;
@@ -457,91 +499,138 @@ impl AudioDevice for DelayDevice {
         let tape = self.tape;
         let mut filter_g = self.filter_g;
 
-        for n in 0..frames {
-            let in_l = inputs[2 * n];
-            let in_r = inputs[2 * n + 1];
+        let min_delay = if looped { LOOP_MIN_DELAY } else { 0.0 };
+        // `take` leaves empty Vecs behind (no allocation) so the slot chain can be borrowed.
+        let mut loop_in = std::mem::take(&mut self.slots.loop_in);
+        let mut loop_out = std::mem::take(&mut self.slots.loop_out);
 
-            // Smoothed controls.
-            let fb = self.feedback.next();
-            let depth = self.mod_depth.next();
-            let drive = self.drive.next();
-            let duck = self.ducking.next();
-            let width = self.width.next();
-            let m_in = self.mono_in.next();
-            let cross = self.cross.next();
-            let r_mono = self.r_mono.next();
-            let m_out = self.mono_out.next();
-            if !(self.low_cut.is_settled() && self.high_cut.is_settled()) {
-                self.low_cut.next();
-                self.high_cut.next();
-                filter_g = self.cutoff_g();
-            }
-            if !self.mix.is_settled() {
-                self.mix.next();
-                self.gains = dry_wet_gains(self.mix.current(), MixLaw::EqualPower);
-            }
+        let mut base = 0;
+        while base < frames {
+            let sub = if looped {
+                (frames - base).min(LOOP_BLOCK)
+            } else {
+                frames - base
+            };
+            // Read phase (and the whole of today's per-sample code on the plain path).
+            for k in 0..sub {
+                let pending = if looped { k as f32 } else { 0.0 };
+                let in_l = inputs[2 * (base + k)];
+                let in_r = inputs[2 * (base + k) + 1];
 
-            // Delay modulation: the Mod LFO in both modes, wow and flutter in Tape.
-            self.mod_phase = (self.mod_phase + mod_inc).fract();
-            let mut swing = (self.mod_phase * TAU).sin() * depth * MOD_MAX_MS * ms;
-            if tape {
-                self.wow_phase = (self.wow_phase + wow_inc).fract();
-                self.flutter_phase = (self.flutter_phase + flutter_inc).fract();
-                swing += (self.wow_phase * TAU).sin() * WOW_MS * ms
-                    + (self.flutter_phase * TAU).sin() * FLUTTER_MS * ms;
-            }
-
-            // Read both lines.
-            let mut read = [0.0f32; 2];
-            for ch in 0..2 {
-                self.taps[ch].advance(target[ch], tape, glide, fade_step);
-                let t = self.taps[ch];
-                let a = self.line[ch].read_hermite(t.cur + swing);
-                read[ch] = if t.fade > 0.0 {
-                    let b = self.line[ch].read_hermite(t.next + swing);
-                    a + (b - a) * t.fade
-                } else {
-                    a
-                };
-            }
-
-            // Tone and Tape drive give the wet signal; the feedback is that, clipped.
-            let mut wet = [0.0f32; 2];
-            let mut own_fb = [0.0f32; 2];
-            for ch in 0..2 {
-                let mut w = self.tone[ch].process(read[ch], filter_g.0, filter_g.1);
-                if tape && drive > 0.0 {
-                    let g = drive * 6.0;
-                    w = fast_tanh(g * w) / g;
+                // Smoothed controls.
+                let fb = self.feedback.next();
+                let depth = self.mod_depth.next();
+                let drive = self.drive.next();
+                let duck = self.ducking.next();
+                let width = self.width.next();
+                let m_in = self.mono_in.next();
+                let cross = self.cross.next();
+                let r_mono = self.r_mono.next();
+                let m_out = self.mono_out.next();
+                if !(self.low_cut.is_settled() && self.high_cut.is_settled()) {
+                    self.low_cut.next();
+                    self.high_cut.next();
+                    filter_g = self.cutoff_g();
                 }
-                wet[ch] = w;
-                // Clip after the feedback gain: the loop's small-signal gain is Feedback (so
-                // 100–110 % still builds up) but the signal fed back never passes ±1, however
-                // high Feedback is set.
-                own_fb[ch] = soft_clip(w * fb);
+                if !self.mix.is_settled() {
+                    self.mix.next();
+                    self.gains = dry_wet_gains(self.mix.current(), MixLaw::EqualPower);
+                }
+
+                // Delay modulation: the Mod LFO in both modes, wow and flutter in Tape.
+                self.mod_phase = (self.mod_phase + mod_inc).fract();
+                let mut swing = (self.mod_phase * TAU).sin() * depth * MOD_MAX_MS * ms;
+                if tape {
+                    self.wow_phase = (self.wow_phase + wow_inc).fract();
+                    self.flutter_phase = (self.flutter_phase + flutter_inc).fract();
+                    swing += (self.wow_phase * TAU).sin() * WOW_MS * ms
+                        + (self.flutter_phase * TAU).sin() * FLUTTER_MS * ms;
+                }
+
+                // Read both lines.
+                let mut read = [0.0f32; 2];
+                for ch in 0..2 {
+                    self.taps[ch].advance(target[ch], tape, glide, fade_step);
+                    let t = self.taps[ch];
+                    // In a sub-block the last `k` samples aren't pushed yet, so the read moves
+                    // `k` closer to land on the same moment.
+                    let a = self.line[ch].read_hermite((t.cur + swing).max(min_delay) - pending);
+                    read[ch] = if t.fade > 0.0 {
+                        let b =
+                            self.line[ch].read_hermite((t.next + swing).max(min_delay) - pending);
+                        a + (b - a) * t.fade
+                    } else {
+                        a
+                    };
+                }
+
+                // Tone and Tape drive give the wet signal; the feedback is that, clipped.
+                let mut wet = [0.0f32; 2];
+                let mut own_fb = [0.0f32; 2];
+                for ch in 0..2 {
+                    let mut w = self.tone[ch].process(read[ch], filter_g.0, filter_g.1);
+                    if tape && drive > 0.0 {
+                        let g = drive * 6.0;
+                        w = fast_tanh(g * w) / g;
+                    }
+                    wet[ch] = w;
+                    // Clip after the feedback gain: the loop's small-signal gain is Feedback (so
+                    // 100–110 % still builds up) but the signal fed back never passes ±1, however
+                    // high Feedback is set.
+                    own_fb[ch] = soft_clip(w * fb);
+                }
+
+                // Routing: input mix, feedback cross-feed.
+                let mono = 0.5 * (in_l + in_r);
+                let line_in_l = in_l + (mono - in_l) * m_in;
+                let line_in_r = in_r * (1.0 - m_in) + mono * m_in * r_mono;
+                let fb_l = own_fb[0] + (own_fb[1] - own_fb[0]) * cross;
+                let fb_r = own_fb[1] + (own_fb[0] - own_fb[1]) * cross;
+                if looped {
+                    // Hold the loop signal back: FB FX processes it once per sub-block.
+                    loop_in[2 * k] = own_fb[0];
+                    loop_in[2 * k + 1] = own_fb[1];
+                    self.loop_line_in[k] = [line_in_l, line_in_r];
+                    self.loop_cross[k] = cross;
+                } else {
+                    self.line[0].push(line_in_l + fb_l);
+                    self.line[1].push(line_in_r + fb_r);
+                }
+
+                // Output: Mono, Ducking, Width, then Mix.
+                let wet_l = wet[0];
+                let wet_r = wet[1] + (wet[0] - wet[1]) * m_out;
+                let env = self.ducker.process(in_l.abs().max(in_r.abs()));
+                let duck_gain = 1.0 - duck * (env * DUCK_SCALE).min(1.0);
+                let (wet_l, wet_r) = (wet_l * duck_gain, wet_r * duck_gain);
+                let mid = 0.5 * (wet_l + wet_r);
+                let side = 0.5 * (wet_l - wet_r) * width;
+                let (dry_gain, wet_gain) = self.gains;
+                outputs[2 * (base + k)] = in_l * dry_gain + (mid + side) * wet_gain;
+                outputs[2 * (base + k) + 1] = in_r * dry_gain + (mid - side) * wet_gain;
             }
-
-            // Routing: input mix, feedback cross-feed.
-            let mono = 0.5 * (in_l + in_r);
-            let line_in_l = in_l + (mono - in_l) * m_in;
-            let line_in_r = in_r * (1.0 - m_in) + mono * m_in * r_mono;
-            let fb_l = own_fb[0] + (own_fb[1] - own_fb[0]) * cross;
-            let fb_r = own_fb[1] + (own_fb[0] - own_fb[1]) * cross;
-            self.line[0].push(line_in_l + fb_l);
-            self.line[1].push(line_in_r + fb_r);
-
-            // Output: Mono, Ducking, Width, then Mix.
-            let wet_l = wet[0];
-            let wet_r = wet[1] + (wet[0] - wet[1]) * m_out;
-            let env = self.ducker.process(in_l.abs().max(in_r.abs()));
-            let duck_gain = 1.0 - duck * (env * DUCK_SCALE).min(1.0);
-            let (wet_l, wet_r) = (wet_l * duck_gain, wet_r * duck_gain);
-            let mid = 0.5 * (wet_l + wet_r);
-            let side = 0.5 * (wet_l - wet_r) * width;
-            let (dry_gain, wet_gain) = self.gains;
-            outputs[2 * n] = in_l * dry_gain + (mid + side) * wet_gain;
-            outputs[2 * n + 1] = in_r * dry_gain + (mid - side) * wet_gain;
+            if looped {
+                // Chain phase.
+                if let Some(chain) = self.slots.chain_mut(0) {
+                    chain.process_block(&loop_in[..2 * sub], &mut loop_out[..2 * sub], sub);
+                }
+                // Write phase: cross-feed and push.
+                for k in 0..sub {
+                    let own = [
+                        loop_out[2 * k].clamp(-1.0, 1.0),
+                        loop_out[2 * k + 1].clamp(-1.0, 1.0),
+                    ];
+                    let cross = self.loop_cross[k];
+                    let fb_l = own[0] + (own[1] - own[0]) * cross;
+                    let fb_r = own[1] + (own[0] - own[1]) * cross;
+                    self.line[0].push(self.loop_line_in[k][0] + fb_l);
+                    self.line[1].push(self.loop_line_in[k][1] + fb_r);
+                }
+            }
+            base += sub;
         }
+        self.slots.loop_in = loop_in;
+        self.slots.loop_out = loop_out;
         self.filter_g = filter_g;
     }
 
@@ -588,6 +677,12 @@ impl AudioDevice for DelayDevice {
     }
 
     fn reset(&mut self) {
+        self.slots.reset();
+        self.loop_floor.snap(if self.slots.is_live(0) {
+            LOOP_MIN_DELAY
+        } else {
+            0.0
+        });
         for line in &mut self.line {
             line.clear();
         }
@@ -607,8 +702,11 @@ impl AudioDevice for DelayDevice {
     }
 
     /// Resize the lines for the new rate and restart from the current parameters.
-    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+    fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         self.sample_rate = sample_rate;
+        self.slots.prepare(max_frames);
+        self.loop_floor
+            .set_ramp(sample_rate, SmoothedParam::DEFAULT_RAMP_MS);
         self.prepare_lines();
         let ramp = SmoothedParam::DEFAULT_RAMP_MS;
         for p in [
@@ -675,6 +773,24 @@ impl AudioDevice for DelayDevice {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    // === Slots (spec 040) ===
+
+    fn device_slots(&self) -> &'static [SlotSpec] {
+        &DELAY_SLOTS
+    }
+
+    fn as_container(&self) -> Option<&dyn DeviceContainer> {
+        Some(&self.slots)
+    }
+
+    fn as_container_mut(&mut self) -> Option<&mut dyn DeviceContainer> {
+        Some(&mut self.slots)
+    }
+
+    fn is_container(&self) -> bool {
+        true
     }
 
     // === Sleep ===
@@ -1009,5 +1125,203 @@ mod tests {
         let percent = elapsed / 10.0 * 100.0;
         println!("Delay worst case: {percent:.3} % of a core");
         assert!(percent < 0.5, "{percent} % of a core");
+    }
+
+    // === Spec 040: FB FX ===
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A gain stage that counts its `process_block` calls.
+    struct Gain {
+        gain: f32,
+        calls: Arc<AtomicUsize>,
+        enabled: bool,
+    }
+
+    impl Gain {
+        fn boxed(gain: f32) -> (Box<dyn AudioDevice>, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let g = Gain {
+                gain,
+                calls: calls.clone(),
+                enabled: true,
+            };
+            (Box::new(g), calls)
+        }
+    }
+
+    impl AudioDevice for Gain {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            for i in 0..n * 2 {
+                outputs[i] = inputs[i] * self.gain;
+            }
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.gain"
+        }
+        fn device_name(&self) -> &str {
+            "Gain"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn is_enabled(&self) -> bool {
+            self.enabled
+        }
+        fn set_enabled(&mut self, enabled: bool) {
+            self.enabled = enabled;
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn put_in_fb_fx(d: &mut DelayDevice, device: Box<dyn AudioDevice>) {
+        d.slots.children_mut(0).unwrap().push(device);
+    }
+
+    fn peak_near(signal: &[f32], index: usize) -> f32 {
+        signal[index.saturating_sub(3)..index + 4]
+            .iter()
+            .fold(0.0f32, |m, x| m.max(x.abs()))
+    }
+
+    /// A busy delay: feedback, modulation, Tape, Ping-Pong, ducking.
+    fn busy() -> DelayDevice {
+        let mut d = DelayDevice::new(SR, 5000.0);
+        d.prepare(SR, 512);
+        d.set_parameter(MODE, 1.0);
+        d.set_parameter(ROUTING, 0.5);
+        set_real(&mut d, TIME_L, 37.0);
+        set_real(&mut d, FEEDBACK, 70.0);
+        set_real(&mut d, MOD_DEPTH, 40.0);
+        set_real(&mut d, DRIVE, 30.0);
+        set_real(&mut d, DUCKING, 30.0);
+        d
+    }
+
+    #[test]
+    fn delay_has_one_loop_slot() {
+        let mut d = DelayDevice::new(SR, 5000.0);
+        assert_eq!(d.device_slots().len(), 1);
+        assert_eq!(d.device_slots()[0].key, "fb_fx");
+        assert_eq!(d.device_slots()[0].kind, SlotKind::Loop);
+        assert!(d.is_container());
+        assert_eq!(d.as_container().unwrap().child_count(), 1);
+        d.as_container_mut()
+            .unwrap()
+            .insert_child(0, Gain::boxed(1.0).0);
+        assert_eq!(d.as_container().unwrap().child_count(), 1);
+    }
+
+    #[test]
+    fn empty_fb_fx_is_sample_identical() {
+        // A slot holding only a bypassed device stays on the plain path, which is the code
+        // that ran before the slot existed.
+        let input = stereo(&white_noise(20_000, 0.5, 11));
+        let mut plain = busy();
+        let mut slotted = busy();
+        let (mut off, calls) = Gain::boxed(0.1);
+        off.set_enabled(false);
+        put_in_fb_fx(&mut slotted, off);
+        let a = render(&mut plain, &input, &[512, 100, 64, 3]);
+        let b = render(&mut slotted, &input, &[512, 100, 64, 3]);
+        assert_eq!(a, b);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn fb_fx_halves_each_later_repeat() {
+        // 10 ms = 480 samples, quiet enough to stay under the feedback soft clip.
+        let build = |with_fx: bool| {
+            let mut d = wet_only();
+            set_sync(&mut d, "Off");
+            set_real(&mut d, TIME_L, 10.0);
+            set_real(&mut d, FEEDBACK, 80.0);
+            if with_fx {
+                put_in_fb_fx(&mut d, Gain::boxed(0.5).0);
+            }
+            // Let the Clean time change finish crossfading.
+            render(&mut d, &vec![0.0; 6000 * 2], &[512]);
+            let mut input = vec![0.0f32; 4000];
+            input[0] = 0.2;
+            render(&mut d, &stereo(&input), &[512])
+        };
+        let plain = left(&build(false));
+        let slotted = left(&build(true));
+        // The first repeat comes straight from the line.
+        let first = peak_near(&plain, 480);
+        assert!(first > 0.05);
+        assert!((peak_near(&slotted, 480) - first).abs() < 1e-6);
+        // Every later repeat has been through the slot once more.
+        for repeat in 2..=4 {
+            let at = 480 * repeat;
+            let ratio = peak_near(&slotted, at) / peak_near(&plain, at);
+            let want = 0.5f32.powi(repeat as i32 - 1);
+            assert!(
+                (ratio - want).abs() < 0.02,
+                "repeat {repeat}: ratio {ratio}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn fb_fx_enforces_loop_floor_without_click() {
+        let mut d = wet_only();
+        set_sync(&mut d, "Off");
+        set_real(&mut d, TIME_L, 1.0); // 48 samples, under the floor
+        set_real(&mut d, FEEDBACK, 50.0);
+        let tone = stereo(&sine(440.0, SR, 48_000, 0.3));
+        let before = left(&render(&mut d, &tone, &[512]));
+        let steady = max_jump(&before[24_000..]);
+        // The first device lands in the slot while sound is running.
+        put_in_fb_fx(&mut d, Gain::boxed(1.0).0);
+        let after = left(&render(&mut d, &tone, &[512]));
+        assert!(
+            max_jump(&after) < steady * 2.5,
+            "jump {} vs steady {steady}",
+            max_jump(&after)
+        );
+        // Once settled, nothing is read closer than LOOP_BLOCK + 2 samples.
+        let mut input = vec![0.0f32; 400];
+        input[0] = 1.0;
+        set_real(&mut d, FEEDBACK, 0.0);
+        render(&mut d, &vec![0.0; 9600 * 2], &[512]);
+        let echo = left(&render(&mut d, &stereo(&input), &[512]));
+        assert_eq!(peak_index(&echo), LOOP_BLOCK + 2);
+    }
+
+    #[test]
+    fn bypassed_delay_skips_fb_fx() {
+        let mut d = wet_only();
+        let (fx, calls) = Gain::boxed(0.0);
+        put_in_fb_fx(&mut d, fx);
+        d.set_enabled(false);
+        let input = stereo(&white_noise(2000, 0.5, 5));
+        let out = render(&mut d, &input, &[512]);
+        assert_eq!(out, input);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn fb_fx_runs_in_sub_blocks() {
+        let mut d = wet_only();
+        let (fx, calls) = Gain::boxed(1.0);
+        put_in_fb_fx(&mut d, fx);
+        render(&mut d, &vec![0.0; 256 * 2], &[256]);
+        assert_eq!(calls.load(Ordering::Relaxed), 256 / LOOP_BLOCK);
     }
 }

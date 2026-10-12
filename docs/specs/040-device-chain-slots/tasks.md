@@ -106,7 +106,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test async_slot` passes
   - _Depends on_: T-006
 
-- [ ] **T-008** [REQ-002, REQ-007, REQ-010, REQ-012] Delay FB FX.
+- [x?] **T-008** [REQ-002, REQ-007, REQ-010, REQ-012] Delay FB FX.
   - Add `slots: DeviceSlots` with `DELAY_SLOTS` (`fb_fx` Loop) and a `loop_floor:
     SmoothedParam`, with target `LOOP_BLOCK + 2` while FB FX is live and 0 otherwise, applied in
     `target_samples`.
