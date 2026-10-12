@@ -107,6 +107,35 @@ struct Tap {
     channel_id: ChannelId,
     output: WavOutput,
     interleaved: Vec<f32>,
+    /// The channel's path latency at render start: leading frames that are compensation delay,
+    /// not part of the range.
+    skip: u64,
+    /// Frames rendered so far, counting the skipped ones.
+    seen: u64,
+    /// Frames written to the file so far.
+    written: u64,
+    /// Most frames the file may hold, once a fixed-length tail pins the render's length.
+    cap: Option<u64>,
+}
+
+impl Tap {
+    /// Write the block just copied into `interleaved`, minus the frames still inside `skip` and
+    /// the ones past `cap`.
+    fn write_block(&mut self) -> Result<(), RenderError> {
+        let frames = (self.interleaved.len() / 2) as u64;
+        let first = self.skip.saturating_sub(self.seen).min(frames);
+        let mut last = frames;
+        if let Some(cap) = self.cap {
+            last = last.min(first + cap.saturating_sub(self.written));
+        }
+        self.seen += frames;
+        if last > first {
+            self.output
+                .write(&self.interleaved[first as usize * 2..last as usize * 2])?;
+            self.written += last - first;
+        }
+        Ok(())
+    }
 }
 
 /// An analysis in progress: the analyzer and the channel audio copied out for it each block.
@@ -116,8 +145,66 @@ struct AnalysisRun {
     buffers: Vec<(ChannelId, Vec<f32>)>,
     /// Tick of the current block's first frame.
     block_start_tick: f64,
-    /// Set once the range has been rendered; the tail is not analyzed.
+    /// Tick of the render's first frame.
+    first_tick: Option<f64>,
+    /// Each tap's path latency at render start, in the order of `buffers`.
+    skips: Vec<u64>,
+    /// Frames rendered so far, counting the skipped ones.
+    seen: u64,
+    /// Compensated frames each tap holds, waiting for the slowest tap's.
+    pending: Vec<Vec<f32>>,
+    /// Frames handed to the analyzer so far.
+    analyzed: u64,
+    /// Frames in the range, once it has been rendered.
+    range_frames: Option<u64>,
+    /// Set once the whole range has been analyzed; the tail is not.
     done: bool,
+}
+
+impl AnalysisRun {
+    /// The range has been rendered and is `frames` long. The taps' delayed ends of it may still
+    /// come out of the tail.
+    fn range_rendered(&mut self, frames: u64) {
+        self.range_frames = Some(frames);
+        self.done = self.analyzed >= frames;
+    }
+
+    /// Line the block in `buffers` up by each tap's latency and analyze the frames every tap
+    /// has by now.
+    fn analyze_block(&mut self, frames: usize) {
+        let lagging = self.skips.iter().any(|&skip| skip > 0);
+        for ((_, buffer), (&skip, pending)) in self
+            .buffers
+            .iter()
+            .zip(self.skips.iter().zip(&mut self.pending))
+        {
+            let first = skip.saturating_sub(self.seen).min(frames as u64) as usize;
+            pending.extend_from_slice(&buffer[first * 2..frames * 2]);
+        }
+        self.seen += frames as u64;
+        let ready = self.pending.iter().map(|p| p.len() / 2).min().unwrap_or(0);
+        if ready > 0 {
+            let slices: Vec<&[f32]> = self.pending.iter().map(|p| &p[..ready * 2]).collect();
+            // With latency to line up, the blocks no longer start where the render's do: the
+            // first starts at the render's start and the analyzer's own clock carries on.
+            let start = match (lagging, self.analyzed) {
+                (false, _) => self.block_start_tick,
+                (true, 0) => self.first_tick.unwrap_or(self.block_start_tick),
+                (true, _) => self.analyzer.next_tick(),
+            };
+            self.analyzer.process_block(start, ready, &slices);
+            for pending in &mut self.pending {
+                pending.drain(..ready * 2);
+            }
+            self.analyzed += ready as u64;
+        }
+        if self
+            .range_frames
+            .is_some_and(|range| self.analyzed >= range)
+        {
+            self.done = true;
+        }
+    }
 }
 
 /// A render in progress. `begin` takes the engine over; `end` must run to hand it back.
@@ -208,13 +295,22 @@ impl<'a> Render<'a> {
     fn run(&mut self) -> Result<Vec<PathBuf>, RenderError> {
         let mut taps = self.open_outputs()?;
         self.analysis = self.open_analysis()?;
+        // Compensation delays every file's start; the render runs that long past the tail to
+        // make up for what the files drop.
+        let max_skip = taps
+            .iter()
+            .map(|tap| tap.skip)
+            .chain(self.analysis.iter().flat_map(|a| a.skips.iter().copied()))
+            .max()
+            .unwrap_or(0);
+        self.frames_expected += max_skip;
         self.wait_until_ready()?;
         self.prepare_devices()?;
         self.render_range(&mut taps)?;
         if let Some(analysis) = &mut self.analysis {
-            analysis.done = true;
+            analysis.range_rendered(self.frames_written);
         }
-        self.render_tail(&mut taps)?;
+        self.render_tail(&mut taps, max_skip)?;
 
         let mut paths = Vec::with_capacity(taps.len() + 1);
         for tap in taps {
@@ -231,7 +327,7 @@ impl<'a> Render<'a> {
     /// Create the WAV files (as `.part` until they're complete), master first.
     fn open_outputs(&self) -> Result<Vec<Tap>, RenderError> {
         let outputs = &self.job.outputs;
-        let channels: Vec<ChannelId> = {
+        let channels: Vec<(ChannelId, u64)> = {
             let state = lock(self.state);
             if let Some(&(missing, _)) = outputs
                 .stems
@@ -245,17 +341,22 @@ impl<'a> Render<'a> {
                 .iter()
                 .map(|_| MASTER_CHANNEL_ID)
                 .chain(outputs.stems.iter().map(|&(id, _)| id))
+                .map(|id| (id, path_latency(&state, id)))
                 .collect()
         };
         let rate = self.sample_rate.round() as u32;
         channels
             .into_iter()
             .zip(outputs.paths())
-            .map(|(channel_id, path)| {
+            .map(|((channel_id, skip), path)| {
                 Ok(Tap {
                     channel_id,
                     output: WavOutput::create(&path, rate, outputs.format)?,
                     interleaved: Vec::with_capacity(self.job.block_frames * 2),
+                    skip,
+                    seen: 0,
+                    written: 0,
+                    cap: None,
                 })
             })
             .collect()
@@ -295,6 +396,11 @@ impl<'a> Render<'a> {
             range_end_tick: self.job.end_tick as f64,
             taps: channels.iter().map(|&id| id as u32).collect(),
         });
+        let skips = channels
+            .iter()
+            .map(|&id| path_latency(&state, id))
+            .collect();
+        let pending = channels.iter().map(|_| Vec::new()).collect();
         let buffers = channels
             .into_iter()
             .map(|id| (id, Vec::with_capacity(self.job.block_frames * 2)))
@@ -303,6 +409,12 @@ impl<'a> Render<'a> {
             analyzer,
             buffers,
             block_start_tick: 0.0,
+            first_tick: None,
+            skips,
+            seen: 0,
+            pending,
+            analyzed: 0,
+            range_frames: None,
             done: false,
         }))
     }
@@ -446,11 +558,22 @@ impl<'a> Render<'a> {
     }
 
     /// Render the tail with the transport stopped.
-    fn render_tail(&mut self, taps: &mut [Tap]) -> Result<(), RenderError> {
-        let max_frames =
+    ///
+    /// The files drop their first `skip` frames, so the render runs `max_skip` frames longer than
+    /// the tail to keep them the length they'd have without the latency. Until-silent tails
+    /// don't look for silence before then: delayed audio is still on its way out of the paths.
+    fn render_tail(&mut self, taps: &mut [Tap], max_skip: u64) -> Result<(), RenderError> {
+        let tail_frames =
             (self.job.tail.max_seconds() as f64 * self.sample_rate as f64).round() as u64;
+        let max_frames = tail_frames + max_skip;
         let hold_frames = (SILENCE_HOLD.as_secs_f64() * self.sample_rate as f64) as u64;
         let until_silent = matches!(self.job.tail, RenderTail::UntilSilent { .. });
+        if !until_silent {
+            // A tap with less latency than the longest would run longer than the range and tail.
+            for tap in taps.iter_mut() {
+                tap.cap = Some(self.frames_written + tail_frames);
+            }
+        }
         let mut rendered = 0;
         let mut silent_frames = 0;
         while rendered < max_frames {
@@ -464,7 +587,7 @@ impl<'a> Render<'a> {
             };
             self.after_block(taps, frames)?;
             rendered += frames as u64;
-            if until_silent {
+            if until_silent && rendered >= max_skip {
                 silent_frames = if peak < SILENCE_LEVEL {
                     silent_frames + frames as u64
                 } else {
@@ -507,6 +630,7 @@ impl<'a> Render<'a> {
         if let Some(run) = &mut self.analysis {
             run.block_start_tick =
                 state.get_current_tick() as f64 + state.get_fractional_tick_accumulator();
+            run.first_tick.get_or_insert(run.block_start_tick);
         }
 
         self.block_clock.publish_offline_block();
@@ -560,12 +684,10 @@ impl<'a> Render<'a> {
             .into());
         }
         for tap in taps.iter_mut() {
-            tap.output.write(&tap.interleaved)?;
+            tap.write_block()?;
         }
         if let Some(run) = self.analysis.as_mut().filter(|run| !run.done) {
-            let buffers: Vec<&[f32]> = run.buffers.iter().map(|(_, b)| b.as_slice()).collect();
-            run.analyzer
-                .process_block(run.block_start_tick, frames, &buffers);
+            run.analyze_block(frames);
         }
         self.frames_written += frames as u64;
         if self.last_progress.elapsed() >= PROGRESS_INTERVAL {
@@ -612,6 +734,15 @@ impl<'a> Render<'a> {
             .status_tx
             .send(EngineStatus::PlayheadUpdate(self.saved_tick));
     }
+}
+
+/// Frames the channel's audio trails the project timeline by: its path latency in the
+/// installed compensation plan.
+fn path_latency(state: &EngineState, channel_id: ChannelId) -> u64 {
+    state
+        .channels
+        .get(&channel_id)
+        .map_or(0, |channel| channel.latency.out_frames as u64)
 }
 
 /// Release held clip notes, reset every device (nested ones included), and forget clip playback
@@ -704,7 +835,7 @@ fn find_unready(state: &mut EngineState, job: &RenderJob) -> Result<Option<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::super::{AnalysisSpec, PreRoll, RenderJob};
+    use super::super::{AnalysisSpec, PreRoll, RenderJob, DEFAULT_BLOCK_FRAMES};
     use super::*;
     use crate::audio::analysis::{AnalysisResult, Resolution};
     use crate::audio::channel::Channel;
@@ -994,6 +1125,113 @@ mod tests {
         let short = read(short);
         assert_eq!(short.bars.len(), 1);
         assert!(short.bars[0].taps[1].lufs < -100.0);
+    }
+
+    /// Plan latency compensation for the state and install it, as the command thread does.
+    fn install_latency(state: &Mutex<EngineState>) {
+        use crate::audio::mixing::latency::{plan, LatencySignature};
+        let mut state = state.lock().unwrap();
+        let signature = LatencySignature::build(&state.channels);
+        let plan = plan(&signature, SR as u32);
+        for (sig, channel_plan) in signature.channels.iter().zip(&plan.channels) {
+            if let Some(channel) = state.channels.get_mut(&sig.id) {
+                channel.latency = channel_plan.to_latency(sig, MAX_BLOCK_FRAMES);
+            }
+        }
+    }
+
+    /// The `project` with a latency device after the synth on channel 2.
+    fn delayed_project(
+        notes: &[(Tick, Tick, u8)],
+        length: Tick,
+        delay: usize,
+    ) -> Mutex<EngineState> {
+        use crate::audio::mixing::test_support::LatencyDevice;
+        let state = project(notes, length);
+        state
+            .lock()
+            .unwrap()
+            .channels
+            .get_mut(&2)
+            .unwrap()
+            .devices
+            .push(Box::new(LatencyDevice::new(delay, 1.0)));
+        install_latency(&state);
+        state
+    }
+
+    fn first_audible(samples: &[f32]) -> usize {
+        samples.iter().position(|s| s.abs() > 1e-4).unwrap() / 2
+    }
+
+    #[test]
+    fn render_trims_latency() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes = [(0, 960, 60), (1920, 960, 64)];
+        let job = |name: &str, tail: RenderTail| {
+            let mut job = master_job(dir.path(), name, 0, BAR, tail);
+            job.outputs
+                .stems
+                .push((2, dir.path().join(format!("{name}_stem.wav"))));
+            job
+        };
+
+        for tail in [
+            RenderTail::Seconds(0.5),
+            RenderTail::UntilSilent { max_seconds: 5.0 },
+        ] {
+            let plain = project(&notes, BAR);
+            let plain_files = render(&plain, &job("plain", tail)).unwrap();
+            let delayed = delayed_project(&notes, BAR, 512);
+            assert_eq!(
+                delayed.lock().unwrap().channels[&1].latency.out_frames,
+                512,
+                "the plan reached the master"
+            );
+            let delayed_files = render(&delayed, &job("delayed", tail)).unwrap();
+
+            for (plain, delayed) in plain_files.iter().zip(&delayed_files) {
+                let (plain, delayed) = (read_wav(plain), read_wav(delayed));
+                let (a, b) = (first_audible(&plain), first_audible(&delayed));
+                assert!(a.abs_diff(b) <= 1, "onset {b} vs {a} without the device");
+                // An until-silent tail ends on a block boundary, so the delayed render can
+                // end up to a block away from the plain one.
+                let slack = match tail {
+                    RenderTail::Seconds(_) => 2,
+                    _ => 4 * DEFAULT_BLOCK_FRAMES,
+                };
+                assert!(
+                    delayed.len().abs_diff(plain.len()) <= slack,
+                    "{} vs {} samples",
+                    delayed.len(),
+                    plain.len()
+                );
+                // The range's end made it out of the delay: same audio, not shifted.
+                let mid = plain.len() / 2;
+                assert!(
+                    (plain[mid..mid + 2000].iter().zip(&delayed[mid..mid + 2000]))
+                        .all(|(p, d)| (p - d).abs() < 1e-4),
+                    "the file follows the timeline"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn analysis_ignores_latency() {
+        let dir = tempfile::tempdir().unwrap();
+        let read = |state: &Mutex<EngineState>| -> AnalysisResult {
+            let job = analysis_job(dir.path(), 0, BAR, AnalysisTaps::Channels(vec![2]));
+            render(state, &job).unwrap();
+            let path = job.analysis.unwrap().path;
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let plain = read(&project(&[(0, BAR, 60)], BAR));
+        let delayed = read(&delayed_project(&[(0, BAR, 60)], BAR, 512));
+        assert_eq!(plain.bars.len(), delayed.bars.len());
+        for (p, d) in plain.bars[0].taps.iter().zip(&delayed.bars[0].taps) {
+            assert!((p.lufs - d.lufs).abs() < 0.1, "{} vs {}", p.lufs, d.lufs);
+        }
     }
 
     #[test]

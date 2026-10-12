@@ -220,7 +220,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test multiband_aligns_bands` passes, plus a Reverb test (a Wet FX latency device keeps dry and wet aligned) and a PolySynth `latency_frames` test
   - _Depends on_: T-022
 
-- [ ] **T-024** [REQ-018] Renders trim the compensation latency
+- [x?] **T-024** [REQ-018] Renders trim the compensation latency
   - _Files_: `Engine/src/audio/render/worker.rs`
   - _Output_:
     - `Tap.skip` is set from its channel's `out_frames` (analysis taps likewise).
