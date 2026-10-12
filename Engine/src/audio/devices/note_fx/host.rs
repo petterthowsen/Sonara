@@ -93,9 +93,11 @@ pub trait NoteProcessor: Send + 'static {
     /// Whether the effect feeds the `note_state` data stream (Arpeggiator, Step Sequencer).
     const HAS_STATE: bool = false;
 
-    /// Fill the `note_state` view: current step, last sounding key and held keys. Only called
-    /// while subscribed, at the polling rate.
-    fn state(&self, _out: &mut NoteState) {}
+    /// Fill the `note_state` view: current step, last sounding key, held keys, and (for clocked
+    /// effects) the steps reached/fired and the step timing. Only called while subscribed, once
+    /// per poll and once on subscribe (to drop marks from before the subscription). It drains the
+    /// since-last-poll marks, hence `&mut self`.
+    fn state(&mut self, _out: &mut NoteState) {}
 }
 
 /// What the `note_state` stream shows (design: Data and protocol changes). `0xFF` means none.
@@ -105,7 +107,22 @@ pub struct NoteState {
     pub branch: u8,
     /// Held keys, in any order; the host sorts them.
     pub held: Vec<u8>,
+    /// Bit k: step k was reached since the last poll.
+    pub reached: u16,
+    /// Bit k: step k fired (sounded) since the last poll.
+    pub fired: u16,
+    /// Milliseconds from the current step's start to the end of the last rendered block.
+    pub elapsed_ms: u16,
+    /// Milliseconds from the end of the last rendered block to the next step's start.
+    pub next_in_ms: u16,
+    /// Milliseconds from the next step to the one after it.
+    pub gap_a_ms: u16,
+    /// Milliseconds of the gap after that (the gaps then alternate a, b, a, ...).
+    pub gap_b_ms: u16,
 }
+
+/// A timing field that is unknown (not running, or no step clock).
+pub const TIMING_UNKNOWN: u16 = 0xFFFF;
 
 impl NoteState {
     fn new() -> Self {
@@ -114,6 +131,12 @@ impl NoteState {
             key: 0xFF,
             branch: 0xFF,
             held: Vec::with_capacity(HELD_CAPACITY),
+            reached: 0,
+            fired: 0,
+            elapsed_ms: TIMING_UNKNOWN,
+            next_in_ms: TIMING_UNKNOWN,
+            gap_a_ms: TIMING_UNKNOWN,
+            gap_b_ms: TIMING_UNKNOWN,
         }
     }
 
@@ -122,6 +145,12 @@ impl NoteState {
         self.key = 0xFF;
         self.branch = 0xFF;
         self.held.clear();
+        self.reached = 0;
+        self.fired = 0;
+        self.elapsed_ms = TIMING_UNKNOWN;
+        self.next_in_ms = TIMING_UNKNOWN;
+        self.gap_a_ms = TIMING_UNKNOWN;
+        self.gap_b_ms = TIMING_UNKNOWN;
     }
 }
 
@@ -658,6 +687,11 @@ impl<P: NoteProcessor> AudioDevice for NoteFxHost<P> {
     fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
         if P::HAS_STATE && data_type == "note_state" {
             self.state_subscribed = true;
+            // Drop marks recorded before the subscription: the first poll shows only what
+            // happened since now.
+            self.state.clear();
+            self.processor.state(&mut self.state);
+            self.state.clear();
             return Ok(());
         }
         Err(format!(
@@ -681,12 +715,22 @@ impl<P: NoteProcessor> AudioDevice for NoteFxHost<P> {
         self.processor.state(&mut self.state);
         self.state.held.sort_unstable();
         self.state.held.dedup();
-        let mut bytes = Vec::with_capacity(4 + self.state.held.len());
+        let mut bytes = Vec::with_capacity(4 + self.state.held.len() + 12);
         bytes.push(self.state.step);
         bytes.push(self.state.key);
         bytes.push(self.state.branch);
         bytes.push(self.state.held.len().min(255) as u8);
         bytes.extend_from_slice(&self.state.held);
+        for field in [
+            self.state.reached,
+            self.state.fired,
+            self.state.elapsed_ms,
+            self.state.next_in_ms,
+            self.state.gap_a_ms,
+            self.state.gap_b_ms,
+        ] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
         Some(("note_state".to_string(), bytes))
     }
 
@@ -1108,5 +1152,64 @@ pub mod tests {
         for _ in 0..10 {
             assert!(run(&mut h, 64).is_empty());
         }
+    }
+
+    /// Marks a step for every note-on and reports (and drains) the marks in `state`.
+    struct MarkProc {
+        marks: u16,
+    }
+
+    impl NoteProcessor for MarkProc {
+        fn new(_sample_rate: f32) -> Self {
+            Self { marks: 0 }
+        }
+        fn device_id() -> &'static str {
+            "test.mark_proc"
+        }
+        fn device_name() -> &'static str {
+            "Mark"
+        }
+        fn table() -> &'static ParamTable {
+            &TABLE
+        }
+        fn apply(&mut self, _id: ParamId, _real: f32) {}
+        fn note(&mut self, cx: &mut NoteCx, event: &NoteEvent, at: u64) {
+            if let NoteEvent::On {
+                note_id,
+                key,
+                velocity,
+            } = *event
+            {
+                self.marks |= 1;
+                cx.emit_on_with(note_id, key as i32, velocity, at, note_id);
+            }
+        }
+        const HAS_STATE: bool = true;
+        fn state(&mut self, out: &mut NoteState) {
+            out.reached = self.marks;
+            out.fired = self.marks;
+            self.marks = 0;
+        }
+    }
+
+    #[test]
+    fn subscribing_drops_marks_from_before_the_subscription() {
+        let mut h = NoteFxHost::<MarkProc>::new(48_000.0);
+        h.send_note_event(&on(1, 60), 0);
+        run(&mut h, 64);
+        h.subscribe_data("note_state").unwrap();
+        let (_, bytes) = h.poll_device_data().unwrap();
+        // step, key, branch none; no held keys; masks 0; timings unknown.
+        assert_eq!(
+            bytes,
+            vec![0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
+        // Marks made after subscribing do show up, once.
+        h.send_note_event(&on(2, 61), 0);
+        run(&mut h, 64);
+        let (_, bytes) = h.poll_device_data().unwrap();
+        assert_eq!(&bytes[4..8], &[1, 0, 1, 0]);
+        let (_, bytes) = h.poll_device_data().unwrap();
+        assert_eq!(&bytes[4..8], &[0, 0, 0, 0]);
     }
 }

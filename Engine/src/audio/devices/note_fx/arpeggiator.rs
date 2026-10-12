@@ -398,7 +398,7 @@ impl NoteProcessor for Arpeggiator {
 
     const HAS_STATE: bool = true;
 
-    fn state(&self, out: &mut NoteState) {
+    fn state(&mut self, out: &mut NoteState) {
         out.key = self.last_key.unwrap_or(0xFF);
         out.held.extend(self.held.iter().map(|h| h.key));
     }
@@ -767,6 +767,13 @@ mod tests {
         let (kind, bytes) = d.poll_device_data().unwrap();
         assert_eq!(kind, "note_state");
         // step none, sounding 60 (lowest, Up), no branch, two held keys ascending.
-        assert_eq!(bytes, vec![0xFF, 60, 0xFF, 2, 60, 67]);
+        // No step marks (masks 0) and unknown timing (0xFFFF x4).
+        assert_eq!(
+            bytes,
+            vec![
+                0xFF, 60, 0xFF, 2, 60, 67, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF
+            ]
+        );
     }
 }

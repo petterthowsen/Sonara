@@ -18,6 +18,17 @@ func _ready() -> void:
 	compact.mod_hint_active = true
 	compact.mod_hint_color = ModDisplay.SOURCE_COLORS[0]
 
+	var toggles: StepLane = $Flow/StepLaneCard/Toggles
+	toggles.set_values_no_signal(PackedFloat32Array([1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1]))
+	toggles.length = 12
+	toggles.playhead = 3
+	var bars: StepLane = $Flow/StepLaneCard/Bars
+	bars.set_values_no_signal(PackedFloat32Array([0, 7, 12, -5, 0, 19, 24, -12, 3, 0, 7, -24, 5, 0, 12, 0]))
+	bars.off_mask = 0b100100
+	bars.length = 12
+	bars.playhead = 3
+	bars.set_flash(3, 0.8)
+
 	var volumeter: Volumeter = $Flow/VolumeterCard/Volumeter
 	volumeter._display_peak = 0.78
 	volumeter._display_rms = 0.42

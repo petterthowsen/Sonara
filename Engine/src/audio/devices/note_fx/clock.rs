@@ -62,6 +62,8 @@ pub struct StepClock {
     /// Free-running: unswung start sample of step `next_k`.
     free_base: f64,
     free_active: bool,
+    /// The step `next` last declined because it starts at or after `until`.
+    upcoming: Option<Step>,
 }
 
 impl StepClock {
@@ -84,6 +86,7 @@ impl StepClock {
             last_step: None,
             free_base: 0.0,
             free_active: false,
+            upcoming: None,
         }
     }
 
@@ -115,6 +118,20 @@ impl StepClock {
         self.last_step = None;
         self.free_active = false;
         self.dirty = false;
+        self.upcoming = None;
+    }
+
+    /// The step the last `next` call declined (it starts at or after that call's `until`), or
+    /// None when the clock is idle, was reset, or the last call handed a step out.
+    pub fn upcoming(&self) -> Option<Step> {
+        self.upcoming
+    }
+
+    /// Samples from the start of grid step `k` to the start of step `k + 1`, at the current
+    /// tempo: the rate plus the swing difference. Alternates for odd and even `k` under swing.
+    pub fn gap_samples(&self, k: i64) -> f64 {
+        let beats = self.rate_beats + self.swing_beats(k + 1) - self.swing_beats(k);
+        beats * 60.0 / self.transport.tempo.max(1.0) * self.sample_rate
     }
 
     /// The step length in samples at the current tempo.
@@ -264,6 +281,7 @@ impl StepClock {
     /// The next step starting before `until` (the block starts at `now`), or None.
     pub fn next(&mut self, now: u64, until: u64) -> Option<Step> {
         self.begin_block(now);
+        self.upcoming = None;
         let at = if self.transport.playing {
             self.playing_step_at(now, self.next_k)
         } else if self.free_active {
@@ -284,6 +302,10 @@ impl StepClock {
             return None;
         };
         if at >= until {
+            self.upcoming = Some(Step {
+                at,
+                index: self.next_k,
+            });
             return None;
         }
         let step = Step {
@@ -486,5 +508,52 @@ mod tests {
         let step = clock.next(now, now + 6000).unwrap();
         assert!(step.at >= now, "{step:?}");
         assert_eq!(step.at % 6000, 0, "phase kept");
+    }
+
+    #[test]
+    fn upcoming_is_the_step_next_declined() {
+        let mut clock = StepClock::new(SR);
+        clock.set_rate_beats(0.25);
+        let map = TempoMap::default();
+        assert!(clock.upcoming().is_none());
+        clock.set_transport(&transport_at(&map, 0.0, false));
+        clock.start_at(0, 0);
+        // The first step is at 6000: a short block declines it and remembers it.
+        assert!(clock.next(0, BLOCK).is_none());
+        assert_eq!(clock.upcoming(), Some(Step { at: 6000, index: 1 }));
+        // Asking again does not advance the clock.
+        assert!(clock.next(0, BLOCK).is_none());
+        assert_eq!(clock.upcoming(), Some(Step { at: 6000, index: 1 }));
+        // A block that reaches it hands it out and then declines the following one.
+        assert_eq!(clock.next(0, 7000).unwrap().at, 6000);
+        assert_eq!(clock.upcoming(), None);
+        assert!(clock.next(0, 7000).is_none());
+        assert_eq!(
+            clock.upcoming(),
+            Some(Step {
+                at: 12_000,
+                index: 2
+            })
+        );
+        clock.reset();
+        assert!(clock.upcoming().is_none());
+        // Idle (stopped, never started): nothing upcoming.
+        assert!(clock.next(0, BLOCK).is_none());
+        assert!(clock.upcoming().is_none());
+    }
+
+    #[test]
+    fn gap_samples_include_swing() {
+        let mut clock = StepClock::new(SR);
+        clock.set_rate_beats(0.25);
+        let map = TempoMap::default();
+        clock.set_transport(&transport_at(&map, 0.0, false));
+        assert_eq!(clock.gap_samples(0).round(), 6000.0);
+        assert_eq!(clock.gap_samples(1).round(), 6000.0);
+        clock.set_swing(0.5);
+        assert_eq!(clock.gap_samples(0).round(), 7500.0);
+        assert_eq!(clock.gap_samples(1).round(), 4500.0);
+        assert_eq!(clock.gap_samples(2).round(), 7500.0);
+        assert_eq!(clock.gap_samples(-1).round(), 4500.0);
     }
 }

@@ -414,6 +414,17 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"bar_fill": accent,
 		&"mod_live": _with_alpha(p.role(&"text_bright"), 0.9),
 	})
+	_set_colors(t, &"StepLane", {
+		&"bg": well,
+		&"grid": p.role(&"grid_line"),
+		&"bar": accent,
+		&"bar_off": p.role(&"text_disabled"),
+		&"toggle_on": accent,
+		&"toggle_off": track,
+		&"playhead": _with_alpha(p.role(&"text_bright"), 0.16),
+		&"fired": _with_alpha(p.role(&"accent_secondary"), 0.55),
+		&"beyond": _with_alpha(well, 0.6),
+	})
 	_set_colors(t, &"HDualSlider", {
 		&"bg": SLIDER_TROUGH,
 		&"fill": accent,

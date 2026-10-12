@@ -14,6 +14,7 @@
 [ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="10_segments"]
 [ext_resource type="PackedScene" uid="uid://cj6bkxh40g8w4" path="res://components/EnvelopeControl.tscn" id="11_envelope"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="12_line_edit"]
+[ext_resource type="Script" uid="uid://don1g0qpftim" path="res://components/StepLane.gd" id="14_steplane"]
 
 [node name="ComponentGallery" type="PanelContainer" unique_id=1220882205]
 custom_minimum_size = Vector2(1200, 700)
@@ -291,3 +292,30 @@ layout_mode = 2
 theme_override_constants/separation = 1
 script = ExtResource("10_segments")
 items = PackedStringArray("Clean", "Glue", "Punch")
+
+[node name="StepLaneCard" type="VBoxContainer" parent="Flow"]
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/StepLaneCard"]
+layout_mode = 2
+text = "Step Lane"
+horizontal_alignment = 1
+
+[node name="Toggles" type="Control" parent="Flow/StepLaneCard"]
+custom_minimum_size = Vector2(260, 18)
+layout_mode = 2
+script = ExtResource("14_steplane")
+mode = 0
+min_value = 0.0
+max_value = 1.0
+default_value = 0.0
+
+[node name="Bars" type="Control" parent="Flow/StepLaneCard"]
+custom_minimum_size = Vector2(260, 80)
+layout_mode = 2
+script = ExtResource("14_steplane")
+guide_values = PackedFloat32Array(-12, 12)
+unit = "st"

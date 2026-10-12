@@ -794,6 +794,40 @@ after subscribing.
   the block is purely additive, and decoders that walk it skip any kind they don't know
   via `len`.
 
+**Note state stream (`"note_state"`):**
+
+Sent by the note effects that show a live position: the Arpeggiator, the Step Sequencer
+(`sonara.builtin.step_sequencer`) and note containers that hold either. Other devices reject the
+subscription. It is polled at about 20 Hz and arrives through `device_data_received` as a
+`PackedByteArray`. `0xFF` in a `u8` field means none. All `u16` fields are little-endian.
+
+```
+offset   field
+0        u8  step         current step, 0-based (0xFF none; the Arpeggiator has no step)
+1        u8  key          last sounding key (0xFF none)
+2        u8  branch       (0xFF none)
+3        u8  held_count
+4        held_count x u8  held keys, ascending
+n+0      u16 reached      bit k: step k was reached since the last poll
+n+2      u16 fired        bit k: step k fired (emitted notes) since the last poll
+n+4      u16 elapsed_ms   from the current step's start to the end of the last rendered block
+n+6      u16 next_in_ms   from the end of the last rendered block to the next step's start
+n+8      u16 gap_a_ms     from the next step to the one after it
+n+10     u16 gap_b_ms     the gap after that; the gaps then alternate a, b, a, ...
+```
+
+`n = 4 + held_count`, so the blob is `16 + held_count` bytes.
+
+- `reached` / `fired` start afresh at every poll (and on subscribe), so a step that starts and ends
+  between two polls is still reported. An Off step, a step that lost its chance roll and a step
+  with no held notes are reached but not fired.
+- The four timing fields are `0xFFFF` when unknown: the sequence is not running, or the effect has
+  no step clock (the Arpeggiator sends masks 0 and all four `0xFFFF`). Otherwise they are rounded
+  milliseconds, saturated at `0xFFFE`. The gaps differ when Swing is set (the step after an
+  odd grid index is early), which is why two are sent.
+- Decoders must tolerate blobs that end after the held keys (older engines): treat the masks as 0
+  and the timings as unknown. `NoteStrip.decode` does.
+
 **Example Usage:**
 ```gdscript
 # Subscribe to spectrum data

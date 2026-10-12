@@ -75,6 +75,19 @@
 - `EqTypeIcon` draws the band type's magnitude curve (`EqResponse.band_filter`/`filter_db`, 24 samples over a 100 Hz–10 kHz log sweep, clamped to ±18 dB) in a given colour. The static `EqTypeIcon.texture(type, color) -> ImageTexture` renders the same `_curve_points` geometry offscreen (anti-aliased disc-pen stroke, `ICON_SIZE` 16×16, transparent background) and caches per type + colour, for `OptionButton` item icons in both type dropdowns.
 - Headless tests: `tests/test_compact_hslider.gd`, `tests/test_eq_view.gd`.
 
+## Step Sequencer view
+- Spec: `docs/specs/039-step-sequencer-view/`. `devices/builtin/StepSequencerDefaultView.gd` is the Panel view of `sonara.builtin.step_sequencer`. Lanes are `components/StepLane.gd`, playhead logic is `devices/builtin/StepPlayhead.gd` (a pure model; `now_ms` and latency are injectable for tests).
+- Layout: a left column (130 px) of shared controls: Length, Rate, Gate and Swing sliders, Mode (Chord/Mono) and Velocity source. To its right, one column per step (16) shared by every lane: the step-number row, the On row (`StepLane` TOGGLES), the Pitch lane (BARS −24..24 st with ±12 guides, takes spare height), a Velocity | Chance switch, and the Lower lane (BARS 0–100 %, showing whichever field the switch picks). The switch choice lasts as long as the view and is not saved.
+- Editing: lanes write per-step parameters through `DeviceInstance.set_parameter_real`, at `step_param(k, field)` = `100 + 10·k + field` (On 0, Pitch 1, Velocity 2, Chance 3). Sliders and segmented controls write their own IDs, and Ctrl/Cmd-click resets to the parameter default. Incoming parameter changes update the controls with `*_no_signal`. Steps past Length are dimmed but stay editable.
+- Live feedback: on show the view subscribes to `"note_state"` for its device path, and on hide it unsubscribes and clears. Each blob goes through `NoteStrip.decode` into `StepPlayhead.feed`:
+  - `elapsed_ms` says how long the engine's current step has run; `next_in_ms` is the time to the next step; `gap_a_ms` and `gap_b_ms` are the next two gaps, which differ under swing.
+  - The schedule is shifted by output latency (`AudioConfig.config["latency_ms"]`), so the playhead lines up with what is heard.
+  - Between blobs (about 20 Hz) `step_at` advances the playhead through the gaps. No blob for `TIMEOUT_MS` (500 ms) clears it.
+  - Fired steps flash (`FLASH_MS` 150 ms fade) when the playhead reaches them. A fired step still ahead of the playhead flashes at most `FLASH_WAIT_MS` (100 ms) later.
+  - `_process` runs only while the playhead is active or a flash is fading.
+- Choice: `DeviceViewFactory` maps the device to this scene in `BUILTIN_PANEL_SCENES`. The generated Simple View still takes over when the device's "Simple" toggle (`devices/simple_view/<id>`) is on, as for any device with a Panel view (see "Simple View" above).
+- Headless tests: `tests/test_step_lane.gd`, `tests/test_step_playhead.gd`, `tests/test_step_sequencer_view.gd`.
+
 ## Parameter Typing
 - `DeviceParameter.param_type` is one of `"float"`, `"bool"`, or `"enum"`; `"enum"` parameters must populate `enum_values` with display strings where the index matches the engine payload.
 - Keep `default_value`, `min_value`, and `max_value` aligned with the declared type: booleans stay in `[0,1]`, enums use integer indices, floats can still mark `is_logarithmic`. `default_value` is a real value (an index for enums), never normalized.

@@ -521,6 +521,15 @@ pub struct StepSequencer {
     running: bool,
     /// The step of the last grid point handed out.
     step: Option<u8>,
+    sample_rate: f32,
+    /// Bit k: step k was reached since the last `state` poll.
+    reached: u16,
+    /// Bit k: step k fired (emitted notes) since the last `state` poll.
+    fired: u16,
+    /// Absolute start sample of the current step.
+    step_at: u64,
+    /// End (absolute sample) of the last block run.
+    block_end: u64,
 }
 
 impl StepSequencer {
@@ -528,6 +537,8 @@ impl StepSequencer {
     /// An off step, or one that loses its chance roll, plays nothing.
     fn play_step(&mut self, cx: &mut NoteCx, at: u64, k: usize) {
         self.step = Some(k as u8);
+        self.step_at = at;
+        self.reached |= 1 << k;
         let step = self.steps[k];
         if !step.on || self.held.is_empty() {
             return;
@@ -537,6 +548,7 @@ impl StepSequencer {
         if self.rng.next_f32() >= step.chance {
             return;
         }
+        self.fired |= 1 << k;
         let length = ((self.gate * self.clock.step_samples() as f32) as u64).max(1);
         let count = if self.mono { 1 } else { self.held.len() };
         for i in 0..count {
@@ -578,6 +590,15 @@ impl StepSequencer {
         self.pending_start = None;
         self.running = false;
         self.step = None;
+        self.reached = 0;
+        self.fired = 0;
+    }
+
+    /// Samples to rounded milliseconds, saturated below the "unknown" value.
+    fn to_ms(&self, samples: f64) -> u16 {
+        (samples.max(0.0) / self.sample_rate as f64 * 1000.0)
+            .round()
+            .min(0xFFFE as f64) as u16
     }
 }
 
@@ -602,6 +623,11 @@ impl NoteProcessor for StepSequencer {
             pending_start: None,
             running: false,
             step: None,
+            sample_rate,
+            reached: 0,
+            fired: 0,
+            step_at: 0,
+            block_end: 0,
         }
     }
 
@@ -688,6 +714,8 @@ impl NoteProcessor for StepSequencer {
                     self.running = false;
                     self.pending_start = None;
                     self.step = None;
+                    self.reached = 0;
+                    self.fired = 0;
                 }
             }
             NoteEvent::Expression { .. } => {}
@@ -695,6 +723,7 @@ impl NoteProcessor for StepSequencer {
     }
 
     fn run_until(&mut self, cx: &mut NoteCx, until: u64) {
+        self.block_end = until;
         self.start_pending(cx, until);
         // A sequence still arriving at its start frame: step 1 anchors the clock, so don't ask
         // it for steps before then.
@@ -727,15 +756,26 @@ impl NoteProcessor for StepSequencer {
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
         self.clock.set_sample_rate(sample_rate);
     }
 
     const HAS_STATE: bool = true;
 
-    fn state(&self, out: &mut NoteState) {
+    fn state(&mut self, out: &mut NoteState) {
         if self.running {
             out.step = self.step.unwrap_or(0xFF);
+            if let (Some(_), Some(next)) = (self.step, self.clock.upcoming()) {
+                out.elapsed_ms = self.to_ms(self.block_end.saturating_sub(self.step_at) as f64);
+                out.next_in_ms = self.to_ms(next.at.saturating_sub(self.block_end) as f64);
+                out.gap_a_ms = self.to_ms(self.clock.gap_samples(next.index));
+                out.gap_b_ms = self.to_ms(self.clock.gap_samples(next.index + 1));
+            }
         }
+        out.reached = self.reached;
+        out.fired = self.fired;
+        self.reached = 0;
+        self.fired = 0;
         out.key = self.last_key.unwrap_or(0xFF);
         out.held.extend(self.held.iter().map(|h| h.key));
     }
@@ -1076,6 +1116,81 @@ mod tests {
         assert_eq!(kind, "note_state");
         // Step 1 (0-based 0), sounding 67 (Chord played 60 and 67, 67 last), no branch,
         // two held keys ascending.
-        assert_eq!(bytes, vec![0x00, 67, 0xFF, 2, 60, 67]);
+        // Then reached = fired = step 1 (bit 0), and the timing: the step started at frame 0,
+        // the block ended at 500, the next step falls at 6000 (the gaps are 125 ms each).
+        assert_eq!(
+            bytes,
+            vec![
+                0x00, 67, 0xFF, 2, 60, 67, // step, key, branch, held
+                1, 0, 1, 0, // reached, fired
+                10, 0, 115, 0, // elapsed 500 f = 10 ms, next in 5500 f = 115 ms
+                125, 0, 125, 0, // gap a, gap b
+            ]
+        );
+    }
+
+    fn u16_at(bytes: &[u8], i: usize) -> u16 {
+        u16::from_le_bytes([bytes[i], bytes[i + 1]])
+    }
+
+    /// REQ-015: holding 60, step 2 has Chance 0 % and step 3 is off. Steps 1-4 run in one block:
+    /// all four are reached, only 1 and 4 fired; the next poll is empty and step 4 is current.
+    #[test]
+    fn the_stream_reports_steps_reached_and_fired_since_the_last_poll() {
+        let mut d = device();
+        set(&mut d, LENGTH, 4.0);
+        set_step(&mut d, 0, true, 0.0, 100.0, 100.0);
+        set_step(&mut d, 1, true, 0.0, 100.0, 0.0);
+        set_step(&mut d, 2, false, 0.0, 100.0, 100.0);
+        set_step(&mut d, 3, true, 0.0, 100.0, 100.0);
+        d.subscribe_data("note_state").unwrap();
+        press(&mut d, 1, 60, 0);
+        // Steps at 0, 6000, 12000, 18000: one block covers all four.
+        d.process_notes(18_500);
+        let (_, bytes) = d.poll_device_data().unwrap();
+        assert_eq!(bytes[0], 3, "step 4 is current");
+        assert_eq!(bytes[3], 1);
+        assert_eq!(u16_at(&bytes, 5), 0b1111, "reached");
+        assert_eq!(u16_at(&bytes, 7), 0b1001, "fired");
+        let (_, bytes) = d.poll_device_data().unwrap();
+        assert_eq!(bytes[0], 3, "still on step 4");
+        assert_eq!(u16_at(&bytes, 5), 0);
+        assert_eq!(u16_at(&bytes, 7), 0);
+    }
+
+    /// 1/16 at 120 BPM: both gaps are 125 ms; with Swing 50 % they are 94 and 156 when the
+    /// upcoming step is odd.
+    #[test]
+    fn the_stream_reports_the_step_timing() {
+        let mut d = device();
+        set(&mut d, LENGTH, 4.0);
+        set_steps_on(&mut d, 4);
+        d.subscribe_data("note_state").unwrap();
+        press(&mut d, 1, 60, 0);
+        d.process_notes(BLOCK);
+        let (_, bytes) = d.poll_device_data().unwrap();
+        assert_eq!(u16_at(&bytes, 7 + 2), 10, "elapsed");
+        assert_eq!(u16_at(&bytes, 7 + 4), 115, "next in");
+        assert_eq!(u16_at(&bytes, 7 + 6), 125, "gap a");
+        assert_eq!(u16_at(&bytes, 7 + 8), 125, "gap b");
+
+        set(&mut d, SWING, 50.0);
+        d.process_notes(BLOCK);
+        let (_, bytes) = d.poll_device_data().unwrap();
+        // The upcoming step is index 1 (odd, delayed): the gap from it to step 2 is short (94),
+        // and the gap after that is long (156).
+        let a = u16_at(&bytes, 7 + 6) as i32;
+        let b = u16_at(&bytes, 7 + 8) as i32;
+        assert!((a - 94).abs() <= 1, "gap a {a}");
+        assert!((b - 156).abs() <= 1, "gap b {b}");
+
+        // Not running: every timing is unknown.
+        release(&mut d, 1, 60, 0);
+        d.process_notes(BLOCK);
+        let (_, bytes) = d.poll_device_data().unwrap();
+        assert_eq!(bytes[0], 0xFF);
+        for i in 0..4 {
+            assert_eq!(u16_at(&bytes, 4 + 4 + 2 * i), 0xFFFF);
+        }
     }
 }

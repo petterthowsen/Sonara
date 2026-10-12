@@ -272,6 +272,7 @@ const CONTEXTS := {
 	"value_lanes": "clip_editor",
 	"automation_lane": "arranger",
 	"control_knob": "global",
+	"step_lane": "device_panel",
 	# A text control has focus: the help bar shows nothing but Escape/Enter hints.
 	"text": "global",
 }
@@ -286,6 +287,7 @@ const STATES := {
 	"note_drag": "clip_editor",
 	"note_drag_alt": "clip_editor",
 	"value_lane_draw": "clip_editor",
+	"step_lane_draw": "step_lane",
 }
 
 const CONTEXT_LABELS := {
@@ -301,6 +303,7 @@ const CONTEXT_LABELS := {
 	"value_lanes": "Value lanes",
 	"automation_lane": "Automation lane",
 	"control_knob": "Control",
+	"step_lane": "Step lane",
 	"text": "Text input",
 }
 
@@ -375,6 +378,13 @@ const GESTURES := [
 	{ "context": "control_knob", "mods": "Shift", "input": "drag", "label": "fine adjust" },
 	{ "context": "control_knob", "mods": "", "input": "double_click", "label": "type value" },
 	{ "context": "control_knob", "mods": "Ctrl", "input": "click", "label": "reset to default" },
+	# --- Step lanes: StepLane._on_press / _on_drag ---
+	{ "context": "step_lane", "mods": "", "input": "drag", "label": "draw steps" },
+	{ "context": "step_lane", "mods": "Shift", "input": "drag", "label": "fine adjust" },
+	{ "context": "step_lane", "mods": "Ctrl", "input": "drag", "label": "reset to default" },
+	{ "context": "step_lane", "mods": "", "input": "double_click", "label": "exact value" },
+	{ "context": "step_lane_draw", "mods": "Shift", "input": "", "label": "fine adjust" },
+	{ "context": "step_lane_draw", "mods": "Ctrl", "input": "", "label": "reset to default" },
 ]
 
 

@@ -133,8 +133,8 @@ margins or separations on scenes that a variation already covers.
 competes with track or status colours.
 
 **Custom-drawn controls** (`RotaryKnob`, `Fader`, `VolumeSlider`, `HorSlider`, `HDualSlider`,
-`CompactHSlider`, `Meter`, `LevelMeter`, `Volumeter`, `LightButton`, `SegmentedControl`, `XYSlider`,
-`EnvelopeControl`, `Ruler`) have their own theme type with one colour item per property, named
+`CompactHSlider`, `Meter`, `LevelMeter`, `Volumeter`, `LightButton`, `SegmentedControl`, `StepLane`,
+`XYSlider`, `EnvelopeControl`, `Ruler`) have their own theme type with one colour item per property, named
 without the `_color` suffix (`Fader/colors/fill`). Their colour properties are not exported:
 reading one returns the resolved theme colour, and writing one (`knob.value_arc_color = X`) sets a
 per-instance theme override, so it survives theme changes. In a scene, override with
@@ -167,6 +167,7 @@ per-instance theme override, so it survives theme changes. In a scene, override 
 | `Fader.gd` | Vertical value control (the knob's sibling): `min/max/value_default`, `logarithmic` or `to_position`/`from_position`, `fill_origin`, `scale_marks` + `scale_side`, `overlay_level`, `ghost_value`, mod contract. `value_to_position(v)` maps a value onto the track |
 | `ScaleMarks.gd` | Tick/label layout through a value→0..1 Callable, so marks sit where the fill does |
 | `SegmentedControl.gd` | Exclusive toggle-button row: `set_items`, `selected` / `set_selected_no_signal`, `selected_changed` |
+| `StepLane.gd` | One row of step cells: `mode` TOGGLES (On/Off) or BARS (Pitch, Velocity, Chance). `*_no_signal` data setters, `off_mask`, `length`, `playhead`, `set_flash`. Emits `value_edited(step, value)` on real changes, plus `edit_started` / `edit_ended`. Drag paints with gap-fill, Shift fine, Ctrl/Cmd reset, double-click typed entry. Theme type `StepLane` |
 | `meter/MeterBallistics.gd` | dB-domain peak release, hold and RMS smoothing for any meter that draws itself (`push`, `step`, `settled`) |
 | `meter/LevelMeter.gd` | Configurable dB meter: N bars, `display` PEAK/RMS/BOTH, ZONES/SOLID colour, LEVEL or REDUCTION (GR from the top), scale, readout, caption. `push(index, peak_db, rms_db)`; click resets holds |
 

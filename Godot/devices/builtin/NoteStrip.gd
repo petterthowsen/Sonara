@@ -12,6 +12,8 @@ const NONE := 0xFF
 const IDLE_RANGE := Vector2i(36, 72)
 ## Fewest keys drawn, so a single note still gets a readable strip.
 const MIN_SPAN := 12
+## Trailing bytes after the held keys: six u16s.
+const EXTRA_BYTES := 12
 
 var held: PackedInt32Array = PackedInt32Array()
 var sounding_key: int = -1
@@ -30,8 +32,11 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
-## Decode the engine's `note_state` blob: `u8 step, u8 key, u8 branch, u8 held_count, held keys`.
-## Returns {} for a malformed blob. 0xFF fields come back as -1.
+## Decode the engine's `note_state` blob: `u8 step, u8 key, u8 branch, u8 held_count, held keys`,
+## then optionally six little-endian u16s: reached, fired, elapsed_ms, next_in_ms, gap_a_ms,
+## gap_b_ms (spec 039). Returns {} for a malformed blob. 0xFF fields come back as -1.
+## Without the trailing 12 bytes `reached` and `fired` are 0 and the timings -1; a 0xFFFF timing
+## is -1 too.
 static func decode(blob: PackedByteArray) -> Dictionary:
 	if blob.size() < 4:
 		return {}
@@ -41,12 +46,27 @@ static func decode(blob: PackedByteArray) -> Dictionary:
 	var keys := PackedInt32Array()
 	for i in count:
 		keys.append(blob[4 + i])
+	var base := 4 + count
+	var has_extra := blob.size() >= base + EXTRA_BYTES
 	return {
 		"step": -1 if blob[0] == NONE else blob[0],
 		"key": -1 if blob[1] == NONE else blob[1],
 		"branch": -1 if blob[2] == NONE else blob[2],
 		"held": keys,
+		"reached": blob.decode_u16(base) if has_extra else 0,
+		"fired": blob.decode_u16(base + 2) if has_extra else 0,
+		"elapsed_ms": _timing(blob, base + 4, has_extra),
+		"next_in_ms": _timing(blob, base + 6, has_extra),
+		"gap_a_ms": _timing(blob, base + 8, has_extra),
+		"gap_b_ms": _timing(blob, base + 10, has_extra),
 	}
+
+
+static func _timing(blob: PackedByteArray, offset: int, has_extra: bool) -> int:
+	if not has_extra:
+		return -1
+	var value := blob.decode_u16(offset)
+	return -1 if value == 0xFFFF else value
 
 
 ## Show a decoded blob. False (and no change) for an empty one.

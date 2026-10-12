@@ -295,7 +295,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     passes. Conformance passes.
   - _Depends on_: T-008
 
-- [ ] **T-028** [REQ-038] Step Sequencer view.
+- [ ] **T-028** [REQ-038] Step Sequencer view. Superseded by spec 039 (`docs/specs/039-step-sequencer-view/`).
   - _Files_: `Godot/devices/builtin/StepGrid.gd` (new), `Godot/devices/builtin/StepSequencerDefaultView.gd` / `.tscn` (new),
     `Godot/devices/DeviceViewFactory.gd`, `Godot/tests/test_step_sequencer_view.gd` (new)
   - _Output_: header controls and the 16-column grid with an On / Pitch / Velocity / Chance bar
