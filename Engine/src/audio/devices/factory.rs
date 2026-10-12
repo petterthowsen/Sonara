@@ -397,6 +397,17 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
         is_container: device.is_container(),
         parameters,
         default_modulators: device.default_modulators(),
+        slots: device
+            .device_slots()
+            .iter()
+            .map(|s| {
+                (
+                    s.key.to_string(),
+                    s.name.to_string(),
+                    s.kind.as_str().to_string(),
+                )
+            })
+            .collect(),
     }
 }
 

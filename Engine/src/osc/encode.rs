@@ -264,6 +264,7 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
             is_container,
             parameters,
             default_modulators,
+            slots,
         } => {
             tracing::info!("📨 Sending builtin device info: {} ({})", name, id);
 
@@ -310,6 +311,14 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
                     args.push(OscType::String(target.clone()));
                     args.push(OscType::Float(*amount));
                 }
+            }
+
+            // Device slots (spec 040): count, then (key, name, kind) each.
+            args.push(OscType::Int(slots.len() as i32));
+            for (key, name, kind) in slots {
+                args.push(OscType::String(key));
+                args.push(OscType::String(name));
+                args.push(OscType::String(kind));
             }
 
             ("/builtin/info".to_string(), args)
@@ -902,11 +911,51 @@ mod tests {
             is_container: false,
             parameters: vec![],
             default_modulators: vec![],
+            slots: vec![],
         });
         assert_eq!(addr, "/builtin/info");
-        // id name category description midi in out files filetype ext_count params container mods
-        assert_eq!(tags, "s s s s i i i i s i i i i");
+        // id name category description midi in out files filetype ext_count params container
+        // mods slots
+        assert_eq!(tags, "s s s s i i i i s i i i i i");
         assert_eq!(args[4], OscType::Int(0));
+    }
+
+    #[test]
+    fn builtin_device_info_writes_slots_after_default_modulators() {
+        let (_, tags, args) = wire(EngineStatus::BuiltinDeviceInfo {
+            id: "polysynth".into(),
+            name: "PolySynth".into(),
+            category: "instrument".into(),
+            description: "".into(),
+            accepts_midi: true,
+            audio_in_channels: 0,
+            audio_out_channels: 2,
+            supports_file_loading: false,
+            file_extensions: vec![],
+            file_type_description: "".into(),
+            is_container: true,
+            parameters: vec![],
+            default_modulators: vec![],
+            slots: vec![
+                ("note_fx".into(), "Note FX".into(), "note".into()),
+                ("fx".into(), "FX".into(), "audio".into()),
+            ],
+        });
+        // ... container mods(0) slot_count (key name kind)x2
+        assert_eq!(tags, "s s s s i i i i s i i i i i s s s s s s");
+        let n = args.len();
+        assert_eq!(args[n - 7], OscType::Int(2));
+        assert_eq!(
+            args[n - 6..],
+            [
+                string("note_fx"),
+                string("Note FX"),
+                string("note"),
+                string("fx"),
+                string("FX"),
+                string("audio")
+            ]
+        );
     }
 
     #[test]

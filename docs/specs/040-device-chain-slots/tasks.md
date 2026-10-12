@@ -61,7 +61,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test note_fx` and `cargo test routing` still pass (the real test is in T-006)
   - _Depends on_: T-002
 
-- [ ] **T-005** [REQ-001] Advertise slots in `/builtin/info`.
+- [x?] **T-005** [REQ-001] Advertise slots in `/builtin/info`.
   - Add `slots: Vec<(String, String, String)>` to `BuiltinDeviceInfo`.
   - `factory.rs` `builtin_device_info` fills it from `device_slots()`.
   - `osc/encode.rs` appends `i:count` and then `(s:key, s:name, s:kind)` for each slot, and the

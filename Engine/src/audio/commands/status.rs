@@ -224,6 +224,9 @@ pub enum EngineStatus {
         parameters: Vec<BuiltinParamInfo>,
         /// Modulators a fresh instance starts with (the device's default patch; empty: none).
         default_modulators: Vec<crate::audio::devices::DefaultModulator>,
+        /// The device's fixed slots (spec 040) as `(key, name, kind)`, kind `note`, `audio` or
+        /// `loop`; empty for a device without slots.
+        slots: Vec<(String, String, String)>,
     },
     BuiltinDevicesComplete {
         count: usize,
