@@ -277,7 +277,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
     Every REQ is marked `[x]` in this file only when its check passed.
   - _Depends on_: T-015, T-025, T-027
 
-- [ ] **T-030** [REQ-all] Update issue #1
+- [x?] **T-030** [REQ-all] Update issue #1
   - _Files_: GitHub issue #1 (petterthowsen/Sonara)
   - _Output_:
     - Checklist items: "Plugin latency compensation" and "Realtime thread priority configuration" become `[x?]`, then `[x]` after T-029.
