@@ -143,6 +143,13 @@ mod imp {
             }
         }
 
+        report_violations();
+    }
+
+    /// Log and clear the violations counted on this thread since the last call, if any. For
+    /// processing threads, which have no summary cadence of their own. Call outside
+    /// `check_callback`.
+    pub fn report_violations() {
         let table = SECTIONS.with(|cell| cell.replace([(SectionName::EMPTY, 0); MAX_SECTIONS]));
         let entries: Vec<String> = table
             .iter()
@@ -150,6 +157,7 @@ mod imp {
             .map(|(name, count)| format!("{}: {}", name.display(), count))
             .collect();
         if !entries.is_empty() {
+            let total = TOTAL.with(|t| t.get());
             warn!(
                 "rt-debug: audio thread (de)allocations since last report ({} total): {}",
                 total,
@@ -187,6 +195,11 @@ mod imp {
 
     #[inline(always)]
     pub fn report() {}
+
+    #[inline(always)]
+    pub fn report_violations() {}
 }
 
-pub use imp::{check_callback, device_name, device_section, report, section, SectionName};
+pub use imp::{
+    check_callback, device_name, device_section, report, report_violations, section, SectionName,
+};

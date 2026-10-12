@@ -1,5 +1,6 @@
 //! Mixing: fader and pan, routing in dependency order, and the master output.
 
+mod pool;
 mod routing;
 pub mod sidechain;
 mod solo;
@@ -20,7 +21,7 @@ use super::state::EngineState;
 use super::types::*;
 
 use routing::{
-    begin_finish, copy_pre_fader, count_route_inputs, drain_parked, mark_aux_sources,
+    begin_finish, chain_start, copy_pre_fader, count_route_inputs, drain_parked, mark_aux_sources,
     process_aux_sources, route_finished,
 };
 use solo::{assign_solo_roles, is_silenced};
@@ -189,14 +190,7 @@ fn device_prepass(
         if channel.mix.is_route_target {
             continue;
         }
-        // An aux source already ran its first device in the aux pass (its returns may route
-        // elsewhere, e.g. Layer slots to a bus), so only its remaining FX run here.
-        let start = if channel.mix.has_aux_source {
-            channel.aux_source_index() + 1
-        } else {
-            0
-        };
-        match channel.begin_device_chain(start, frames) {
+        match channel.begin_device_chain(chain_start(channel), frames) {
             ChainStep::Parked => parked.push_back(id),
             ChainStep::Done { .. } => forward_device_events(channel, status_tx),
         }

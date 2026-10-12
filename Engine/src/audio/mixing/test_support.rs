@@ -118,3 +118,97 @@ pub(super) fn send_to(target_channel_id: ChannelId, pre_fader: bool) -> Send {
         muted: false,
     }
 }
+
+/// What the fake plugins did, in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AsyncEvent {
+    Begin(ChannelId),
+    Finish(ChannelId),
+}
+
+pub(super) type AsyncLog = Arc<std::sync::Mutex<Vec<AsyncEvent>>>;
+
+/// Stand-in for a subprocess plugin: begins blocks asynchronously, logs `Begin`/`Finish`,
+/// and outputs its input times `gain`. Disabled, it passes dry input like the adapter. With
+/// `sleep_on_silence`, it goes to sleep after a block without activity.
+pub(super) struct FakePlugin {
+    pub(super) id: ChannelId,
+    pub(super) gain: f32,
+    pub(super) log: AsyncLog,
+    pub(super) enabled: bool,
+    pub(super) sleeping: bool,
+    pub(super) sleep_on_silence: bool,
+    /// Time `begin_block` spends before returning, as the start of a slow block.
+    pub(super) begin_cost: std::time::Duration,
+}
+
+impl FakePlugin {
+    pub(super) fn new(id: ChannelId, gain: f32, log: &AsyncLog) -> Self {
+        Self {
+            id,
+            gain,
+            log: Arc::clone(log),
+            enabled: true,
+            sleeping: false,
+            sleep_on_silence: false,
+            begin_cost: std::time::Duration::ZERO,
+        }
+    }
+}
+
+impl AudioDevice for FakePlugin {
+    fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        assert!(self.begin_block(inputs, sample_count));
+        self.finish_block(inputs, outputs, sample_count);
+    }
+    fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool {
+        self.log.lock().unwrap().push(AsyncEvent::Begin(self.id));
+        std::thread::sleep(self.begin_cost);
+        true
+    }
+    fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        self.log.lock().unwrap().push(AsyncEvent::Finish(self.id));
+        let gain = if self.enabled { self.gain } else { 1.0 };
+        for i in 0..sample_count * 2 {
+            outputs[i] = inputs[i] * gain;
+        }
+    }
+    fn is_sleeping(&self) -> bool {
+        self.sleeping
+    }
+    fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
+        let sleeping = self.sleep_on_silence && !has_audio_activity;
+        let changed = sleeping != self.sleeping;
+        self.sleeping = sleeping;
+        changed
+    }
+    fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+        None
+    }
+    fn device_id(&self) -> &str {
+        "test.fake_plugin"
+    }
+    fn device_name(&self) -> &str {
+        "Fake Plugin"
+    }
+    fn device_category(&self) -> DeviceCategory {
+        DeviceCategory::Effect
+    }
+    fn device_variant(&self) -> DeviceVariant {
+        DeviceVariant::BuiltIn
+    }
+    fn parameters(&self) -> Vec<ParamInfo> {
+        Vec::new()
+    }
+    fn reset(&mut self) {}
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}

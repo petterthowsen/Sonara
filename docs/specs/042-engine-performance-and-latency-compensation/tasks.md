@@ -101,7 +101,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test channel_ids_are_sorted` passes; all mixing tests pass
   - _Depends on_: —
 
-- [ ] **T-011** [REQ-008, REQ-011, REQ-012] `ChannelPool` core
+- [x?] **T-011** [REQ-008, REQ-011, REQ-012] `ChannelPool` core
   - _Files_: `Engine/src/audio/mixing/pool.rs` (new), `Engine/src/audio/mixing/mod.rs` (`mod pool`)
   - _Output_:
     - `ChannelPool::new/threads/realtime_summary/Drop` and `PoolShared` with the documented `unsafe` invariant.
