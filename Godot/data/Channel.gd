@@ -743,6 +743,9 @@ func _get_device_type_string(device_type: Device.DeviceType) -> String:
 
 func add_device(device_instance: DeviceInstance, position: int = -1, parent: DeviceInstance = null) -> void:
 	## Add a device to the channel root list or into a container parent.
+	if DeviceSlots.is_slotted(parent):
+		logger.warn("[%d] %s can't be added straight into slotted device %s: add it to one of its slots" % [id, device_instance.get_display_name(), parent.get_display_name()])
+		return
 	if parent and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
 		if device_instance.slot_note < 0:
 			device_instance.slot_note = parent.next_free_drum_note()
@@ -803,6 +806,9 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 		return
 
 	var removed_device = host[position]
+	if DeviceSlots.is_slot_chain(removed_device):
+		logger.warn("[%d] Slot chain %s of %s is fixed and can't be removed" % [id, removed_device.get_display_name(), parent.get_display_name()])
+		return
 	var device_id = removed_device.device.device_id
 	var shifted: Array[DeviceInstance] = host.slice(position + 1)
 	_disconnect_devices(shifted)
@@ -857,6 +863,10 @@ func move_device(from_position: int, to_position: int, parent: DeviceInstance = 
 		logger.warn("[%d] Invalid to_position: %d" % [id, to_position])
 		return
 	if from_position == to_position:
+		return
+
+	if DeviceSlots.is_slotted(parent):
+		logger.warn("[%d] The slots of %s are fixed and can't be moved" % [id, parent.get_display_name()])
 		return
 
 	for device_inst in host:
@@ -950,7 +960,10 @@ func _sync_device_tree_to_engine(device_instance: DeviceInstance) -> void:
 		device_instance.load_file(device_instance.loaded_file_path)
 	device_instance.sync_slot_to_engine()
 	for child in device_instance.children:
-		_send_add_device_osc(child, device_instance)
+		# The engine owns a slotted device's slot chains (spec 040): it already has them, so
+		# only their contents are sent.
+		if not DeviceSlots.is_slot_chain(child):
+			_send_add_device_osc(child, device_instance)
 		_sync_device_tree_to_engine(child)
 	# Routes into a child only resolve after it exists, so re-send the modulators now.
 	device_instance.sync_modulators_to_engine()

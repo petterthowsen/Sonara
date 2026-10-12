@@ -44,6 +44,7 @@ func run_tests() -> void:
 	_test_one_slot_open()
 	_test_slot_role_colors()
 	_test_slot_accessors()
+	_test_sync_skips_slot_chains()
 
 
 ## Registered fake device `device_id`.
@@ -212,3 +213,47 @@ func _test_slot_accessors() -> void:
 	_assert(poly.slot_devices("fx") == [delay] and poly.slot_devices("note_fx").is_empty(), "slot_devices lists the chain's devices")
 	_assert(_slots.kind_for_host(poly.children[1]) == "audio" and _slots.kind_for_host(delay.children[0]) == "loop" and _slots.kind_for_host(poly) == "",
 		"kind_for_host is the innermost slot kind above the host (the Delay's own loop slot wins inside it)")
+
+
+## Addresses of the `add_device` / `remove_device` / `move_device` messages queued so far.
+func _structure_sends(osc: Object) -> Array:
+	var out: Array = []
+	for item in osc._pending_sends:
+		var address := String(item.address)
+		if address.ends_with("/add_device") or address.ends_with("/remove_device") or address.ends_with("/move_device"):
+			out.append(address)
+	return out
+
+
+func _test_sync_skips_slot_chains() -> void:
+	var osc: Object = root.get_node("AudioEngineOSC")
+	var ch: Object = _fresh_project()
+	ch._is_connected = true  # headless sends queue in _pending_sends
+	osc._pending_sends.clear()
+	var poly := _inst(POLY_ID, ch)
+	ch.add_device(poly)
+	var base := "/channel/%d/device/0" % ch.id
+	var sends := _structure_sends(osc)
+	_assert(sends == ["/channel/%d/add_device" % ch.id], "adding a PolySynth sends one add_device, none for its slots: %s" % str(sends))
+	osc._pending_sends.clear()
+	var delay := _inst(DELAY_ID, ch)
+	ch.add_device(delay, -1, poly.children[1])
+	sends = _structure_sends(osc)
+	_assert(sends == [base + "/child/1/add_device"], "a Delay added to FX goes to the slot's path: %s" % str(sends))
+	_assert(delay.osc_path() == base + "/child/1/child/0", "the device inside FX is addressed through the slot chain")
+	# Full re-sync (reconnect or project load) sends the slot contents but not the chains.
+	osc._pending_sends.clear()
+	ch._sync_device_tree_to_engine(poly)
+	sends = _structure_sends(osc)
+	_assert(sends == [base + "/child/1/add_device"], "a full sync sends no add_device for the chains: %s" % str(sends))
+	# Slots are fixed: Channel refuses to remove or move them and to add straight into the device.
+	osc._pending_sends.clear()
+	ch.remove_device(0, poly)
+	ch.move_device(0, 1, poly)
+	ch.add_device(_inst(DELAY_ID, ch), -1, poly)
+	_assert(_structure_sends(osc).is_empty() and poly.children.size() == 2 and _names(poly.children) == ["Note FX", "FX"],
+		"removing, moving or adding straight into a slotted device does nothing")
+	ch.remove_device(0, poly.children[1])
+	_assert(_structure_sends(osc) == [base + "/child/1/remove_device"] and poly.children[1].children.is_empty(), "a device in a slot can be removed")
+	ch._is_connected = false
+	osc._pending_sends.clear()

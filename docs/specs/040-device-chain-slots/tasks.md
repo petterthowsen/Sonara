@@ -201,7 +201,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh device_chain_slots device_slots` passes
   - _Depends on_: T-013
 
-- [ ] **T-015** [REQ-001] Engine sync skips slot chains.
+- [x?] **T-015** [REQ-001] Engine sync skips slot chains.
   - `Channel._sync_device_tree_to_engine` doesn't send `add_device` for `DeviceSlots.is_slot_chain`
     children, but still recurses into them.
   - Test `test_sync_skips_slot_chains`: capture sent OSC and check there's no `add_device` at
