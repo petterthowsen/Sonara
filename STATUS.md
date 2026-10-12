@@ -3,6 +3,7 @@
 ## Engine performance and latency compensation (spec 042)
 
 ### Working
+- Latency compensation live (user, 2026-10-12): LSP plugin with a Lookahead setting on a channel; the Engine panel shows the channel's latency and follows Lookahead changes at runtime (T-019, T-021, T-025 live checks).
 - T-009 shared-state audit (2026-10-12): `audio/devices`, `audio/modulation` and `audio/dsp` reached from `process_block`/`begin_block`/`finish_block`. **No to-fix items**: no device on one channel mutates state another channel's chain touches.
   - safe: every `static TABLE: ParamTable` / `*_SLOTS: [SlotSpec]` (immutable const data).
   - safe: `dsp/oscillator.rs` `SINE_TABLE` (`LazyLock`, forced in `Oscillator::new` off the audio thread, read-only after).
@@ -20,6 +21,7 @@
   - No FTZ/DAZ denormal flags are set anywhere today. If they are added later, workers need them too (MXCSR is per thread).
 
 ### Not Working / To do
+- Renders read the latency plan once at start: a plugin that changes latency mid-render isn't followed (T-024).
 - Live observation (user, 2026-10-12, release build after T-014): orchestral project (mostly sfz, some built-ins, one Decent Sampler plugin, Dragonfly Hall Reverb plugin). At 32 frames: 1 thread 52% avg / 60% peak, Auto (6 threads, realtime granted) 40% / 46%, a 23% cut. At 2048 frames, Auto: 35% / 40%. (An earlier "40 → 38%" was the old build vs this one, not 1 vs Auto.) Reading: at 32 frames each routing sweep's pool wake/wait and each plugin round trip are a large share of a 0.67 ms block. At 2048 those amortize, so 35% suggests a serial critical path (likely the Dragonfly reverb bus, which waits for all its senders, or one heavy channel). To confirm: channel table top rows and load with Dragonfly disabled, at 2048 Auto. REQ-008's ratio is still to be measured on the T-015 benchmark at 256 frames.
 
 ## Saturator (spec 031)
