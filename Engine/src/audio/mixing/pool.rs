@@ -206,7 +206,7 @@ impl ChannelPool {
         }
         if threads > 0 {
             info!(
-                "Channel pool: {} processing threads, realtime {}",
+                "Channel pool: {} worker threads, realtime {}",
                 threads,
                 pool.realtime_summary()
             );
