@@ -189,6 +189,10 @@ fn main() {
         info!("Logging to {}", path.display());
     }
 
+    // Before the plugin-audio thread is promoted: a plugin block that overruns its period must
+    // not end the host (the hard RLIMIT_RTTIME still stops a runaway thread).
+    engine::audio::realtime::ignore_cpu_time_signal();
+
     // Install X11 error handler BEFORE any X11 operations
     // This prevents the default X11 error handler from terminating the process
     // when plugins trigger X11 errors (e.g., accessing destroyed windows)

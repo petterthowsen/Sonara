@@ -43,6 +43,9 @@ fn main() -> Result<()> {
         info!("SONARA_SERIAL_PLUGIN_DISPATCH=1: plugins process one after another");
     }
     info!("Starting DAW Audio Engine...");
+    // Before the stream starts: cpal promotes the callback thread and sets a one-period soft
+    // RLIMIT_RTTIME, and an overrun must cost an xrun, not the process.
+    engine::audio::realtime::ignore_cpu_time_signal();
     prune_plugin_logs();
 
     let engine = AudioEngine::with_status_channel(status_tx, status_rx)?;
