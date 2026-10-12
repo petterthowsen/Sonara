@@ -7,11 +7,13 @@ use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInf
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
+use crate::audio::dsp::block_delay::StereoBlockDelay;
 use crate::audio::ipc::{
     futex, BlockEvent, BlockTransport, HostAssignment, InstanceId, PluginCommand, PluginFormat,
     ProcessManager, MAX_BLOCK_EVENTS,
 };
 use crate::audio::midi_types::NoteEvent;
+use crate::audio::stream::MAX_BLOCK_FRAMES;
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -190,6 +192,14 @@ pub struct SubprocessClapAdapter {
     block_clock: Arc<BlockClock>,
     /// What `finish_block` owes for the block `begin_block` started.
     pending: PendingBlock,
+    /// Delays the dry input by the plugin's latency so a bypassed, unloaded or late plugin keeps
+    /// the latency it reports and stays aligned with latency compensation. Prepared on the
+    /// command thread by `set_latency_frames`; unused (and unallocated) at latency 0.
+    bypass_delay: StereoBlockDelay,
+    /// Planar scratch for `bypass_delay`, `MAX_BLOCK_FRAMES` long once prepared.
+    bypass_scratch: [Vec<f32>; 2],
+    /// Delay `bypass_delay` was prepared for; 0 means the dry path is a plain copy.
+    bypass_latency: usize,
 }
 
 /// The block between `begin_block` and `finish_block`.
@@ -297,6 +307,9 @@ impl SubprocessClapAdapter {
             stall: None,
             block_clock,
             pending: PendingBlock::None,
+            bypass_delay: StereoBlockDelay::new(),
+            bypass_scratch: [Vec::new(), Vec::new()],
+            bypass_latency: 0,
         };
 
         info!(
@@ -322,10 +335,62 @@ impl SubprocessClapAdapter {
     pub fn set_active_state(&mut self, active: bool, latency_frames: u32) {
         self.is_active = active;
         if active {
-            self.load.set_latency_frames(latency_frames);
+            self.set_latency_frames(latency_frames);
             self.load.set_activated_rate(self.sample_rate);
         } else {
             self.load.set_activated_rate(0.0);
+        }
+    }
+
+    /// Command thread only (allocates): record the plugin's latency and size the bypass delay
+    /// for it. Clears the delay, so the first `latency` frames after a change are silent.
+    pub fn set_latency_frames(&mut self, frames: u32) {
+        self.load.set_latency_frames(frames);
+        let latency = frames as usize;
+        if latency == 0 {
+            self.bypass_latency = 0;
+            return;
+        }
+        self.bypass_delay.prepare(latency, MAX_BLOCK_FRAMES);
+        for plane in &mut self.bypass_scratch {
+            plane.clear();
+            plane.resize(MAX_BLOCK_FRAMES, 0.0);
+        }
+        self.bypass_latency = latency;
+    }
+
+    /// Audio thread: feed this block's input to the bypass delay. Written on every block, even
+    /// when the plugin processes normally, so a switch to a dry outcome mid-stream plays the
+    /// input from `latency` frames earlier instead of a burst of silence.
+    fn record_dry_input(&mut self, inputs: &[f32], sample_count: usize) {
+        let frames = sample_count.min(inputs.len() / 2);
+        if self.bypass_latency == 0 || frames == 0 || frames > MAX_BLOCK_FRAMES {
+            return;
+        }
+        let [left, right] = &mut self.bypass_scratch;
+        for i in 0..frames {
+            left[i] = inputs[i * 2];
+            right[i] = inputs[i * 2 + 1];
+        }
+        self.bypass_delay.write(left, right, frames);
+    }
+
+    /// Audio thread: the dry outcome. The input delayed by the plugin's latency (what
+    /// `record_dry_input` stored), or a plain copy at latency 0.
+    fn write_dry(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        let interleaved = (sample_count * 2).min(outputs.len());
+        let copy_len = interleaved.min(inputs.len());
+        let frames = copy_len / 2;
+        if self.bypass_latency == 0 || frames == 0 || frames > MAX_BLOCK_FRAMES {
+            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            return;
+        }
+        let [left, right] = &mut self.bypass_scratch;
+        self.bypass_delay
+            .read_delayed(self.bypass_latency, frames, left, right);
+        for i in 0..frames {
+            outputs[i * 2] = left[i];
+            outputs[i * 2 + 1] = right[i];
         }
     }
 
@@ -443,15 +508,15 @@ impl AudioDevice for SubprocessClapAdapter {
             "finish_block called without begin_block"
         );
         let interleaved = (sample_count * 2).min(outputs.len());
-        let copy_len = interleaved.min(inputs.len());
+        self.record_dry_input(inputs, sample_count);
 
         let PendingBlock::Request(seq) = pending else {
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            self.write_dry(inputs, outputs, sample_count);
             return;
         };
         let load = Arc::clone(&self.load);
         let Some(shared) = load.shared() else {
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            self.write_dry(inputs, outputs, sample_count);
             return;
         };
         let layout = *shared.memory.layout();
@@ -482,7 +547,7 @@ impl AudioDevice for SubprocessClapAdapter {
             self.consecutive_misses = 0;
         } else {
             self.record_deadline_miss();
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            self.write_dry(inputs, outputs, sample_count);
         }
     }
 
@@ -1101,6 +1166,9 @@ impl SubprocessClapAdapter {
             stall: None,
             block_clock,
             pending: PendingBlock::None,
+            bypass_delay: StereoBlockDelay::new(),
+            bypass_scratch: [Vec::new(), Vec::new()],
+            bypass_latency: 0,
         }
     }
 }
@@ -1354,6 +1422,90 @@ mod tests {
             TRANSPORT_FLAG_PLAYING
         );
         assert_eq!((published.tsig_num, published.tsig_den), (3, 4));
+    }
+
+    /// A dry outcome keeps the plugin's reported latency: the disabled path and the late-block
+    /// path output the input `latency_frames` late, including across the switch from processing.
+    #[test]
+    fn bypassed_plugin_keeps_latency() {
+        const LATENCY: usize = 10;
+        let sample = |n: usize| (n + 1) as f32 * 0.001;
+        let block = |start: usize| -> Vec<f32> {
+            (start..start + 64)
+                .flat_map(|n| [sample(n), -sample(n)])
+                .collect()
+        };
+        let check = |out: &[f32], start: usize, what: &str| {
+            for i in 0..64 {
+                let n = start + i;
+                let want = if n >= LATENCY {
+                    sample(n - LATENCY)
+                } else {
+                    0.0
+                };
+                assert_eq!(out[i * 2], want, "{what}: left frame {n}");
+                assert_eq!(out[i * 2 + 1], -want, "{what}: right frame {n}");
+            }
+        };
+
+        // Disabled.
+        let (load, memory, doorbell) = ready_block("sonara_test_bypass_latency", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let host = spawn_fake_host(
+            memory,
+            doorbell,
+            Arc::clone(&stop),
+            Arc::new(AtomicBool::new(true)),
+            None,
+        );
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        clock.publish(Instant::now(), Duration::from_millis(500));
+        let mut adapter =
+            SubprocessClapAdapter::new_for_test(load, Arc::clone(&clock), 48_000.0, 64);
+        adapter.set_active_state(true, LATENCY as u32);
+        adapter.set_enabled(false);
+        let mut out = vec![0.0f32; 64 * 2];
+        for b in 0..3 {
+            adapter.process_block(&block(b * 64), &mut out, 64);
+            check(&out, b * 64, "disabled");
+        }
+        // Enabled: the plugin (the fake doubles its input) processes, and the delay keeps
+        // following the input so a later dry block is continuous.
+        adapter.set_enabled(true);
+        clock.publish(Instant::now(), Duration::from_millis(500));
+        adapter.process_block(&block(192), &mut out, 64);
+        assert_eq!(out[0], block(192)[0] * 2.0);
+        adapter.set_enabled(false);
+        adapter.process_block(&block(256), &mut out, 64);
+        check(&out, 256, "disabled after processing");
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
+
+        // Late: a held request misses its deadline.
+        let (load, memory, doorbell) = ready_block("sonara_test_bypass_latency_late", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let host = spawn_fake_host(
+            memory,
+            doorbell,
+            Arc::clone(&stop),
+            Arc::clone(&release),
+            None,
+        );
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter =
+            SubprocessClapAdapter::new_for_test(load, Arc::clone(&clock), 48_000.0, 64);
+        adapter.set_active_state(true, LATENCY as u32);
+        clock.publish(Instant::now(), Duration::from_micros(200));
+        adapter.process_block(&block(0), &mut out, 64);
+        check(&out, 0, "late");
+        // The request is still outstanding: the next block is dry too.
+        clock.publish(Instant::now(), Duration::from_secs(1));
+        adapter.process_block(&block(64), &mut out, 64);
+        check(&out, 64, "outstanding");
+        release.store(true, Ordering::Release);
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
     }
 
     #[test]

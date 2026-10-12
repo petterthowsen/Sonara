@@ -183,7 +183,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
     - Live: the panel shows the channel's latency after a linear-phase EQ plugin is added.
   - _Depends on_: T-018, T-003
 
-- [ ] **T-020** [REQ-015] Bypass delay in the CLAP adapter
+- [x?] **T-020** [REQ-015] Bypass delay in the CLAP adapter
   - _Files_: `Engine/src/audio/devices/clap_host/subprocess_adapter/mod.rs`
   - _Output_:
     - `bypass_delay` is sized in `set_active_state`.
