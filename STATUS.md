@@ -1,5 +1,24 @@
 # Sonara DAW - Project Status
 
+## Engine performance and latency compensation (spec 042)
+
+### Working
+- T-009 shared-state audit (2026-10-12): `audio/devices`, `audio/modulation` and `audio/dsp` reached from `process_block`/`begin_block`/`finish_block`. **No to-fix items**: no device on one channel mutates state another channel's chain touches.
+  - safe: every `static TABLE: ParamTable` / `*_SLOTS: [SlotSpec]` (immutable const data).
+  - safe: `dsp/oscillator.rs` `SINE_TABLE` (`LazyLock`, forced in `Oscillator::new` off the audio thread, read-only after).
+  - safe: `note_fx/ids.rs` `NEXT_GENERATED` (atomic `fetch_add`, ids stay distinct). With workers the *values* a channel draws depend on scheduling, but nothing compares or orders by id value (only equality matching), so audio output stays deterministic.
+  - safe: `subprocess_adapter` `PLUGIN_UNDERRUNS` (relaxed counter), `container.rs` `SERIAL_PLUGIN_DISPATCH` (read-only after startup).
+  - safe: plugin `HostSharedMemory` doorbell shared by all instances in one host: `futex::ring` is `fetch_add` + wake-all, and `finish_block` waits re-check their own instance's `done_seq`; block memory (`shared.memory`) is per instance.
+  - safe: adapter `param_info_cache`, `saved_state` (`Arc<Mutex>`) — command-thread paths only (reload, state save), not in the process path.
+  - safe: `sfizz_device` `Arc<Mutex<…>>` fields are per instance, shared only with that instance's loader thread; process path uses `try_lock`. The sfizz C++ library's internals were not audited; instances are independent by design.
+  - safe: test-only `Arc<Mutex<Vec<…>>>` recorders in `note_fx/routing.rs`, `modulation/host.rs`.
+  - No global RNG (`thread_rng`/`fastrand`) in device code; no `thread_local!` besides `rt_debug`.
+- Constraints for T-011/T-012 found during the audit (not code changes):
+  - Cross-channel writes happen only in the mixer, serially: `copy_extra_outs_to_targets` (aux pass), `forward_device_events`, `feed_taps` (block start) and `SidechainTaps::snapshot` (end). They must stay outside pool jobs.
+  - `rt_debug` counters are `thread_local!`, so allocation violations on workers are only seen if each worker runs under `check_callback`/sections and reports (T-011's "rt_debug wrapping").
+  - The logger (`logging/mod.rs`) writes through `Arc<Mutex<File>>`; `warn!` from several realtime threads at once contends on it. That's pre-existing on the audio thread and not pool-specific, but avoid logging per block on workers.
+  - No FTZ/DAZ denormal flags are set anywhere today. If they are added later, workers need them too (MXCSR is per thread).
+
 ## Saturator (spec 031)
 
 ### Working

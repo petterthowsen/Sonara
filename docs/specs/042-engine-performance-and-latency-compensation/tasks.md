@@ -66,7 +66,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
 
 ## Phase 2: Realtime scheduling for plugin hosts (B)
 
-- [ ] **T-007** [REQ-006, REQ-007] Promote the plugin host's audio thread
+- [x?] **T-007** [REQ-006, REQ-007] Promote the plugin host's audio thread
   - _Files_: `Engine/Cargo.toml`, `Engine/src/audio/realtime.rs` (new), `Engine/src/audio/mod.rs`, `Engine/src/audio/ipc/protocol.rs`, `Engine/src/audio/ipc/shared_memory.rs`, `Engine/src/plugin_host/audio_thread.rs`
   - _Output_:
     - `promote_current_thread` wrapper.
@@ -89,13 +89,13 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
 
 ## Phase 3: Channel worker pool (C)
 
-- [ ] **T-009** [REQ-009] Audit for shared mutable state across channels
+- [x?] **T-009** [REQ-009] Audit for shared mutable state across channels
   - _Files_: — (findings in `STATUS.md`; fixes become extra tasks here)
   - _Output_: a list of every `static`, `thread_local!`, `Arc<Mutex…>`/`Arc<RefCell…>` and global reached from `AudioDevice::process_block` in `audio/devices`, `audio/modulation` and `audio/dsp`, each marked safe or to-fix
   - _Verify_: the list is in `STATUS.md`, and each to-fix item has a follow-up task appended below
   - _Depends on_: —
 
-- [ ] **T-010** [REQ-009] Deterministic channel order
+- [x?] **T-010** [REQ-009] Deterministic channel order
   - _Files_: `Engine/src/audio/mixing/mod.rs`
   - _Output_: `channel_ids.sort_unstable()` after it is filled
   - _Verify_: `cargo test channel_ids_are_sorted` passes; all mixing tests pass
@@ -149,7 +149,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
 
 ## Phase 4: Latency compensation (D)
 
-- [ ] **T-016** [REQ-013] `StereoBlockDelay`
+- [x?] **T-016** [REQ-013] `StereoBlockDelay`
   - _Files_: `Engine/src/audio/dsp/block_delay.rs` (new), `Engine/src/audio/dsp/mod.rs`
   - _Output_: `prepare`, `write`, `add_delayed` and `read_delayed` over two `DelayLine`s
   - _Verify_: `cargo test block_delay_reads_back_exact` passes
