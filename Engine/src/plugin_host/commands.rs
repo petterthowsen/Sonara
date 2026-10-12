@@ -254,70 +254,18 @@ pub fn process_command(
                 deactivate_plugin(state, audio);
             }
             state.sample_rate = sample_rate;
-
-            info!(
-                "Activating plugin (sample_rate={}, max_buffer_size={})",
-                state.sample_rate, state.max_buffer_size
-            );
-
-            let config = PluginAudioConfiguration {
-                sample_rate: state.sample_rate as f64,
-                min_frames_count: 1,
-                max_frames_count: state.max_buffer_size as u32,
-            };
-
-            let stopped = match state.instance.activate(|_, _| (), config) {
-                Ok(stopped) => stopped,
-                Err(e) => {
-                    error!("Failed to activate plugin: {:?}", e);
-                    return Some(PluginResponse::ActivateResult {
-                        success: false,
-                        error: Some(format!("{:?}", e)),
-                        latency_frames: 0,
-                    });
-                }
-            };
-            let started = match stopped.start_processing() {
-                Ok(started) => started,
-                Err(e) => {
-                    error!("Failed to start processing: {:?}", e);
-                    return Some(PluginResponse::ActivateResult {
-                        success: false,
-                        error: Some(format!("Failed to start processing: {:?}", e)),
-                        latency_frames: 0,
-                    });
-                }
-            };
-
-            let param_map = Some(Arc::clone(state.param_map()));
-            if let Err(e) = audio.set_processor(
-                instance_id,
-                PluginAudioProcessorEnum::Started(started),
-                Arc::clone(&state.shared_memory),
-                param_map,
-                state.span.clone(),
-            ) {
-                error!("Failed to hand the processor to the audio thread: {}", e);
-                return Some(PluginResponse::ActivateResult {
+            match activate_plugin(state, audio) {
+                Ok(latency) => Some(PluginResponse::ActivateResult {
+                    success: true,
+                    error: None,
+                    latency_frames: latency,
+                }),
+                Err(error) => Some(PluginResponse::ActivateResult {
                     success: false,
-                    error: Some(e),
+                    error: Some(error),
                     latency_frames: 0,
-                });
+                }),
             }
-
-            let latency = query_latency(state);
-            state.latency_frames = latency;
-            state.activated = true;
-            state.processing = true;
-            info!(
-                "✅ Plugin activated and processing started (latency {} frames)",
-                latency
-            );
-            Some(PluginResponse::ActivateResult {
-                success: true,
-                error: None,
-                latency_frames: latency,
-            })
         }
 
         PluginCommand::Deactivate => {
@@ -683,7 +631,6 @@ pub fn process_command(
     }
 }
 
-/// Stop processing on the audio thread and deactivate the instance on the main thread.
 /// `GuiSize` for a GUI operation's result, `GuiError` if it failed
 fn gui_size_response(result: Result<GuiSize, String>) -> Option<PluginResponse> {
     Some(match result {
@@ -695,6 +642,77 @@ fn gui_size_response(result: Result<GuiSize, String>) -> Option<PluginResponse> 
     })
 }
 
+/// Activate at `state.sample_rate`, start processing and hand the processor to the audio
+/// thread. Returns the plugin's latency in frames.
+fn activate_plugin(state: &mut PluginState, audio: &AudioThreadHandle) -> Result<u32, String> {
+    info!(
+        "Activating plugin (sample_rate={}, max_buffer_size={})",
+        state.sample_rate, state.max_buffer_size
+    );
+
+    let config = PluginAudioConfiguration {
+        sample_rate: state.sample_rate as f64,
+        min_frames_count: 1,
+        max_frames_count: state.max_buffer_size as u32,
+    };
+
+    let stopped = state.instance.activate(|_, _| (), config).map_err(|e| {
+        error!("Failed to activate plugin: {:?}", e);
+        format!("{:?}", e)
+    })?;
+    // A latency report from inside `activate` is the answer, not a new restart request
+    state.shared.clear_restart_requested();
+    let started = stopped.start_processing().map_err(|e| {
+        error!("Failed to start processing: {:?}", e);
+        format!("Failed to start processing: {:?}", e)
+    })?;
+
+    let param_map = Some(Arc::clone(state.param_map()));
+    audio
+        .set_processor(
+            state.instance_id,
+            PluginAudioProcessorEnum::Started(started),
+            Arc::clone(&state.shared_memory),
+            param_map,
+            state.span.clone(),
+        )
+        .map_err(|e| {
+            error!("Failed to hand the processor to the audio thread: {}", e);
+            e
+        })?;
+
+    let latency = query_latency(state);
+    state.latency_frames = latency;
+    state.activated = true;
+    state.processing = true;
+    info!(
+        "✅ Plugin activated and processing started (latency {} frames)",
+        latency
+    );
+    Ok(latency)
+}
+
+/// The plugin asked to be restarted (`request_restart` or `latency.changed`): deactivate and
+/// re-activate it at the same rate. Returns the new latency when it changed, for
+/// `PluginEvent::LatencyChanged`. A plugin that isn't active is left alone.
+pub fn restart_plugin(state: &mut PluginState, audio: &AudioThreadHandle) -> Option<u32> {
+    if !state.activated {
+        return None;
+    }
+    let before = state.latency_frames;
+    info!("Restarting plugin on its request");
+    deactivate_plugin(state, audio);
+    match activate_plugin(state, audio) {
+        Ok(latency) if latency != before => Some(latency),
+        Ok(_) => None,
+        Err(e) => {
+            error!("Restart failed, the plugin stays inactive: {}", e);
+            None
+        }
+    }
+}
+
+/// Stop processing on the audio thread and deactivate the instance on the main thread.
 fn deactivate_plugin(state: &mut PluginState, audio: &AudioThreadHandle) {
     if let Some(stopped) = audio.take_processor(state.instance_id) {
         state.instance.deactivate(stopped);

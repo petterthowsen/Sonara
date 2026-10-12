@@ -207,6 +207,17 @@ impl CommandWorker {
                             plugin.set_state_dirty()
                         });
                     }
+                    PluginEvent::LatencyChanged { frames } => {
+                        info!(
+                            "Plugin {} latency is now {} frames",
+                            plugin.handle.device_name(),
+                            frames
+                        );
+                        // `refresh_latency` replans from the new value after this poll
+                        self.with_plugin(plugin.channel_id, &plugin.device_path, |plugin| {
+                            plugin.set_latency_frames(frames)
+                        });
+                    }
                 }
             }
             if !plugin.output_events.is_empty() {

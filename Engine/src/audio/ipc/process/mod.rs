@@ -580,4 +580,21 @@ mod tests {
         assert!(matches!(received, PluginEvent::StateDirty));
         assert!(rx.try_recv().is_err());
     }
+
+    #[test]
+    fn latency_changed_events_reach_their_instance() {
+        let (process, host) = fake_host();
+        let (tx, rx) = channel::unbounded();
+        lock(&process.routing.events).insert(5, tx);
+        let event = HostMessage::Event {
+            instance_id: 5,
+            event: PluginEvent::LatencyChanged { frames: 1024 },
+        };
+        wire::send_frame(&host, &event, &[]).unwrap();
+        let received = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            received,
+            PluginEvent::LatencyChanged { frames: 1024 }
+        ));
+    }
 }

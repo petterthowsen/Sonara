@@ -277,6 +277,11 @@ pub enum PluginEvent {
     /// The plugin called `mark_dirty`: its saved state no longer matches what was loaded. The
     /// engine refreshes its state blob from this (crash recovery, project save).
     StateDirty,
+
+    /// The host re-activated the plugin after it asked for a restart (CLAP `request_restart` or
+    /// `latency.changed`, VST3 `kLatencyChanged`) and its latency is now `frames`. Sent only
+    /// when the value changed. The engine updates the adapter and replans the compensation.
+    LatencyChanged { frames: u32 },
 }
 
 /// Parameter metadata

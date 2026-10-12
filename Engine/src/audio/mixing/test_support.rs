@@ -72,7 +72,7 @@ pub(super) fn add_test_device(channel: &mut Channel, level: f32) -> Arc<AtomicUs
 /// as its latency.
 pub(crate) struct LatencyDevice {
     pub(super) gain: f32,
-    pub(super) delay: usize,
+    pub(crate) delay: usize,
     /// Interleaved history, `delay` frames long, used as a ring.
     history: Vec<f32>,
     pos: usize,

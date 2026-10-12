@@ -688,8 +688,17 @@ pub fn service_vst3(state: &mut Vst3State, audio: &AudioThreadHandle) {
     }
     if state.shared.take_reactivate_requested() && state.activated {
         info!("Re-activating after a latency change");
-        if let Err(e) = reactivate(state, audio) {
-            error!("Re-activation failed: {}", e);
+        let before = state.latency_frames;
+        match reactivate(state, audio) {
+            Ok(()) if state.latency_frames != before => {
+                state
+                    .shared
+                    .send_event(crate::audio::ipc::PluginEvent::LatencyChanged {
+                        frames: state.latency_frames,
+                    });
+            }
+            Ok(()) => {}
+            Err(e) => error!("Re-activation failed: {}", e),
         }
     }
 }

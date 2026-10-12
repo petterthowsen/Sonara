@@ -260,4 +260,28 @@ mod tests {
         assert_eq!(state.latency_over_limit, 0);
         assert_eq!(state.channels[&3].latency.route_delay, 60_000);
     }
+
+    /// A plugin's `LatencyChanged` only updates what the adapter reports; the next refresh must
+    /// replan from it.
+    #[test]
+    fn a_device_latency_change_replans() {
+        let state = state();
+        let mut status = LatencyStatus::default();
+        add_latency(&state, 2, 100);
+        refresh(&state, &mut status, BLOCK);
+        assert_eq!(state.lock().unwrap().channels[&3].latency.route_delay, 100);
+
+        {
+            let mut state = state.lock().unwrap();
+            let device = state.channels.get_mut(&2).unwrap().devices[0]
+                .as_any_mut()
+                .downcast_mut::<LatencyDevice>()
+                .unwrap();
+            device.delay = 2048;
+        }
+        assert!(refresh(&state, &mut status, BLOCK).is_some());
+        let state = state.lock().unwrap();
+        assert_eq!(state.channels[&3].latency.route_delay, 2048);
+        assert_eq!(state.output_latency_frames, 2048);
+    }
 }

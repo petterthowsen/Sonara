@@ -27,7 +27,7 @@ use crate::audio::ipc::{
     PluginFormat,
 };
 use crate::plugin_host::audio_thread::{self, AudioThreadHandle};
-use crate::plugin_host::commands::process_command;
+use crate::plugin_host::commands::{process_command, restart_plugin};
 use crate::plugin_host::logging;
 use crate::plugin_host::state::{HostedInstance, PluginState};
 use crate::plugin_host::vst3::commands::{process_vst3_command, service_vst3, Vst3Modules};
@@ -357,6 +357,13 @@ pub fn run_plugin_host(
             // Plugin-required main-thread work (timers, GUI callbacks, parameter flush).
             let span = state.span.clone();
             let _entered = span.enter();
+            if state.shared.take_restart_requested() {
+                if let Some(frames) = restart_plugin(state, &audio) {
+                    state
+                        .shared
+                        .send_event(PluginEvent::LatencyChanged { frames });
+                }
+            }
             // Values changed without per-parameter events (a preset loaded in the plugin's GUI):
             // report every current value.
             if state.shared.take_param_values_rescanned() {

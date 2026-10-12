@@ -77,7 +77,7 @@ impl Vst3Shared {
         Arc::clone(&self.param_map.lock().unwrap())
     }
 
-    fn send_event(&self, event: PluginEvent) {
+    pub fn send_event(&self, event: PluginEvent) {
         let _ = self.event_tx.send(HostMessage::Event {
             instance_id: self.instance_id,
             event,

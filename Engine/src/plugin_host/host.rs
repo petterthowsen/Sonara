@@ -42,6 +42,9 @@ pub struct SubprocessHostShared {
     flush_requested: Arc<AtomicBool>,
     /// Set when the plugin calls `mark_dirty` on the state extension
     state_dirty: Arc<AtomicBool>,
+    /// Set when the plugin asks to be restarted (`request_restart`, or `latency.changed` while
+    /// active), so the event loop re-activates it and re-reads its latency
+    restart_requested: Arc<AtomicBool>,
     /// The instance's log span (`logging::instance_span`): plugin log callbacks can come from
     /// any thread, so they enter it themselves.
     span: tracing::Span,
@@ -63,6 +66,7 @@ impl SubprocessHostShared {
             param_values_rescanned: Arc::new(AtomicBool::new(false)),
             flush_requested: Arc::new(AtomicBool::new(false)),
             state_dirty: Arc::new(AtomicBool::new(false)),
+            restart_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -72,7 +76,7 @@ impl SubprocessHostShared {
     }
 
     /// Send an event to the engine, addressed to this instance.
-    fn send_event(&self, event: PluginEvent) {
+    pub fn send_event(&self, event: PluginEvent) {
         let _ = self.event_tx.send(HostMessage::Event {
             instance_id: self.instance_id,
             event,
@@ -93,6 +97,17 @@ impl SubprocessHostShared {
     /// plugin's next `mark_dirty` after it is a new change and must reach the engine again.
     pub fn clear_state_dirty(&self) {
         self.state_dirty.store(false, Ordering::Release);
+    }
+
+    /// True once after the plugin asked to be restarted.
+    pub fn take_restart_requested(&self) -> bool {
+        self.restart_requested.swap(false, Ordering::AcqRel)
+    }
+
+    /// Forget restart requests made so far: the plugin was just (re-)activated, and a compliant
+    /// plugin reports `latency.changed` from inside `activate`, which must not restart it again.
+    pub fn clear_restart_requested(&self) {
+        self.restart_requested.store(false, Ordering::Release);
     }
 
     /// True once after the plugin asked for a parameter flush.
@@ -181,8 +196,9 @@ impl<'a> MainThreadHandler<'a> for SubprocessHostMainThread<'a> {
 
 impl<'a> SharedHandler<'a> for SubprocessHostShared {
     fn request_restart(&self) {
-        // We don't support runtime restart
-        info!("Plugin requested restart (not supported)");
+        // The event loop deactivates and re-activates it (`restart_plugin`)
+        info!("Plugin requested a restart");
+        self.restart_requested.store(true, Ordering::Release);
     }
 
     fn request_process(&self) {
@@ -270,8 +286,10 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
 
 impl HostLatencyImpl for SubprocessHostMainThread<'_> {
     fn changed(&mut self) {
-        // Re-queried by the engine after activation; nothing to do here.
+        // Inside `activate` this is the expected report and the flag is cleared right after.
+        // Outside it, some plugins skip `request_restart`, so treat it as one.
         info!("Plugin reported a latency change");
+        self.shared.restart_requested.store(true, Ordering::Release);
     }
 }
 
