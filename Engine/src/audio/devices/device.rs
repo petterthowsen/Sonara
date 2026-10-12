@@ -527,7 +527,8 @@ pub fn apply_transport(
     }
 }
 
-fn apply_transport_to(
+/// Hand the transport to `device` and everything nested inside it.
+pub fn apply_transport_to(
     device: &mut dyn AudioDevice,
     transport: &crate::audio::transport::Transport,
 ) {

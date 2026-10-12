@@ -25,7 +25,9 @@ use super::{ModulatorKind, ModulatorState, MAX_MODULATORS, MAX_ROUTES};
 use crate::audio::devices::container::{
     copy_interleaved, device_at_path_mut, insert_device, remove_device,
 };
-use crate::audio::devices::{AudioDevice, DeviceContainer, DevicePath, ParamId};
+use crate::audio::devices::{
+    apply_transport_to, AudioDevice, DeviceContainer, DevicePath, ParamId,
+};
 use crate::audio::midi_types::{cc14_to_unit, NoteEvent};
 use crate::audio::modulation::kinds::{CC_NUMBER, LFO_RETRIGGER};
 use crate::audio::transport::Transport;
@@ -1104,6 +1106,13 @@ impl AudioDevice for ModulatedDevice {
         let mut done = 0;
         while done < sample_count {
             let frames = (sample_count - done).min(CONTROL_STEP);
+            if done > 0 && self.transport.playing {
+                // The channel pushes the transport once per block; each later window hands the
+                // inner tree the position it has reached, so clocked note effects (Arpeggiator,
+                // Step Sequencer) inside a modulated synth or container place their steps right.
+                let transport = self.transport;
+                apply_transport_to(self.dev_mut(), &transport);
+            }
             self.control_step(frames, &inputs[window(done, frames, inputs.len())]);
             self.deliver_midi(done, frames);
             let in_range = window(done, frames, inputs.len());
@@ -2928,5 +2937,130 @@ mod tests {
         let inner = fx.as_container_mut().unwrap().child_mut(0).unwrap();
         assert!(inner.as_modulated_mut().is_none());
         assert_eq!(inner.device_id(), "sonara.builtin.delay");
+    }
+}
+
+/// Clocked note effects inside a modulated device keep time while the transport plays.
+#[cfg(test)]
+mod transport_window_tests {
+    use super::*;
+    use crate::audio::devices::{
+        apply_transport, create_note_effect, ChainDevice, DeviceCategory, DeviceVariant, ParamInfo,
+        ParamValue, PolySynthDevice,
+    };
+    use std::sync::{Arc, Mutex};
+
+    const SR: f32 = 48_000.0;
+
+    /// Logs every note-on as an absolute sample: its frame plus the song position of the last
+    /// transport it was handed, so a stale transport shows up as a wrong time.
+    struct TimedRecorder {
+        at: f64,
+        log: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl AudioDevice for TimedRecorder {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            copy_interleaved(inputs, outputs, n);
+        }
+        fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+            if matches!(event, NoteEvent::On { .. }) {
+                let at = (self.at * SR as f64).round() as u64 + frame_offset as u64;
+                self.log.lock().unwrap().push(at);
+            }
+        }
+        fn accepts_note_input(&self) -> bool {
+            true
+        }
+        fn set_transport(&mut self, transport: &Transport) {
+            self.at = transport.song_pos_seconds;
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.timed_recorder"
+        }
+        fn device_name(&self) -> &str {
+            "Timed Recorder"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// An Arpeggiator followed by a recorder, for a note list.
+    fn arp_and_recorder(block: usize) -> (Vec<Box<dyn AudioDevice>>, Arc<Mutex<Vec<u64>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let arp = create_note_effect("sonara.builtin.arpeggiator", SR, block).unwrap();
+        let recorder = TimedRecorder {
+            at: 0.0,
+            log: log.clone(),
+        };
+        (vec![arp, Box::new(recorder)], log)
+    }
+
+    /// Plays two seconds at 120 BPM with C3 held, pushing the transport once per block like the
+    /// channel does, and returns the arpeggiator's note-ons (1/16 steps: every 6000 samples).
+    fn onsets(device: Box<dyn AudioDevice>, log: &Arc<Mutex<Vec<u64>>>, block: usize) -> Vec<u64> {
+        let mut chain = vec![device];
+        let mut transport = Transport {
+            tempo: 120.0,
+            playing: true,
+            ..Transport::default()
+        };
+        let mut out = vec![0.0; block * 2];
+        for b in 0..(2 * SR as usize) / block {
+            apply_transport(&mut chain, &transport);
+            if b == 0 {
+                chain[0].send_note_event(&NoteEvent::test_on(60, 100), 0);
+            }
+            chain[0].process_block(&[], &mut out, block);
+            transport.advance(block, SR);
+        }
+        let got = log.lock().unwrap().clone();
+        got
+    }
+
+    fn want() -> Vec<u64> {
+        (0..16).map(|i| i * 6000).collect()
+    }
+
+    #[test]
+    fn note_fx_in_a_modulated_polysynth_follows_the_transport() {
+        for block in [256, 512, 1024, 2048] {
+            let mut synth = PolySynthDevice::new(SR);
+            synth.prepare(SR, block);
+            let (devices, log) = arp_and_recorder(block);
+            let slots = synth.as_container_mut().unwrap();
+            let note_fx = slots.child_mut(0).unwrap().as_container_mut().unwrap();
+            note_fx.chain_children_mut().unwrap().extend(devices);
+            let wrapped = Box::new(ModulatedDevice::new(Box::new(synth), SR));
+            assert_eq!(onsets(wrapped, &log, block), want(), "block {block}");
+        }
+    }
+
+    #[test]
+    fn note_fx_in_a_modulated_chain_follows_the_transport() {
+        for block in [256, 512, 1024, 2048] {
+            let mut chain = ChainDevice::new(block);
+            let (devices, log) = arp_and_recorder(block);
+            for (i, device) in devices.into_iter().enumerate() {
+                chain.insert_child(i, device);
+            }
+            let wrapped = Box::new(ModulatedDevice::new(Box::new(chain), SR));
+            assert_eq!(onsets(wrapped, &log, block), want(), "block {block}");
+        }
     }
 }
