@@ -126,11 +126,15 @@ impl DeviceSlots {
         self.specs
     }
 
-    /// Command thread, stream stopped: grow the scratch for blocks of up to `max_frames`. The
-    /// slot chains themselves are prepared by the command thread's device visitor.
-    pub fn prepare(&mut self, max_frames: usize) {
+    /// Command thread, stream stopped: grow the scratch, and the slot chains' own ping-pong
+    /// buffers, for blocks of up to `max_frames`. A chain truncates a block longer than its
+    /// buffers, so they must keep up with `slot_buf`.
+    pub fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         if self.slot_buf.len() < max_frames * 2 {
             self.slot_buf.resize(max_frames * 2, 0.0);
+        }
+        for chain in &mut self.chains {
+            chain.prepare(sample_rate, max_frames);
         }
     }
 
@@ -501,5 +505,20 @@ pub mod tests {
         asy.async_blocks = true;
         slots.children_mut(1).unwrap().push(Box::new(asy));
         assert!(slots.has_async(1));
+    }
+
+    #[test]
+    fn prepare_grows_slot_chains_with_the_scratch() {
+        // A chain truncates blocks longer than its buffers, so prepare must grow them too.
+        let mut slots = DeviceSlots::new(&TEST_SLOTS, 16);
+        slots.children_mut(1).unwrap().push(Box::new(Fx::new()));
+        slots.prepare(48_000.0, 256);
+        let input = vec![1.0f32; 256 * 2];
+        let mut output = vec![0.0f32; 256 * 2];
+        slots
+            .chain_mut(1)
+            .unwrap()
+            .process_block(&input, &mut output, 256);
+        assert!(output.iter().all(|s| *s != 0.0), "block was truncated");
     }
 }

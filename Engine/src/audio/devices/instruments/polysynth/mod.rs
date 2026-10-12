@@ -584,8 +584,12 @@ fn retarget(smoother: &mut SmoothedParam, value: f32) {
 }
 
 impl PolySynthDevice {
-    /// Queue a note for the voices at `frame_offset`.
+    /// Queue a note for the voices at `frame_offset`. A full queue drops the note instead of
+    /// growing on the audio thread (ADR-0002); Note FX can emit many notes per block.
     fn queue_note(&mut self, event: &NoteEvent, frame_offset: usize) {
+        if self.queued_midi.len() >= self.queued_midi.capacity() {
+            return;
+        }
         match *event {
             NoteEvent::On { key, velocity, .. } => {
                 self.queued_midi.push((frame_offset, key, velocity, true))
@@ -1001,7 +1005,8 @@ impl AudioDevice for PolySynthDevice {
         self.sample_rate = sample_rate;
         self.allocate(sample_rate, max_frames.max(DEFAULT_MAX_FRAMES));
         self.rebuild_free_lfos();
-        self.slots.prepare(max_frames.max(DEFAULT_MAX_FRAMES));
+        self.slots
+            .prepare(sample_rate, max_frames.max(DEFAULT_MAX_FRAMES));
         let p = &self.params;
         let cutoff_slot = params::slot_of(CUTOFF);
         self.level_smoothed = [

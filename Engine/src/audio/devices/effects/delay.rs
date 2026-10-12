@@ -704,7 +704,7 @@ impl AudioDevice for DelayDevice {
     /// Resize the lines for the new rate and restart from the current parameters.
     fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         self.sample_rate = sample_rate;
-        self.slots.prepare(max_frames);
+        self.slots.prepare(sample_rate, max_frames);
         self.loop_floor
             .set_ramp(sample_rate, SmoothedParam::DEFAULT_RAMP_MS);
         self.prepare_lines();

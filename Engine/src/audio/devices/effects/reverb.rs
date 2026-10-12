@@ -1502,7 +1502,7 @@ impl AudioDevice for ReverbDevice {
 
     fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         self.sample_rate = sample_rate;
-        self.slots.prepare(max_frames);
+        self.slots.prepare(sample_rate, max_frames);
         if self.whole_buf.len() < max_frames * 2 {
             self.whole_buf.resize(max_frames * 2, 0.0);
         }
