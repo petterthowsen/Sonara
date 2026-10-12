@@ -21,8 +21,8 @@ use crate::audio::devices::note_fx::routing::{
     release_note_effect_at_into, release_note_effects_into, route_cc, route_note, run_note_phase,
 };
 use crate::audio::devices::{
-    AudioDevice, DefaultModulator, DeviceCategory, DeviceSlots, DeviceVariant, MidiPort, ParamId,
-    ParamInfo, ParamValue, PortFlow, SlotKind, SlotSpec,
+    apply_transport, AudioDevice, DefaultModulator, DeviceCategory, DeviceSlots, DeviceVariant,
+    MidiPort, ParamId, ParamInfo, ParamValue, PortFlow, SlotKind, SlotSpec,
 };
 use crate::audio::dsp::SmoothedParam;
 use crate::audio::midi_types::NoteEvent;
@@ -639,6 +639,11 @@ impl PolySynthDevice {
         // Note FX: each note effect emits this block's notes; what falls off the end plays.
         if self.slots.len(NOTE_FX_SLOT) > 0 {
             if let Some((children, sink)) = self.slots.children_and_sink(NOTE_FX_SLOT) {
+                // A wrapping `ModulatedDevice` renders the host block in control-step windows,
+                // but the channel pushes the transport once per block. `self.transport` has
+                // been advanced to this window's start, so hand that to the note effects:
+                // clocked ones (Arpeggiator, Step Sequencer) place their steps from it.
+                apply_transport(children, &self.transport);
                 run_note_phase(children, sample_count, Some(sink));
             }
             self.drain_note_sink(sample_count);
@@ -2725,6 +2730,64 @@ mod slot_tests {
             with_tail > plain + 5,
             "the synth slept at block {with_tail}, barely after {plain} without the tail"
         );
+    }
+
+    /// Arpeggiator note-ons over two seconds of playback at 120 BPM (1/16 steps), as absolute
+    /// samples. The transport is pushed once per host block, like the channel does. With
+    /// `window` set, each block is rendered in windows of that size, the way `ModulatedDevice`
+    /// drives a synth that has modulators.
+    fn arp_onsets_while_playing(block: usize, window: Option<usize>) -> Vec<u64> {
+        use crate::audio::devices::apply_transport;
+        use crate::audio::devices::note_fx::routing::test_devices::Recorder;
+        let mut dev = PolySynthDevice::new(SR);
+        dev.prepare(SR, block);
+        let arp = create_note_effect("sonara.builtin.arpeggiator", SR, block).unwrap();
+        put(&mut dev, NOTE_FX_SLOT, arp);
+        let (recorder, log) = Recorder::new();
+        put(&mut dev, NOTE_FX_SLOT, Box::new(recorder));
+        let mut chain: Vec<Box<dyn AudioDevice>> = vec![Box::new(dev)];
+        let mut transport = Transport {
+            tempo: 120.0,
+            playing: true,
+            ..Transport::default()
+        };
+        let window = window.unwrap_or(block);
+        let mut out = vec![0.0; block * 2];
+        let mut onsets = Vec::new();
+        for b in 0..(2 * SR as usize) / block {
+            apply_transport(&mut chain, &transport);
+            if b == 0 {
+                chain[0].send_note_event(&NoteEvent::test_on(60, 100), 0);
+            }
+            let mut done = 0;
+            while done < block {
+                let n = window.min(block - done);
+                log.lock().unwrap().clear();
+                chain[0].process_block(&[], &mut out[..n * 2], n);
+                for (frame, event) in log.lock().unwrap().iter() {
+                    if matches!(event, NoteEvent::On { .. }) {
+                        onsets.push((b * block + done + frame) as u64);
+                    }
+                }
+                done += n;
+            }
+            transport.advance(block, SR);
+        }
+        onsets
+    }
+
+    #[test]
+    fn note_fx_follows_the_transport_inside_control_windows() {
+        use crate::audio::modulation::host::CONTROL_STEP;
+        let want: Vec<u64> = (0..16).map(|i| i * 6000).collect();
+        for block in [256, 512, 1024, 2048] {
+            assert_eq!(arp_onsets_while_playing(block, None), want, "block {block}");
+            assert_eq!(
+                arp_onsets_while_playing(block, Some(CONTROL_STEP)),
+                want,
+                "block {block} in control-step windows"
+            );
+        }
     }
 
     #[test]
