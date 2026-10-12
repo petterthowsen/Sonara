@@ -2,6 +2,7 @@
 
 use crate::audio::devices::{has_audio_signal, AudioDevice};
 use std::fmt;
+use std::time::Instant;
 
 /// Deepest device nesting a `DevicePath` can address. Paths deeper than this are rejected when
 /// parsed and devices can't be inserted below it.
@@ -400,6 +401,8 @@ pub struct ChainCursor {
     pub has_input_activity: bool,
     /// `devices[next]` began a block and is waiting for `resume_chain`.
     pub parked: bool,
+    /// Nanoseconds the parked device spent in `begin_block`, added to its `finish_block` time.
+    pub parked_ns: u64,
 }
 
 impl ChainCursor {
@@ -409,6 +412,7 @@ impl ChainCursor {
             next: 0,
             has_input_activity,
             parked: false,
+            parked_ns: 0,
         }
     }
 }
@@ -435,6 +439,11 @@ fn chain_buffers<'a>(
     }
 }
 
+/// Nanoseconds since `started`, or 0 when timing is off.
+fn elapsed_ns(started: Option<Instant>) -> u64 {
+    started.map_or(0, |t| t.elapsed().as_nanos() as u64)
+}
+
 /// Update a device's sleep state from the chain's input and its own output.
 fn after_device(
     device: &mut dyn AudioDevice,
@@ -455,12 +464,19 @@ fn after_device(
 ///
 /// `buf_a` must hold the interleaved input when the chain starts. Calls
 /// `on_sleep_change(index, is_sleeping)` for each device whose sleep state changed.
+///
+/// With `timing` on, calls `on_device_time(index, ns)` once per device that ran: the time in
+/// `process_block`, or in `begin_block` plus `finish_block` for a device that parked. The wait
+/// while parked is not counted, and a sleeping device reports nothing. With `timing` off the
+/// clock is never read.
 pub fn run_chain(
     devices: &mut [Box<dyn AudioDevice>],
     buf_a: &mut [f32],
     buf_b: &mut [f32],
     sample_count: usize,
     cursor: &mut ChainCursor,
+    timing: bool,
+    on_device_time: &mut impl FnMut(usize, u64),
     on_sleep_change: &mut impl FnMut(usize, bool),
 ) -> ChainStep {
     debug_assert!(!cursor.parked, "run_chain on a parked chain");
@@ -487,6 +503,7 @@ pub fn run_chain(
             }
         }
 
+        let started = timing.then(Instant::now);
         let begun = !serial && {
             let section = crate::audio::rt_debug::device_name("begin_block", device.device_id());
             crate::audio::rt_debug::device_section(section, || {
@@ -495,6 +512,7 @@ pub fn run_chain(
         };
         if begun {
             cursor.parked = true;
+            cursor.parked_ns = elapsed_ns(started);
             return ChainStep::Parked;
         }
 
@@ -502,6 +520,9 @@ pub fn run_chain(
         crate::audio::rt_debug::device_section(section, || {
             device.process_block(input, output, sample_count)
         });
+        if let Some(started) = started {
+            on_device_time(idx, started.elapsed().as_nanos() as u64);
+        }
         after_device(
             device.as_mut(),
             idx,
@@ -526,16 +547,22 @@ pub fn resume_chain(
     buf_b: &mut [f32],
     sample_count: usize,
     cursor: &mut ChainCursor,
+    timing: bool,
+    on_device_time: &mut impl FnMut(usize, u64),
     on_sleep_change: &mut impl FnMut(usize, bool),
 ) -> ChainStep {
     debug_assert!(cursor.parked, "resume_chain on a chain that isn't parked");
     let idx = cursor.next;
     if let Some(device) = devices.get_mut(idx) {
         let (input, output) = chain_buffers(idx, buf_a, buf_b);
+        let started = timing.then(Instant::now);
         let section = crate::audio::rt_debug::device_name("finish_block", device.device_id());
         crate::audio::rt_debug::device_section(section, || {
             device.finish_block(input, output, sample_count)
         });
+        if timing {
+            on_device_time(idx, cursor.parked_ns + elapsed_ns(started));
+        }
         after_device(
             device.as_mut(),
             idx,
@@ -546,8 +573,18 @@ pub fn resume_chain(
         );
     }
     cursor.parked = false;
+    cursor.parked_ns = 0;
     cursor.next = idx + 1;
-    run_chain(devices, buf_a, buf_b, sample_count, cursor, on_sleep_change)
+    run_chain(
+        devices,
+        buf_a,
+        buf_b,
+        sample_count,
+        cursor,
+        timing,
+        on_device_time,
+        on_sleep_change,
+    )
 }
 
 /// Serial ping-pong processing of a device list on interleaved stereo buffers.
@@ -562,6 +599,8 @@ pub fn process_serial_chain(
     buf_b: &mut [f32],
     sample_count: usize,
     has_input_activity: bool,
+    timing: bool,
+    mut on_device_time: impl FnMut(usize, u64),
     mut on_sleep_change: impl FnMut(usize, bool),
 ) -> bool {
     let mut cursor = ChainCursor::start(has_input_activity);
@@ -571,6 +610,8 @@ pub fn process_serial_chain(
         buf_b,
         sample_count,
         &mut cursor,
+        timing,
+        &mut on_device_time,
         &mut on_sleep_change,
     );
     loop {
@@ -583,6 +624,8 @@ pub fn process_serial_chain(
                     buf_b,
                     sample_count,
                     &mut cursor,
+                    timing,
+                    &mut on_device_time,
                     &mut on_sleep_change,
                 )
             }
@@ -915,8 +958,16 @@ mod tests {
         ];
         let mut buf_a = vec![1.0f32; 8];
         let mut buf_b = vec![0.0f32; 8];
-        let result_in_b =
-            process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 4, true, |_, _| {});
+        let result_in_b = process_serial_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            4,
+            true,
+            false,
+            |_, _| {},
+            |_, _| {},
+        );
         let out = if result_in_b { &buf_b } else { &buf_a };
         for sample in &out[..8] {
             assert!((sample - 2.0).abs() < 1e-6, "got {}", sample);
@@ -979,6 +1030,8 @@ mod tests {
             &mut buf_b,
             4,
             true,
+            false,
+            |_, _| {},
             |idx, sleeping| changes.push((idx, sleeping)),
         );
         let out = if result_in_b { &buf_b } else { &buf_a };
@@ -987,7 +1040,16 @@ mod tests {
 
         // Silence keeps it asleep and passes through.
         let mut buf_a = vec![0.0f32; 8];
-        process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 4, false, |_, _| {});
+        process_serial_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            4,
+            false,
+            false,
+            |_, _| {},
+            |_, _| {},
+        );
         assert!(devices[0].is_sleeping());
     }
 
@@ -997,10 +1059,16 @@ mod tests {
         let mut buf_a = vec![0.25f32; 4];
         let mut buf_b = vec![0.0f32; 4];
         let mut changes = 0;
-        let result_in_b =
-            process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 2, false, |_, _| {
-                changes += 1
-            });
+        let result_in_b = process_serial_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            2,
+            false,
+            false,
+            |_, _| {},
+            |_, _| changes += 1,
+        );
         assert!(!result_in_b);
         assert_eq!(changes, 0);
         assert_eq!(buf_a[0], 0.25);
@@ -1064,5 +1132,162 @@ mod tests {
                 .child_count(),
             3
         );
+    }
+
+    /// A copying effect that burns a little time, can sleep, and can park between
+    /// `begin_block` and `finish_block`.
+    struct TimedDevice {
+        sleeping: bool,
+        park: bool,
+    }
+
+    impl TimedDevice {
+        fn new(sleeping: bool, park: bool) -> Self {
+            Self { sleeping, park }
+        }
+
+        fn burn(&self) {
+            let t = Instant::now();
+            while t.elapsed().as_nanos() < 2_000 {}
+        }
+    }
+
+    impl AudioDevice for TimedDevice {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            self.burn();
+            let count = (sample_count * 2).min(inputs.len()).min(outputs.len());
+            outputs[..count].copy_from_slice(&inputs[..count]);
+        }
+
+        fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool {
+            self.burn();
+            self.park
+        }
+
+        fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            self.burn();
+            let count = (sample_count * 2).min(inputs.len()).min(outputs.len());
+            outputs[..count].copy_from_slice(&inputs[..count]);
+        }
+
+        fn is_sleeping(&self) -> bool {
+            self.sleeping
+        }
+
+        fn update_sleep_state(&mut self, _has_audio_activity: bool) -> bool {
+            false
+        }
+
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+
+        fn device_id(&self) -> &str {
+            "test.timed"
+        }
+
+        fn device_name(&self) -> &str {
+            "Timed"
+        }
+
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+
+        fn reset(&mut self) {}
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn chain_timer_counts_each_device() {
+        const FRAMES: usize = 16;
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![
+            Box::new(TimedDevice::new(false, false)),
+            Box::new(TimedDevice::new(true, false)),
+            Box::new(TimedDevice::new(false, true)),
+            Box::new(TimedDevice::new(false, false)),
+        ];
+        let input = vec![0.5f32; FRAMES * 2];
+        let mut buf_a = input.clone();
+        let mut buf_b = vec![0.0f32; FRAMES * 2];
+
+        // Timing on: the parked device reports once, with its wait left out.
+        let mut times: Vec<(usize, u64)> = Vec::new();
+        let mut cursor = ChainCursor::start(true);
+        let mut step = run_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            FRAMES,
+            &mut cursor,
+            true,
+            &mut |idx, ns| times.push((idx, ns)),
+            &mut |_, _| {},
+        );
+        while step == ChainStep::Parked {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            step = resume_chain(
+                &mut devices,
+                &mut buf_a,
+                &mut buf_b,
+                FRAMES,
+                &mut cursor,
+                true,
+                &mut |idx, ns| times.push((idx, ns)),
+                &mut |_, _| {},
+            );
+        }
+        let indices: Vec<usize> = times.iter().map(|(idx, _)| *idx).collect();
+        assert_eq!(indices, vec![0, 2, 3], "sleeping device 1 reports nothing");
+        assert!(times.iter().all(|(_, ns)| *ns > 0));
+        assert!(
+            times.iter().all(|(_, ns)| *ns < 20_000_000),
+            "the parked wait must not count: {times:?}"
+        );
+        // The parked device's figure holds both its begin and finish calls.
+        assert!(times[1].1 >= 4_000, "begin + finish: {times:?}");
+
+        // Timing off: nothing is reported, and the audio still comes through.
+        let mut buf_a = input.clone();
+        let mut buf_b = vec![0.0f32; FRAMES * 2];
+        let mut calls = 0;
+        let mut cursor = ChainCursor::start(true);
+        let mut step = run_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            FRAMES,
+            &mut cursor,
+            false,
+            &mut |_, _| calls += 1,
+            &mut |_, _| {},
+        );
+        while step == ChainStep::Parked {
+            step = resume_chain(
+                &mut devices,
+                &mut buf_a,
+                &mut buf_b,
+                FRAMES,
+                &mut cursor,
+                false,
+                &mut |_, _| calls += 1,
+                &mut |_, _| {},
+            );
+        }
+        assert_eq!(calls, 0);
+        assert!(matches!(step, ChainStep::Done { .. }));
     }
 }

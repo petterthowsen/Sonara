@@ -10,7 +10,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
 
 ## Phase 1: Timing, end to end (A)
 
-- [ ] **T-001** [REQ-002, REQ-005] Device timing in the chain runner
+- [x?] **T-001** [REQ-002, REQ-005] Device timing in the chain runner
   - _Files_: `Engine/src/audio/devices/containers/container.rs`, `Engine/src/audio/devices/containers/*.rs` and `Engine/src/audio/devices/effects/{multiband,reverb,delay}.rs`, `Engine/src/audio/devices/instruments/polysynth/mod.rs` (the `process_serial_chain` callers pass `timing = false` and a no-op)
   - _Output_:
     - `run_chain`/`resume_chain`/`process_serial_chain` take `timing: bool` and `on_device_time: &mut impl FnMut(usize, u64)`.

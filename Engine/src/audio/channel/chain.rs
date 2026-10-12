@@ -199,6 +199,8 @@ impl Channel {
             &mut self.device_output_buffer,
             sample_count,
             &mut self.mix.cursor,
+            false,
+            &mut |_, _| {},
             &mut |idx, sleeping| {
                 sleep_changes.push((
                     crate::audio::devices::DevicePath::root(start + idx),
@@ -220,6 +222,8 @@ impl Channel {
             &mut self.device_output_buffer,
             sample_count,
             &mut self.mix.cursor,
+            false,
+            &mut |_, _| {},
             &mut |idx, sleeping| {
                 sleep_changes.push((
                     crate::audio::devices::DevicePath::root(start + idx),

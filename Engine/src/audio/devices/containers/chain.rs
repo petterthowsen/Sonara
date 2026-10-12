@@ -91,6 +91,8 @@ impl AudioDevice for ChainDevice {
             &mut self.buf_b,
             sample_count,
             true,
+            false,
+            |_, _| {},
             |_, _| {},
         );
         let src = if result_in_b {

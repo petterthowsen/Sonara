@@ -560,6 +560,8 @@ mod tests {
             &mut buf_b,
             BUFFER_SIZE,
             true,
+            false,
+            |_, _| {},
             |_, _| {},
         );
         if in_b {
