@@ -48,6 +48,11 @@ pub struct RenderScratch {
     pub parked: VecDeque<ChannelId>,
     /// Route targets ready in the current routing sweep.
     pub ready: Vec<ChannelId>,
+    /// Addresses of the channels one pool pass runs (`ChannelPool::run_jobs`). Addresses rather
+    /// than `*mut Channel`, which isn't `Send` and would make `EngineState` `!Send`.
+    pub jobs: Vec<usize>,
+    /// The callback thread's own parked pool jobs (indices into `jobs`).
+    pub job_parks: VecDeque<usize>,
 }
 
 impl Default for RenderScratch {
@@ -60,6 +65,8 @@ impl Default for RenderScratch {
             channel_ids: Vec::with_capacity(MAX_CHANNELS),
             parked: VecDeque::with_capacity(MAX_CHANNELS),
             ready: Vec::with_capacity(MAX_CHANNELS),
+            jobs: Vec::with_capacity(MAX_CHANNELS),
+            job_parks: VecDeque::with_capacity(MAX_CHANNELS),
         }
     }
 }

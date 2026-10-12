@@ -20,9 +20,11 @@ use super::rt_debug;
 use super::state::EngineState;
 use super::types::*;
 
+pub use pool::ChannelPool;
+
 use routing::{
     begin_finish, chain_start, copy_pre_fader, count_route_inputs, drain_parked, mark_aux_sources,
-    process_aux_sources, route_finished,
+    process_aux_sources, route_finished, runs_on_finish,
 };
 use solo::{assign_solo_roles, is_silenced};
 
@@ -109,6 +111,7 @@ pub fn mix_and_output(
         sc_taps,
         perf_timing,
         device_sample_rate,
+        pool,
         ..
     } = state;
     let timing = *perf_timing;
@@ -116,8 +119,15 @@ pub fn mix_and_output(
         channel_ids,
         parked,
         ready,
+        jobs,
+        job_parks,
         ..
     } = render_scratch;
+    let mut pooled = PooledPass {
+        pool: pool.as_ref().filter(|pool| pool.threads() > 0),
+        jobs,
+        job_parks,
+    };
 
     let has_solo = channel_map.values().any(|c| c.solo);
     for channel in channel_map.values_mut() {
@@ -138,7 +148,14 @@ pub fn mix_and_output(
     // normal pre-pass so remaining FX wait until children mix back in.
     process_aux_sources(channel_map, channel_ids, frames, status_tx);
 
-    device_prepass(channel_map, channel_ids, parked, frames, status_tx);
+    device_prepass(
+        channel_map,
+        channel_ids,
+        parked,
+        &mut pooled,
+        frames,
+        status_tx,
+    );
 
     // Pre-fader sends take the device output before the fader. Route targets copy theirs in
     // the routing pass, once their inputs have mixed in and their devices have run.
@@ -150,7 +167,15 @@ pub fn mix_and_output(
 
     apply_fader_and_pan(channel_map, frames);
 
-    route_in_dependency_order(channel_map, channel_ids, parked, ready, frames, status_tx);
+    route_in_dependency_order(
+        channel_map,
+        channel_ids,
+        parked,
+        ready,
+        &mut pooled,
+        frames,
+        status_tx,
+    );
 
     write_hardware_outputs(channel_map, data, channels);
 
@@ -166,6 +191,49 @@ pub fn mix_and_output(
     }
 }
 
+/// The worker pool for one buffer, with its preallocated job lists.
+struct PooledPass<'a> {
+    /// `None` when there are no workers: chains run on the callback thread as before.
+    pool: Option<&'a ChannelPool>,
+    jobs: &'a mut Vec<usize>,
+    job_parks: &'a mut VecDeque<usize>,
+}
+
+impl PooledPass<'_> {
+    /// Run the chains of the channels in `ids` that `runs` accepts on the pool, then forward
+    /// their device events in `ids` order. False, with nothing run, when there are no workers or
+    /// fewer than 2 such chains: the caller takes the single-thread path.
+    fn run(
+        &mut self,
+        channel_map: &mut HashMap<ChannelId, Channel>,
+        ids: &[ChannelId],
+        runs: impl Fn(&Channel) -> bool,
+        frames: usize,
+        status_tx: &Sender<EngineStatus>,
+    ) -> bool {
+        let Some(pool) = self.pool else {
+            return false;
+        };
+        self.jobs.clear();
+        for id in ids {
+            if let Some(channel) = channel_map.get_mut(id).filter(|c| runs(c)) {
+                self.jobs.push(channel as *mut Channel as usize);
+            }
+        }
+        if self.jobs.len() < 2 {
+            return false;
+        }
+        // The map isn't touched until `run_jobs` returns (see `PoolShared`).
+        pool.run_jobs(self.jobs, self.job_parks, frames);
+        for id in ids {
+            if let Some(channel) = channel_map.get_mut(id).filter(|c| runs(c)) {
+                forward_device_events(channel, status_tx);
+            }
+        }
+        true
+    }
+}
+
 /// First pass: begin and finish the device chains of channels nothing routes into.
 ///
 /// Reads: `mix.is_route_target`, `mix.has_aux_source`. Writes: channel buffers and device
@@ -174,22 +242,24 @@ fn device_prepass(
     channel_map: &mut HashMap<ChannelId, Channel>,
     channel_ids: &[ChannelId],
     parked: &mut VecDeque<ChannelId>,
+    pooled: &mut PooledPass,
     frames: usize,
     status_tx: &Sender<EngineStatus>,
 ) {
-    // First pass: process device chains (instruments and effects) before the fader.
     // Route targets are skipped; they run in the routing pass after their inputs mix in.
+    let runs = |channel: &Channel| !channel.mix.is_route_target;
+    if pooled.run(channel_map, channel_ids, runs, frames, status_tx) {
+        return;
+    }
+    // First pass: process device chains (instruments and effects) before the fader.
     // Every chain starts first; a chain that reaches a plugin parks there while the plugin
     // processes in its host, so plugins on different channels (and hosts) run in parallel and
     // built-in-only chains run on this thread meanwhile. Then the parked chains are finished.
     parked.clear();
     for &id in channel_ids.iter() {
-        let Some(channel) = channel_map.get_mut(&id) else {
+        let Some(channel) = channel_map.get_mut(&id).filter(|c| runs(c)) else {
             continue;
         };
-        if channel.mix.is_route_target {
-            continue;
-        }
         match channel.begin_device_chain(chain_start(channel), frames) {
             ChainStep::Parked => parked.push_back(id),
             ChainStep::Done { .. } => forward_device_events(channel, status_tx),
@@ -242,6 +312,7 @@ fn route_in_dependency_order(
     channel_ids: &[ChannelId],
     parked: &mut VecDeque<ChannelId>,
     ready: &mut Vec<ChannelId>,
+    pooled: &mut PooledPass,
     frames: usize,
     status_tx: &Sender<EngineStatus>,
 ) {
@@ -271,11 +342,20 @@ fn route_in_dependency_order(
             ready.push(id);
         }
 
-        parked.clear();
-        for &id in ready.iter() {
-            begin_finish(channel_map, id, frames, parked, status_tx);
+        if pooled.pool.is_some() {
+            for &id in ready.iter() {
+                if let Some(channel) = channel_map.get_mut(&id) {
+                    channel.mix.done = true;
+                }
+            }
         }
-        drain_parked(channel_map, parked, frames, status_tx);
+        if !pooled.run(channel_map, ready, runs_on_finish, frames, status_tx) {
+            parked.clear();
+            for &id in ready.iter() {
+                begin_finish(channel_map, id, frames, parked, status_tx);
+            }
+            drain_parked(channel_map, parked, frames, status_tx);
+        }
         for &id in ready.iter() {
             route_finished(channel_map, id, frames);
         }

@@ -6,6 +6,7 @@ use crate::audio::channel::Channel;
 use crate::audio::clip::Clip;
 use crate::audio::devices::{AudioDevice, DevicePath};
 use crate::audio::mixing::sidechain::SidechainTaps;
+use crate::audio::mixing::ChannelPool;
 use crate::audio::preview::PreviewPlayer;
 use crate::audio::project::ProjectSettings;
 use crate::audio::render_scratch::RenderScratch;
@@ -102,6 +103,10 @@ pub struct EngineState {
     pub perf_timing: bool,
     /// Counted `/engine/perf/subscribe` requests not yet unsubscribed.
     pub perf_subscribers: u32,
+    /// Processing threads (spec 042 part C). `None`, or a pool without workers, runs every chain
+    /// on the callback thread. Built and dropped by the command thread outside the lock, swapped
+    /// in under it.
+    pub pool: Option<ChannelPool>,
     /// Browser sample preview (spec 037), mixed into the hardware output after the master.
     pub preview: PreviewPlayer,
 }
@@ -252,6 +257,7 @@ impl Default for EngineState {
             sc_taps: SidechainTaps::default(),
             perf_timing: false,
             perf_subscribers: 0,
+            pool: None,
             preview: PreviewPlayer::default(),
         }
     }

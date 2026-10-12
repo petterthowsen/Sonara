@@ -209,6 +209,12 @@ pub(super) fn chain_start(channel: &Channel) -> usize {
     }
 }
 
+/// A channel finishing in the routing pass runs its device chain: route targets that aren't
+/// muted.
+pub(super) fn runs_on_finish(channel: &Channel) -> bool {
+    channel.mix.is_route_target && !channel.mute
+}
+
 /// Start finishing a channel whose inputs have all mixed in: mark it done and begin its device
 /// chain. A chain that parks at a plugin goes into `parked`; drain it before `route_finished`.
 ///
@@ -225,7 +231,7 @@ pub(super) fn begin_finish(
         return;
     };
     channel.mix.done = true;
-    if !channel.mix.is_route_target || channel.mute {
+    if !runs_on_finish(channel) {
         return;
     }
     match channel.begin_device_chain(chain_start(channel), frames) {
@@ -369,14 +375,12 @@ mod tests {
     use crate::audio::channel::fader_gain;
     use crate::audio::channel::{Channel, Send};
     use crate::audio::devices::container;
-    use crate::audio::devices::{
-        AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
-    };
+    use crate::audio::devices::AudioDevice;
     use crate::audio::mixing::mix_and_output;
     use crate::audio::mixing::test_support::*;
     use crate::audio::state::EngineState;
     use crossbeam::channel::unbounded;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     /// Master (0 dB) and a bus (0 dB) fed by a 0.5 source with its only output being a send.
@@ -395,59 +399,6 @@ mod tests {
             test_channel(2, Some(1), 0.0),
             source,
         ])
-    }
-
-    /// Device that writes 0.4 to the main out and 0.8 to extra bus 0, counting its blocks.
-    #[derive(Default)]
-    struct TestAuxDevice {
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl AudioDevice for TestAuxDevice {
-        fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            let n = (sample_count * 2).min(outputs.len());
-            outputs[..n].fill(0.4);
-        }
-        fn extra_output_bus_count(&self) -> usize {
-            1
-        }
-        fn process_block_with_extra(
-            &mut self,
-            inputs: &[f32],
-            outputs: &mut [f32],
-            extra_outs: &mut [Vec<f32>],
-            sample_count: usize,
-        ) {
-            self.process_block(inputs, outputs, sample_count);
-            if let Some(extra) = extra_outs.first_mut() {
-                let n = (sample_count * 2).min(extra.len());
-                extra[..n].fill(0.8);
-            }
-        }
-        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
-        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-            None
-        }
-        fn device_id(&self) -> &str {
-            "test.aux"
-        }
-        fn device_name(&self) -> &str {
-            "Aux"
-        }
-        fn device_category(&self) -> DeviceCategory {
-            DeviceCategory::Instrument
-        }
-        fn device_variant(&self) -> DeviceVariant {
-            DeviceVariant::BuiltIn
-        }
-        fn parameters(&self) -> Vec<ParamInfo> {
-            Vec::new()
-        }
-        fn reset(&mut self) {}
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
     }
 
     /// 0 dB track routed to master, fed 0.5 left / 0.25 right.

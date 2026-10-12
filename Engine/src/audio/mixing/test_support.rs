@@ -212,3 +212,56 @@ impl AudioDevice for FakePlugin {
         self
     }
 }
+
+/// Device that writes 0.4 to the main out and 0.8 to extra bus 0, counting its blocks.
+#[derive(Default)]
+pub(super) struct TestAuxDevice {
+    pub(super) calls: Arc<AtomicUsize>,
+}
+
+impl AudioDevice for TestAuxDevice {
+    fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let n = (sample_count * 2).min(outputs.len());
+        outputs[..n].fill(0.4);
+    }
+    fn extra_output_bus_count(&self) -> usize {
+        1
+    }
+    fn process_block_with_extra(
+        &mut self,
+        inputs: &[f32],
+        outputs: &mut [f32],
+        extra_outs: &mut [Vec<f32>],
+        sample_count: usize,
+    ) {
+        self.process_block(inputs, outputs, sample_count);
+        if let Some(extra) = extra_outs.first_mut() {
+            let n = (sample_count * 2).min(extra.len());
+            extra[..n].fill(0.8);
+        }
+    }
+    fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+        None
+    }
+    fn device_id(&self) -> &str {
+        "test.aux"
+    }
+    fn device_name(&self) -> &str {
+        "Aux"
+    }
+    fn device_category(&self) -> DeviceCategory {
+        DeviceCategory::Instrument
+    }
+    fn device_variant(&self) -> DeviceVariant {
+        DeviceVariant::BuiltIn
+    }
+    fn parameters(&self) -> Vec<ParamInfo> {
+        Vec::new()
+    }
+    fn reset(&mut self) {}
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}

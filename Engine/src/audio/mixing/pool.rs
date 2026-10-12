@@ -72,6 +72,9 @@ pub struct PoolShared {
     /// Test hook: workers don't claim while set, so the callback must run every job.
     #[cfg(test)]
     paused: AtomicBool,
+    /// Test counter: jobs a worker (not the callback) finished.
+    #[cfg(test)]
+    worker_jobs: AtomicUsize,
 }
 
 impl PoolShared {
@@ -86,6 +89,8 @@ impl PoolShared {
             realtime: (0..workers).map(|_| AtomicU8::new(0)).collect(),
             #[cfg(test)]
             paused: AtomicBool::new(false),
+            #[cfg(test)]
+            worker_jobs: AtomicUsize::new(0),
         }
     }
 
@@ -111,7 +116,13 @@ impl PoolShared {
     }
 
     /// Count one finished job; the last one wakes the callback.
-    fn finish_one(&self, count: usize) {
+    fn finish_one(&self, count: usize, on_worker: bool) {
+        #[cfg(test)]
+        if on_worker {
+            self.worker_jobs.fetch_add(1, Ordering::Relaxed);
+        }
+        #[cfg(not(test))]
+        let _ = on_worker;
         if self.done_count.fetch_add(1, Ordering::AcqRel) + 1 == count as u32 {
             futex::wake(&self.done_count, i32::MAX);
         }
@@ -121,30 +132,30 @@ impl PoolShared {
     /// on this thread. `parked` holds job indices and is empty on return.
     ///
     /// On a worker a panicking job still counts as finished, so the callback isn't left waiting.
-    fn work(&self, generation: u32, parked: &mut VecDeque<usize>, catch: bool) {
+    fn work(&self, generation: u32, parked: &mut VecDeque<usize>, on_worker: bool) {
         let mut job_count = 0;
         let mut frames = 0;
         while let Some((index, count)) = self.claim(generation) {
             // The claim's acquire makes this generation's frames visible.
             job_count = count;
             frames = self.frames.load(Ordering::Relaxed);
-            if self.step(index, frames, false, catch) {
+            if self.step(index, frames, false, on_worker) {
                 parked.push_back(index);
             } else {
-                self.finish_one(count);
+                self.finish_one(count, on_worker);
             }
         }
         while let Some(index) = parked.pop_front() {
-            if self.step(index, frames, true, catch) {
+            if self.step(index, frames, true, on_worker) {
                 parked.push_back(index);
             } else {
-                self.finish_one(job_count);
+                self.finish_one(job_count, on_worker);
             }
         }
     }
 
     /// Begin (or resume) job `index`'s chain. True when it parked at a plugin.
-    fn step(&self, index: usize, frames: usize, resume: bool, catch: bool) -> bool {
+    fn step(&self, index: usize, frames: usize, resume: bool, on_worker: bool) -> bool {
         let address = self.jobs[index].load(Ordering::Relaxed);
         // SAFETY: this thread claimed `index` for the current generation and hasn't finished it
         // (see the invariant on `PoolShared`).
@@ -157,7 +168,7 @@ impl PoolShared {
             };
             matches!(step, ChainStep::Parked)
         };
-        if !catch {
+        if !on_worker {
             return run();
         }
         match catch_unwind(AssertUnwindSafe(run)) {
@@ -485,6 +496,160 @@ mod tests {
             shared.upgrade().is_none(),
             "every worker exited and released the shared state"
         );
+    }
+
+    /// Frames per block in the full-graph test: large enough for the effects to build state.
+    const GRAPH_FRAMES: usize = 256;
+
+    fn graph_channel(id: ChannelId, output: ChannelId, volume_db: f32) -> Channel {
+        let mut channel = Channel::new(id, format!("Channel {id}"), GRAPH_FRAMES, SAMPLE_RATE);
+        channel.output_channel_id = Some(output);
+        channel.volume_db = volume_db;
+        channel
+    }
+
+    fn effect(id: &str) -> Box<dyn crate::audio::devices::AudioDevice> {
+        crate::audio::devices::create_effect(
+            &format!("sonara.builtin.{id}"),
+            SAMPLE_RATE,
+            GRAPH_FRAMES,
+        )
+        .unwrap()
+    }
+
+    /// Instruments, effects, buses, pre- and post-fader sends, a routing cycle, an aux source
+    /// with its return channel, and fake plugins that park.
+    fn graph(pool: Option<ChannelPool>) -> crate::audio::state::EngineState {
+        use crate::audio::devices::{AudioDevice, PolySynthDevice};
+        use crate::audio::midi_types::NoteEvent;
+
+        let log = AsyncLog::default();
+        let mut reverb_bus = graph_channel(2, 1, -3.0);
+        reverb_bus.devices.push(effect("reverb"));
+        let mut delay_bus = graph_channel(3, 1, -6.0);
+        delay_bus.devices.push(effect("delay"));
+        delay_bus
+            .devices
+            .push(Box::new(FakePlugin::new(3, 0.7, &log)));
+
+        let mut synth = graph_channel(4, 2, -2.0);
+        let mut poly: Box<dyn AudioDevice> = Box::new(PolySynthDevice::new(SAMPLE_RATE));
+        poly.prepare(SAMPLE_RATE, GRAPH_FRAMES);
+        synth.devices.push(poly);
+        synth.devices.push(effect("chorus"));
+        synth.send_note_event_to_devices(&NoteEvent::test_on(60, 100), 0);
+        synth.send_note_event_to_devices(&NoteEvent::test_on(67, 90), 3);
+        synth.send_channels.push(send_to(3, false));
+
+        let mut audio = graph_channel(5, 2, 0.0);
+        audio.devices.push(effect("compressor"));
+        audio.devices.push(Box::new(FakePlugin::new(5, 1.5, &log)));
+        audio.send_channels.push(send_to(3, true));
+
+        let mut direct = graph_channel(6, 1, -1.0);
+        add_test_device(&mut direct, 0.01);
+        direct.devices.push(Box::new(FakePlugin::new(6, 0.5, &log)));
+
+        let mut parent = graph_channel(7, 1, 0.0);
+        parent.devices.push(Box::new(TestAuxDevice::default()));
+        parent.devices.push(effect("saturator"));
+        parent.set_aux_out(0, 8);
+        let mut child = graph_channel(8, 7, -4.0);
+        child.devices.push(effect("filter"));
+
+        let mut cycle_a = graph_channel(9, 10, -6.0);
+        cycle_a.devices.push(effect("utility"));
+        let mut cycle_b = graph_channel(10, 9, -6.0);
+        cycle_b.devices.push(effect("eq"));
+        cycle_b.send_channels.push(send_to(2, false));
+
+        let mut phaser = graph_channel(11, 1, 0.0);
+        phaser.devices.push(effect("phaser"));
+        let mut plain = graph_channel(12, 3, 0.0);
+        plain.devices.push(Box::new(FakePlugin::new(12, 1.1, &log)));
+
+        let mut state = state_with(vec![
+            graph_channel(1, 1000, 0.0),
+            reverb_bus,
+            delay_bus,
+            synth,
+            audio,
+            direct,
+            parent,
+            child,
+            cycle_a,
+            cycle_b,
+            phaser,
+            plain,
+        ]);
+        state.pool = pool;
+        state.perf_timing = true;
+        state
+    }
+
+    /// Deterministic noise for the audio channels' inputs.
+    fn feed(state: &mut crate::audio::state::EngineState, block: usize) {
+        for id in [5, 6, 9, 11, 12] {
+            let channel = state.channels.get_mut(&id).unwrap();
+            let mut seed = (block as u32 + 1).wrapping_mul(2_654_435_761) ^ (id as u32);
+            for i in 0..GRAPH_FRAMES {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let sample = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                channel.buffer_left[i] = sample;
+                channel.buffer_right[i] = -0.5 * sample;
+            }
+        }
+    }
+
+    fn render(
+        mut state: crate::audio::state::EngineState,
+    ) -> (Vec<f32>, crate::audio::state::EngineState) {
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut rendered = Vec::new();
+        let mut output = vec![0.0f32; GRAPH_FRAMES * 2];
+        for block in 0..50 {
+            feed(&mut state, block);
+            crate::audio::mixing::mix_and_output(
+                &mut state,
+                &mut output,
+                2,
+                GRAPH_FRAMES,
+                &status_tx,
+            );
+            rendered.extend_from_slice(&output);
+        }
+        (rendered, state)
+    }
+
+    #[test]
+    fn pool_output_matches_single_thread() {
+        let (single, _) = render(graph(None));
+        assert!(
+            single.iter().any(|&s| s.abs() > 1e-3),
+            "the graph makes sound"
+        );
+        let pool = ChannelPool::spawn(4, None);
+        let shared = Arc::clone(&pool.shared);
+        let (pooled, state) = render(graph(Some(pool)));
+        assert!(
+            shared.worker_jobs.load(Ordering::Relaxed) > 0,
+            "the workers took part"
+        );
+        let first_difference = single
+            .iter()
+            .zip(&pooled)
+            .position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(first_difference, None, "4 workers changed the output");
+
+        // The timers fill in on workers too.
+        for id in [4, 5, 6, 12] {
+            let channel = &state.channels[&id];
+            assert!(channel.mix.timer.total_ns > 0, "channel {id} was timed");
+            assert!(
+                channel.device_timers[0].blocks > 0,
+                "channel {id}'s device was timed"
+            );
+        }
     }
 
     #[test]

@@ -111,7 +111,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test pool_completes_with_paused_workers pool_drop_joins_workers` passes; a debug assertion rejects a duplicate job pointer
   - _Depends on_: T-007 (realtime wrapper), T-009
 
-- [ ] **T-012** [REQ-008, REQ-009] Use the pool in the pre-pass and the routing sweeps
+- [x?] **T-012** [REQ-008, REQ-009] Use the pool in the pre-pass and the routing sweeps
   - _Files_: `Engine/src/audio/mixing/mod.rs`, `Engine/src/audio/mixing/routing.rs`, `Engine/src/audio/render_scratch.rs`, `Engine/src/audio/state.rs`
   - _Output_:
     - `EngineState::pool` and `RenderScratch::jobs` (addresses as `usize`).
