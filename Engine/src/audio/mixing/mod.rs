@@ -1,5 +1,6 @@
 //! Mixing: fader and pan, routing in dependency order, and the master output.
 
+pub mod latency;
 mod pool;
 mod routing;
 pub mod sidechain;

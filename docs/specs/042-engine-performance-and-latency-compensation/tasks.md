@@ -155,7 +155,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test block_delay_reads_back_exact` passes
   - _Depends on_: —
 
-- [ ] **T-017** [REQ-013, REQ-017] Latency signature and plan
+- [x?] **T-017** [REQ-013, REQ-017] Latency signature and plan
   - _Files_: `Engine/src/audio/mixing/latency.rs` (new), `Engine/src/audio/channel/mod.rs` (`ChannelLatency`)
   - _Output_:
     - `LatencySignature` and `plan()`: in and out latency per channel, plus route, send and hardware delays.

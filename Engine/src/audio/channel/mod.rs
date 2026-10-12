@@ -16,6 +16,7 @@ pub use send::Send;
 
 use crate::audio::active_notes::ActiveNotes;
 use crate::audio::devices::AudioDevice;
+use crate::audio::dsp::block_delay::StereoBlockDelay;
 use crate::audio::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
 use crate::audio::render_scratch::MixBuffers;
 use crate::audio::types::ChannelId;
@@ -104,8 +105,36 @@ pub struct Channel {
     /// written while `mix.timing` is on.
     pub device_timers: [DeviceTimer; MAX_TIMED_DEVICES],
 
+    /// Latency compensation for this channel's edges (spec 042), from the command thread's
+    /// `LatencyPlan`. All zero and no rings in a project without latency.
+    pub latency: ChannelLatency,
+
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
+}
+
+/// One channel's latency compensation (spec 042 part D): its path latency and the delay on each
+/// edge out of it, read from the rings the mixer writes once per block. Built and sized by the
+/// command thread outside the lock and swapped in under it.
+#[derive(Default)]
+pub struct ChannelLatency {
+    /// Where this channel's inputs are aligned to.
+    pub in_frames: u32,
+    /// Path latency of this channel's output.
+    pub out_frames: u32,
+    /// Delay on the route into the target channel.
+    pub route_delay: u32,
+    /// Delay on each send, in `send_channels` order.
+    pub send_delays: Vec<u32>,
+    /// Delay on the hardware write.
+    pub hw_delay: u32,
+    /// Delay on the aux-source device's own output.
+    pub aux_delay: u32,
+    /// The post-fader block, for the route, post-fader sends and the hardware write. `None`
+    /// when none of them is delayed.
+    pub post: Option<StereoBlockDelay>,
+    /// The pre-fader block, for delayed pre-fader sends.
+    pub pre: Option<StereoBlockDelay>,
 }
 
 impl Channel {
@@ -158,6 +187,7 @@ impl Channel {
             extra_out_buffers: Vec::new(),
             sleep_changes: Vec::with_capacity(MAX_SLEEP_CHANGES),
             device_timers: [DeviceTimer::default(); MAX_TIMED_DEVICES],
+            latency: ChannelLatency::default(),
             mix: MixBuffers::new(buffer_size),
         }
     }
