@@ -102,6 +102,16 @@ impl AudioDevice for ChainDevice {
         outputs[..interleaved].copy_from_slice(src);
     }
 
+    fn prepare(&mut self, _sample_rate: f32, max_frames: usize) {
+        let interleaved = max_frames.saturating_mul(2);
+        if self.buf_a.len() < interleaved {
+            self.buf_a.resize(interleaved, 0.0);
+        }
+        if self.buf_b.len() < interleaved {
+            self.buf_b.resize(interleaved, 0.0);
+        }
+    }
+
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         route_note(&mut self.children, event, frame_offset);
     }
@@ -296,6 +306,22 @@ mod tests {
         for sample in &outputs {
             assert!((sample - 0.5).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn prepare_grows_buffers() {
+        let mut chain = ChainDevice::new(4);
+        chain.prepare(48_000.0, 64);
+        assert_eq!(chain.buf_a.len(), 128);
+        assert_eq!(chain.buf_b.len(), 128);
+        // Never shrinks.
+        chain.prepare(48_000.0, 8);
+        assert_eq!(chain.buf_a.len(), 128);
+        // A block larger than the original size now runs the whole chain.
+        let inputs = vec![1.0f32; 128];
+        let mut outputs = vec![0.0f32; 128];
+        chain.process_block(&inputs, &mut outputs, 64);
+        assert!(outputs.iter().all(|s| (s - 1.0).abs() < 1e-6));
     }
 
     #[test]

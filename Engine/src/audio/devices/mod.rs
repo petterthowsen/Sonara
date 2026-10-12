@@ -13,6 +13,7 @@ pub mod note_fx;
 pub mod param_table;
 mod params;
 mod sleep;
+pub mod slots;
 
 pub use clap_host::{PluginDescriptor, PluginScanner};
 pub use containers::{
@@ -34,3 +35,4 @@ pub use instruments::{
 };
 pub use params::*;
 pub use sleep::*;
+pub use slots::{DeviceSlots, SlotKind, SlotSpec, LOOP_BLOCK};

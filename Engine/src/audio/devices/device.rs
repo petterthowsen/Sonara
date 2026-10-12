@@ -185,6 +185,18 @@ pub trait AudioDevice: Send {
         &[]
     }
 
+    /// The fixed device slots this device owns (spec 040), in child order: child *i* of the
+    /// device's container view is slot *i*. Default: none.
+    fn device_slots(&self) -> &'static [super::slots::SlotSpec] {
+        &[]
+    }
+
+    /// Command thread, before a structural edit in note slot `slot`: release what the note
+    /// effect at `index` (or every note effect in the slot when `None`) has sounding, into
+    /// whatever the slot feeds (a slotted instrument queues the note-offs at frame 0).
+    /// Default: nothing.
+    fn release_slot_notes(&mut self, _slot: usize, _index: Option<usize>) {}
+
     /// Command thread, before a structural edit (remove, move): note-offs at frame 0 for
     /// everything this effect has sounding downstream. The schedule is dropped.
     fn release_notes_now(&mut self) -> &[note_fx::TimedNote] {

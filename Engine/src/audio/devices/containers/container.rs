@@ -279,6 +279,8 @@ pub fn insert_device(
         devices.insert(index, device);
         return Ok(DevicePath::root(index));
     }
+    // Device slots take only what fits their kind (spec 040).
+    crate::audio::devices::slots::check_insert(devices, parent_path, device.as_ref())?;
     let container = container_at_path_mut(devices, parent_path)
         .ok_or_else(|| format!("No container at path {}", parent_path))?;
     let index = position.min(container.child_count());
@@ -1002,5 +1004,65 @@ mod tests {
         assert!(!result_in_b);
         assert_eq!(changes, 0);
         assert_eq!(buf_a[0], 0.25);
+    }
+
+    #[test]
+    fn insert_into_slot_is_checked() {
+        use crate::audio::devices::note_fx::routing::test_devices::{Recorder, Shift};
+        use crate::audio::devices::slots::tests::{Fx, TestSlotted};
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(TestSlotted::new())];
+
+        // An instrument (Recorder) is refused by the audio slot, and the slot stays empty.
+        let (inst, _) = Recorder::new();
+        let audio_slot = DevicePath::from_indices([0, 1]);
+        let err = insert_device(&mut devices, &audio_slot, 0, Box::new(inst)).unwrap_err();
+        assert!(err.contains("FX") && err.contains("Recorder"), "{err}");
+        assert_eq!(
+            container_at_path_mut(&mut devices, &audio_slot)
+                .unwrap()
+                .child_count(),
+            0
+        );
+
+        // A plain effect is refused by the note slot, a note effect by the audio slot.
+        assert!(insert_device(
+            &mut devices,
+            &DevicePath::from_indices([0, 0]),
+            0,
+            Box::new(Fx::new())
+        )
+        .is_err());
+        assert!(insert_device(&mut devices, &audio_slot, 0, Box::new(Shift::new(1))).is_err());
+
+        // Fitting devices go in.
+        assert!(insert_device(
+            &mut devices,
+            &DevicePath::from_indices([0, 0]),
+            0,
+            Box::new(Shift::new(1))
+        )
+        .is_ok());
+        assert!(insert_device(&mut devices, &audio_slot, 0, Box::new(Fx::new())).is_ok());
+
+        // The kind check applies to devices nested below the slot too.
+        let nested_parent = insert_device(
+            &mut devices,
+            &audio_slot,
+            1,
+            Box::new(crate::audio::devices::ChainDevice::new(8)),
+        )
+        .unwrap();
+        let (inst, _) = Recorder::new();
+        assert!(insert_device(&mut devices, &nested_parent, 0, Box::new(inst)).is_err());
+        assert!(insert_device(&mut devices, &nested_parent, 0, Box::new(Fx::new())).is_ok());
+
+        // Adding straight into the slotted device is refused.
+        assert!(insert_device(&mut devices, &DevicePath::root(0), 0, Box::new(Fx::new())).is_err());
+        assert_eq!(
+            container_at_path_mut(&mut devices, &DevicePath::root(0))
+                .unwrap()
+                .child_count(),
+            3
+        );
     }
 }

@@ -1226,6 +1226,14 @@ impl AudioDevice for ModulatedDevice {
         self.dev_mut().send_cc(cc, value14, frame_offset);
     }
 
+    fn device_slots(&self) -> &'static [crate::audio::devices::SlotSpec] {
+        self.dev().device_slots()
+    }
+
+    fn release_slot_notes(&mut self, slot: usize, index: Option<usize>) {
+        self.dev_mut().release_slot_notes(slot, index);
+    }
+
     fn is_note_effect(&self) -> bool {
         self.dev().is_note_effect()
     }

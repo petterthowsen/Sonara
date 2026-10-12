@@ -9,7 +9,7 @@ with `Godot/tests/run_all.sh <word>`.
 
 ## Phase 1 — engine: the slot mechanism
 
-- [ ] **T-001** [REQ-001, REQ-014–017] Add `audio/devices/slots.rs`.
+- [x?] **T-001** [REQ-001, REQ-014–017] Add `audio/devices/slots.rs`.
   - `SlotKind {Note, Audio, Loop}` with `as_str()` ("note" / "audio" / "loop") and
     `accepts(&dyn AudioDevice) -> Result<(), String>`, recursive over `as_container` children.
     Note takes `is_note_effect()`. Audio rejects `DeviceCategory::Instrument` and note effects.
@@ -28,7 +28,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test slots` passes; `cargo fmt`
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-001] Add the trait hooks and forward them.
+- [x?] **T-002** [REQ-001] Add the trait hooks and forward them.
   - In `device.rs`, add `fn device_slots(&self) -> &'static [SlotSpec] { &[] }` and
     `fn release_slot_notes(&mut self, _slot: usize, _index: Option<usize>) {}`.
   - `ModulatedDevice` forwards both.
@@ -40,7 +40,7 @@ with `Godot/tests/run_all.sh <word>`.
     `prepare_grows_buffers` test
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-017] Enforce slot kinds in `insert_device`.
+- [x?] **T-003** [REQ-017] Enforce slot kinds in `insert_device`.
   - Add `slots::check_insert(devices, parent_path, device)`. It walks the ancestors of
     `parent_path` and finds the innermost one whose parent device has `device_slots()`, then
     calls `SlotKind::accepts`.
