@@ -187,11 +187,6 @@ impl EngineState {
             .expect("type checked above"))
     }
 
-    /// Create master (ID 1) routed to the default hardware output if it is missing.
-    ///
-    /// Without this, a Godot session that outlives an engine restart still routes tracks to
-    /// channel 1, but that channel does not exist: meters stay at zero and the CPAL buffer
-    /// stays silent.
     /// Count a perf subscriber in or out (spec 042). Timing runs while any remains; turning it on
     /// zeroes every timer so the first report has no stale data. Unsubscribing saturates at 0.
     pub fn set_perf_subscription(&mut self, subscribe: bool) {
@@ -214,6 +209,11 @@ impl EngineState {
         }
     }
 
+    /// Create master (ID 1) routed to the default hardware output if it is missing.
+    ///
+    /// Without this, a Godot session that outlives an engine restart still routes tracks to
+    /// channel 1, but that channel does not exist: meters stay at zero and the CPAL buffer
+    /// stays silent.
     pub fn ensure_master_channel(&mut self, buffer_size: usize) {
         if self.channels.contains_key(&1) {
             return;
