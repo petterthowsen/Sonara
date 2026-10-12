@@ -1,12 +1,12 @@
 //! Note-routed parallel container: each child is assigned a MIDI note.
 
-use super::container::{
-    copy_interleaved, insert_into_vec, move_in_vec, remove_from_vec, DeviceContainer,
-};
+use super::container::{insert_into_vec, move_in_vec, remove_from_vec, DeviceContainer};
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
+use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::midi_types::NoteEvent;
+use crate::audio::stream::MAX_BLOCK_FRAMES;
 
 /// Default first pad note (C1).
 const FIRST_PAD_NOTE: u8 = 36;
@@ -21,6 +21,9 @@ pub struct DrumSlot {
     /// note *k*. Directed (A choking B does not make B choke A) and note-based, so it survives
     /// slot reorders. The slot's own bit is ignored.
     pub choke_targets: u128,
+    /// Delays this pad up to the slowest pad's latency, so the pads mix (and reach their extra
+    /// buses) aligned. Sized by `update_latency`.
+    align: AlignDelay,
 }
 
 impl DrumSlot {
@@ -30,6 +33,7 @@ impl DrumSlot {
             device,
             note,
             choke_targets: 0,
+            align: AlignDelay::default(),
         }
     }
 }
@@ -40,6 +44,8 @@ pub struct DrumMachineDevice {
     enabled: bool,
     mix_buffer: Vec<f32>,
     child_buffer: Vec<f32>,
+    /// Delays the input by the Drum Machine's latency while bypassed. Fed every block.
+    dry: AlignDelay,
 }
 
 impl DrumMachineDevice {
@@ -51,6 +57,7 @@ impl DrumMachineDevice {
             enabled: true,
             mix_buffer: vec![0.0; interleaved],
             child_buffer: vec![0.0; interleaved],
+            dry: AlignDelay::default(),
         }
     }
 
@@ -147,9 +154,10 @@ impl AudioDevice for DrumMachineDevice {
             .min(self.child_buffer.len());
 
         if !self.enabled {
-            copy_interleaved(inputs, outputs, sample_count);
+            self.dry.process(inputs, outputs, sample_count);
             return;
         }
+        self.dry.write(inputs, sample_count);
 
         outputs[..interleaved].fill(0.0);
         if self.slots.is_empty() {
@@ -160,11 +168,36 @@ impl AudioDevice for DrumMachineDevice {
         for slot in &mut self.slots {
             slot.device
                 .process_block(inputs, &mut self.child_buffer, sample_count);
+            slot.align.apply(&mut self.child_buffer, sample_count);
             for i in 0..interleaved {
                 self.mix_buffer[i] += self.child_buffer[i];
             }
         }
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
+    }
+
+    /// The pads run in parallel and are aligned to the slowest one.
+    fn latency_frames(&self) -> u32 {
+        self.slots
+            .iter()
+            .map(|slot| slot.device.latency_frames())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn update_latency(&mut self, sample_rate: f32) -> u32 {
+        let latency = self
+            .slots
+            .iter_mut()
+            .map(|slot| slot.device.update_latency(sample_rate))
+            .max()
+            .unwrap_or(0);
+        for slot in &mut self.slots {
+            let own = slot.device.latency_frames().min(latency);
+            slot.align.set((latency - own) as usize, MAX_BLOCK_FRAMES);
+        }
+        self.dry.set(latency as usize, MAX_BLOCK_FRAMES);
+        latency
     }
 
     fn extra_output_bus_count(&self) -> usize {
@@ -184,18 +217,20 @@ impl AudioDevice for DrumMachineDevice {
             .min(self.child_buffer.len());
 
         if !self.enabled {
-            copy_interleaved(inputs, outputs, sample_count);
+            self.dry.process(inputs, outputs, sample_count);
             for buf in extra_outs.iter_mut() {
                 let n = interleaved.min(buf.len());
                 buf[..n].fill(0.0);
             }
             return;
         }
+        self.dry.write(inputs, sample_count);
 
         outputs[..interleaved].fill(0.0);
         for (i, slot) in self.slots.iter_mut().enumerate() {
             slot.device
                 .process_block(inputs, &mut self.child_buffer, sample_count);
+            slot.align.apply(&mut self.child_buffer, sample_count);
             if i < extra_outs.len() {
                 let n = interleaved.min(extra_outs[i].len());
                 extra_outs[i][..n].copy_from_slice(&self.child_buffer[..n]);
@@ -632,5 +667,30 @@ mod tests {
             open.iter().all(|s| *s == 0.0),
             "closed hat choked the open hat"
         );
+    }
+
+    #[test]
+    fn drum_machine_aligns_pads() {
+        use crate::audio::mixing::test_support::{delayed_ramp, stream_device, LatencyDevice};
+        let build = || {
+            let mut dm = DrumMachineDevice::new(64);
+            dm.insert_child(0, Box::new(LatencyDevice::new(0, 1.0)));
+            dm.insert_child(1, Box::new(LatencyDevice::new(5, -1.0)));
+            assert_eq!(dm.latency_frames(), 5);
+            assert_eq!(dm.update_latency(48_000.0), 5);
+            dm
+        };
+
+        let (main, _) = stream_device(&mut build(), 5, 4, 0);
+        assert!(main.iter().all(|x| x.abs() < 1e-6), "{main:?}");
+
+        let (_, extras) = stream_device(&mut build(), 5, 4, 2);
+        assert_eq!(extras[0], delayed_ramp(5, 1.0, 40));
+        assert_eq!(extras[1], delayed_ramp(5, -1.0, 40));
+
+        let mut dm = build();
+        dm.set_enabled(false);
+        let (main, _) = stream_device(&mut dm, 5, 4, 0);
+        assert_eq!(main, delayed_ramp(5, 1.0, 40));
     }
 }

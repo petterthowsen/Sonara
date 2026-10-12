@@ -50,18 +50,19 @@ fn refresh(
     let (signature, sample_rate) = {
         let mut state = lock();
         let rate = state.device_sample_rate;
-        let signature = LatencySignature::build(&state.channels);
-        if signature == status.signature && rate == status.sample_rate {
-            return None;
-        }
-        // Something changed: let containers resize their branch delays, which can change what
-        // they report, then read the graph again.
+        // Containers first: they align their branches to the slowest one. That can change
+        // inside a container without changing what it reports (a faster branch got slower), so
+        // it runs every time, not only when the signature changed. Unchanged, it's a no-op.
         for channel in state.channels.values_mut() {
             for device in channel.devices.iter_mut() {
                 device.update_latency(rate);
             }
         }
-        (LatencySignature::build(&state.channels), rate)
+        let signature = LatencySignature::build(&state.channels);
+        if signature == status.signature && rate == status.sample_rate {
+            return None;
+        }
+        (signature, rate)
     };
 
     let plan = plan(&signature, sample_rate.max(1.0) as u32);
@@ -128,6 +129,9 @@ fn install(
             .unwrap_or(0) as usize;
         keep_ring(&mut old.post, &mut latency.post, needed, max_block);
         keep_ring(&mut old.pre, &mut latency.pre, needed, max_block);
+        if old.aux.frames() == latency.aux.frames() {
+            std::mem::swap(&mut old.aux, &mut latency.aux);
+        }
         std::mem::swap(old, latency);
     }
     state.output_latency_frames = plan.output_frames;

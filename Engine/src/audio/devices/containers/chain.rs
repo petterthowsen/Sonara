@@ -1,15 +1,17 @@
 //! Serial device container: children process in order, then a single volume is applied.
 
 use super::container::{
-    apply_gain, copy_interleaved, gain_to_normalized, insert_into_vec, move_in_vec,
-    normalized_to_gain, process_serial_chain, remove_from_vec, DeviceContainer,
+    apply_gain, gain_to_normalized, insert_into_vec, move_in_vec, normalized_to_gain,
+    process_serial_chain, remove_from_vec, DeviceContainer,
 };
 use crate::audio::devices::note_fx::routing::{route_note, run_note_phase};
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
     ParamValue, PortFlow,
 };
+use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::midi_types::NoteEvent;
+use crate::audio::stream::MAX_BLOCK_FRAMES;
 
 /// Built-in Chain: sequential child processing plus a post-chain volume.
 pub struct ChainDevice {
@@ -19,6 +21,9 @@ pub struct ChainDevice {
     enabled: bool,
     buf_a: Vec<f32>,
     buf_b: Vec<f32>,
+    /// Delays the input by the children's latency while bypassed (spec 042: bypass keeps
+    /// latency). Fed every block so a switch to bypass plays on without a gap.
+    dry: AlignDelay,
 }
 
 impl ChainDevice {
@@ -31,6 +36,7 @@ impl ChainDevice {
             enabled: true,
             buf_a: vec![0.0; interleaved],
             buf_b: vec![0.0; interleaved],
+            dry: AlignDelay::default(),
         }
     }
 }
@@ -71,9 +77,10 @@ impl AudioDevice for ChainDevice {
         // drained and their schedules moving.
         run_note_phase(&mut self.children, sample_count, None);
         if !self.enabled {
-            copy_interleaved(inputs, outputs, sample_count);
+            self.dry.process(inputs, outputs, sample_count);
             return;
         }
+        self.dry.write(inputs, sample_count);
 
         let interleaved = (sample_count * 2)
             .min(inputs.len())
@@ -102,6 +109,24 @@ impl AudioDevice for ChainDevice {
         };
         apply_gain(src, sample_count, self.volume);
         outputs[..interleaved].copy_from_slice(src);
+    }
+
+    /// The children run in series, so their latencies add.
+    fn latency_frames(&self) -> u32 {
+        self.children
+            .iter()
+            .map(|child| child.latency_frames())
+            .fold(0, u32::saturating_add)
+    }
+
+    fn update_latency(&mut self, sample_rate: f32) -> u32 {
+        let latency = self
+            .children
+            .iter_mut()
+            .map(|child| child.update_latency(sample_rate))
+            .fold(0, u32::saturating_add);
+        self.dry.set(latency as usize, MAX_BLOCK_FRAMES);
+        latency
     }
 
     fn prepare(&mut self, _sample_rate: f32, max_frames: usize) {
@@ -408,5 +433,26 @@ mod tests {
         assert_eq!(on_keys(&log_a), vec![60]);
         assert_eq!(on_keys(&log_b), vec![72]);
         assert_eq!(log_b.lock().unwrap()[0].0, 3);
+    }
+
+    #[test]
+    fn chain_latency_is_the_sum_and_bypass_keeps_it() {
+        use crate::audio::mixing::test_support::{delayed_ramp, stream_device, LatencyDevice};
+        let mut chain = ChainDevice::new(64);
+        chain.insert_child(0, Box::new(LatencyDevice::new(3, 1.0)));
+        chain.insert_child(1, Box::new(LatencyDevice::new(6, 1.0)));
+        assert_eq!(chain.latency_frames(), 9);
+        assert_eq!(chain.update_latency(48_000.0), 9);
+        let (main, _) = stream_device(&mut chain, 5, 4, 0);
+        assert_eq!(main, delayed_ramp(9, 1.0, 40));
+
+        chain.set_enabled(false);
+        chain.reset();
+        let mut bypassed = ChainDevice::new(64);
+        bypassed.insert_child(0, Box::new(LatencyDevice::new(9, 1.0)));
+        bypassed.update_latency(48_000.0);
+        bypassed.set_enabled(false);
+        let (main, _) = stream_device(&mut bypassed, 5, 4, 0);
+        assert_eq!(main, delayed_ramp(9, 1.0, 40));
     }
 }

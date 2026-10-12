@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use crate::audio::channel::{Channel, ChannelLatency};
-use crate::audio::dsp::block_delay::StereoBlockDelay;
+use crate::audio::dsp::block_delay::{AlignDelay, StereoBlockDelay};
 use crate::audio::types::{ChannelId, HARDWARE_OUTPUT_BASE};
 
 use super::routing::{is_valid_route, output_target};
@@ -174,6 +174,11 @@ impl ChannelPlan {
             aux_delay: self.aux_delay,
             post: ring(self.needs_post_ring(signature)),
             pre: ring(self.needs_pre_ring(signature)),
+            aux: {
+                let mut aux = AlignDelay::default();
+                aux.set(self.aux_delay as usize, max_block);
+                aux
+            },
         }
     }
 }

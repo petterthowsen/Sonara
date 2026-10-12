@@ -151,6 +151,10 @@ impl Channel {
             timer.add(elapsed_ns(started));
         }
         self.extra_out_buffers = extras;
+        // Meet the returns, which mix back into this channel later on their own paths
+        self.latency
+            .aux
+            .apply(&mut self.device_output_buffer, sample_count);
 
         deinterleave_stereo(
             &self.device_output_buffer[..sample_count * 2],

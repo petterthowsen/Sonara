@@ -77,6 +77,25 @@ impl StereoBlockDelay {
         (self.left.read(ago), self.right.read(ago))
     }
 
+    /// Append one interleaved stereo block.
+    #[inline]
+    pub fn write_interleaved(&mut self, buf: &[f32], frames: usize) {
+        for frame in buf.chunks_exact(2).take(frames) {
+            self.left.push(frame[0]);
+            self.right.push(frame[1]);
+        }
+    }
+
+    /// Overwrite an interleaved stereo block with the delayed block.
+    #[inline]
+    pub fn read_interleaved(&self, delay: usize, frames: usize, out: &mut [f32]) {
+        for (i, frame) in out.chunks_exact_mut(2).take(frames).enumerate() {
+            let ago = Self::ago(frames, i, delay);
+            frame[0] = self.left.read(ago);
+            frame[1] = self.right.read(ago);
+        }
+    }
+
     /// Overwrite `out_l` / `out_r` with the delayed block.
     #[inline]
     pub fn read_delayed(&self, delay: usize, frames: usize, out_l: &mut [f32], out_r: &mut [f32]) {
@@ -84,6 +103,64 @@ impl StereoBlockDelay {
             let ago = Self::ago(frames, i, delay);
             out_l[i] = self.left.read(ago);
             out_r[i] = self.right.read(ago);
+        }
+    }
+}
+
+/// One parallel branch's alignment delay (spec 042 part D): a container delays its faster
+/// branches (and its disabled dry path) so they line up with the slowest one. At 0 it does
+/// nothing and owns no memory.
+#[derive(Clone, Debug, Default)]
+pub struct AlignDelay {
+    frames: usize,
+    line: StereoBlockDelay,
+}
+
+impl AlignDelay {
+    /// Command thread, from `update_latency`: set the delay. A change allocates and clears the
+    /// history; the same value keeps it running.
+    pub fn set(&mut self, frames: usize, max_block: usize) {
+        if frames == self.frames {
+            return;
+        }
+        self.frames = frames;
+        self.line = StereoBlockDelay::new();
+        if frames > 0 {
+            self.line.prepare(frames, max_block);
+        }
+    }
+
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    /// Delay an interleaved stereo block in place.
+    #[inline]
+    pub fn apply(&mut self, buf: &mut [f32], frames: usize) {
+        if self.frames > 0 {
+            self.line.write_interleaved(buf, frames);
+            self.line.read_interleaved(self.frames, frames, buf);
+        }
+    }
+
+    /// Feed an interleaved block without reading it back, to keep the history current for a
+    /// path that may switch to reading it later (a container's dry path while it's enabled).
+    #[inline]
+    pub fn write(&mut self, buf: &[f32], frames: usize) {
+        if self.frames > 0 {
+            self.line.write_interleaved(buf, frames);
+        }
+    }
+
+    /// Write `input` and read it back delayed into `out`. At 0 this is a plain copy.
+    #[inline]
+    pub fn process(&mut self, input: &[f32], out: &mut [f32], frames: usize) {
+        if self.frames > 0 {
+            self.line.write_interleaved(input, frames);
+            self.line.read_interleaved(self.frames, frames, out);
+        } else {
+            let n = (frames * 2).min(input.len()).min(out.len());
+            out[..n].copy_from_slice(&input[..n]);
         }
     }
 }
@@ -125,6 +202,29 @@ mod tests {
             }
             n += frames;
         }
+    }
+
+    #[test]
+    fn align_delay_delays_interleaved_blocks() {
+        let mut align = AlignDelay::default();
+        align.set(3, 4);
+        let mut out = Vec::new();
+        for block in 0..3 {
+            let mut buf: Vec<f32> = (0..4)
+                .flat_map(|i| {
+                    let n = (block * 4 + i + 1) as f32;
+                    [n, -n]
+                })
+                .collect();
+            align.apply(&mut buf, 4);
+            out.extend(buf);
+        }
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let want: Vec<f32> = (0..12)
+            .map(|n| if n < 3 { 0.0 } else { (n - 2) as f32 })
+            .collect();
+        assert_eq!(left, want);
+        assert!(out.chunks(2).all(|f| f[1] == -f[0]));
     }
 
     #[test]

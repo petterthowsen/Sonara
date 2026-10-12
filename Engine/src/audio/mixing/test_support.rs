@@ -347,3 +347,50 @@ impl AudioDevice for TestAuxDevice {
         self
     }
 }
+
+/// Stream `blocks` blocks of `frames` through `device` (with `extra_buses` extra outputs when
+/// > 0) and return the interleaved main output and each extra bus, concatenated. The input is
+/// a stereo ramp: frame n is (n + 1, -(n + 1)) / 1000.
+pub(crate) fn stream_device(
+    device: &mut dyn AudioDevice,
+    blocks: usize,
+    frames: usize,
+    extra_buses: usize,
+) -> (Vec<f32>, Vec<Vec<f32>>) {
+    let mut main = Vec::new();
+    let mut extras_out = vec![Vec::new(); extra_buses];
+    for block in 0..blocks {
+        let input: Vec<f32> = (0..frames)
+            .flat_map(|i| {
+                let n = (block * frames + i + 1) as f32 / 1000.0;
+                [n, -n]
+            })
+            .collect();
+        let mut output = vec![0.0; frames * 2];
+        if extra_buses > 0 {
+            let mut extras = vec![vec![0.0; frames * 2]; extra_buses];
+            device.process_block_with_extra(&input, &mut output, &mut extras, frames);
+            for (all, bus) in extras_out.iter_mut().zip(extras) {
+                all.extend(bus);
+            }
+        } else {
+            device.process_block(&input, &mut output, frames);
+        }
+        main.extend(output);
+    }
+    (main, extras_out)
+}
+
+/// The ramp `stream_device` feeds, `delay` frames late, for `total` interleaved samples.
+pub(crate) fn delayed_ramp(delay: usize, gain: f32, total: usize) -> Vec<f32> {
+    (0..total / 2)
+        .flat_map(|n| {
+            let x = if n >= delay {
+                (n - delay + 1) as f32 / 1000.0 * gain
+            } else {
+                0.0
+            };
+            [x, -x]
+        })
+        .collect()
+}

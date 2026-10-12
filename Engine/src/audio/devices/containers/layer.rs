@@ -1,13 +1,14 @@
 //! Parallel device container: children share input, outputs mix with per-slot volume/mute/solo.
 
 use super::container::{
-    apply_gain, copy_interleaved, insert_into_vec, move_in_vec, normalized_to_gain,
-    remove_from_vec, DeviceContainer,
+    apply_gain, insert_into_vec, move_in_vec, normalized_to_gain, remove_from_vec, DeviceContainer,
 };
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
+use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::midi_types::{NoteEvent, SoundingNoteId, AUDITION_NOTE_ID};
+use crate::audio::stream::MAX_BLOCK_FRAMES;
 
 /// Slot note map entry for an input note the slot ignores (and an empty `held` entry).
 pub const NOTE_NONE: u8 = 255;
@@ -38,6 +39,9 @@ pub struct LayerSlot {
     pub held: [(u8, SoundingNoteId); 128],
     /// When true (and the Layer is a multi-out source), audio goes to this slot's extra bus.
     pub separate_out: bool,
+    /// Delays this slot up to the slowest slot's latency, so the slots mix (and reach their
+    /// extra buses) aligned. Sized by `update_latency`.
+    align: AlignDelay,
 }
 
 impl LayerSlot {
@@ -51,6 +55,7 @@ impl LayerSlot {
             note_map: full_note_map(),
             held: [NOT_HELD; 128],
             separate_out: false,
+            align: AlignDelay::default(),
         }
     }
 
@@ -66,6 +71,8 @@ pub struct LayerDevice {
     enabled: bool,
     mix_buffer: Vec<f32>,
     child_buffer: Vec<f32>,
+    /// Delays the input by the Layer's latency while bypassed. Fed every block.
+    dry: AlignDelay,
 }
 
 impl LayerDevice {
@@ -77,6 +84,7 @@ impl LayerDevice {
             enabled: true,
             mix_buffer: vec![0.0; interleaved],
             child_buffer: vec![0.0; interleaved],
+            dry: AlignDelay::default(),
         }
     }
 
@@ -178,6 +186,8 @@ impl LayerDevice {
             let audible = slot.is_audible(any_solo);
             slot.device
                 .process_block(inputs, &mut self.child_buffer, sample_count);
+            // Every block, audible or not, so the delay's history stays continuous
+            slot.align.apply(&mut self.child_buffer, sample_count);
             let bus = if slot.separate_out {
                 extra_outs.get_mut(i)
             } else {
@@ -249,9 +259,10 @@ impl AudioDevice for LayerDevice {
             .min(self.child_buffer.len());
 
         if !self.enabled {
-            copy_interleaved(inputs, outputs, sample_count);
+            self.dry.process(inputs, outputs, sample_count);
             return;
         }
+        self.dry.write(inputs, sample_count);
 
         outputs[..interleaved].fill(0.0);
         if self.slots.is_empty() {
@@ -261,6 +272,30 @@ impl AudioDevice for LayerDevice {
         // Not a multi-out source here: separate slots mix in so no audio is lost.
         self.render_slots(inputs, &mut [], sample_count, interleaved);
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
+    }
+
+    /// The slots run in parallel and are aligned to the slowest one.
+    fn latency_frames(&self) -> u32 {
+        self.slots
+            .iter()
+            .map(|slot| slot.device.latency_frames())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn update_latency(&mut self, sample_rate: f32) -> u32 {
+        let latency = self
+            .slots
+            .iter_mut()
+            .map(|slot| slot.device.update_latency(sample_rate))
+            .max()
+            .unwrap_or(0);
+        for slot in &mut self.slots {
+            let own = slot.device.latency_frames().min(latency);
+            slot.align.set((latency - own) as usize, MAX_BLOCK_FRAMES);
+        }
+        self.dry.set(latency as usize, MAX_BLOCK_FRAMES);
+        latency
     }
 
     fn extra_output_bus_count(&self) -> usize {
@@ -287,9 +322,10 @@ impl AudioDevice for LayerDevice {
         }
 
         if !self.enabled {
-            copy_interleaved(inputs, outputs, sample_count);
+            self.dry.process(inputs, outputs, sample_count);
             return;
         }
+        self.dry.write(inputs, sample_count);
 
         outputs[..interleaved].fill(0.0);
         if self.slots.is_empty() {
@@ -843,5 +879,37 @@ mod tests {
         render(&mut layer, 0.0);
         assert_eq!(on_keys(&log_a), vec![72]);
         assert_eq!(on_keys(&log_b), vec![60]);
+    }
+
+    #[test]
+    fn layer_aligns_slots() {
+        use crate::audio::mixing::test_support::{delayed_ramp, stream_device, LatencyDevice};
+        let build = || {
+            let mut layer = LayerDevice::new(64);
+            layer.insert_child(0, Box::new(LatencyDevice::new(0, 1.0)));
+            layer.insert_child(1, Box::new(LatencyDevice::new(7, -1.0)));
+            assert_eq!(layer.latency_frames(), 7);
+            assert_eq!(layer.update_latency(48_000.0), 7);
+            layer
+        };
+
+        // Mixed: the passthrough slot waits for the delayed, inverted one, so they cancel
+        let (main, _) = stream_device(&mut build(), 5, 4, 0);
+        assert!(main.iter().all(|x| x.abs() < 1e-6), "{main:?}");
+
+        // Separate outs: each bus carries its slot, both 7 frames late
+        let mut layer = build();
+        layer.set_slot_separate_out(0, true);
+        layer.set_slot_separate_out(1, true);
+        let (main, extras) = stream_device(&mut layer, 5, 4, 2);
+        assert!(main.iter().all(|&x| x == 0.0));
+        assert_eq!(extras[0], delayed_ramp(7, 1.0, 40));
+        assert_eq!(extras[1], delayed_ramp(7, -1.0, 40));
+
+        // Bypassed: the input comes out 7 frames late too
+        let mut layer = build();
+        layer.set_enabled(false);
+        let (main, _) = stream_device(&mut layer, 5, 4, 0);
+        assert_eq!(main, delayed_ramp(7, 1.0, 40));
     }
 }

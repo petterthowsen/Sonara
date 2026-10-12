@@ -202,7 +202,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
     - Live: change a lookahead setting on a plugin that reports latency changes; the panel's latency follows within 1 s.
   - _Depends on_: T-019, T-020
 
-- [ ] **T-022** [REQ-014] Containers align their branches
+- [x?] **T-022** [REQ-014] Containers align their branches
   - _Files_: `Engine/src/audio/devices/containers/chain.rs`, `Engine/src/audio/devices/containers/layer.rs`, `Engine/src/audio/devices/containers/drum_machine.rs`
   - _Output_:
     - Chain: sum.

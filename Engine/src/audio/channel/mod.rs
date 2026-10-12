@@ -16,7 +16,7 @@ pub use send::Send;
 
 use crate::audio::active_notes::ActiveNotes;
 use crate::audio::devices::AudioDevice;
-use crate::audio::dsp::block_delay::StereoBlockDelay;
+use crate::audio::dsp::block_delay::{AlignDelay, StereoBlockDelay};
 use crate::audio::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
 use crate::audio::render_scratch::MixBuffers;
 use crate::audio::types::ChannelId;
@@ -135,6 +135,8 @@ pub struct ChannelLatency {
     pub post: Option<StereoBlockDelay>,
     /// The pre-fader block, for delayed pre-fader sends.
     pub pre: Option<StereoBlockDelay>,
+    /// Delays the aux-source device's main output by `aux_delay`.
+    pub aux: AlignDelay,
 }
 
 impl Channel {
