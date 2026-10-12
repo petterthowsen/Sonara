@@ -275,7 +275,10 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 	
 	# Debug logging for unrouted messages
 	if not routed:
-		if address.contains("/param/") and address.ends_with("/value"):
+		if address.ends_with("/sleep"):
+			# Device sleep status (/channel/<id>/device/<path>/sleep); nothing consumes it yet.
+			pass
+		elif address.contains("/param/") and address.ends_with("/value"):
 			# Parameter change with no listener
 			if randf() < 0.05:  # Only log 5% to reduce spam
 				logger.warn("⚠️  No listener for: " + address)

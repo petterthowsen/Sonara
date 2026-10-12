@@ -32,6 +32,7 @@ func run_tests() -> void:
 	_test_table_order_and_names()
 	_test_container_is_one_row()
 	_test_stale_dropped()
+	_test_threads_header()
 
 
 func _make_instance(id: String, display: String, channel_id: int) -> Object:
@@ -113,3 +114,19 @@ func _test_stale_dropped() -> void:
 	}
 	_panel_script._drop_stale_channel_perf(entries, Time.get_ticks_msec())
 	_assert(entries.has(2) and not entries.has(3), "a channel silent for over 1 s is dropped")
+
+
+func _test_threads_header() -> void:
+	var granted = _EnginePerf.from_osc([4, "granted", 0, 0, 48000])
+	_assert(_panel_script.threads_header(granted) == "4 threads · realtime", "granted: %s" % _panel_script.threads_header(granted))
+	var partial = _EnginePerf.from_osc([3, "partial", 0, 0, 48000])
+	_assert(_panel_script.threads_header(partial) == "3 threads · partly realtime", "partial")
+	var denied = _EnginePerf.from_osc([2, "denied", 0, 0, 48000])
+	var denied_text: String = _panel_script.threads_header(denied)
+	_assert(denied_text.begins_with("2 threads · ") and denied_text.contains("no realtime")
+			and denied_text.contains(_panel_script.COLOR_WARN), "denied is shown in the warn colour")
+	var none = _EnginePerf.from_osc([1, "none", 0, 0, 48000])
+	_assert(_panel_script.threads_header(none) == "1 thread", "none omits the suffix, 1 is singular")
+	var one = _EnginePerf.from_osc([1, "granted", 0, 0, 48000])
+	_assert(_panel_script.threads_header(one) == "1 thread · realtime", "1 thread, realtime")
+	_assert(_panel_script.threads_header(null) == "", "no report, no header")

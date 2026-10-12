@@ -19,6 +19,10 @@
 #       realtime]   (the last five are optional; realtime is "granted", "denied" or "unknown")
 #   /audio/config/changed [rate]   (the device rate changed: audio clips reload)
 #
+# "audio/processing_threads" ("Auto" or "1".."cores") goes out separately, never through
+# /audio/config/set (a thread change must not reopen the stream):
+#   /engine/threads/set [threads]   (0 = Auto)
+#
 # Registered as the "AudioConfig" autoload, after Settings.
 extends Node
 
@@ -29,6 +33,7 @@ const DEVICE_KEY := "audio/output_device"
 const RATE_KEY := "audio/sample_rate"
 const BUFFER_KEY := "audio/buffer_size"
 const KEYS := [DRIVER_KEY, DEVICE_KEY, RATE_KEY, BUFFER_KEY]
+const THREADS_KEY := "audio/processing_threads"
 
 ## Hardware output IDs: 1000 = outputs 1/2 of the selected device, 1001 = 3/4, …
 const HARDWARE_OUTPUT_BASE := 1000
@@ -74,6 +79,7 @@ func start() -> void:
 	if not AudioEngineOSC.engine_connected.is_connected(_on_engine_connected):
 		AudioEngineOSC.engine_connected.connect(_on_engine_connected)
 	sync_to_engine()
+	sync_threads_to_engine()
 
 
 # ============================================================================
@@ -95,6 +101,18 @@ func sync_to_engine() -> void:
 	AudioEngineOSC.send("/audio/config/set", build_message())
 
 
+## Engine thread count for the "audio/processing_threads" setting: "Auto" (or anything that is
+## not a positive number) is 0, "4" is 4.
+static func threads_from_setting(value) -> int:
+	var text := str(value)
+	return maxi(0, int(text)) if text.is_valid_int() else 0
+
+
+## Send the processing thread count. Safe to repeat.
+func sync_threads_to_engine() -> void:
+	AudioEngineOSC.send("/engine/threads/set", [threads_from_setting(Settings.get_value(THREADS_KEY))])
+
+
 ## Ask the engine for its output devices (it opens each one, so this takes a moment).
 func request_devices() -> void:
 	AudioEngineOSC.send("/audio/devices/request", [])
@@ -106,6 +124,9 @@ func request_config() -> void:
 
 
 func _on_setting_changed(key: String, _value) -> void:
+	if key == THREADS_KEY:
+		sync_threads_to_engine()
+		return
 	if key not in KEYS:
 		return
 	if key == DRIVER_KEY:
@@ -128,6 +149,7 @@ func _apply_deferred() -> void:
 
 func _on_engine_connected() -> void:
 	sync_to_engine()
+	sync_threads_to_engine()
 	if devices_loaded:
 		request_devices()
 

@@ -35,6 +35,7 @@ func run_tests() -> void:
 
 	_test_settings_are_registered()
 	_test_message_from_settings()
+	_test_processing_threads()
 	_test_driver_change_resets_device()
 	_test_parse_reports()
 	_test_rates_and_buffers_per_device()
@@ -83,6 +84,43 @@ func _test_message_from_settings() -> void:
 	_assert(config.build_message()[0] == "", "the system default is sent as \"\"")
 	_sonara.set_config(_script.DRIVER_KEY, "pipewire")
 	_assert(config.build_message()[3] == "pipewire", "the driver defaults to pipewire")
+	config.free()
+
+
+func _threads_messages() -> Array:
+	var found: Array = []
+	for item in root.get_node("/root/AudioEngineOSC")._pending_sends:
+		if item.address == "/engine/threads/set":
+			found.append(item.args)
+	return found
+
+
+func _test_processing_threads() -> void:
+	var settings := root.get_node("/root/Settings")
+	var setting = settings.get_setting(_script.THREADS_KEY)
+	_assert(setting != null and setting.default == "Auto", "processing threads default to Auto")
+	_assert(setting != null and setting.options.size() == OS.get_processor_count() + 1
+			and setting.options[0] == "Auto" and setting.options[1] == "1", "choices are Auto and 1..cores")
+	_assert(_script.threads_from_setting("Auto") == 0, "Auto maps to 0")
+	_assert(_script.threads_from_setting("4") == 4, "\"4\" maps to 4")
+	_assert(_script.threads_from_setting("junk") == 0, "junk maps to 0")
+
+	var osc := root.get_node("/root/AudioEngineOSC")
+	var config := _new_config()
+	_sonara.set_config(_script.THREADS_KEY, "4")
+	osc._pending_sends.clear()
+	config._on_setting_changed(_script.THREADS_KEY, "4")
+	_assert(_threads_messages() == [[4]], "a change sends /engine/threads/set [4]: %s" % [_threads_messages()])
+	var audio_config_sent := false
+	for item in osc._pending_sends:
+		if item.address == "/audio/config/set":
+			audio_config_sent = true
+	_assert(not audio_config_sent and not config._apply_scheduled, "a thread change does not go through /audio/config/set")
+	_sonara.set_config(_script.THREADS_KEY, "Auto")
+	osc._pending_sends.clear()
+	config._on_engine_connected()
+	_assert(_threads_messages() == [[0]], "engine_connected sends Auto as 0: %s" % [_threads_messages()])
+	osc._pending_sends.clear()
 	config.free()
 
 

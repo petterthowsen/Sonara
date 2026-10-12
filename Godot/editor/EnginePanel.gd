@@ -38,6 +38,7 @@ const CHANNEL_PERF_STALE_MSEC := 1000
 ## Latest ChannelPerf per channel id: {channel_id: {"perf": ChannelPerf, "msec": int}}.
 var _channel_perf: Dictionary = {}
 var _perf_subscribed: bool = false
+var _engine_perf: EngineStatus.EnginePerf = null
 
 const POPUP_REOPEN_GUARD_MSEC := 250
 var _popup_hidden_msec: int = -1000000
@@ -64,6 +65,8 @@ func _ready() -> void:
 	
 	_engine_status.engine_stats_received.connect(_on_engine_stats_received)
 	_engine_status.channel_perf_received.connect(_on_channel_perf_received)
+	_engine_status.engine_perf_received.connect(_on_engine_perf_received)
+	AudioEngineOSC.engine_connected.connect(_on_engine_connected)
 	performance_text.tooltip_text = PERFORMANCE_TOOLTIP
 	_engine_status.start()
 	
@@ -122,6 +125,36 @@ func _set_perf_subscribed(on: bool) -> void:
 	else:
 		_engine_status.unsubscribe_perf()
 		_channel_perf.clear()
+		_engine_perf = null
+
+
+## The engine restarted with no subscribers: subscribe again while the popup is open.
+func _on_engine_connected() -> void:
+	if _perf_subscribed:
+		_engine_status.subscribe_perf()
+
+
+func _on_engine_perf_received(perf: EngineStatus.EnginePerf) -> void:
+	_engine_perf = perf
+
+
+## "N threads · realtime" header of the popup text. Empty without a report.
+static func threads_header(perf: EngineStatus.EnginePerf) -> String:
+	if perf == null or perf.processing_threads <= 0:
+		return ""
+	var text := "%d thread%s" % [perf.processing_threads, "" if perf.processing_threads == 1 else "s"]
+	match perf.threads_realtime:
+		"granted":
+			return text + " · realtime"
+		"partial":
+			return text + " · partly realtime"
+		"denied":
+			return text + " · " + _colored_static("no realtime", COLOR_WARN)
+	return text
+
+
+static func _colored_static(text: String, color: String) -> String:
+	return "[color=%s]%s[/color]" % [color, text]
 
 
 func _on_channel_perf_received(perf: EngineStatus.ChannelPerf) -> void:
@@ -254,6 +287,9 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 	if not denied.is_empty():
 		parts.append(_colored("No realtime priority: %s" % ", ".join(denied), COLOR_WARN))
 	var channel_table := _channels_text(project.channels if project else [], now)
+	var header := threads_header(_engine_perf)
+	if not header.is_empty():
+		parts.insert(0, header)
 	performance_text.text = "\n".join(parts) + channel_table
 	_set_load_text("%.0f%%" % (stats.load_avg * 100.0))
 	var load_color := ""

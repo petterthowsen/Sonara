@@ -499,6 +499,21 @@ func _register_all_settings() -> void:
 		+ "ALSA driver: if PipeWire's quantum is larger, the engine uses a bigger buffer that holds it and says so here.",
 	)).sub("Output").range(32, 2048, 1).scene("res://settings/AudioSettingControl.tscn")
 
+	# --- Audio: performance (spec 042). AudioConfig sends it to the engine live. ---
+	var thread_choices: Array = ["Auto"]
+	for n in range(1, maxi(1, OS.get_processor_count()) + 1):
+		thread_choices.append(str(n))
+	_register(Setting.new(
+		"audio/processing_threads",
+		"Processing Threads",
+		Type.CHOICE,
+		"Auto",
+		CATEGORY_AUDIO,
+		"How many threads render audio, including the audio callback thread itself. Channels that are independent of each other are rendered in parallel.\n\n"
+		+ "Auto picks a count from the CPU cores. 1 renders everything on the callback thread.\n\n"
+		+ "Changes apply right away and do not restart the audio stream. The engine panel shows how many threads run and whether they got realtime priority.",
+	)).sub("Performance").choices(thread_choices)
+
 	# --- Audio: plugin hosting (engine-stability-plan Phase 5) ---
 	_register(Setting.new(
 		"plugins/hosting_mode",

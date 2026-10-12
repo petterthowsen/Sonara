@@ -132,7 +132,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
     - Live: `oscsend localhost 7000 /engine/threads/set i 4` during playback; `/status/engine_perf` shows 4 within 1 s, and the xrun count rises by at most 1.
   - _Depends on_: T-012, T-003
 
-- [ ] **T-014** [REQ-010, REQ-011] Godot: Processing threads setting and panel header
+- [x?] **T-014** [REQ-010, REQ-011] Godot: Processing threads setting and panel header
   - _Files_: `Godot/settings/Settings.gd`, `Godot/data/AudioConfig.gd`, `Godot/editor/EnginePanel.gd`, `Godot/tests/test_audio_config.gd`, `Godot/tests/test_engine_perf.gd`
   - _Output_:
     - `audio/processing_threads` (Auto, 1..cores) under Audio › Performance.
