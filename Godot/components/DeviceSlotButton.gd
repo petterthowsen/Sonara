@@ -10,6 +10,8 @@ const TITLE_COLOR := Color(0.6, 0.6, 0.6)
 const TITLE_COLOR_OPEN := Color(0.92, 0.92, 0.92)
 
 @export var font_size := 14
+## Draw the number of devices in the slot (Simple View tile).
+@export var show_count := false
 
 var container: DeviceInstance = null
 var key := ""
@@ -49,6 +51,11 @@ func is_open() -> bool:
 	return container != null and container.is_slot_open(key)
 
 
+## Number of devices in the bound slot.
+func device_count() -> int:
+	return container.slot_devices(key).size() if container else 0
+
+
 func _on_slots_changed() -> void:
 	tooltip_text = ("Hide %s" if is_open() else "Show %s") % _title() if container else ""
 	queue_redraw()
@@ -70,6 +77,26 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 
+## Dropping a device on the tile adds it at the end of the slot and opens the slot.
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	if container == null:
+		return false
+	var chain := container.slot_chain(key)
+	return chain != null and _drop_util().can_drop_on_container(container.get_channel(), chain, data)
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	if not _can_drop_data(_at_position, data):
+		return
+	_drop_util().drop_on_container(container.get_channel(), container.slot_chain(key), data)
+	container.set_slot_open(key, true)
+
+
+## Loaded on use: `DeviceDropUtil` reaches autoloads, which headless scripts compile without.
+func _drop_util() -> GDScript:
+	return load("res://devices/DeviceDropUtil.gd")
+
+
 func _draw() -> void:
 	var rect := Rect2(Vector2.ZERO, size)
 	var open := is_open()
@@ -85,3 +112,12 @@ func _draw() -> void:
 	line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	var top := STRIP_HEIGHT + (size.y - STRIP_HEIGHT - line.get_size().y) * 0.5
 	line.draw(get_canvas_item(), Vector2(4.0, top), TITLE_COLOR_OPEN if open or _hovering else TITLE_COLOR)
+
+	if show_count and container:
+		var count := device_count()
+		var text := str(count) if count > 0 else ""
+		if not text.is_empty():
+			var badge := TextLine.new()
+			badge.add_string(text, get_theme_font("font", "Label"), font_size)
+			badge.draw(get_canvas_item(), Vector2(size.x - badge.get_size().x - 5.0, size.y - badge.get_size().y - 2.0),
+				color if open else TITLE_COLOR)

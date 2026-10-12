@@ -33,6 +33,10 @@ func run_tests() -> void:
 	await _test_parameters_tab_default()
 	await _test_groups_fill_and_spread()
 	await _test_fixed_height()
+	await _test_slot_tiles_render_with_count()
+	await _test_slot_tile_click_toggles()
+	await _test_drop_on_slot_tile()
+	await _test_edited_layout_gets_slot_tiles_appended()
 
 
 ## A device instance for a fake built-in device with `params`, on a fresh channel. Unique ids keep
@@ -287,3 +291,134 @@ func _test_groups_fill_and_spread() -> void:
 	_assert(is_equal_approx(view._grid.custom_minimum_size.x, 2 * view.cell_size.x),
 		"the grid shrinks to a 2-column page (%.0f)" % view._grid.custom_minimum_size.x)
 	panel.queue_free()
+
+
+## ----------------------------------------------------------------------------
+## Slot tiles (spec 040, REQ-024 – REQ-028)
+## ----------------------------------------------------------------------------
+
+## A slotted fake device (a "PolySynth" with Note FX and FX slots, plus `Gain` and `Mix`) on a
+## fresh channel, and the fake Transpose and Delay devices the tile tests use.
+func _slotted_instance(title: String) -> Object:
+	var registry: Object = root.get_node("AssetService").device_registry
+	for id in ["sonara.builtin.chain", "sonara.builtin.transpose", "sonara.builtin.delay"]:
+		if not registry._devices.has(id):
+			var category: int = _device_script.DeviceCategory.NoteEffect if id.ends_with("transpose") \
+				else _device_script.DeviceCategory.Effect
+			var fake: Object = _device_script.new(id, id, category, _device_script.DeviceType.BuiltIn)
+			fake.is_container = id.ends_with("chain")
+			registry._devices[id] = fake
+	var device_id := "sonara.test.slotted_%s.%d" % [title.to_lower(), Time.get_ticks_usec()]
+	var device: Object = _device_script.new(device_id, title,
+		_device_script.DeviceCategory.Instrument, _device_script.DeviceType.BuiltIn)
+	device.is_container = true
+	device.slots.append({"key": "note_fx", "name": "Note FX", "kind": "note"})
+	device.slots.append({"key": "fx", "name": "FX", "kind": "audio"})
+	device.add_parameter(_float_param(0, "Gain"))
+	device.add_parameter(_float_param(1, "Mix"))
+	registry._devices[device_id] = device
+	var channel: Object = _project.create_instrument_track(title).channel
+	var instance: Object = _device_instance_script.new(device, channel.id, 0)
+	channel.add_device(instance)
+	return instance
+
+
+func _tiles(node: Node, out: Array = []) -> Array:
+	for child in node.get_children():
+		if child is Control and child.has_method("bind_to_slot") and not child.is_queued_for_deletion():
+			out.append(child)
+		_tiles(child, out)
+	return out
+
+
+func _tile_for(panel: Control, key: String) -> Control:
+	for tile in _tiles(panel._panel_view):
+		if tile.key == key:
+			return tile
+	return null
+
+
+func _click(tile: Control) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = true
+	tile._gui_input(event)
+
+
+func _test_slot_tiles_render_with_count() -> void:
+	var instance: Object = _slotted_instance("Poly")
+	var panel: Control = await _panel_for(instance)
+	var tiles := _tiles(panel._panel_view)
+	_assert(tiles.size() == 2, "the Simple View has one tile per slot (%d)" % tiles.size())
+	var titles: Array = tiles.map(func(t): return t.container.slot_title(t.key))
+	_assert(titles == ["Note FX", "FX"], "tiles are labelled with the slot names (%s)" % [titles])
+	_assert(tiles.all(func(t): return t.show_count), "tiles show a device count")
+	var note_tile := _tile_for(panel, "note_fx")
+	_assert(note_tile != null and note_tile.device_count() == 0, "an empty slot counts 0")
+	var channel: Object = instance.get_channel()
+	var transpose: Object = _device_instance_script.new(
+		root.get_node("AssetService").device_registry._devices["sonara.builtin.transpose"], channel.id, -1)
+	channel.add_device(transpose, -1, instance.slot_chain("note_fx"))
+	instance.slots_changed.emit()
+	_assert(note_tile.device_count() == 1, "after adding a Transpose, the Note FX tile counts 1 (%d)" % note_tile.device_count())
+	_assert(_tile_for(panel, "fx").device_count() == 0, "the FX tile still counts 0")
+	panel.queue_free()
+
+
+func _test_slot_tile_click_toggles() -> void:
+	var instance: Object = _slotted_instance("PolyClick")
+	var panel: Control = await _panel_for(instance)
+	var fx := _tile_for(panel, "fx")
+	_click(fx)
+	_assert(instance.is_slot_open("fx") and fx.is_open(), "clicking the FX tile opens FX")
+	_click(fx)
+	_assert(not instance.is_slot_open("fx") and not fx.is_open(), "clicking it again closes it")
+	_click(fx)
+	_click(_tile_for(panel, "note_fx"))
+	_assert(instance.is_slot_open("note_fx") and not instance.is_slot_open("fx"), "opening Note FX closes FX")
+	panel.queue_free()
+
+
+func _test_drop_on_slot_tile() -> void:
+	var instance: Object = _slotted_instance("PolyDrop")
+	var panel: Control = await _panel_for(instance)
+	var fx := _tile_for(panel, "fx")
+	var asset: Object = load("res://browser/Asset.gd").new()
+	asset.type = load("res://browser/Asset.gd").TYPE.Device
+	asset.path = "sonara.builtin.delay"
+	_assert(fx._can_drop_data(Vector2.ZERO, asset), "the FX tile accepts a Delay")
+	fx._drop_data(Vector2.ZERO, asset)
+	var devices: Array = instance.slot_devices("fx")
+	_assert(devices.size() == 1 and devices[0].device.device_id == "sonara.builtin.delay",
+		"the Delay is the FX slot's last device (%d)" % devices.size())
+	_assert(instance.is_slot_open("fx"), "the slot opens after the drop")
+	_assert(not _tile_for(panel, "note_fx")._can_drop_data(Vector2.ZERO, asset), "the Note FX tile refuses a Delay")
+	panel.queue_free()
+
+
+func _test_edited_layout_gets_slot_tiles_appended() -> void:
+	var store: Object = load("res://devices/simple_view/SimpleLayoutStore.gd")
+	var instance: Object = _slotted_instance("PolyEdit")
+	var device: Object = instance.device
+	var layout = store.load_or_generate(device, device.parameters)
+	var before: Array = []
+	for control in layout.pages[0].controls:
+		if control.kind != "slot":
+			before.append(control.duplicate(true))
+	# a user edit: the tiles are gone and the layout is marked edited
+	layout.pages[0].controls = before.duplicate(true)
+	layout.generated = false
+	store.save(layout)
+	store.clear_cache()
+	var loaded = store.load_or_generate(device, device.parameters)
+	var kept: Array = loaded.pages[0].controls.filter(func(c): return c.kind != "slot")
+	var tiles: Array = loaded.pages[0].controls.filter(func(c): return c.kind == "slot")
+	_assert(kept == before, "every other control stays where it was")
+	_assert(tiles.map(func(t): return t.slot) == ["note_fx", "fx"], "both tiles are appended in table order")
+	var right := 0
+	for c in kept:
+		right = maxi(right, c.rect[0] + c.rect[2])
+	_assert(tiles.all(func(t): return t.rect[0] >= right), "the tiles sit at the end of Main")
+	_assert(loaded.validate().is_empty(), "the layout stays valid: %s" % [loaded.validate()])
+	_assert(loaded.reconcile_slots(PackedStringArray(["note_fx", "fx"])).is_empty(), "reconciling again adds nothing")
+	store.clear_cache()

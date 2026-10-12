@@ -2,7 +2,7 @@
 ## Saved description of a Simple View: row count, pages, groups and controls. Pages are `rows`
 ## tall and as wide as their controls need.
 ## Pages are plain dictionaries in the on-disk JSON shape (see docs/specs/004-simple-view/design.md):
-## `{title, groups: [{id, title, rect}], controls: [{kind, params, rect, group?, label?, unit?, stages?}]}`
+## `{title, groups: [{id, title, rect}], controls: [{kind, params, rect, group?, label?, unit?, stages?, slot?}]}`
 ## with `rect` = `[col, row, w, h]` in cells.
 
 class_name SimpleLayout extends RefCounted
@@ -14,6 +14,10 @@ const DEFAULT_ROWS := 4
 const MAX_PAGE_COLUMNS := 24
 ## Title of pages added for parameters the layout didn't mention.
 const OVERFLOW_PAGE_TITLE := "More"
+const MAIN_TITLE := "Main"
+## Group of the slot tiles (spec 040).
+const SLOTS_GROUP_ID := "slots"
+const SLOTS_GROUP_TITLE := "Slots"
 
 static var logger := Log.make("SimpleLayout")
 
@@ -117,7 +121,7 @@ static func _page_from_dict(raw: Variant) -> Dictionary:
 				return {}
 			params.append(int(p))
 		var control := {"kind": str(c.get("kind", "")), "params": params, "rect": _int_array(c.rect)}
-		for key in ["group", "label", "unit", "stages"]:
+		for key in ["group", "label", "unit", "stages", "slot"]:
 			if c.has(key):
 				control[key] = str(c[key])
 		page.controls.append(control)
@@ -171,6 +175,8 @@ func param_ids() -> Array[int]:
 	var ids: Array[int] = []
 	for page in pages:
 		for control in page.controls:
+			if control.kind == SimpleControlKinds.SLOT:
+				continue
 			for id in control.params:
 				ids.append(int(id))
 	return ids
@@ -310,6 +316,50 @@ func reconcile(params: Array) -> Dictionary:
 	if not removed.is_empty() or not added.is_empty():
 		refresh_groups()
 	return {"removed": removed, "added": added}
+
+
+## Add a tile for each of `keys` the layout lacks, after the last tile or at the end of the Main
+## page (the first page), and drop tiles for slots the device no longer has (REQ-028). Other
+## controls don't move. Returns the keys added.
+func reconcile_slots(keys: PackedStringArray) -> PackedStringArray:
+	var present := {}
+	var changed := false
+	for page in pages:
+		var kept: Array = []
+		for control in page.controls:
+			if control.kind == SimpleControlKinds.SLOT:
+				var key := str(control.get("slot", ""))
+				if key not in keys or present.has(key):
+					changed = true
+					continue
+				present[key] = true
+			kept.append(control)
+		page.controls = kept
+	var added := PackedStringArray()
+	for key in keys:
+		if present.has(key):
+			continue
+		if pages.is_empty():
+			_append_page(MAIN_TITLE)
+		var page: Dictionary = pages[0]
+		# at the right end: everything left of the page's current edge counts as taken
+		var occ := _occupancy(page)
+		var right := 0
+		for control in page.controls:
+			right = maxi(right, GridPacker.rect_from_array(control.rect).end.x)
+		occ.mark(Rect2i(0, 0, right, rows))
+		var size := GridPacker.clamp_size(SimpleControlKinds.footprint(SimpleControlKinds.SLOT), 0, rows)
+		var rect := occ.find_free(size)
+		page.controls.append(GridPacker.make_control(
+			{"kind": SimpleControlKinds.SLOT, "params": [], "slot": key}, rect, SLOTS_GROUP_ID))
+		added.append(key)
+	if not added.is_empty():
+		var main: Dictionary = pages[0]
+		if not main.groups.any(func(g): return g.id == SLOTS_GROUP_ID):
+			main.groups.append({"id": SLOTS_GROUP_ID, "title": SLOTS_GROUP_TITLE, "rect": [0, 0, 1, 1]})
+	if changed or not added.is_empty():
+		refresh_groups()
+	return added
 
 
 ## Put a generated `{kind, params}` item on the last page, or a new one when the last page is

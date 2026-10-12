@@ -188,6 +188,8 @@ func _build_inner() -> void:
 			_inner = _build_envelope()
 		SimpleControlKinds.EQ_BAND:
 			_inner = _build_eq_band()
+		SimpleControlKinds.SLOT:
+			_inner = _build_slot()
 		_:
 			logger.warning("Unknown control kind '%s'" % control_data.get("kind"))
 	if _inner:
@@ -206,6 +208,15 @@ func _build_inner() -> void:
 		_blocker = null
 	_apply_disabled()
 	_collect_mod_targets()
+
+
+## The slot tile (spec 040): a `DeviceSlotButton` with a device count, bound to the layout's slot.
+func _build_slot() -> DeviceSlotButton:
+	var tile := DeviceSlotButton.new()
+	tile.show_count = true
+	tile.custom_minimum_size = Vector2.ZERO
+	tile.bind_to_slot(instance, String(control_data.get("slot", "")))
+	return tile
 
 
 func _build_knob() -> RotaryKnob:

@@ -115,7 +115,17 @@ static func load_or_generate(device: Device, params: Array) -> SimpleLayout:
 		logger.info("regenerated layout for %s: its parameters changed" % device_id)
 		return layout
 	layout.reconcile(params)
+	if not layout.generated and device.has_device_slots():
+		layout.reconcile_slots(slot_keys_of(device))
 	return layout
+
+
+## Slot keys of `device`'s slot table, in order.
+static func slot_keys_of(device: Device) -> PackedStringArray:
+	var keys := PackedStringArray()
+	for spec in device.slots:
+		keys.append(String(spec.key))
+	return keys
 
 
 ## Replace the layout for `device` with a newly generated one and overwrite its file (REQ-015).

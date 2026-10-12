@@ -329,6 +329,8 @@ static func _pack_section(groups: Array, title: String, rows: int, max_columns: 
 					columns = null  # start the family on a fresh page
 				if columns != null:
 					columns.break_column()  # a family gets a column of its own, its groups aligned
+		if group.get("new_column", false) and columns != null:
+			columns.break_column()  # e.g. the slot tiles: always a column of their own, at the right end
 		var items: Array = group.items
 		var sizes := _item_sizes(items, rows, max_columns)
 		var start := 0
@@ -429,6 +431,8 @@ static func make_control(item: Dictionary, rect: Rect2i, group_id: String) -> Di
 		control["label"] = item.label
 	if item.has("stages"):
 		control["stages"] = item.stages
+	if item.has("slot"):
+		control["slot"] = item.slot
 	return control
 
 

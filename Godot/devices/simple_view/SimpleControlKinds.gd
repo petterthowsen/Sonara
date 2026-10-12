@@ -13,6 +13,8 @@ const SPINBOX := "spinbox"
 const XY := "xy"
 const ENVELOPE := "envelope"
 const EQ_BAND := "eq_band"
+## A device slot tile (spec 040): no parameters, carries `slot` (the slot key).
+const SLOT := "slot"
 
 ## Footprint in cells (columns × rows) per control kind.
 const FOOTPRINT: Dictionary[String, Vector2i] = {
@@ -26,6 +28,7 @@ const FOOTPRINT: Dictionary[String, Vector2i] = {
 	XY: Vector2i(2, 2),
 	ENVELOPE: Vector2i(3, 3),
 	EQ_BAND: Vector2i(2, 1),
+	SLOT: Vector2i(2, 1),
 }
 
 ## Number of parameters each compound kind binds, in `params` order.
@@ -33,6 +36,7 @@ const PARAM_COUNT: Dictionary[String, int] = {
 	XY: 2,
 	ENVELOPE: 4,
 	EQ_BAND: 3,
+	SLOT: 0,
 }
 
 

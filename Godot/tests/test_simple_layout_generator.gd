@@ -45,6 +45,7 @@ func run_tests() -> void:
 	_test_compressor_faders()
 	_test_step_sequencer_layout()
 	_test_step_sequencer_flat_names()
+	_test_slot_tiles_are_last_on_main()
 
 
 ## ----------------------------------------------------------------------------
@@ -1032,3 +1033,53 @@ func _test_step_sequencer_flat_names() -> void:
 		_assert(gate[0] == on[0] and gate[1] == on[1] + 1, "flat step %d stacks On over Gate (%s, %s)" % [k + 1, on, gate])
 	for id in [0, 1]:
 		_assert(int(_find(layout, id).control.rect[0]) < int(first.control.rect[0]), "param %d before the steps" % id)
+
+
+## Slot tiles (spec 040, REQ-023, REQ-027): the last group on Main, in table order, nowhere else.
+func _test_slot_tiles_are_last_on_main() -> void:
+	var cases := [
+		["sonara.builtin.polysynth", "PolySynth", Device.DeviceCategory.Instrument,
+			[["note_fx", "Note FX", "note"], ["fx", "FX", "audio"]]],
+		["sonara.builtin.delay", "Delay", Device.DeviceCategory.Effect, [["fb_fx", "FB FX", "loop"]]],
+		["sonara.builtin.reverb", "Reverb", Device.DeviceCategory.Effect,
+			[["tank_fx", "Tank FX", "loop"], ["wet_fx", "Wet FX", "audio"]]],
+	]
+	for c in cases:
+		var device := _device(c[0], c[1], c[2])
+		device.is_container = true
+		var keys: Array = []
+		for spec in c[3]:
+			device.slots.append({"key": spec[0], "name": spec[1], "kind": spec[2]})
+			keys.append(spec[0])
+		var params: Array = [_float(0, "Mix"), _float(1, "Time"), _float(2, "Level"), _float(3, "Tone")]
+		for p in params:
+			device.add_parameter(p)
+		_assert(device.uses_simple_view(), "%s uses the Simple View" % c[1])
+		var layout := SimpleLayoutGenerator.generate(device, params)
+		_check_layout(layout, params, c[1] + " with slots")
+		var main: Dictionary = layout.pages[0]
+		var tiles: Array = []
+		for control in main.controls:
+			if control.kind == SimpleControlKinds.SLOT:
+				tiles.append(control)
+		var tile_keys: Array = tiles.map(func(t): return t.slot)
+		tiles.sort_custom(func(a, b): return a.rect[1] < b.rect[1])
+		_assert(tiles.map(func(t): return t.slot) == keys, "%s: tiles in table order (%s)" % [c[1], tile_keys])
+		_assert(main.groups.back().id == "slots", "%s: the last group on Main is the slots group" % c[1])
+		var tile_left := 999
+		var other_right := 0
+		for control in main.controls:
+			var rect := GridPacker.rect_from_array(control.rect)
+			if control.kind == SimpleControlKinds.SLOT:
+				tile_left = mini(tile_left, rect.position.x)
+				_assert(control.group == "slots" and control.params.is_empty(), "%s: tile is in the slots group" % c[1])
+			else:
+				other_right = maxi(other_right, rect.end.x)
+		_assert(tile_left >= other_right, "%s: tiles sit right of every other control" % c[1])
+		for i in range(1, layout.pages.size()):
+			for control in layout.pages[i].controls:
+				_assert(control.kind != SimpleControlKinds.SLOT, "%s: no tile on page %d" % [c[1], i])
+		_assert(layout.param_ids().size() == params.size(), "%s: param_ids skips the tiles" % c[1])
+	var plain := SimpleLayoutGenerator.generate(_device("x.plain", "Plain"), [_float(0, "A")])
+	for control in plain.pages[0].controls:
+		_assert(control.kind != SimpleControlKinds.SLOT, "a device without slots gets no tiles")
