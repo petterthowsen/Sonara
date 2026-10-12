@@ -2830,4 +2830,103 @@ mod tests {
             assert!(!m.has_note_driven_modulator(), "{}", kind.id());
         }
     }
+
+    /// A PolySynth with a Delay in its FX slot, wrapped, plus an LFO (when `route` is set)
+    /// routed to the Delay's Mix through the slot.
+    fn synth_with_fx_delay(route: bool) -> Vec<Box<dyn AudioDevice>> {
+        use crate::audio::devices::PolySynthDevice;
+        let mut synth = PolySynthDevice::new(SR);
+        synth.prepare(SR, 512);
+        {
+            let fx = synth
+                .as_container_mut()
+                .and_then(|c| c.child_mut(1))
+                .expect("FX slot");
+            fx.as_container_mut().unwrap().insert_child(0, delay());
+        }
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(synth)];
+        wrap(&mut devices);
+        if route {
+            let modulated = devices[0].as_modulated_mut().unwrap();
+            modulated.add_modulator(0, ModulatorKind::Lfo).unwrap();
+            modulated
+                .set_modulator_param(0, LFO_RATE, 1.0)
+                .expect("rate");
+            modulated
+                .set_modulator_route(0, "child/1.0/param/41", 0.7)
+                .expect("route into the FX slot");
+            assert_eq!(
+                modulated.modulator_routes(),
+                vec![(0, "child/1.0/param/41".to_string(), 0.7)]
+            );
+        }
+        devices
+    }
+
+    #[test]
+    fn route_reaches_slot_device() {
+        let input = vec![0.0f32; 512 * 2];
+        let run = |route: bool| -> Vec<f32> {
+            let mut devices = synth_with_fx_delay(route);
+            devices[0].send_note_event(&NoteEvent::test_on(60, 100), 0);
+            let mut all = Vec::new();
+            let mut out = vec![0.0f32; 512 * 2];
+            for _ in 0..24 {
+                devices[0].process_block(&input, &mut out, 512);
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        let reference = run(false);
+        let modulated = run(true);
+        assert!(reference.iter().any(|s| s.abs() > 0.01), "no sound");
+        assert_ne!(
+            modulated, reference,
+            "the route into the FX slot had no effect"
+        );
+
+        // A target that isn't in a slot, or isn't modulatable, is still refused.
+        let mut devices = synth_with_fx_delay(true);
+        let modulated = devices[0].as_modulated_mut().unwrap();
+        assert!(modulated
+            .set_modulator_route(0, "child/1.5/param/41", 0.5)
+            .is_err());
+        assert!(modulated
+            .set_modulator_route(0, "child/1.0/param/999", 0.5)
+            .is_err());
+    }
+
+    #[test]
+    fn wrap_and_unwrap_work_on_slotted_devices_and_their_slot_devices() {
+        // The slotted device itself.
+        let mut devices = synth_with_fx_delay(false);
+        unwrap_at_path(&mut devices, &DevicePath::root(0)).expect("unwrap synth");
+        assert_eq!(devices[0].device_id(), "sonara.builtin.polysynth");
+        assert_eq!(devices[0].as_container().unwrap().child_count(), 2);
+        wrap(&mut devices);
+        assert!(devices[0].as_modulated_mut().is_some());
+
+        // A device inside one of its slots.
+        let slot_device = DevicePath::from_indices([0, 1, 0]);
+        wrap_at_path(&mut devices, &slot_device, SR).expect("wrap slot device");
+        let fx = devices[0]
+            .as_container_mut()
+            .and_then(|c| c.child_mut(1))
+            .unwrap();
+        assert!(fx
+            .as_container_mut()
+            .unwrap()
+            .child_mut(0)
+            .unwrap()
+            .as_modulated_mut()
+            .is_some());
+        unwrap_at_path(&mut devices, &slot_device).expect("unwrap slot device");
+        let fx = devices[0]
+            .as_container_mut()
+            .and_then(|c| c.child_mut(1))
+            .unwrap();
+        let inner = fx.as_container_mut().unwrap().child_mut(0).unwrap();
+        assert!(inner.as_modulated_mut().is_none());
+        assert_eq!(inner.device_id(), "sonara.builtin.delay");
+    }
 }

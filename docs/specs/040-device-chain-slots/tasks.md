@@ -154,7 +154,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test reverb` passes
   - _Depends on_: T-009, T-007
 
-- [ ] **T-011** [REQ-032] A modulator route into a slot device.
+- [x?] **T-011** [REQ-032] A modulator route into a slot device.
   - Test `modulation::host::tests::route_reaches_slot_device`: a wrapped PolySynth's LFO is routed
     to `child/1/child/0` param Mix of a Delay, and the Delay's effective Mix moves.
   - Fix the route resolution if the test fails.
