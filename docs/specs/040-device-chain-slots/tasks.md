@@ -75,7 +75,7 @@ with `Godot/tests/run_all.sh <word>`.
 
 ## Phase 2 — engine: the three devices
 
-- [ ] **T-006** [REQ-001–006, REQ-012, REQ-013] PolySynth Note FX and FX.
+- [x?] **T-006** [REQ-001–006, REQ-012, REQ-013] PolySynth Note FX and FX.
   - Add `slots: DeviceSlots` with `POLYSYNTH_SLOTS` (`note_fx` Note, `fx` Audio).
   - `send_note_event` routes through Note FX with `route_note`. A note that falls through is
     queued directly. `send_cc` also calls `route_cc`.
@@ -94,7 +94,7 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `cargo test polysynth` passes; `cargo fmt`
   - _Depends on_: T-003, T-004
 
-- [ ] **T-007** [REQ-006, REQ-009] Whole-block path for plugins in audio slots.
+- [x?] **T-007** [REQ-006, REQ-009] Whole-block path for plugins in audio slots.
   - `has_async_blocks()` is true while an audio slot `has_async`.
   - `begin_block` processes the whole block synchronously into `slot_buf` and returns true, and
     `finish_block` copies `slot_buf` out. Do this for the PolySynth here, and for the Reverb

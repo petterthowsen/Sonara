@@ -158,6 +158,28 @@ impl DeviceSlots {
             .chain_children_mut()
     }
 
+    /// The devices in note slot `index` together with the note sink, as a split borrow for
+    /// `run_note_phase(children, n, Some(sink))` and the sink-taking release helpers.
+    pub fn children_and_sink(
+        &mut self,
+        index: usize,
+    ) -> Option<(&mut Vec<Box<dyn AudioDevice>>, &mut NoteBuffer)> {
+        let children = self
+            .chains
+            .get_mut(index)?
+            .as_container_mut()?
+            .chain_children_mut()?;
+        Some((children, &mut self.note_sink))
+    }
+
+    /// Number of devices (enabled or not) in slot `index`.
+    pub fn len(&self, index: usize) -> usize {
+        self.chains
+            .get(index)
+            .and_then(|c| c.as_container())
+            .map_or(0, |c| c.child_count())
+    }
+
     /// True when slot `index` holds at least one enabled device. Bypassed devices don't count,
     /// so a slot with only bypassed devices keeps the device on its plain code path. Not
     /// cached: a child's bypass toggles without its parent being told.

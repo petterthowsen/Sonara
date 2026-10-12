@@ -16,9 +16,13 @@
 mod params;
 mod voice;
 
+use crate::audio::devices::container::DeviceContainer;
+use crate::audio::devices::note_fx::routing::{
+    release_note_effect_at_into, release_note_effects_into, route_cc, route_note, run_note_phase,
+};
 use crate::audio::devices::{
-    AudioDevice, DefaultModulator, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo,
-    ParamValue, PortFlow,
+    AudioDevice, DefaultModulator, DeviceCategory, DeviceSlots, DeviceVariant, MidiPort, ParamId,
+    ParamInfo, ParamValue, PortFlow, SlotKind, SlotSpec,
 };
 use crate::audio::dsp::SmoothedParam;
 use crate::audio::midi_types::NoteEvent;
@@ -36,6 +40,23 @@ const VOICE_BUDGET: usize = 64;
 const DEFAULT_MAX_FRAMES: usize = 4096;
 /// Sentinel key in the queued MIDI list marking a choke (real keys are 0–127).
 const CHOKE_KEY: u8 = 255;
+/// The PolySynth's device slots (spec 040): notes pass through Note FX before the voices, and
+/// the rendered output passes through FX.
+static POLYSYNTH_SLOTS: [SlotSpec; 2] = [
+    SlotSpec {
+        key: "note_fx",
+        name: "Note FX",
+        kind: SlotKind::Note,
+    },
+    SlotSpec {
+        key: "fx",
+        name: "FX",
+        kind: SlotKind::Audio,
+    },
+];
+const NOTE_FX_SLOT: usize = 0;
+const FX_SLOT: usize = 1;
+
 /// The default Filter Env → Cutoff amount (real PolySynth's default patch).
 const DEFAULT_FILTER_ENV_AMOUNT: f32 = 0.35;
 
@@ -124,6 +145,12 @@ pub struct PolySynthDevice {
     level_buf: [Vec<f32>; 2],
     noise_buf: Vec<f32>,
     cutoff_buf: Vec<f32>,
+    /// Stereo scratch for the FX slot's input (and, on the whole-block path, the rendered
+    /// voices).
+    fx_buf: Vec<f32>,
+
+    /// Note FX and FX (spec 040).
+    slots: DeviceSlots,
 }
 
 fn smoothed(value: f32, sample_rate: f32) -> SmoothedParam {
@@ -162,6 +189,8 @@ impl PolySynthDevice {
             level_buf: [Vec::new(), Vec::new()],
             noise_buf: Vec::new(),
             cutoff_buf: Vec::new(),
+            fx_buf: Vec::new(),
+            slots: DeviceSlots::new(&POLYSYNTH_SLOTS, DEFAULT_MAX_FRAMES),
         };
         dev.allocate(sample_rate, DEFAULT_MAX_FRAMES);
         dev
@@ -185,6 +214,8 @@ impl PolySynthDevice {
             buf.clear();
             buf.resize(frames, 0.0);
         }
+        self.fx_buf.clear();
+        self.fx_buf.resize(frames * 2, 0.0);
         self.env_dirty = true;
     }
 
@@ -552,16 +583,62 @@ fn retarget(smoother: &mut SmoothedParam, value: f32) {
     }
 }
 
-impl AudioDevice for PolySynthDevice {
-    fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+impl PolySynthDevice {
+    /// Queue a note for the voices at `frame_offset`.
+    fn queue_note(&mut self, event: &NoteEvent, frame_offset: usize) {
+        match *event {
+            NoteEvent::On { key, velocity, .. } => {
+                self.queued_midi.push((frame_offset, key, velocity, true))
+            }
+            NoteEvent::Off { key, release, .. } => {
+                self.queued_midi.push((frame_offset, key, release, false))
+            }
+            NoteEvent::Expression { .. } => {}
+        }
+    }
+
+    /// Queue the notes that fell off the end of Note FX. They never allocate: a full queue
+    /// drops the note with a warning.
+    fn drain_note_sink(&mut self, sample_count: usize) {
+        for i in 0..self.slots.note_sink.len() {
+            let note = self.slots.note_sink.as_slice()[i];
+            if self.queued_midi.len() >= self.queued_midi.capacity() {
+                tracing::warn!("PolySynth note queue full, Note FX output dropped");
+                break;
+            }
+            self.queue_note(&note.event, note.frame.min(sample_count.saturating_sub(1)));
+        }
+        self.slots.note_sink.clear();
+    }
+
+    /// Run the output through the FX slot: `outputs` is both the input and the result.
+    fn run_fx(&mut self, outputs: &mut [f32], sample_count: usize) {
+        let n = sample_count * 2;
+        self.fx_buf[..n].copy_from_slice(&outputs[..n]);
+        if let Some(chain) = self.slots.chain_mut(FX_SLOT) {
+            chain.process_block(&self.fx_buf[..n], &mut outputs[..n], sample_count);
+        }
+    }
+
+    /// Everything but the FX slot: the Note FX phase, then the voices. Returns the frames
+    /// rendered (0 when the device is inactive or bypassed, which outputs silence).
+    fn render(&mut self, outputs: &mut [f32], sample_count: usize) -> usize {
         outputs[..sample_count * 2].fill(0.0);
         if !self.is_active || !self.is_enabled {
-            return;
+            return 0;
         }
 
         // Scratch is sized in `prepare`; never grow it here. A block larger than that renders
         // only what fits and leaves the rest silent.
         let sample_count = sample_count.min(self.mix_l.len());
+
+        // Note FX: each note effect emits this block's notes; what falls off the end plays.
+        if self.slots.len(NOTE_FX_SLOT) > 0 {
+            if let Some((children, sink)) = self.slots.children_and_sink(NOTE_FX_SLOT) {
+                run_note_phase(children, sample_count, Some(sink));
+            }
+            self.drain_note_sink(sample_count);
+        }
 
         if self.env_dirty {
             self.apply_envelopes();
@@ -623,18 +700,116 @@ impl AudioDevice for PolySynthDevice {
         // Return the (cleared) queue so the next `send_note_event` doesn't allocate
         events.clear();
         self.queued_midi = events;
+        sample_count
+    }
+}
+
+impl AudioDevice for PolySynthDevice {
+    fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        let rendered = self.render(outputs, sample_count);
+        if rendered > 0 && self.slots.is_live(FX_SLOT) {
+            self.run_fx(outputs, rendered);
+        }
+    }
+
+    /// A plugin in the FX slot gets one call per host block: render the voices and run the
+    /// slot synchronously for the whole block (the wrapper doesn't split it), and hand the
+    /// result to `finish_block`.
+    fn begin_block(&mut self, _inputs: &[f32], sample_count: usize) -> bool {
+        if !self.slots.has_async(FX_SLOT) {
+            return false;
+        }
+        // The scratch moves out while `render` borrows the device, and goes back after.
+        let mut voices = core::mem::take(&mut self.fx_buf);
+        let frames = sample_count
+            .min(voices.len() / 2)
+            .min(self.slots.slot_buf.len() / 2);
+        let rendered = self.render(&mut voices, frames);
+        let n = rendered * 2;
+        let mut result = core::mem::take(&mut self.slots.slot_buf);
+        if rendered > 0 && self.slots.is_live(FX_SLOT) {
+            if let Some(chain) = self.slots.chain_mut(FX_SLOT) {
+                chain.process_block(&voices[..n], &mut result[..n], rendered);
+            }
+        } else {
+            result[..n].copy_from_slice(&voices[..n]);
+        }
+        result[n..frames * 2].fill(0.0);
+        self.slots.slot_buf = result;
+        self.fx_buf = voices;
+        true
+    }
+
+    fn finish_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        let n = (sample_count * 2)
+            .min(outputs.len())
+            .min(self.slots.slot_buf.len());
+        outputs[..n].copy_from_slice(&self.slots.slot_buf[..n]);
+        outputs[n..sample_count * 2].fill(0.0);
+    }
+
+    fn has_async_blocks(&self) -> bool {
+        self.slots.has_async(FX_SLOT)
     }
 
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
-        match *event {
-            NoteEvent::On { key, velocity, .. } => {
-                self.queued_midi.push((frame_offset, key, velocity, true))
+        if self.is_enabled && self.slots.len(NOTE_FX_SLOT) > 0 {
+            if let Some(children) = self.slots.children_mut(NOTE_FX_SLOT) {
+                if !route_note(children, event, frame_offset) {
+                    return; // a note effect took it; its output arrives in the note phase
+                }
             }
-            NoteEvent::Off { key, release, .. } => {
-                self.queued_midi.push((frame_offset, key, release, false))
-            }
-            NoteEvent::Expression { .. } => {}
         }
+        self.queue_note(event, frame_offset);
+    }
+
+    fn send_cc(&mut self, cc: u8, value14: u16, frame_offset: usize) {
+        if self.is_enabled && self.slots.len(NOTE_FX_SLOT) > 0 {
+            if let Some(children) = self.slots.children_mut(NOTE_FX_SLOT) {
+                route_cc(children, cc, value14, frame_offset);
+            }
+        }
+    }
+
+    fn device_slots(&self) -> &'static [SlotSpec] {
+        &POLYSYNTH_SLOTS
+    }
+
+    /// Command thread: a note effect in Note FX is about to go. Its note-offs fall off the end
+    /// of the slot and reach the voices at frame 0.
+    fn release_slot_notes(&mut self, slot: usize, index: Option<usize>) {
+        if slot != NOTE_FX_SLOT {
+            return;
+        }
+        if let Some((children, sink)) = self.slots.children_and_sink(NOTE_FX_SLOT) {
+            match index {
+                Some(i) => {
+                    release_note_effect_at_into(children, i, Some(sink));
+                }
+                None => {
+                    release_note_effects_into(children, Some(sink));
+                }
+            }
+        }
+        // Note-offs queued at frame 0; the next block plays them.
+        self.sleep_state.mark_activity();
+        for i in 0..self.slots.note_sink.len() {
+            let note = self.slots.note_sink.as_slice()[i];
+            self.queue_note(&note.event, 0);
+        }
+        self.slots.note_sink.clear();
+    }
+
+    fn as_container(&self) -> Option<&dyn DeviceContainer> {
+        Some(&self.slots)
+    }
+
+    fn as_container_mut(&mut self) -> Option<&mut dyn DeviceContainer> {
+        Some(&mut self.slots)
+    }
+
+    fn is_container(&self) -> bool {
+        true
     }
 
     fn choke(&mut self, frame_offset: usize) {
@@ -818,6 +993,7 @@ impl AudioDevice for PolySynthDevice {
         self.held.clear();
         self.note_counter = 0;
         self.last_note = None;
+        self.slots.reset();
     }
 
     /// Rebuild the voices and scratch at the new rate (sounding notes stop).
@@ -825,6 +1001,7 @@ impl AudioDevice for PolySynthDevice {
         self.sample_rate = sample_rate;
         self.allocate(sample_rate, max_frames.max(DEFAULT_MAX_FRAMES));
         self.rebuild_free_lfos();
+        self.slots.prepare(max_frames.max(DEFAULT_MAX_FRAMES));
         let p = &self.params;
         let cutoff_slot = params::slot_of(CUTOFF);
         self.level_smoothed = [
@@ -864,8 +1041,9 @@ impl AudioDevice for PolySynthDevice {
 
     // === Sleep/Wake System ===
 
+    /// Awake while a note effect in Note FX is live: it makes notes without any input.
     fn is_sleeping(&self) -> bool {
-        self.sleep_state.is_sleeping()
+        self.sleep_state.is_sleeping() && !self.slots.is_live(NOTE_FX_SLOT)
     }
 
     fn mark_activity(&mut self) {
@@ -873,7 +1051,10 @@ impl AudioDevice for PolySynthDevice {
     }
 
     fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
-        self.sleep_state.check_activity(has_audio_activity)
+        // A live Note FX device keeps the synth awake; FX tails keep it awake through the
+        // output they produce.
+        let live = self.slots.is_live(NOTE_FX_SLOT);
+        self.sleep_state.check_activity(has_audio_activity || live)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -2180,5 +2361,410 @@ mod bench {
             elapsed,
             elapsed / 10.0 * 100.0
         );
+    }
+}
+
+/// Device slots (spec 040): Note FX before the voices, FX after them.
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+    use crate::audio::devices::has_audio_signal;
+    use crate::audio::devices::note_fx::routing::test_devices::{CcRecorder, Shift};
+    use crate::audio::devices::{create_note_effect, AudioDevice};
+    use crate::audio::modulation::host::ModulatedDevice;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const SR: f32 = 48_000.0;
+    const BLOCK: usize = 256;
+
+    fn synth() -> PolySynthDevice {
+        let mut dev = PolySynthDevice::new(SR);
+        dev.prepare(SR, BLOCK);
+        dev
+    }
+
+    /// An effect that scales its input; `Tail` below rings on after the input stops.
+    struct Gain(f32, bool);
+
+    impl Gain {
+        fn new(gain: f32) -> Self {
+            Self(gain, true)
+        }
+    }
+
+    impl AudioDevice for Gain {
+        fn is_enabled(&self) -> bool {
+            self.1
+        }
+        fn set_enabled(&mut self, enabled: bool) {
+            self.1 = enabled;
+        }
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            for i in 0..n * 2 {
+                outputs[i] = inputs[i] * self.0;
+            }
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.gain"
+        }
+        fn device_name(&self) -> &str {
+            "Gain"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// A one-pole feedback effect: its output rings on after the input stops.
+    struct Tail {
+        last: [f32; 2],
+    }
+
+    impl AudioDevice for Tail {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            for i in 0..n {
+                for c in 0..2 {
+                    self.last[c] = inputs[i * 2 + c] + 0.9999 * self.last[c];
+                    outputs[i * 2 + c] = self.last[c] * 0.1;
+                }
+            }
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.tail"
+        }
+        fn device_name(&self) -> &str {
+            "Tail"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// A plugin stand-in: `begin_block` takes the block, `finish_block` writes input * 0.5.
+    struct AsyncHalf {
+        begins: Arc<AtomicUsize>,
+        plain: Arc<AtomicUsize>,
+    }
+
+    impl AudioDevice for AsyncHalf {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            self.plain.fetch_add(1, Ordering::Relaxed);
+            for i in 0..n * 2 {
+                outputs[i] = inputs[i] * 0.5;
+            }
+        }
+        fn begin_block(&mut self, _inputs: &[f32], _n: usize) -> bool {
+            self.begins.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], n: usize) {
+            for i in 0..n * 2 {
+                outputs[i] = inputs[i] * 0.5;
+            }
+        }
+        fn has_async_blocks(&self) -> bool {
+            true
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.async"
+        }
+        fn device_name(&self) -> &str {
+            "Async"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn put(dev: &mut PolySynthDevice, slot: usize, device: Box<dyn AudioDevice>) {
+        dev.slots.children_mut(slot).unwrap().push(device);
+    }
+
+    fn render_blocks(dev: &mut PolySynthDevice, blocks: usize) -> Vec<f32> {
+        let mut all = Vec::new();
+        let mut out = vec![0.0; BLOCK * 2];
+        for _ in 0..blocks {
+            dev.process_block(&[], &mut out, BLOCK);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    fn first_nonzero(samples: &[f32]) -> Option<usize> {
+        (0..samples.len() / 2).find(|&i| samples[i * 2].abs() > 1e-9)
+    }
+
+    #[test]
+    fn slots_exist_and_are_fixed() {
+        let mut dev = synth();
+        let specs = dev.device_slots();
+        assert_eq!(specs.len(), 2);
+        assert_eq!((specs[0].key, specs[0].kind), ("note_fx", SlotKind::Note));
+        assert_eq!((specs[1].key, specs[1].kind), ("fx", SlotKind::Audio));
+        assert!(dev.is_container());
+        let container = dev.as_container_mut().unwrap();
+        assert_eq!(container.child_count(), 2);
+        container.insert_child(0, Box::new(Gain::new(1.0)));
+        assert_eq!(container.child_count(), 2);
+        assert!(container.remove_child(0).is_none());
+        assert_eq!(dev.slots.len(0) + dev.slots.len(1), 0);
+    }
+
+    #[test]
+    fn empty_slots_are_sample_identical() {
+        // The reference is the voice render alone, without any slot processing.
+        let mut reference = synth();
+        let mut dev = synth();
+        for d in [&mut reference, &mut dev] {
+            d.send_note_event(&NoteEvent::test_on(60, 100), 37);
+            d.send_note_event(&NoteEvent::test_on(67, 90), 120);
+        }
+        let mut expected = Vec::new();
+        let mut out = vec![0.0; BLOCK * 2];
+        for _ in 0..8 {
+            reference.render(&mut out, BLOCK);
+            expected.extend_from_slice(&out);
+        }
+        assert_eq!(render_blocks(&mut dev, 8), expected);
+    }
+
+    #[test]
+    fn note_fx_transposes_at_frame() {
+        let mut shifted = synth();
+        put(&mut shifted, NOTE_FX_SLOT, Box::new(Shift::new(12)));
+        let mut plain = synth();
+        shifted.send_note_event(&NoteEvent::test_on(60, 100), 100);
+        plain.send_note_event(&NoteEvent::test_on(72, 100), 100);
+        let got = render_blocks(&mut shifted, 4);
+        let want = render_blocks(&mut plain, 4);
+        assert_eq!(first_nonzero(&got), first_nonzero(&want));
+        assert!(first_nonzero(&got).unwrap() >= 100);
+        assert_eq!(got, want, "the transposed note is the plain C4 note");
+        assert_eq!(sounding_keys(&shifted), vec![72]);
+    }
+
+    fn sounding_keys(dev: &PolySynthDevice) -> Vec<u8> {
+        let mut keys: Vec<u8> = dev
+            .voices
+            .iter()
+            .filter(|v| v.gate)
+            .map(|v| v.note)
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    #[test]
+    fn note_fx_release_on_remove() {
+        let mut dev = synth();
+        let mut arp = create_note_effect("sonara.builtin.arpeggiator", SR, BLOCK).unwrap();
+        arp.set_transport(&Transport {
+            tempo: 120.0,
+            ..Transport::default()
+        });
+        put(&mut dev, NOTE_FX_SLOT, arp);
+        for key in [60u8, 64, 67] {
+            dev.send_note_event(&NoteEvent::test_on(key, 100), 0);
+        }
+        // The arpeggiator sounds notes of its own over a few blocks.
+        let mut seen_held = false;
+        for _ in 0..200 {
+            render_blocks(&mut dev, 1);
+            seen_held |= !sounding_keys(&dev).is_empty();
+        }
+        assert!(seen_held, "the arpeggiator never sounded a note");
+        // Make sure a note is held right now by running until one is.
+        let mut guard = 0;
+        while sounding_keys(&dev).is_empty() && guard < 400 {
+            render_blocks(&mut dev, 1);
+            guard += 1;
+        }
+        assert!(!sounding_keys(&dev).is_empty(), "no arpeggiated note held");
+
+        // The command thread releases, then removes, the note effect.
+        dev.release_slot_notes(NOTE_FX_SLOT, Some(0));
+        dev.slots.children_mut(NOTE_FX_SLOT).unwrap().remove(0);
+        render_blocks(&mut dev, 1);
+        assert!(
+            sounding_keys(&dev).is_empty(),
+            "voices left held: {:?}",
+            sounding_keys(&dev)
+        );
+    }
+
+    #[test]
+    fn cc_reaches_note_fx() {
+        let mut dev = synth();
+        let (recorder, log, _) = CcRecorder::new(true);
+        put(&mut dev, NOTE_FX_SLOT, Box::new(recorder));
+        dev.send_cc(1, 8192, 5);
+        assert_eq!(log.lock().unwrap().as_slice(), &[(1, 8192, 5)]);
+    }
+
+    #[test]
+    fn fx_slot_processes_output() {
+        let mut reference = synth();
+        let mut dev = synth();
+        put(&mut dev, FX_SLOT, Box::new(Gain::new(0.5)));
+        reference.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        let want = render_blocks(&mut reference, 4);
+        let got = render_blocks(&mut dev, 4);
+        assert!(want.iter().any(|s| s.abs() > 0.01));
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w * 0.5).abs() < 1e-6, "{g} vs {}", w * 0.5);
+        }
+    }
+
+    #[test]
+    fn bypass_skips_slots() {
+        // A bypassed device inside a slot is skipped on its own.
+        let mut reference = synth();
+        let mut dev = synth();
+        let mut silent = Box::new(Gain::new(0.0));
+        silent.set_enabled(false);
+        put(&mut dev, FX_SLOT, silent);
+        assert!(!dev.slots.is_live(FX_SLOT));
+        reference.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        let want = render_blocks(&mut reference, 2);
+        assert_eq!(render_blocks(&mut dev, 2), want);
+
+        // A bypassed PolySynth outputs silence and its slots are skipped with it.
+        let mut dev = synth();
+        let (recorder, log, _) = CcRecorder::new(true);
+        put(&mut dev, NOTE_FX_SLOT, Box::new(recorder));
+        put(&mut dev, FX_SLOT, Box::new(Gain::new(1.0)));
+        dev.set_enabled(false);
+        dev.send_cc(1, 100, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "CC reached a bypassed synth's slot"
+        );
+        assert!(render_blocks(&mut dev, 2).iter().all(|s| *s == 0.0));
+    }
+
+    /// Block index at which a synth playing one short note goes to sleep, calling
+    /// `update_sleep_state` with its output like the chain does. Panics if it sleeps on a
+    /// non-silent block.
+    fn blocks_until_asleep(dev: &mut PolySynthDevice) -> usize {
+        dev.sleep_state.set_sleep_timeout(Duration::ZERO);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        dev.send_note_event(&NoteEvent::test_off(60), BLOCK - 1);
+        let mut out = vec![0.0; BLOCK * 2];
+        for block in 0..2_000 {
+            dev.process_block(&[], &mut out, BLOCK);
+            let loud = has_audio_signal(&out);
+            dev.update_sleep_state(loud);
+            if dev.is_sleeping() {
+                assert!(!loud, "went to sleep on a non-silent block");
+                return block;
+            }
+        }
+        panic!("never slept");
+    }
+
+    #[test]
+    fn sleep_waits_for_fx_tail() {
+        let plain = blocks_until_asleep(&mut synth());
+        let mut dev = synth();
+        put(&mut dev, FX_SLOT, Box::new(Tail { last: [0.0; 2] }));
+        let with_tail = blocks_until_asleep(&mut dev);
+        assert!(
+            with_tail > plain + 5,
+            "the synth slept at block {with_tail}, barely after {plain} without the tail"
+        );
+    }
+
+    #[test]
+    fn async_slot_takes_whole_block_path() {
+        let begins = Arc::new(AtomicUsize::new(0));
+        let plain = Arc::new(AtomicUsize::new(0));
+        let mut inner = synth();
+        put(
+            &mut inner,
+            FX_SLOT,
+            Box::new(AsyncHalf {
+                begins: begins.clone(),
+                plain: plain.clone(),
+            }),
+        );
+        assert!(inner.has_async_blocks());
+        let mut reference = synth();
+        reference.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        inner.send_note_event(&NoteEvent::test_on(60, 100), 0);
+
+        let mut wrapped = ModulatedDevice::new(Box::new(inner), SR);
+        assert!(wrapped.has_async_blocks());
+        let blocks = 4;
+        let mut want = Vec::new();
+        let mut got = Vec::new();
+        let mut out = vec![0.0; 512 * 2];
+        let mut want_out = vec![0.0; 512 * 2];
+        for _ in 0..blocks {
+            reference.render(&mut want_out, 512);
+            want.extend(want_out.iter().map(|s| s * 0.5));
+            assert!(wrapped.begin_block(&[], 512));
+            wrapped.finish_block(&[], &mut out, 512);
+            got.extend_from_slice(&out);
+        }
+        // One call per host block (not one per 64-frame control step), and never the
+        // synchronous path.
+        assert_eq!(
+            begins.load(Ordering::Relaxed),
+            blocks,
+            "one begin_block per block"
+        );
+        assert_eq!(plain.load(Ordering::Relaxed), 0);
+        assert!(got.iter().any(|s| s.abs() > 0.01));
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() < 1e-6);
+        }
     }
 }
