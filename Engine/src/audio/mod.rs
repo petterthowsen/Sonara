@@ -18,6 +18,7 @@ pub mod pipewire;
 pub mod preview;
 pub mod processing;
 pub mod project;
+pub mod realtime;
 pub mod render;
 pub mod render_scratch;
 pub mod rt_debug;

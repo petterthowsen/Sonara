@@ -719,6 +719,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_no_alloc",
+ "audio_thread_priority",
  "bincode",
  "chrono",
  "clack-extensions",

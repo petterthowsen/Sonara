@@ -49,6 +49,12 @@ const INPUT_EVENT_CAPACITY: usize = 256;
 /// How long `set_processor` / `take_processor` wait for the audio thread to answer.
 const HANDOFF_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Period and rate handed to rtkit for the host audio thread. The host serves whatever block
+/// size the engine publishes and doesn't know the device rate at spawn, so these are typical
+/// values; rtkit only uses them to size the realtime time budget.
+const HOST_PERIOD_FRAMES: u32 = 512;
+const HOST_SAMPLE_RATE: u32 = 48_000;
+
 /// Commands from the host's main thread to its audio thread, each for one instance.
 pub enum HostAudioCommand {
     /// Hand over a freshly activated processor and the instance's shared block.
@@ -891,6 +897,17 @@ pub fn spawn(doorbell: Arc<HostSharedMemory>) -> std::io::Result<AudioThreadHand
     thread::Builder::new()
         .name("plugin-audio".to_string())
         .spawn(move || {
+            // Promote before anything else: the rtkit call blocks and must not run on a thread
+            // that is already realtime. The handle lives until the thread exits. A denial is
+            // only recorded; the thread runs on normally.
+            let (state, _rt_handle) = crate::audio::realtime::promote_current_thread(
+                "plugin-audio",
+                HOST_PERIOD_FRAMES,
+                HOST_SAMPLE_RATE,
+            );
+            doorbell
+                .audio_realtime()
+                .store(state.as_u32(), Ordering::Release);
             let mut worker = AudioWorker::new(doorbell);
             info!("Plugin audio thread ready");
             worker.run(&rx);

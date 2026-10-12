@@ -156,6 +156,13 @@ impl HostSharedMemory {
         unsafe { &*(self.memory.as_ptr() as *const AtomicU32) }
     }
 
+    /// The host audio thread's realtime state: 0 unknown, 1 granted, 2 denied.
+    pub fn audio_realtime(&self) -> &AtomicU32 {
+        // SAFETY: the mapping is at least `size_of::<Doorbell>()` bytes, and `Doorbell` is
+        // `repr(C)` with `audio_realtime` right after the word.
+        unsafe { &(*(self.memory.as_ptr() as *const super::protocol::Doorbell)).audio_realtime }
+    }
+
     /// Bump the doorbell and wake anyone waiting on it.
     pub fn ring(&self) {
         super::futex::ring(self.doorbell());

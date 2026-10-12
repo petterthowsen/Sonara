@@ -582,14 +582,18 @@ impl Default for BlockControl {
 #[repr(C)]
 pub struct Doorbell {
     pub word: std::sync::atomic::AtomicU32,
-    pub _reserved: [u8; 60],
+    /// Realtime state of the host's audio thread, written once by the host at spawn:
+    /// 0 unknown, 1 granted, 2 denied.
+    pub audio_realtime: std::sync::atomic::AtomicU32,
+    pub _reserved: [u8; 56],
 }
 
 impl Default for Doorbell {
     fn default() -> Self {
         Self {
             word: std::sync::atomic::AtomicU32::new(0),
-            _reserved: [0; 60],
+            audio_realtime: std::sync::atomic::AtomicU32::new(0),
+            _reserved: [0; 56],
         }
     }
 }
@@ -597,6 +601,14 @@ impl Default for Doorbell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn doorbell_layout_is_unchanged() {
+        assert_eq!(std::mem::size_of::<Doorbell>(), 64);
+        assert_eq!(std::mem::align_of::<Doorbell>(), 4);
+        assert_eq!(std::mem::offset_of!(Doorbell, word), 0);
+        assert_eq!(std::mem::offset_of!(Doorbell, audio_realtime), 4);
+    }
 
     #[test]
     fn block_event_note_round_trips_id() {
