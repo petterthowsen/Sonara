@@ -377,6 +377,11 @@ static func _rich_text(t: Theme, _p: ThemePalette) -> void:
 # COMPONENT TYPES
 # ---------------------------------------------------------------------------
 
+## Background of HSlider, HDualSlider and Meter (bars and fader): pure black at 50%, so a
+## tinted mixer strip shows through.
+const SLIDER_TROUGH := Color(0, 0, 0, 0.5)
+
+
 ## Colour items for the custom-drawn controls, one theme type per control. Item names are the
 ## control's colour property without the `_color` suffix (the `Ruler` type keeps its older names).
 ## Each control caches these on NOTIFICATION_THEME_CHANGED.
@@ -400,8 +405,8 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"handle": handle,
 		&"overlay": _with_alpha(handle, 0.55),
 	})
-	for type in [&"VolumeSlider", &"HorSlider"]:
-		_set_colors(t, type, {&"bg": well, &"fill": accent, &"handle": handle})
+	_set_colors(t, &"VolumeSlider", {&"bg": well, &"fill": accent, &"handle": handle})
+	_set_colors(t, &"HorSlider", {&"bg": SLIDER_TROUGH, &"fill": accent, &"handle": handle})
 	_set_colors(t, &"CompactSlider", {
 		&"text": p.role(&"text"),
 		&"bg": well,
@@ -410,13 +415,13 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"mod_live": _with_alpha(p.role(&"text_bright"), 0.9),
 	})
 	_set_colors(t, &"HDualSlider", {
-		&"bg": well,
+		&"bg": SLIDER_TROUGH,
 		&"fill": accent,
 		&"alt_fill": p.role(&"accent_secondary"),
 		&"handle": handle,
 	})
 	_set_colors(t, &"Meter", {
-		&"bar_bg": well,
+		&"bar_bg": SLIDER_TROUGH,
 		&"bar_low": accent,
 		&"bar_high": p.role(&"meter_warn"),
 		&"bar_clip": p.role(&"meter_clip"),
@@ -424,7 +429,7 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"tick_minor": _with_alpha(p.role(&"text"), 0.25),
 		&"zero_db": _with_alpha(p.role(&"text_bright"), 0.75),
 		&"fader": accent,
-		&"fader_bg": well,
+		&"fader_bg": SLIDER_TROUGH,
 		&"fader_handle": handle,
 		&"fader_handle_hover": Color.WHITE,
 	})

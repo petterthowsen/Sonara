@@ -73,6 +73,10 @@ func _apply_border() -> void:
 
 
 var _applying_border := false
+const SETTING_COLORED_STRIPS := "appearance/colored_mixer_strips"
+const STRIP_TINT_AMOUNT := 0.8
+var _base_bg := Color.BLACK
+var _has_base_bg := false
 
 
 func _apply_border_unguarded() -> void:
@@ -89,6 +93,26 @@ func _apply_border_unguarded() -> void:
 	# A nested strip ends on its parent's content bottom, so a bottom margin would lift its
 	# controls above the parent's. Its bottom border draws over its own content instead.
 	stylebox.content_margin_bottom = 0.0 if _is_nested() else -1.0
+	stylebox.bg_color = _strip_bg_color(stylebox.bg_color)
+
+
+## Strip background: the scene's neutral fill, or with "Colored Mixer Strips" on, that fill
+## with the channel color's hue and STRIP_TINT_AMOUNT of its saturation. The fill keeps its
+## own value, so a bright channel color never lightens the strip.
+func _strip_bg_color(current: Color) -> Color:
+	if not _has_base_bg:
+		_base_bg = current
+		_has_base_bg = true
+	if channel == null or not Settings.get_value(SETTING_COLORED_STRIPS):
+		return _base_bg
+	var tint := Utils.display_color(channel.color)
+	# One from_hsv call: setting .h on the grey base is a no-op, so a later .s would saturate red.
+	return Color.from_hsv(tint.h, lerpf(_base_bg.s, tint.s, STRIP_TINT_AMOUNT), _base_bg.v, _base_bg.a)
+
+
+func _on_setting_changed(key: String, _value) -> void:
+	if key == SETTING_COLORED_STRIPS and is_node_ready():
+		_apply_border()
 
 
 ## True when this strip sits inside another strip's fold-out.
@@ -179,6 +203,8 @@ var _peak_readout: Label
 
 func _ready():
 	_apply_border()
+	if not Settings.setting_changed.is_connected(_on_setting_changed):
+		Settings.setting_changed.connect(_on_setting_changed)
 	if header:
 		_base_header_height = header.custom_minimum_size.y
 	if side_pane:
@@ -331,6 +357,7 @@ func _update_from_channel() -> void:
 	if title:
 		title.set_value(channel.name)
 
+	_apply_border()
 	# Update header color from channel color
 	_apply_header_color(channel.color)
 	if children_slide:
@@ -546,6 +573,7 @@ func _on_channel_record_armed_changed(armed: bool) -> void:
 
 ## Keep the header fill and title contrast in sync with the channel color.
 func _on_channel_color_changed(new_color : Color) -> void:
+	_apply_border()
 	_apply_header_color(new_color)
 	if children_slide:
 		children_slide.apply_header_color(new_color)

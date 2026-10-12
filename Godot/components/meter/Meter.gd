@@ -209,6 +209,8 @@ var _tooltip: ValueTooltip = null
 var _cap_style := _make_cap_style()
 const HANDLE_GRAB_PAD := 4.0
 const HANDLE_OVERHANG := 3.0
+## Transparent gap between each meter bar and the fader column between them.
+const FADER_SEAM := 1.0
 @export var fader_fine_drag_scale := FineDrag.DEFAULT_SCALE ## Multiplier applied to mouse movement during shift-held fine fader drags
 var _fine_drag := FineDrag.new()
 var mouse_hovered := false
@@ -572,8 +574,12 @@ func _draw() -> void:
 		fader_offset = offset_x + bar_width
 		var offset_left = offset_x
 		var offset_right = offset_x + bar_width + bars_spacing
-		_draw_bar(rms_left,  peak_left,  peak_hold_left_db,  _clip_left,  offset_left,  bar_width)
-		_draw_bar(rms_right, peak_right, peak_hold_right_db, _clip_right, offset_right, bar_width)
+		# The fader fills the gap between the bars, and its trough matches theirs, so keep a
+		# seam on each side or idle bars and fader merge into one block.
+		var seam := FADER_SEAM if show_fader else 0.0
+		var drawn_width := maxf(0.0, bar_width - seam)
+		_draw_bar(rms_left,  peak_left,  peak_hold_left_db,  _clip_left,  offset_left,  drawn_width)
+		_draw_bar(rms_right, peak_right, peak_hold_right_db, _clip_right, offset_right + seam, drawn_width)
 	
 	if show_fader:
 		_draw_fader(fader_offset, bars_spacing)

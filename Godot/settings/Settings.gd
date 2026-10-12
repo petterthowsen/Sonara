@@ -389,6 +389,14 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Show the hotkeys and mouse gestures for whatever the pointer is over in the bar at the bottom of the window.",
 	)).sub("Editor")
+	_register(Setting.new(
+		"appearance/colored_mixer_strips",
+		"Colored Mixer Strips",
+		Type.BOOL,
+		false,
+		CATEGORY_APPEARANCE,
+		"Tint each mixer strip's background with a hint of its channel color.",
+	)).sub("Mixer")
 	_register_theme_settings()
 	_register(Setting.new(
 		"appearance/automation_lane_height",
