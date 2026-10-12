@@ -4,6 +4,7 @@ use crate::audio::channel::{Channel, PanMode, Send};
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
 };
+use crate::audio::mixing::latency::{plan, LatencyPlan, LatencySignature};
 use crate::audio::mixing::mix_and_output;
 use crate::audio::state::EngineState;
 use crate::audio::types::*;
@@ -65,6 +66,87 @@ pub(super) fn add_test_device(channel: &mut Channel, level: f32) -> Arc<AtomicUs
         calls: calls.clone(),
     }));
     calls
+}
+
+/// Effect that scales its input by `gain` and delays it by `delay` frames, reporting the delay
+/// as its latency.
+pub(super) struct LatencyDevice {
+    pub(super) gain: f32,
+    pub(super) delay: usize,
+    /// Interleaved history, `delay` frames long, used as a ring.
+    history: Vec<f32>,
+    pos: usize,
+}
+
+impl LatencyDevice {
+    pub(super) fn new(delay: usize, gain: f32) -> Self {
+        Self {
+            gain,
+            delay,
+            history: vec![0.0; delay * 2],
+            pos: 0,
+        }
+    }
+}
+
+impl AudioDevice for LatencyDevice {
+    fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        for i in 0..sample_count {
+            for ch in 0..2 {
+                let x = inputs[i * 2 + ch];
+                outputs[i * 2 + ch] = if self.delay == 0 {
+                    x * self.gain
+                } else {
+                    let slot = self.pos * 2 + ch;
+                    let out = self.history[slot];
+                    self.history[slot] = x;
+                    out * self.gain
+                };
+            }
+            if self.delay > 0 {
+                self.pos = (self.pos + 1) % self.delay;
+            }
+        }
+    }
+    fn latency_frames(&self) -> u32 {
+        self.delay as u32
+    }
+    fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+        None
+    }
+    fn device_id(&self) -> &str {
+        "test.latency"
+    }
+    fn device_name(&self) -> &str {
+        "Latency"
+    }
+    fn device_category(&self) -> DeviceCategory {
+        DeviceCategory::Effect
+    }
+    fn device_variant(&self) -> DeviceVariant {
+        DeviceVariant::BuiltIn
+    }
+    fn parameters(&self) -> Vec<ParamInfo> {
+        Vec::new()
+    }
+    fn reset(&mut self) {}
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// Plan the state's latency compensation and install it into every channel, as the command
+/// thread will (T-019). Returns the plan.
+pub(super) fn install_latency(state: &mut EngineState) -> LatencyPlan {
+    let signature = LatencySignature::build(&state.channels);
+    let plan = plan(&signature, SAMPLE_RATE as u32);
+    for (channel_sig, channel_plan) in signature.channels.iter().zip(&plan.channels) {
+        if let Some(channel) = state.channels.get_mut(&channel_sig.id) {
+            channel.latency = channel_plan.to_latency(channel_sig, BUFFER_SIZE);
+        }
+    }
+    plan
 }
 
 /// Channel with balance pan and a settled fader.

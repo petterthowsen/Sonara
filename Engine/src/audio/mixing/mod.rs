@@ -396,9 +396,19 @@ fn write_hardware_outputs(
         let frames = data_frames
             .min(channel.buffer_left.len())
             .min(channel.buffer_right.len());
+        let delay = channel.latency.hw_delay as usize;
+        let ring = channel.latency.post.as_ref().filter(|_| delay > 0);
         for frame_idx in 0..frames {
-            let left = channel.buffer_left[frame_idx].clamp(-1.0, 1.0);
-            let right = channel.buffer_right[frame_idx].clamp(-1.0, 1.0);
+            // A delayed write reads the post ring `route_finished` filled this block
+            let (left, right) = match ring {
+                Some(ring) => ring.sample(delay, frames, frame_idx),
+                None => (
+                    channel.buffer_left[frame_idx],
+                    channel.buffer_right[frame_idx],
+                ),
+            };
+            let left = left.clamp(-1.0, 1.0);
+            let right = right.clamp(-1.0, 1.0);
             let base = frame_idx * channels;
             if channels >= 2 {
                 data[base + first] = (data[base + first] + left).clamp(-1.0, 1.0);

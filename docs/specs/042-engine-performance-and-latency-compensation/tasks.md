@@ -164,7 +164,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test plan_aligns_parallel_paths plan_survives_cycles_and_clamps` passes
   - _Depends on_: T-016
 
-- [ ] **T-018** [REQ-013] Apply edge delays in the mixer
+- [x?] **T-018** [REQ-013] Apply edge delays in the mixer
   - _Files_: `Engine/src/audio/mixing/routing.rs`, `Engine/src/audio/mixing/mod.rs`
   - _Output_:
     - `route_finished` writes the post ring and the pre ring.

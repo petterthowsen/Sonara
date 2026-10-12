@@ -9,6 +9,7 @@ use crossbeam::channel::Sender;
 use crate::audio::channel::{elapsed_ns, fader_gain, Channel};
 use crate::audio::commands::EngineStatus;
 use crate::audio::devices::container::ChainStep;
+use crate::audio::dsp::block_delay::StereoBlockDelay;
 use crate::audio::dsp::interleave::deinterleave_stereo;
 use crate::audio::render_scratch::SoloRole;
 use crate::audio::types::*;
@@ -49,6 +50,23 @@ pub(super) fn add_scaled(
         target.buffer_left[i] += left[i] * gain;
         target.buffer_right[i] += right[i] * gain;
     }
+}
+
+/// Add `gain` times `ring`'s block, `delay` samples late, into a channel's buffers.
+fn add_delayed(
+    target: &mut Channel,
+    ring: &StereoBlockDelay,
+    delay: usize,
+    frames: usize,
+    gain: f32,
+) {
+    ring.add_delayed(
+        delay,
+        gain,
+        frames,
+        &mut target.buffer_left,
+        &mut target.buffer_right,
+    );
 }
 
 /// Apply the channel's pan matrix to its own buffers.
@@ -130,18 +148,28 @@ pub(super) fn route_channel(
     let right = std::mem::take(&mut source.buffer_right);
     let pre_left = std::mem::take(&mut source.mix.pre_fader_left);
     let pre_right = std::mem::take(&mut source.mix.pre_fader_right);
+    // Edge delays and their rings (spec 042 D), moved out like the buffers. An edge whose delay
+    // is 0, or whose ring is missing, takes the plain path.
+    let route_delay = source.latency.route_delay as usize;
+    let send_delays = std::mem::take(&mut source.latency.send_delays);
+    let post_ring = source.latency.post.take();
+    let pre_ring = source.latency.pre.take();
 
     if let Some(target_id) = output.filter(|&id| is_valid_route(channel_map, source_id, id)) {
         if let Some(target) = channel_map.get_mut(&target_id) {
             target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
             if audible && (!send_only || target.mix.solo_down) && !target.mix.done {
                 let gain = target.get_gain();
-                add_scaled(target, &left, &right, frames, gain);
+                match post_ring.as_ref().filter(|_| route_delay > 0) {
+                    Some(ring) => add_delayed(target, ring, route_delay, frames, gain),
+                    None => add_scaled(target, &left, &right, frames, gain),
+                }
             }
         }
     }
 
-    for send in &sends {
+    for (send_index, send) in sends.iter().enumerate() {
+        let delay = send_delays.get(send_index).copied().unwrap_or(0) as usize;
         if !is_valid_route(channel_map, source_id, send.target_channel_id) {
             continue;
         }
@@ -159,11 +187,18 @@ pub(super) fn route_channel(
         }
 
         if !send.pre_fader {
-            add_scaled(target, &left, &right, frames, gain);
+            match post_ring.as_ref().filter(|_| delay > 0) {
+                Some(ring) => add_delayed(target, ring, delay, frames, gain),
+                None => add_scaled(target, &left, &right, frames, gain),
+            }
         } else if has_pre_fader_copy {
+            // A delayed send reads the pre-fader ring instead of the copy; the pan applies as usual.
+            let ring = pre_ring.as_ref().filter(|_| delay > 0);
             for i in 0..frames {
-                let left_in = pre_left[i];
-                let right_in = pre_right[i];
+                let (left_in, right_in) = match ring {
+                    Some(ring) => ring.sample(delay, frames, i),
+                    None => (pre_left[i], pre_right[i]),
+                };
                 target.buffer_left[i] +=
                     (left_in * pan.left_to_left + right_in * pan.right_to_left) * gain;
                 target.buffer_right[i] +=
@@ -174,6 +209,9 @@ pub(super) fn route_channel(
 
     if let Some(source) = channel_map.get_mut(&source_id) {
         source.send_channels = sends;
+        source.latency.send_delays = send_delays;
+        source.latency.post = post_ring;
+        source.latency.pre = pre_ring;
         source.buffer_left = left;
         source.buffer_right = right;
         source.mix.pre_fader_left = pre_left;
@@ -240,6 +278,23 @@ pub(super) fn begin_finish(
     }
 }
 
+/// Push this block into the channel's latency rings (spec 042 D), once per block so their
+/// history stays continuous: the final post-fader buffers into `post`, and the pre-fader copy
+/// into `pre` (silence in blocks with no copy, such as every send muted).
+fn write_latency_rings(channel: &mut Channel, frames: usize) {
+    if let Some(post) = channel.latency.post.as_mut() {
+        post.write(&channel.buffer_left, &channel.buffer_right, frames);
+    }
+    if let Some(pre) = channel.latency.pre.as_mut() {
+        let mix = &mut channel.mix;
+        if !mix.has_pre_fader_copy {
+            mix.pre_fader_left[..frames].fill(0.0);
+            mix.pre_fader_right[..frames].fill(0.0);
+        }
+        pre.write(&mix.pre_fader_left, &mix.pre_fader_right, frames);
+    }
+}
+
 /// Complete a channel after its device chain finished: route targets apply their pan (silenced
 /// ones are cleared), then the channel routes onward.
 pub(super) fn route_finished(
@@ -260,6 +315,7 @@ pub(super) fn route_finished(
             channel.clear_buffers();
         }
     }
+    write_latency_rings(channel, frames);
     route_channel(channel_map, id, frames);
     if let (Some(started), Some(channel)) = (started, channel_map.get_mut(&id)) {
         channel.mix.timer.add(elapsed_ns(started));
@@ -922,5 +978,137 @@ mod tests {
         mix(&mut state);
 
         assert_eq!(fx_calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// Fill `ids` with the same test signal each block: sample `k` of block `block`.
+    fn feed(state: &mut EngineState, ids: &[ChannelId], block: usize) {
+        for &id in ids {
+            let channel = state.channels.get_mut(&id).unwrap();
+            for i in 0..BUFFER_SIZE {
+                let k = block * BUFFER_SIZE + i;
+                let x = ((k * 37) % 101) as f32 / 200.0 + 0.1;
+                channel.buffer_left[i] = x;
+                channel.buffer_right[i] = x * 0.5;
+            }
+        }
+    }
+
+    /// Run `blocks` blocks, feeding `sources`, and return every block's mixed output.
+    fn run_blocks(state: &mut EngineState, sources: &[ChannelId], blocks: usize) -> Vec<Vec<f32>> {
+        (0..blocks)
+            .map(|block| {
+                feed(state, sources, block);
+                mix(state)
+            })
+            .collect()
+    }
+
+    /// Two copies of one signal meet at master: channel 3 through a `delay`-frame device, channel
+    /// 4 through a polarity inverter with no latency, each into master by `connect`. Returns the
+    /// output blocks after installing the compensation (or not).
+    fn parallel_paths(
+        delay: usize,
+        compensate: bool,
+        connect: impl Fn(&mut Channel),
+    ) -> Vec<Vec<f32>> {
+        let mut slow = test_channel(3, Some(1), 0.0);
+        slow.devices.push(Box::new(LatencyDevice::new(delay, 1.0)));
+        let mut fast = test_channel(4, None, 0.0);
+        fast.devices.push(Box::new(LatencyDevice::new(0, -1.0)));
+        connect(&mut fast);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), slow, fast]);
+        if compensate {
+            install_latency(&mut state);
+        }
+        run_blocks(&mut state, &[3, 4], 12)
+    }
+
+    fn peak(blocks: &[Vec<f32>]) -> f32 {
+        blocks
+            .iter()
+            .flatten()
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()))
+    }
+
+    #[test]
+    fn parallel_paths_null_at_master() {
+        // Delays shorter and longer than the 4-frame block, for the route and both send kinds
+        let connections: [(&str, fn(&mut Channel)); 3] = [
+            ("route", |c| c.output_channel_id = Some(1)),
+            ("post send", |c| c.send_channels.push(send_to(1, false))),
+            ("pre send", |c| c.send_channels.push(send_to(1, true))),
+        ];
+        for (name, connect) in connections {
+            for delay in [3, 6, 13] {
+                let uncompensated = parallel_paths(delay, false, connect);
+                assert!(
+                    peak(&uncompensated) > 0.1,
+                    "{name} {delay}: paths already null"
+                );
+
+                let blocks = parallel_paths(delay, true, connect);
+                // Past the delay's warm-up the two paths cancel, up to the fader smoothing's
+                // residue (a pre-fader send skips the fader the other path goes through)
+                let settled = delay / BUFFER_SIZE + 2;
+                assert!(
+                    peak(&blocks[settled..]) < 1e-4,
+                    "{name} {delay}: {:?}",
+                    &blocks[settled..]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_paths_null_at_hardware_pair() {
+        // Channel 3 (delayed) and 4 (inverted) both write straight to pair 1000
+        let mut slow = test_channel(3, Some(1000), 0.0);
+        slow.devices.push(Box::new(LatencyDevice::new(6, 1.0)));
+        let mut fast = test_channel(4, Some(1000), 0.0);
+        fast.devices.push(Box::new(LatencyDevice::new(0, -1.0)));
+        let mut state = state_with(vec![test_channel(1, Some(1001), 0.0), slow, fast]);
+        let plan = install_latency(&mut state);
+        assert_eq!(plan.output_frames, 6);
+        assert_eq!(state.channels[&4].latency.hw_delay, 6);
+        assert!(state.channels[&3].latency.post.is_none());
+        let blocks = run_blocks(&mut state, &[3, 4], 12);
+        assert!(peak(&blocks[3..]) < 1e-6, "{:?}", &blocks[3..]);
+    }
+
+    #[test]
+    fn zero_latency_project_unchanged() {
+        // Routes, a bus, and pre and post sends, no device reporting latency
+        let build = || {
+            let mut a = test_channel(3, Some(2), -3.0);
+            a.send_channels.push(send_to(5, true));
+            a.send_channels.push(send_to(5, false));
+            a.pan = 0.4;
+            let mut b = test_channel(4, Some(1), -6.0);
+            b.send_channels.push(send_to(2, true));
+            let mut state = state_with(vec![
+                test_channel(1, Some(1000), 0.0),
+                test_channel(2, Some(1), 0.0),
+                a,
+                b,
+                test_channel(5, Some(1), -2.0),
+            ]);
+            add_test_device(state.channels.get_mut(&2).unwrap(), 0.1);
+            state
+        };
+        let mut plain = build();
+        let mut planned = build();
+        let plan = install_latency(&mut planned);
+        assert!(plan.channels.iter().all(|c| c.max_delay() == 0));
+        assert!(planned
+            .channels
+            .values()
+            .all(|c| c.latency.post.is_none() && c.latency.pre.is_none()));
+
+        let expected = run_blocks(&mut plain, &[3, 4], 6);
+        let actual = run_blocks(&mut planned, &[3, 4], 6);
+        assert!(peak(&expected) > 0.1);
+        for (e, a) in expected.iter().flatten().zip(actual.iter().flatten()) {
+            assert_eq!(e.to_bits(), a.to_bits());
+        }
     }
 }

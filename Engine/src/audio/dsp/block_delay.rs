@@ -69,6 +69,14 @@ impl StereoBlockDelay {
         }
     }
 
+    /// Frame `i` of the delayed block, as (left, right). For readers that can't hand over
+    /// slices, such as the interleaved hardware write.
+    #[inline]
+    pub fn sample(&self, delay: usize, frames: usize, i: usize) -> (f32, f32) {
+        let ago = Self::ago(frames, i, delay);
+        (self.left.read(ago), self.right.read(ago))
+    }
+
     /// Overwrite `out_l` / `out_r` with the delayed block.
     #[inline]
     pub fn read_delayed(&self, delay: usize, frames: usize, out_l: &mut [f32], out_r: &mut [f32]) {

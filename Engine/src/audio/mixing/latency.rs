@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 
-use crate::audio::channel::Channel;
+use crate::audio::channel::{Channel, ChannelLatency};
+use crate::audio::dsp::block_delay::StereoBlockDelay;
 use crate::audio::types::{ChannelId, HARDWARE_OUTPUT_BASE};
 
 use super::routing::{is_valid_route, output_target};
@@ -149,6 +150,31 @@ impl ChannelPlan {
             .chain([self.route_delay, self.hw_delay])
             .max()
             .unwrap_or(0)
+    }
+}
+
+impl ChannelPlan {
+    /// The runtime state for this plan: the delays, and rings sized for the longest edge plus
+    /// `max_block` frames, only where an edge needs one. Allocates, so command thread only,
+    /// outside the lock.
+    pub fn to_latency(&self, signature: &ChannelSignature, max_block: usize) -> ChannelLatency {
+        let ring = |needed: bool| {
+            needed.then(|| {
+                let mut ring = StereoBlockDelay::new();
+                ring.prepare(self.max_delay() as usize, max_block);
+                ring
+            })
+        };
+        ChannelLatency {
+            in_frames: self.in_frames,
+            out_frames: self.out_frames,
+            route_delay: self.route_delay,
+            send_delays: self.send_delays.clone(),
+            hw_delay: self.hw_delay,
+            aux_delay: self.aux_delay,
+            post: ring(self.needs_post_ring(signature)),
+            pre: ring(self.needs_pre_ring(signature)),
+        }
     }
 }
 
