@@ -319,12 +319,13 @@ with `Godot/tests/run_all.sh <word>`.
   - _Verify_: `Godot/tests/run_all.sh dawproject` passes
   - _Depends on_: T-013
 
-- [ ] **T-023** [REQ-all] Full Godot gate.
+- [x?] **T-023** [REQ-all] Full Godot gate.
   - _Files_: —
   - _Output_: no regressions in the other Godot tests
   - _Verify_: `Godot/tests/run_all.sh` passes. Any failure that was already there is listed with
     evidence from `git stash`
   - _Depends on_: T-016 to T-022
+  - _Result_: 2026-10-12, all 237 test scripts passed on the final Phase 5 HEAD; no earlier failures.
 
 ## Phase 6 — docs
 
@@ -356,3 +357,8 @@ with `Godot/tests/run_all.sh <word>`.
     5. The Simple View tiles are at the right, Note FX is green (secondary accent), and clicking
        a tile opens its slot.
   - _Depends on_: T-023, T-024
+  - _Known gap (REQ-013)_: the PolySynth stays awake from its own post-FX output only. A
+    ChainDevice always reports input activity to its children, so devices inside a slot chain
+    never sleep and can't be asked whether their tail is still ringing. A Delay in FX set to
+    more than about 3 s (the sleep timeout) can let the synth sleep between two repeats.
+    Check this in the live test.
