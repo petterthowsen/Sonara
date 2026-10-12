@@ -81,6 +81,8 @@ pub struct CommandWorker {
     perf_statuses: Vec<EngineStatus>,
     stream: StreamControl,
     audio: AudioSettings,
+    /// Requested processing threads (`SetProcessingThreads`): 0 = Auto.
+    processing_threads: u32,
     block_clock: Arc<BlockClock>,
     /// The offline render running or last run (`audio/render`).
     render: Option<RenderHandle>,
@@ -124,6 +126,7 @@ impl CommandWorker {
             perf_since: Instant::now(),
             perf_statuses: Vec::new(),
             stream,
+            processing_threads: 0,
             audio: AudioSettings {
                 opened_period: audio_request.period_frames,
                 request: audio_request,
@@ -217,6 +220,7 @@ impl CommandWorker {
                 sample_rate,
                 period_frames,
             }),
+            AudioCommand::SetProcessingThreads { threads } => self.set_processing_threads(threads),
             AudioCommand::RequestAudioConfig => self.report_audio_config(),
             AudioCommand::RequestAudioDevices => self.list_audio_devices(),
             AudioCommand::PipeWireGraph(graph) => self.on_pipewire_graph(graph),

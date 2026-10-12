@@ -10,12 +10,28 @@ use crate::audio::commands::{AudioConfigReport, EngineStatus};
 use crate::audio::devices::clap_host::subprocess_adapter::PluginIpcHandle;
 use crate::audio::devices::clap_host::SubprocessClapAdapter;
 use crate::audio::devices::{container, DevicePath};
+use crate::audio::mixing::ChannelPool;
 use crate::audio::pipewire::{describe_mismatch, required_period, GraphInfo, RealtimeState};
 use crate::audio::stream::{
     list_output_devices, Driver, StreamInfo, StreamRequest, DEFAULT_SAMPLE_RATE, MAX_PERIOD_FRAMES,
     MIN_PERIOD_FRAMES,
 };
 use crate::audio::types::{ChannelId, HARDWARE_OUTPUT_BASE};
+
+/// Most processing threads Auto picks, the callback thread included.
+const AUTO_MAX_THREADS: usize = 8;
+
+/// Worker threads for a processing-threads setting on a machine with `cores` cores. The callback
+/// thread is the first processing thread, so N threads is N − 1 workers. Auto (0) is
+/// `min(cores / 2, 8)` threads, leaving half the cores to plugin hosts; an explicit setting is
+/// capped at the core count.
+fn pool_workers(requested: u32, cores: usize) -> usize {
+    let threads = match requested {
+        0 => (cores / 2).min(AUTO_MAX_THREADS),
+        n => (n as usize).min(cores),
+    };
+    threads.saturating_sub(1)
+}
 
 /// Master's channel ID.
 const MASTER_CHANNEL_ID: ChannelId = 1;
@@ -156,8 +172,51 @@ impl CommandWorker {
                 sample_rate: new_rate.round() as u32,
             });
         }
+        // The workers ask rtkit for realtime with the stream's period and rate, so they follow it.
+        if started.is_some() {
+            self.rebuild_pool(true);
+        }
         self.check_master_output();
         self.report_audio_config();
+    }
+
+    /// `/engine/threads/set`: remember the setting and resize the worker pool if it changed.
+    pub(super) fn set_processing_threads(&mut self, threads: u32) {
+        self.processing_threads = threads;
+        self.rebuild_pool(false);
+    }
+
+    /// Build the worker pool for the current setting and stream, outside the state lock, swap it
+    /// in under the lock and drop the old one (which joins its threads) after unlocking. Without
+    /// `force`, a pool that already has the right number of workers is kept.
+    fn rebuild_pool(&mut self, force: bool) {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let workers = pool_workers(self.processing_threads, cores);
+        let (current, state_rate) = {
+            let state = self.lock_state();
+            let current = state.pool.as_ref().map_or(0, |pool| pool.threads());
+            (current, state.device_sample_rate as u32)
+        };
+        if !force && current == workers {
+            return;
+        }
+        let (frames, rate) = match self.stream.active() {
+            Some(info) if info.period_frames > 0 => (info.period_frames, info.sample_rate),
+            Some(info) => (self.max_buffer_size as u32, info.sample_rate),
+            None => (self.max_buffer_size as u32, state_rate),
+        };
+        let pool = (workers > 0).then(|| ChannelPool::new(workers, frames, rate));
+        let old = std::mem::replace(&mut self.lock_state().pool, pool);
+        drop(old);
+        info!(
+            "Processing threads: {} ({} worker threads, setting {})",
+            workers + 1,
+            workers,
+            match self.processing_threads {
+                0 => "Auto".to_string(),
+                n => n.to_string(),
+            }
+        );
     }
 
     /// The configs to try for `request`, in order: the request; the driver's default device;
@@ -456,5 +515,21 @@ fn display_device(device: &str) -> &str {
         "the default device"
     } else {
         device
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_processing_threads_leave_half_the_cores() {
+        assert_eq!(pool_workers(0, 12), 5);
+        assert_eq!(pool_workers(0, 2), 0);
+        assert_eq!(pool_workers(0, 32), 7);
+        assert_eq!(pool_workers(0, 1), 0);
+        assert_eq!(pool_workers(1, 12), 0, "1 thread is the callback alone");
+        assert_eq!(pool_workers(4, 12), 3);
+        assert_eq!(pool_workers(64, 12), 11, "capped at the core count");
     }
 }

@@ -551,6 +551,11 @@ pub enum AudioCommand {
     SetPerfSubscription {
         subscribe: bool,
     },
+    /// Processing threads for the channel worker pool (spec 042): 0 = Auto, otherwise 1 to the
+    /// core count, where 1 runs every chain on the callback thread. Applied live.
+    SetProcessingThreads {
+        threads: u32,
+    },
     /// Report the running config (`EngineStatus::AudioConfig`).
     RequestAudioConfig,
     /// List output devices (`AudioDeviceInfo` statuses, then `AudioDevicesComplete`).
@@ -1361,6 +1366,7 @@ fn dispatch(
         | AudioCommand::ReloadDevice { .. }
         | AudioCommand::SetPluginHosting { .. }
         | AudioCommand::SetAudioConfig { .. }
+        | AudioCommand::SetProcessingThreads { .. }
         | AudioCommand::RequestAudioConfig
         | AudioCommand::RequestAudioDevices
         | AudioCommand::PipeWireGraph(_)

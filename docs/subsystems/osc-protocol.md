@@ -1195,9 +1195,18 @@ compensation reports it.
 
 ### `/status/engine_perf [i:processing_threads, s:threads_realtime, i:output_latency_frames, i:over_limit_channels, i:sample_rate]` (Rust -> Godot)
 
-Sent after the channel messages of each report. `threads_realtime` is `granted`, `denied`,
-`partial` or `none`. Until the processing-threads phases land, threads are 0, realtime is `none`
-and the latency and over-limit counts are 0.
+Sent after the channel messages of each report. `processing_threads` counts the callback thread
+plus the worker pool's threads (1 = no workers). `threads_realtime` is the workers' realtime
+state: `granted`, `denied`, `partial` (only some got it) or `none` (no workers). Until latency
+compensation lands, the latency and over-limit counts are 0.
+
+### `/engine/threads/set [i:threads]` (Godot -> Rust)
+
+Processing threads for the channel worker pool. 0 = Auto: `min(cores / 2, 8)` threads.
+Otherwise 1 to the core count, where 1 runs every device chain on the callback thread. The
+callback thread counts as one, so N threads start N − 1 workers. Applied live, without reopening
+the stream; the pool is also rebuilt whenever the stream reopens, because the workers ask rtkit for
+realtime with the stream's period and rate. Not sent: Auto.
 
 ## Offline Rendering (Godot <-> Rust)
 

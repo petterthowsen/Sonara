@@ -77,9 +77,14 @@ fn collect_perf(state: &mut EngineState, out: &mut Vec<EngineStatus>) {
             devices,
         });
     }
+    // The callback thread counts as the first processing thread.
+    let (processing_threads, threads_realtime) = match &state.pool {
+        Some(pool) => (pool.threads() as u32 + 1, pool.realtime_summary()),
+        None => (1, "none"),
+    };
     out.push(EngineStatus::EnginePerf {
-        processing_threads: 0,
-        threads_realtime: "none".to_string(),
+        processing_threads,
+        threads_realtime: threads_realtime.to_string(),
         output_latency_frames: 0,
         over_limit_channels: 0,
         sample_rate: state.device_sample_rate as u32,

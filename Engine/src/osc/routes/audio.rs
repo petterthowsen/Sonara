@@ -30,6 +30,15 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             cx.commands
                 .send(AudioCommand::SetPerfSubscription { subscribe: true })?;
         }
+        // /engine/threads/set <threads:i> — 0 = Auto (spec 042).
+        ["engine", "threads", "set"] => match args {
+            [OscType::Int(threads)] if *threads >= 0 => {
+                cx.commands.send(AudioCommand::SetProcessingThreads {
+                    threads: *threads as u32,
+                })?;
+            }
+            _ => warn!("Ignoring /engine/threads/set: expected one int >= 0"),
+        },
         ["engine", "perf", "unsubscribe"] => {
             cx.commands
                 .send(AudioCommand::SetPerfSubscription { subscribe: false })?;

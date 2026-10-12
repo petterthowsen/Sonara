@@ -121,7 +121,7 @@ before starting an engine on port 7000 or touching PipeWire's forced quantum.
   - _Verify_: `cargo test pool_output_matches_single_thread` passes (bit-identical, 50 blocks, 0 vs 4 workers); the full `cargo test` passes
   - _Depends on_: T-010, T-011, T-002
 
-- [ ] **T-013** [REQ-010, REQ-011] Processing threads command and live resize
+- [x?] **T-013** [REQ-010, REQ-011] Processing threads command and live resize
   - _Files_: `Engine/src/audio/commands/mod.rs`, `Engine/src/audio/command_worker/mod.rs`, `Engine/src/audio/command_worker/audio_config.rs`, `Engine/src/audio/command_worker/perf.rs`, `Engine/src/osc/routes/audio.rs`
   - _Output_:
     - `SetProcessingThreads` with the Auto rule `min(cores / 2, 8) − 1`.

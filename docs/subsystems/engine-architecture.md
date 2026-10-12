@@ -396,6 +396,7 @@ Classes:
 | `ReloadDevice` | build/teardown | `command_worker/plugins.rs` | Reloads a plugin device (crashed or changed hosting). |
 | `SetPluginHosting` | command thread only | `command_worker/plugins.rs` | Changes the `HostingPolicy`. |
 | `SetAudioConfig` | command thread only | `command_worker/audio_config.rs` | Stops, resolves and restarts the stream. |
+| `SetProcessingThreads` | build/teardown | `command_worker/audio_config.rs` (`rebuild_pool`) | Builds the `ChannelPool` outside the lock, swaps it into `EngineState::pool` under it, and drops (joins) the old one after unlock. Also rebuilt when the stream reopens. |
 | `SetPerfSubscription` | graph edit | `commands/mod.rs` (`EngineState::set_perf_subscription`) | Counted; turns `perf_timing` on and resets the timers. `command_worker/perf.rs` reports every 500 ms while subscribed. |
 | `RequestAudioConfig` | query | `command_worker/audio_config.rs` |  |
 | `RequestAudioDevices` | query | `command_worker/audio_config.rs` |  |
