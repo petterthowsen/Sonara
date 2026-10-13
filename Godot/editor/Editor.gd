@@ -285,6 +285,7 @@ func _on_mixer_selection_changed(channels: Array[Channel]) -> void:
 	(arranger.track_list as TrackList).set_selection_silent(mapped["tracks"], mapped["active"])
 	if mapped["active"]:
 		set_track_selection(mapped["tracks"], mapped["active"], false)
+		_apply_record_arm(mapped["active"], "mixer/record_arm_follows_channel_selection")
 	_syncing_selection = false
 
 
@@ -327,7 +328,9 @@ func focus_track(track: Track, apply_record_arm: bool = true) -> void:
 
 
 ## Record-arm only `track` when the given follow setting is on, disarming the
-## other tracks that can hold clips. Tracks without clips keep their arm state.
+## other tracks that can hold clips. A group is resolved first through the group
+## options (RecordArmPolicy): it arms itself or one of its valid children. Folders
+## and other tracks without clips keep their arm state.
 func _apply_record_arm(track: Track, key: String) -> void:
 	if Settings == null:
 		return
@@ -335,12 +338,21 @@ func _apply_record_arm(track: Track, key: String) -> void:
 		return
 	if project == null or track == null:
 		return
+	if track.is_group():
+		var target := RecordArmPolicy.resolve(project, track, Settings.get_value(
+			RecordArmPolicy.KEY_WITH_TARGETS if RecordArmPolicy.has_targets(project, track)
+			else RecordArmPolicy.KEY_WITHOUT_TARGETS))
+		for t in project.tracks:
+			if t.has_clips() or t.is_group():
+				t.set_armed(t == target)
+		return
 	if not track.has_clips():
 		return
 	for t in project.tracks:
-		if not t.has_clips():
-			continue
-		t.set_armed(t == track)
+		if t.has_clips():
+			t.set_armed(t == track)
+		elif t.is_group() and t.armed:
+			t.set_armed(false)
 
 
 ## Record-arm only the active track when the follow-active setting is on.

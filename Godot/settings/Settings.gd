@@ -250,6 +250,36 @@ func _register_all_settings() -> void:
 		"When enabled, selecting a track in the MIDI editor (track list, or clicking another track's notes) record-arms that track and disarms the others.",
 	)).sub("Arranger")
 	_register(Setting.new(
+		"arranger/group_arm_without_targets",
+		"Selecting a Group Without Instrument or Audio Tracks",
+		Type.CHOICE,
+		"Record arm the group",
+		CATEGORY_BEHAVIOR,
+		"What record arm does when a group with no audio or instrument track inside it (at any depth) becomes the active track. Needs Record Arm Follows Active Track.\n\n"
+		+ "Record arm the group: arms the group itself.\n\n"
+		+ "Record arm the first valid child: arms the first audio or instrument track inside the group (none exists here, so the group is armed).\n\n"
+		+ "Record arm the last armed valid child: arms the child that was armed last (none exists here, so the group is armed).",
+	)).sub("Arranger").choices(["Record arm the group", "Record arm the first valid child", "Record arm the last armed valid child"])
+	_register(Setting.new(
+		"arranger/group_arm_with_targets",
+		"Selecting a Group With Instrument or Audio Tracks",
+		Type.CHOICE,
+		"Record arm the last armed valid child",
+		CATEGORY_BEHAVIOR,
+		"What record arm does when a group containing an audio or instrument track (at any depth, nested groups included) becomes the active track. Needs Record Arm Follows Active Track.\n\n"
+		+ "Record arm the group: arms the group itself.\n\n"
+		+ "Record arm the first valid child: arms the first audio or instrument track inside the group.\n\n"
+		+ "Record arm the last armed valid child: arms the child of the group that was armed most recently, or the first valid child if none was armed before.",
+	)).sub("Arranger").choices(["Record arm the group", "Record arm the first valid child", "Record arm the last armed valid child"])
+	_register(Setting.new(
+		"mixer/record_arm_follows_channel_selection",
+		"Record Arm Follows Mixer Channel Selection",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, selecting a channel in the Mixer also record-arms its track and disarms the others. Selecting a group follows the group options under Arranger.",
+	)).sub("Mixer")
+	_register(Setting.new(
 		"arranger/markers/rename_on_create",
 		"Rename New Markers",
 		Type.BOOL,
