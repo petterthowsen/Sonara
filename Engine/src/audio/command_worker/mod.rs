@@ -80,6 +80,10 @@ pub struct CommandWorker {
     perf_since: Instant,
     /// Statuses collected by `report_perf`, kept to reuse the allocation.
     perf_statuses: Vec<EngineStatus>,
+    /// Memory probes collected by `report_perf`, kept to reuse the allocation.
+    memory_probes: Vec<perf::MemoryProbe>,
+    /// Cached `/proc` memory of the engine and its plugin hosts.
+    memory: crate::audio::proc_mem::MemorySampler,
     stream: StreamControl,
     audio: AudioSettings,
     /// Requested processing threads (`SetProcessingThreads`): 0 = Auto.
@@ -128,6 +132,8 @@ impl CommandWorker {
             plugin_reports_since: Instant::now(),
             perf_since: Instant::now(),
             perf_statuses: Vec::new(),
+            memory_probes: Vec::new(),
+            memory: Default::default(),
             stream,
             processing_threads: 0,
             audio: AudioSettings {

@@ -1197,3 +1197,17 @@ fn single_mode_unchanged_through_zone_path() {
     }
     assert_eq!(blocks.len(), SINGLE_MODE_FIXTURE.len());
 }
+
+#[test]
+fn memory_bytes_counts_decoded_sample_data() {
+    let mut sampler = SamplerDevice::new_for_metadata();
+    assert_eq!(
+        sampler.memory_bytes(),
+        Some(0),
+        "empty sampler holds nothing"
+    );
+    assert!(!sampler.memory_is_approximate());
+    // 1000 stereo frames of f32.
+    sampler.set_sample("", vec![0.0; 2000], 2, 48_000);
+    assert_eq!(sampler.memory_bytes(), Some(2000 * 4));
+}

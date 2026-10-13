@@ -6,7 +6,11 @@ use std::time::{Duration, Instant};
 use super::CommandWorker;
 use crate::audio::channel::MAX_TIMED_DEVICES;
 use crate::audio::commands::EngineStatus;
+use crate::audio::devices::clap_host::SubprocessClapAdapter;
+use crate::audio::devices::{container, DevicePath};
+use crate::audio::proc_mem::MemorySampler;
 use crate::audio::state::EngineState;
+use crate::audio::types::ChannelId;
 
 /// How often `ChannelPerf` and `EnginePerf` are sent while subscribed.
 const PERF_REPORT_INTERVAL: Duration = Duration::from_millis(500);
@@ -23,15 +27,95 @@ impl CommandWorker {
         }
         self.perf_since = now;
         let mut statuses = std::mem::take(&mut self.perf_statuses);
+        let mut probes = std::mem::take(&mut self.memory_probes);
         {
             let mut state = self.lock_state();
             collect_perf(&mut state, &mut statuses);
+            collect_memory_probes(&mut state, &mut probes);
         }
+        // /proc is read with the lock released, at most once a second (`MemorySampler`).
+        if !statuses.is_empty() {
+            self.memory.refresh(now, probes.iter().map(|p| p.host_pid));
+            memory_statuses(&probes, &self.memory, &mut statuses);
+        }
+        probes.clear();
+        self.memory_probes = probes;
         for status in statuses.drain(..) {
             self.send_status(status);
         }
         self.perf_statuses = statuses;
     }
+}
+
+/// What the state lock yields about one device's memory: its own figure, or the host process it
+/// runs in. The `/proc` reads and the statuses come after the lock is released.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct MemoryProbe {
+    channel_id: ChannelId,
+    device_path: DevicePath,
+    own_bytes: Option<u64>,
+    approximate: bool,
+    /// Host process of a subprocess plugin, 0 for anything else.
+    host_pid: u32,
+}
+
+/// Every device with a memory figure, nested ones included. Pushes nothing while nobody is
+/// subscribed. Runs under the state lock, so each device only does a cheap sum or an atomic read.
+fn collect_memory_probes(state: &mut EngineState, out: &mut Vec<MemoryProbe>) {
+    if state.perf_subscribers == 0 {
+        return;
+    }
+    for (&channel_id, channel) in state.channels.iter_mut() {
+        container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {
+            let mut probe = MemoryProbe {
+                channel_id,
+                device_path: *device_path,
+                own_bytes: device.memory_bytes(),
+                approximate: device.memory_is_approximate(),
+                host_pid: 0,
+            };
+            if let Some(plugin) = device.as_any_mut().downcast_mut::<SubprocessClapAdapter>() {
+                let load = plugin.load();
+                if load.is_ready() {
+                    probe.host_pid = load.host_pid();
+                }
+            }
+            if probe.own_bytes.is_some() || probe.host_pid != 0 {
+                out.push(probe);
+            }
+        });
+    }
+}
+
+/// `DeviceMemory` for each probe with a figure, then `EngineMemory`. A plugin reports its host
+/// process's memory with the number of probed plugins in that process; a host whose `/proc` entry
+/// couldn't be read (just exited) gets none.
+fn memory_statuses(probes: &[MemoryProbe], sampler: &MemorySampler, out: &mut Vec<EngineStatus>) {
+    for probe in probes {
+        let (bytes, shared_by) = match (probe.own_bytes, sampler.host_bytes(probe.host_pid)) {
+            (Some(bytes), _) => (bytes, 1),
+            (None, Some(bytes)) => {
+                let sharing = probes
+                    .iter()
+                    .filter(|other| other.host_pid == probe.host_pid)
+                    .count();
+                (bytes, sharing.max(1) as u32)
+            }
+            (None, None) => continue,
+        };
+        out.push(EngineStatus::DeviceMemory {
+            channel_id: probe.channel_id,
+            device_path: probe.device_path,
+            bytes,
+            shared_by,
+            approximate: probe.approximate,
+        });
+    }
+    out.push(EngineStatus::EngineMemory {
+        engine_bytes: sampler.engine_bytes(),
+        plugin_bytes: sampler.plugin_bytes(),
+        plugin_hosts: sampler.host_count() as u32,
+    });
 }
 
 /// Take every channel's timers and push a `ChannelPerf` for each channel that ran, then one
@@ -210,6 +294,83 @@ mod tests {
                 assert!((devices[0].1 - 0.15).abs() < 1e-6, "{devices:?}");
             }
             other => panic!("expected ChannelPerf, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_probes_need_a_subscriber_and_a_figure() {
+        let mut state = state_with_channels(&[2]);
+        state
+            .channels
+            .get_mut(&2)
+            .unwrap()
+            .devices
+            .push(create_effect("sonara.builtin.delay", 48_000.0, 64).unwrap());
+        let mut out = Vec::new();
+        collect_memory_probes(&mut state, &mut out);
+        assert!(out.is_empty(), "nobody subscribed");
+        state.set_perf_subscription(true);
+        collect_memory_probes(&mut state, &mut out);
+        assert!(out.is_empty(), "a delay has no memory figure");
+    }
+
+    fn probe(device: usize, own: Option<u64>, pid: u32) -> MemoryProbe {
+        MemoryProbe {
+            channel_id: 2,
+            device_path: DevicePath::root(device),
+            own_bytes: own,
+            approximate: false,
+            host_pid: pid,
+        }
+    }
+
+    #[test]
+    fn memory_statuses_share_a_host_between_its_plugins() {
+        let mut sampler = MemorySampler::default();
+        let me = std::process::id();
+        sampler.refresh(std::time::Instant::now(), [me]);
+        let host = sampler.host_bytes(me).unwrap();
+        let probes = [
+            probe(0, Some(4096), 0),
+            probe(1, None, me),
+            probe(2, None, me),
+            probe(3, None, u32::MAX - 1),
+        ];
+        let mut out = Vec::new();
+        memory_statuses(&probes, &sampler, &mut out);
+        assert_eq!(
+            out.len(),
+            4,
+            "3 devices with a figure plus the engine: {out:?}"
+        );
+        assert!(matches!(
+            out[0],
+            EngineStatus::DeviceMemory {
+                bytes: 4096,
+                shared_by: 1,
+                ..
+            }
+        ));
+        for status in &out[1..3] {
+            match status {
+                EngineStatus::DeviceMemory {
+                    bytes, shared_by, ..
+                } => {
+                    assert_eq!((*bytes, *shared_by), (host, 2));
+                }
+                other => panic!("expected DeviceMemory, got {other:?}"),
+            }
+        }
+        match &out[3] {
+            EngineStatus::EngineMemory {
+                plugin_bytes,
+                plugin_hosts,
+                engine_bytes,
+            } => {
+                assert_eq!((*plugin_bytes, *plugin_hosts), (host, 1));
+                assert!(*engine_bytes > 0);
+            }
+            other => panic!("expected EngineMemory, got {other:?}"),
         }
     }
 }

@@ -383,6 +383,20 @@ pub trait AudioDevice: Send {
         self.latency_frames()
     }
 
+    /// Bytes of RAM this device itself holds (decoded samples and the like), for the tooltip's
+    /// RAM figure. `None` (the default) means "not tracked". Called on the command thread under
+    /// the state lock about twice a second while a perf subscriber listens, so it must be a cheap
+    /// sum with no I/O and no waiting on locks. Subprocess plugins are measured per host process
+    /// by the command worker instead and leave this at `None`.
+    fn memory_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    /// `memory_bytes()` is a lower bound or estimate rather than an exact count.
+    fn memory_is_approximate(&self) -> bool {
+        false
+    }
+
     /// Adopt a new device sample rate. Runs on the command thread while the output stream is
     /// stopped, so it may allocate. `max_frames` is the largest block `process_block` will get.
     /// Devices whose processing doesn't depend on the rate keep the default no-op; containers

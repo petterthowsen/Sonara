@@ -184,6 +184,24 @@ pub enum EngineStatus {
         /// The host audio thread's realtime state: 0 unknown, 1 granted, 2 denied.
         host_realtime: u32,
     },
+    /// RAM a device holds (spec 042 follow-up), sent with the perf report while subscribed and
+    /// only for devices that have a figure. `bytes` is the device's own data (Sampler, SFZ) or,
+    /// for a subprocess plugin, the whole host process's PSS, which `shared_by` instances share
+    /// (1 = the plugin has the process to itself). `approximate` marks an estimate or lower bound.
+    DeviceMemory {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        bytes: u64,
+        shared_by: u32,
+        approximate: bool,
+    },
+    /// Engine process memory (PSS) and the sum over the plugin host processes, with their count.
+    /// Sent after the `EnginePerf` of each report.
+    EngineMemory {
+        engine_bytes: u64,
+        plugin_bytes: u64,
+        plugin_hosts: u32,
+    },
     /// A plugin finished loading into a host process: the hosting mode that chose the host, its
     /// key and its pid. Sent on every load, reload and move. Phase 5.
     PluginHost {

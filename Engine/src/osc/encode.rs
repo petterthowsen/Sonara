@@ -209,6 +209,32 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
                 OscType::Int(host_realtime as i32),
             ],
         ),
+        EngineStatus::DeviceMemory {
+            channel_id,
+            device_path,
+            bytes,
+            shared_by,
+            approximate,
+        } => (
+            device_path.to_osc_addr(channel_id, "memory"),
+            vec![
+                OscType::Int(kib(bytes)),
+                OscType::Int(shared_by as i32),
+                OscType::Int(approximate as i32),
+            ],
+        ),
+        EngineStatus::EngineMemory {
+            engine_bytes,
+            plugin_bytes,
+            plugin_hosts,
+        } => (
+            "/status/engine_memory".to_string(),
+            vec![
+                OscType::Int(kib(engine_bytes)),
+                OscType::Int(kib(plugin_bytes)),
+                OscType::Int(plugin_hosts as i32),
+            ],
+        ),
         EngineStatus::PluginHost {
             channel_id,
             device_path,
@@ -648,6 +674,11 @@ fn osc_count(count: u64) -> i32 {
     count.min(i32::MAX as u64) as i32
 }
 
+/// Bytes as whole KiB in an OSC int32 (good to 2 TiB).
+fn kib(bytes: u64) -> i32 {
+    (bytes / 1024).min(i32::MAX as u64) as i32
+}
+
 /// Append one parameter's typed descriptor to a `/builtin/*` message.
 fn push_param_args(args: &mut Vec<OscType>, param: &BuiltinParamInfo) {
     args.push(OscType::Int(param.id as i32));
@@ -726,6 +757,37 @@ mod tests {
         assert_eq!(tags, "f f f f i i i i i");
         assert_eq!(args[7], OscType::Int(0));
         assert_eq!(args[8], OscType::Int(2));
+    }
+
+    #[test]
+    fn device_memory_encodes_kib_sharing_and_approximation() {
+        let (addr, tags, args) = wire(EngineStatus::DeviceMemory {
+            channel_id: 4,
+            device_path: DevicePath::root(1),
+            bytes: 412 * 1024 * 1024 + 700,
+            shared_by: 2,
+            approximate: true,
+        });
+        assert!(addr.ends_with("/memory"), "{addr}");
+        assert_eq!(tags, "i i i");
+        assert_eq!(
+            args,
+            vec![OscType::Int(412 * 1024), OscType::Int(2), OscType::Int(1)]
+        );
+    }
+
+    #[test]
+    fn engine_memory_encodes_kib_and_clamps() {
+        let (addr, tags, args) = wire(EngineStatus::EngineMemory {
+            engine_bytes: 300 * 1024 * 1024,
+            plugin_bytes: u64::MAX,
+            plugin_hosts: 3,
+        });
+        assert_eq!(addr, "/status/engine_memory");
+        assert_eq!(tags, "i i i");
+        assert_eq!(args[0], OscType::Int(300 * 1024));
+        assert_eq!(args[1], OscType::Int(i32::MAX));
+        assert_eq!(args[2], OscType::Int(3));
     }
 
     #[test]
