@@ -87,6 +87,7 @@ const MOD_BAR := 3.0
 			if is_inside_tree():
 				smart_line_edit.set_value(_value)
 				queue_redraw()
+				_layout_value_label()
 	get:
 		return _value
 
@@ -131,7 +132,46 @@ func _ready():
 	
 	smart_line_edit.value_changed.connect(_on_smart_value_changed)
 	smart_line_edit.set_value(value)
+	# The readout is placed by `_layout_value_label` and never takes the pointer, so hovering
+	# it doesn't count as leaving the slider. Typing (double-click) shows the line edit.
+	smart_line_edit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	smart_line_edit.label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	smart_line_edit.line_edit.visibility_changed.connect(_layout_value_label)
+	resized.connect(_layout_value_label)
 	queue_redraw()
+	_layout_value_label()
+
+
+## Whether the value readout shows: while hovered, dragging or typing a value.
+func _value_label_shown() -> bool:
+	return _mouse_hovered or _dragging or smart_line_edit.is_editing or smart_line_edit.line_edit.visible
+
+
+## Top of the readout inside the slider. Centered vertically, unless the handle is near the
+## center, where the readout sits just below the handle (handle in the upper half) or just
+## above it (lower half) so the two never overlap.
+func value_label_top(label_height: float) -> float:
+	var center := (size.y - label_height) * 0.5
+	var handle_center := size.y * (1.0 - _norm_value())
+	var handle_half := maxf(handle_height, 1.0) * 0.5
+	var clearance := (label_height + handle_height) * 0.5
+	if absf(handle_center - size.y * 0.5) >= clearance:
+		return center
+	if handle_center <= size.y * 0.5:
+		return minf(handle_center + handle_half, size.y - label_height)
+	return maxf(handle_center - handle_half - label_height, 0.0)
+
+
+func _layout_value_label() -> void:
+	if smart_line_edit == null or not is_inside_tree():
+		return
+	smart_line_edit.visible = _value_label_shown()
+	if not smart_line_edit.visible:
+		return
+	var label_height := maxf(smart_line_edit.label.get_combined_minimum_size().y, 16.0)
+	smart_line_edit.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	smart_line_edit.position = Vector2(0.0, value_label_top(label_height))
+	smart_line_edit.size = Vector2(size.x, label_height)
 
 func _on_smart_value_changed(val):
 	value = val
@@ -243,6 +283,7 @@ func _gui_input(event: InputEvent):
 				_last_click_time = current_time
 			else:
 				_dragging = false
+			_layout_value_label()
 	elif event is InputEventMouseMotion:
 		if _dragging:
 			_fine_drag.scale = fine_drag_scale
@@ -262,12 +303,14 @@ func _update_value_from_mouse(mouse_pos: Vector2):
 func _on_mouse_entered():
 	_mouse_hovered = true
 	_refresh_mod_tooltip()
+	_layout_value_label()
 	queue_redraw()
 
 
 func _on_mouse_exited():
 	_mouse_hovered = false
 	_refresh_mod_tooltip()
+	_layout_value_label()
 	queue_redraw()
 
 
