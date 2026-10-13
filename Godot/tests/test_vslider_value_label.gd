@@ -10,6 +10,7 @@ func suite_name() -> String:
 
 
 func run_tests() -> void:
+	root.size = Vector2i(400, 400)
 	var holder := Control.new()
 	holder.size = Vector2(200, 300)
 	root.add_child(holder)
@@ -23,29 +24,35 @@ func run_tests() -> void:
 	holder.add_child(slider)
 	await process_frame
 	await process_frame
-	var label := slider.smart_line_edit
-	var h := label.size.y
+	holder.position = Vector2(40, 40)
+	slider.size = Vector2(60, 200)  # narrow strip width
+	await process_frame
+	var tip: ValueTooltip = null
 
-	_assert(not label.visible, "hidden when not hovered")
+	_assert(slider._value_tooltip == null or not slider._value_tooltip.visible, "no readout when not hovered")
+	_assert(not slider.smart_line_edit.visible, "the permanent label is gone")
 	slider._on_mouse_entered()
-	_assert(label.visible, "shown on hover")
-	slider.value = 10.0  # handle near the bottom
-	_assert(is_equal_approx(label.position.y, (200.0 - label.size.y) * 0.5), "centered when the handle is far from center (%s)" % label.position.y)
+	tip = slider._value_tooltip
+	_assert(tip != null and tip.visible, "tooltip shows on hover")
 
-	slider.value = 52.0  # handle just above center
-	var handle_center := 200.0 * (1.0 - 0.52)
-	_assert(label.position.y >= handle_center, "handle in upper half: label sits below it (%s vs %s)" % [label.position.y, handle_center])
-	slider.value = 48.0  # handle just below center
-	handle_center = 200.0 * (1.0 - 0.48)
-	_assert(label.position.y + label.size.y <= handle_center, "handle in lower half: label sits above it (%s)" % label.position.y)
-	_assert(label.position.y >= 0.0 and label.position.y + h <= 200.0, "label stays inside the slider")
+	var win: Rect2 = Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	for v in [5.0, 10.0, 30.0, 45.0, 48.0, 50.0, 52.0, 55.0, 70.0, 95.0]:
+		slider.value = v
+		var tip_rect: Rect2 = Rect2(tip.global_position, tip.size)
+		var handle_y: float = slider.get_global_rect().position.y + slider.size.y * (1.0 - v / 100.0)
+		var handle: Rect2 = Rect2(slider.get_global_rect().position.x, handle_y - slider.handle_height * 0.5, slider.size.x, slider.handle_height)
+		_assert(not tip_rect.intersects(handle), "value %s: tooltip does not cover the handle (%s vs %s)" % [v, tip_rect, handle])
+		_assert(win.encloses(tip_rect), "value %s: tooltip inside the window" % v)
+	slider.value = 10.0
+	var centered := slider.get_global_rect().get_center().y
+	_assert(absf(tip.global_position.y + tip.size.y * 0.5 - centered) < 1.0, "centered when the handle is far from center")
 
 	slider._on_mouse_exited()
-	_assert(not label.visible, "hidden again after the pointer leaves")
+	_assert(not tip.visible, "hidden after the pointer leaves")
 	slider._dragging = true
 	slider._layout_value_label()
-	_assert(label.visible, "shown while dragging")
+	_assert(tip.visible, "shown while dragging")
 	slider._dragging = false
 	slider._layout_value_label()
-	_assert(not label.visible, "hidden after the drag ends")
+	_assert(not tip.visible, "hidden after the drag ends")
 	holder.free()

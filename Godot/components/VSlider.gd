@@ -8,6 +8,7 @@ signal value_changed(new_value: float)
 var _dragging := false
 var _value := 0.0  # Internal backing field
 var _mouse_hovered := false
+var _value_tooltip: ValueTooltip = null
 var _last_click_time := 0.0
 var _double_click_threshold := 0.4  # 400ms
 @export var fine_drag_scale := FineDrag.DEFAULT_SCALE
@@ -132,24 +133,30 @@ func _ready():
 	
 	smart_line_edit.value_changed.connect(_on_smart_value_changed)
 	smart_line_edit.set_value(value)
-	# The readout is placed by `_layout_value_label` and never takes the pointer, so hovering
-	# it doesn't count as leaving the slider. Typing (double-click) shows the line edit.
-	smart_line_edit.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	smart_line_edit.label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The permanent label is replaced by a hover ValueTooltip; the SmartLineEdit only shows
+	# while typing a value (double-click).
+	smart_line_edit.visible = false
 	smart_line_edit.line_edit.visibility_changed.connect(_layout_value_label)
 	resized.connect(_layout_value_label)
+	visibility_changed.connect(func() -> void:
+		if not is_visible_in_tree() and _value_tooltip:
+			_value_tooltip.visible = false)
 	queue_redraw()
 	_layout_value_label()
 
 
-## Whether the value readout shows: while hovered, dragging or typing a value.
+## Whether the hover readout (a ValueTooltip) shows: while hovered or dragging, not while typing.
 func _value_label_shown() -> bool:
-	return _mouse_hovered or _dragging or smart_line_edit.is_editing or smart_line_edit.line_edit.visible
+	return (_mouse_hovered or _dragging) and not _is_typing()
 
 
-## Top of the readout inside the slider. Centered vertically, unless the handle is near the
-## center, where the readout sits just below the handle (handle in the upper half) or just
-## above it (lower half) so the two never overlap.
+func _is_typing() -> bool:
+	return smart_line_edit.is_editing or smart_line_edit.line_edit.visible
+
+
+## Top of a readout of `label_height` inside the slider. Centered vertically, unless the
+## handle is near the center, where it sits just below the handle (handle in the upper half)
+## or just above it (lower half) so the two never overlap.
 func value_label_top(label_height: float) -> float:
 	var center := (size.y - label_height) * 0.5
 	var handle_center := size.y * (1.0 - _norm_value())
@@ -162,16 +169,33 @@ func value_label_top(label_height: float) -> float:
 	return maxf(handle_center - handle_half - label_height, 0.0)
 
 
+## Show the hover tooltip (black-background ValueTooltip) over the slider, out of the
+## handle's way; while typing, the SmartLineEdit sits at the same spot instead.
 func _layout_value_label() -> void:
 	if smart_line_edit == null or not is_inside_tree():
 		return
-	smart_line_edit.visible = _value_label_shown()
-	if not smart_line_edit.visible:
+	if _is_typing():
+		var edit_height := maxf(smart_line_edit.label.get_combined_minimum_size().y, 16.0)
+		smart_line_edit.visible = true
+		smart_line_edit.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		smart_line_edit.position = Vector2(0.0, value_label_top(edit_height))
+		smart_line_edit.size = Vector2(size.x, edit_height)
+	else:
+		smart_line_edit.visible = false
+	if not _value_label_shown():
+		if _value_tooltip:
+			_value_tooltip.visible = false
 		return
-	var label_height := maxf(smart_line_edit.label.get_combined_minimum_size().y, 16.0)
-	smart_line_edit.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	smart_line_edit.position = Vector2(0.0, value_label_top(label_height))
-	smart_line_edit.size = Vector2(size.x, label_height)
+	if _value_tooltip == null:
+		_value_tooltip = ValueTooltip.attach(self)
+	_value_tooltip.set_text("%.1f dB" % value)
+	_value_tooltip.visible = true
+	var tip_height := _value_tooltip.get_combined_minimum_size().y
+	var top := value_label_top(tip_height)
+	var origin := get_global_rect().position
+	# place_over centers on the rect; top_level so the strip never clips it (clamped to the window).
+	_value_tooltip.place_over(Rect2(origin + Vector2(0.0, top), Vector2(size.x, tip_height)))
+
 
 func _on_smart_value_changed(val):
 	value = val
