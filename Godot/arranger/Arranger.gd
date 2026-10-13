@@ -237,6 +237,7 @@ func _ready():
 	mouse_exited.connect(_on_mouse_exited)
 	visibility_changed.connect(_on_visibility_changed)
 	v_scroll.resized.connect(_sync_arranger_content_height)
+	track_list.connect("visual_order_updated", _sync_arranger_content_height)
 
 	# Initial ruler and playhead update
 	_update_ruler()
@@ -667,10 +668,12 @@ func _zoom_tracks_vertically(zoom_in: bool) -> void:
 	# Get minimum height from TrackItem (check first available TrackItem)
 	# Use the header's real content floor (it grows when a narrow tracks panel wraps the
 	# controls); get_minimum_size() would include the current height and never shrink.
+	# Skip hidden headers (folded away or hidden tracks): they are never laid out, so their
+	# flow container measures at a stale or zero width and reports a fully wrapped floor.
 	var min_height = 30.0  # Fallback minimum
 	if track_list:
 		for child in track_list.get_children():
-			if child is TrackItem:
+			if child is TrackItem and child.is_visible_in_tree():
 				min_height = max(min_height, float(child._content_min_height()))
 
 	# Clamp to reasonable bounds and set as target
@@ -1047,16 +1050,17 @@ func _ensure_selection_bounds_overlay() -> void:
 	bounds.bind(timeline.clip_selection_manager, grid_helper)
 
 
-## Keep the scroll child at least as tall as the viewport and as the stacked tracks.
+## Keep the scroll child at least as tall as the viewport and as the stacked rows. Only rows the
+## arranger shows count: summing every track would leave blank scroll space for children of
+## collapsed folders and hidden tracks.
 func _sync_arranger_content_height() -> void:
 	if not v_scroll or not h_split:
 		return
-	var tracks_h := 0
+	var rows_h := 0.0
 	if current_project:
-		for t in current_project.tracks:
-			if t:
-				tracks_h += t.height
-	h_split.custom_minimum_size.y = maxi(tracks_h, int(v_scroll.size.y))
+		for row in AutomationRowOrder.build(current_project):
+			rows_h += AutomationRowOrder.base_height(row)
+	h_split.custom_minimum_size.y = maxi(int(rows_h), int(v_scroll.size.y))
 
 
 ## Track height changes must grow the scroll content or separator-drag fights the layout.

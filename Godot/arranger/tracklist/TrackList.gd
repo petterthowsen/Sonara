@@ -51,6 +51,8 @@ var _drop_indicator: DropIndicator = null
 @export var folder_indent_pixels: int = 12
 
 signal selection_changed(tracks: Array[Track], active: Track)
+## The set of shown rows changed (fold, hide, automation toggle, add/remove, reorder).
+signal visual_order_updated
 
 ## Rows from the last _update_visual_order, resized on every fold animation step.
 var _fold_rows: Array = []
@@ -729,6 +731,7 @@ func _update_visual_order() -> void:
 	AutomationRowOrder.apply_heights(current_project, rows, _node_for_row)
 
 	logger.info("Updated visual order (%d rows)" % rows.size())
+	visual_order_updated.emit()
 
 
 ## Hide TrackItems of tracks folded away (not in `rows`); apply_heights() shows the rest.

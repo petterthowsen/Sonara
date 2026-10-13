@@ -66,10 +66,37 @@ func _test_bottom_row_pinned_and_aligned() -> void:
 	await process_frame
 	_assert_columns_aligned(arranger, "after split change")
 
+	await _test_content_height_skips_folded_rows(arranger)
+
 	root.queue_free()
 	await process_frame
 	get_root().get_node("Sonara").editor = null
 	editor.free()
+
+
+## Children of a collapsed folder have no row, so they must not add blank scroll space.
+func _test_content_height_skips_folded_rows(arranger: Control) -> void:
+	var project: Object = load("res://data/Project.gd").new()
+	var folder: Object = project.create_folder_track("Folder").track
+	var a: Object = project.create_instrument_track("A").track
+	var b: Object = project.create_instrument_track("B").track
+	var after: Object = project.create_instrument_track("After").track
+	project.place_track(a, folder.id, null)
+	project.place_track(b, folder.id, a)
+	project.place_track(after, -1, folder)
+	for t in [folder, a, b, after]:
+		t.height = 400
+	var prev: Object = arranger.current_project
+	arranger.current_project = project
+
+	arranger._sync_arranger_content_height()
+	_assert(int(arranger.h_split.custom_minimum_size.y) == 1600, "expanded folder counts all rows (%d)" % arranger.h_split.custom_minimum_size.y)
+	folder.set("_is_folder_expanded", false)
+	arranger._sync_arranger_content_height()
+	_assert(int(arranger.h_split.custom_minimum_size.y) == 800, "collapsed folder leaves out its children (%d)" % arranger.h_split.custom_minimum_size.y)
+
+	arranger.current_project = prev
+	await process_frame
 
 
 func _assert_columns_aligned(arranger: Control, label: String) -> void:
