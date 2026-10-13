@@ -22,7 +22,7 @@ Folder vs Folder Bus vs Group:
 - Folder: organizational timeline parent, no mixer strip, no clips.
 - Folder Bus: a folder linked to a right-pane bus; children stay top-level left strips and route to that bus.
 - Group: left-pane mix parent with a timeline header; children nest under it and output is locked to the group. Device Multi-Out is a Group.
-- `move_track` reorders tracks or moves them into or out of a group or folder (`into: "top"` un-nests). Moving into a group re-routes the channel to the group.
+- `move_track` reorders tracks or moves them into or out of a group or folder (`into: "top"` un-nests). Moving into a group re-routes the channel to the group. To build a new group, create it first, then `create_track` each member with `into` set to the group.
 
 Devices:
 - Address devices by `path` only (`Channel/Device/Child`, e.g. `Kick/Delay` or `Kick/Chain/Delay 2`).
