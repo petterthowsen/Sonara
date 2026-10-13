@@ -386,7 +386,6 @@ clip_contents = true
 layout_mode = 2
 
 [node name="Children" type="PanelContainer" parent="HBox/ChildrenClip" unique_id=470089133]
-custom_minimum_size = Vector2(91.685, 0)
 layout_mode = 1
 anchors_preset = 9
 anchor_bottom = 1.0

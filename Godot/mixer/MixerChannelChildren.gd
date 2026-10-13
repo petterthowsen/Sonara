@@ -3,6 +3,9 @@ class_name MixerChannelChildren extends PanelContainer
 
 signal contents_changed
 
+## Width of an empty fold-out, so there is something to drop channels onto.
+const EMPTY_MIN_WIDTH := 92.0
+
 @onready var parent_header: Panel = $VBox/ParentHeader
 @onready var channels_box: ChannelsBox = $VBox/ChildBox
 
@@ -102,6 +105,9 @@ func sync_children() -> void:
 		if ui.get_parent() == channels_box and ui.get_index() != i:
 			channels_box.move_child(ui, i)
 
+	# No fixed width floor when there are children, so the box hugs them in every size mode.
+	# An empty fold-out keeps a drop-target width.
+	custom_minimum_size.x = 0.0 if desired.size() > 0 else EMPTY_MIN_WIDTH
 	contents_changed.emit()
 
 
