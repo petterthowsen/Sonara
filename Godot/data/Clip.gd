@@ -293,9 +293,11 @@ func update_midi_note(midi_note: MidiNoteData) -> void:
 	extend_content_length(midi_note.start_tick + midi_note.duration_ticks)
 
 	# Sync to audio engine if clip exists on engine
-	if _synced_to_engine:
-		var osc_path = "/clip/%s/update_note" % id
-		AudioEngineOSC.send(osc_path, [midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity, midi_note.release])
+	if _note_sync_throttled:
+		_dirty_notes[midi_note.id] = midi_note
+		_flush_dirty_notes_if_due()
+	elif _synced_to_engine:
+		_send_update_note(midi_note)
 		logger.info("[Clip] Updated note %d in clip %s: pitch=%d start=%d dur=%d" % [midi_note.id, id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks])
 	else:
 		push_warning("[Clip] Attempted to update note %d but clip %s not synced to engine!" % [midi_note.id, id])
@@ -303,6 +305,49 @@ func update_midi_note(midi_note: MidiNoteData) -> void:
 	modified_date = Time.get_unix_time_from_system()
 	midi_note_changed.emit(midi_note)
 	clip_modified.emit()
+
+
+## Minimum time between engine syncs of changed notes while note sync is throttled.
+const NOTE_SYNC_INTERVAL_MSEC := 40
+
+var _note_sync_throttled := false
+var _dirty_notes: Dictionary = {}  # note id -> MidiNoteData, changed but not yet sent
+var _last_note_flush_msec := 0
+## Number of update_note messages sent to the engine (tests and diagnostics).
+var note_updates_sent := 0
+
+
+## While throttled, `update_midi_note` sends changed notes to the engine at most every
+## NOTE_SYNC_INTERVAL_MSEC (the latest state of each note) instead of on every call. Use it around
+## a drag that edits many notes per frame. Ending the throttle sends everything still pending, so
+## the engine always matches the model afterwards.
+func set_note_sync_throttled(throttled: bool) -> void:
+	if _note_sync_throttled == throttled:
+		return
+	_note_sync_throttled = throttled
+	if not throttled:
+		flush_dirty_notes()
+
+
+## Send every note changed during a throttled period now.
+func flush_dirty_notes() -> void:
+	_last_note_flush_msec = Time.get_ticks_msec()
+	var pending := _dirty_notes.values()
+	_dirty_notes.clear()
+	if not _synced_to_engine:
+		return
+	for n: MidiNoteData in pending:
+		_send_update_note(n)
+
+
+func _flush_dirty_notes_if_due() -> void:
+	if Time.get_ticks_msec() - _last_note_flush_msec >= NOTE_SYNC_INTERVAL_MSEC:
+		flush_dirty_notes()
+
+
+func _send_update_note(midi_note: MidiNoteData) -> void:
+	note_updates_sent += 1
+	AudioEngineOSC.send("/clip/%s/update_note" % id, [midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity, midi_note.release])
 
 
 func get_notes_at_tick(tick: int) -> Array[MidiNoteData]:

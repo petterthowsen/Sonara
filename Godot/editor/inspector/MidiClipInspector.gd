@@ -18,6 +18,7 @@ var _stats_label: Label
 ## Velocity (7-bit) of each note before the drag (MidiNoteData -> float), empty when no drag runs.
 var _drag_origin: Dictionary = {}
 var _drag_before: Dictionary = {}
+var _drag_clips: Array[Clip] = []
 var _drag_src_lo := 1.0
 var _drag_src_hi := 127.0
 
@@ -69,6 +70,7 @@ func _on_clip_modified() -> void:
 
 
 func _on_unbound() -> void:
+	_end_throttle()
 	_drag_origin.clear()
 	_drag_before.clear()
 
@@ -101,6 +103,9 @@ func _on_drag_started() -> void:
 	_drag_src_lo = s["min"]
 	_drag_src_hi = s["max"]
 	_drag_before = ClipNotesStateCommand.capture_many(_clips())
+	for clip in _clips():
+		clip.set_note_sync_throttled(true)
+		_drag_clips.append(clip)
 
 
 func _on_range_changed(a: float, b: float) -> void:
@@ -123,10 +128,18 @@ func _on_range_changed(a: float, b: float) -> void:
 	refresh()
 
 
+## Release the throttle on any clip still held (unbound mid-drag), sending its final state.
+func _end_throttle() -> void:
+	for clip in _drag_clips:
+		clip.set_note_sync_throttled(false)
+	_drag_clips.clear()
+
+
 func _on_drag_ended() -> void:
 	if _drag_origin.is_empty():
 		return
 	var before := _drag_before
+	_end_throttle()  # sends the final state to the engine
 	_drag_origin = {}
 	_drag_before = {}
 	ClipNotesStateCommand.commit_many("Adjust Velocity", before)
