@@ -220,8 +220,8 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 10
-split_offsets = PackedInt32Array(210)
-split_offset = 210
+split_offsets = PackedInt32Array(250)
+split_offset = 250
 
 [node name="TracksPanel" type="PanelContainer" parent="VSplitContainer/ArrangeBody/VScroll/HSplit" unique_id=2126478893]
 z_index = 2

@@ -85,6 +85,7 @@ plugin and host (`Plugin Dragonfly Room Reverb (instance 3, host instance-3 (pid
 | `/channel/{id}/pan` | `f:pan, f:pan_right?` | Set pan (-1.0 to 1.0). The second value is the right pan in `STEREO_DUAL` mode |
 | `/channel/{id}/pan_mode` | `i:mode` | 0 = stereo combined (default), 1 = stereo dual (separate L/R), 2 = stereo balance, 3 = mono |
 | `/channel/{id}/mute` | `i:0_or_1` | Set mute state |
+| `/channel/{id}/enabled` | `i:0_or_1` | Enable (1, default) or deactivate (0) a channel: silent and its device chain is skipped |
 | `/channel/{id}/solo` | `i:0_or_1` | Set solo state |
 | `/channel/{id}/route` | `i:output_channel_id` | Set output routing (-1 for none; 1000+ = hardware outputs, see below) |
 | `/channel/{id}/aux_out` | `i:bus_index, i:target_channel_id` | Map extra device bus `bus_index` to a child channel (0 clears) |

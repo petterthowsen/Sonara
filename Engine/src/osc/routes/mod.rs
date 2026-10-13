@@ -381,6 +381,19 @@ mod tests {
     }
 
     #[test]
+    fn channel_enabled_route_sends_the_command() {
+        let mut h = Harness::new();
+        let sent = h.send("/channel/3/enabled", vec![Int(0)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetChannelEnabled {
+                id: 3,
+                enabled: false
+            }]
+        ));
+    }
+
+    #[test]
     fn preview_routes_send_the_preview_commands() {
         let mut h = Harness::new();
         let sent = h.send("/preview/play", vec![Str("/s/kick.wav".into()), Float(0.5)]);

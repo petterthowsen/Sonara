@@ -180,6 +180,12 @@ impl Channel {
     /// With `mix.timing` on, the call's time goes to the channel timer and each device's to its
     /// device timer.
     pub fn begin_device_chain(&mut self, start: usize, sample_count: usize) -> ChainStep {
+        if !self.enabled {
+            // Deactivated (issue 70): no MIDI dispatch, no devices; the solo pass silences it.
+            return ChainStep::Done {
+                result_in_output: false,
+            };
+        }
         let started = self.mix.timing.then(Instant::now);
         if start == 0 {
             crate::audio::rt_debug::section("device MIDI dispatch", || {

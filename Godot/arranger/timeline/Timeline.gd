@@ -399,6 +399,9 @@ func _sync_track_row_visibility(rows: Array) -> void:
 	for child in get_children():
 		if child is TimelineTrack and (child as TimelineTrack).track:
 			child.visible = shown.has((child as TimelineTrack).track)
+			(child as Control).modulate.a = ItemVisibility.dim_alpha(
+				ItemVisibility.track_hidden(project, child.track),
+				ItemVisibility.track_disabled(project, child.track))
 
 
 ## Follow the same fold slide as TrackList (TrackFoldAnimation.start is shared and idempotent).

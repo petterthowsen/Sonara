@@ -67,6 +67,13 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
                 mute: a.bool(0)?,
             })?;
         }
+        ["channel", id_str, "enabled"] => {
+            let id: usize = segment(cx.addr, id_str)?;
+            cx.commands.send(AudioCommand::SetChannelEnabled {
+                id,
+                enabled: a.bool(0)?,
+            })?;
+        }
         ["channel", id_str, "solo"] => {
             let id: usize = segment(cx.addr, id_str)?;
             cx.commands.send(AudioCommand::SetChannelSolo {

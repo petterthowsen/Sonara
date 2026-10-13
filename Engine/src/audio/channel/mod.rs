@@ -49,6 +49,9 @@ pub struct Channel {
     /// audio callback by the automation pass, cleared by `release_lane` (spec 030).
     pub cc_lane_mask: u128,
     pub mute: bool,
+    /// False deactivates the channel (issue 70): it is silent like a muted one and its device
+    /// chain is skipped, so it costs no CPU. Distinct from `mute`, which still runs devices.
+    pub enabled: bool,
     pub solo: bool,
     pub output_channel_id: Option<ChannelId>, // None for master/no output
 
@@ -164,6 +167,7 @@ impl Channel {
             pan_mode: PanMode::default(),
             cc_lane_mask: 0,
             mute: false,
+            enabled: true,
             solo: false,
             output_channel_id: Some(1), // Default to master (ID 1)
             send_channels: Vec::new(),

@@ -34,6 +34,8 @@ var logger : Log = Log.make("Arranger")
 @onready var automation_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationViewToggle
 @onready var routing_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/RoutingViewToggle
 @onready var automation_follows_clips_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationFollowsClipsToggle
+var show_hidden_toggle: Button
+var show_disabled_toggle: Button
 @onready var timeline_scroll_bar_margin: MarginContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin
 @onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin/TimelineScrollBar
 
@@ -155,6 +157,11 @@ func _ready():
 	automation_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation"))
 	routing_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("routing"))
 	automation_follows_clips_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation_follows_clips"))
+	# Issue 70: bring back hidden and disabled tracks.
+	show_hidden_toggle = _make_view_toggle(
+		"Show Hidden Tracks", preload("res://assets/icons/eye.svg"), "show_hidden")
+	show_disabled_toggle = _make_view_toggle(
+		"Show Disabled Tracks", preload("res://assets/icons/power.svg"), "show_disabled")
 
 	beats_ruler_toggle.toggled.connect(_on_beats_ruler_toggled)
 	time_ruler_toggle.toggled.connect(_on_time_ruler_toggled)
@@ -855,6 +862,20 @@ func _apply_ruler_row_visibility() -> void:
 
 ## Footer toggles: show/hide automation lanes and buttons, or the routing button, on every
 ## track. TrackList, Timeline and TrackItem follow the project's arranger_view.
+## A footer toggle for a project arranger_view flag, added after the existing view toggles.
+func _make_view_toggle(tooltip: String, icon: Texture2D, key: String) -> Button:
+	var button := Button.new()
+	button.custom_minimum_size = Vector2(32, 32)
+	button.tooltip_text = tooltip
+	button.focus_mode = Control.FOCUS_NONE
+	button.toggle_mode = true
+	button.icon = icon
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.toggled.connect(_on_arranger_view_toggled.bind(key))
+	automation_follows_clips_toggle.get_parent().add_child(button)
+	return button
+
+
 func _on_arranger_view_toggled(pressed: bool, key: String) -> void:
 	if current_project:
 		current_project.set_arranger_view(key, pressed)
@@ -895,6 +916,8 @@ func _on_project_activated(project: Project) -> void:
 	automation_view_toggle.set_pressed_no_signal(project.get_arranger_view("automation"))
 	routing_view_toggle.set_pressed_no_signal(project.get_arranger_view("routing"))
 	automation_follows_clips_toggle.set_pressed_no_signal(project.get_arranger_view("automation_follows_clips"))
+	show_hidden_toggle.set_pressed_no_signal(project.get_arranger_view("show_hidden"))
+	show_disabled_toggle.set_pressed_no_signal(project.get_arranger_view("show_disabled"))
 
 	# Set grid_helper on timeline and ruler
 	timeline.grid_helper = grid_helper

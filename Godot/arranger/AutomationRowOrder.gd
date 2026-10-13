@@ -22,7 +22,7 @@ static func build(project: Object) -> Array:
 		return rows
 	var show_lanes: bool = project.get_arranger_view("automation")
 	for track in project.get_visual_track_list():
-		if _folded_away(project, track):
+		if _folded_away(project, track) or not ItemVisibility.track_listed(project, track):
 			continue
 		rows.append({"track": track, "lane": null})
 		if not show_lanes:

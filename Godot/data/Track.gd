@@ -21,6 +21,8 @@ signal automation_lane_removed(lane: AutomationLane)
 signal automation_expanded_changed(expanded: bool)
 ## Folder/group children shown or hidden in the arranger.
 signal folder_expanded_changed(expanded: bool)
+## Hidden or enabled changed (issue 70).
+signal item_state_changed
 
 # ============================================================================
 # PROPERTIES
@@ -159,6 +161,25 @@ var solo: bool:
 		return ch.solo if ch else _solo
 	set(value):
 		_solo = value
+var _hidden: bool = false
+var _enabled: bool = true
+
+## Visual-only hide (issue 70). The linked channel is the source of truth, like `muted`.
+var hidden: bool:
+	get:
+		var ch := get_linked_channel()
+		return ch.hidden if ch else _hidden
+	set(value):
+		_hidden = value
+
+## False deactivates the linked channel's devices (issue 70); a channel-less track only dims.
+var enabled: bool:
+	get:
+		var ch := get_linked_channel()
+		return ch.enabled if ch else _enabled
+	set(value):
+		_enabled = value
+
 var armed: bool = false  # Record armed
 
 # Connection state
@@ -310,6 +331,33 @@ func set_mute(value: bool) -> void:
 		_muted = value
 
 
+## Hide or show the linked channel (and so every track on it), or this track when it has none.
+func set_hidden(value: bool) -> void:
+	var ch := get_linked_channel()
+	if ch:
+		ch.set_hidden(value)
+	elif _hidden != value:
+		_hidden = value
+		_item_state_changed()
+
+
+## Enable or deactivate the linked channel, or this track when it has none.
+func set_enabled(value: bool) -> void:
+	var ch := get_linked_channel()
+	if ch:
+		ch.set_enabled(value)
+	elif _enabled != value:
+		_enabled = value
+		_item_state_changed()
+
+
+func _item_state_changed() -> void:
+	item_state_changed.emit()
+	var project := get_project_ref()
+	if project:
+		project.notify_item_visibility_changed()
+
+
 ## Solo the linked channel, or this track when it has none.
 func set_solo(value: bool) -> void:
 	var ch := get_linked_channel()
@@ -357,6 +405,8 @@ func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> v
 		if old_channel:
 			# Keep the strip's last mute/solo when this track ends up without a channel.
 			_muted = old_channel.mute
+			_hidden = old_channel.hidden
+			_enabled = old_channel.enabled
 			_solo = old_channel.solo
 			old_channel.unregister_track(self)
 
@@ -751,7 +801,8 @@ func to_json() -> Dictionary:
 ## Plain fields copied by JsonFields (through their setters); defaults come from the initializers.
 const JSON_FIELDS: Array[String] = [
 	"name", "color_by_channel", "name_by_channel", "order", "default_channel_id",
-	"parent_track_id", "is_folder_expanded", "height", "folded", "muted", "solo", "armed",
+	"parent_track_id", "is_folder_expanded", "height", "folded", "muted", "solo", "hidden", "enabled",
+	"armed",
 	"automation_expanded",
 ]
 

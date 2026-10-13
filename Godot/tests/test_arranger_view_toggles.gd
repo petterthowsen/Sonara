@@ -126,7 +126,7 @@ func _test_routing_toggle() -> void:
 func _test_view_persists() -> void:
 	var project_script: GDScript = load("res://data/Project.gd")
 	var project: Object = project_script.new()
-	_assert(project.arranger_view == {"automation": true, "routing": true, "automation_follows_clips": false},
+	_assert(project.arranger_view == {"automation": true, "routing": true, "automation_follows_clips": false, "show_hidden": false, "show_disabled": false},
 		"new project shows automation/routing, follows-clips off")
 	project.set_arranger_view("automation", false)
 	project.set_arranger_view("automation_follows_clips", true)

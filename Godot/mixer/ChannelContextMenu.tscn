@@ -72,9 +72,8 @@ theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
 [node name="ActiveCheckbox" type="CheckButton" parent="VBoxContainer" unique_id=821438595]
 layout_mode = 2
 tooltip_text = "Disable to save memory"
-disabled = true
 button_pressed = true
-text = "Active"
+text = "Enabled"
 
 [node name="HSeparator2" type="HSeparator" parent="VBoxContainer" unique_id=1220694933]
 layout_mode = 2
