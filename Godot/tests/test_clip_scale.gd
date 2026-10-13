@@ -28,6 +28,7 @@ func run_tests() -> void:
 	await _test_double_clamps_to_next_clip()
 	await _test_shared_clip_across_tracks_clamps()
 	await _test_half_trims_note_overlaps()
+	await _test_project_wide_scales_unselected_instances()
 
 
 func _make_clip(notes: Array, length: int = 3840) -> Object:
@@ -225,4 +226,37 @@ func _test_half_trims_note_overlaps() -> void:
 	_press(menu.scale_half)
 	var n: Array = _notes(clip)
 	_assert(n[0][0] + n[0][1] <= n[1][0] or n[0][0] == n[1][0], "same-pitch notes do not overlap, got %s" % [n])
+	menu.free()
+
+
+## Scaling one selected instance also scales and clamps the clip's unselected instances on
+## other tracks (the project-wide pass, fed with a track list as the menu feeds the project's).
+func _test_project_wide_scales_unselected_instances() -> void:
+	var menu := await _open_menu()
+	var clip := _make_clip([[0, 480]], 1920)
+	var other := _make_clip([[0, 480]], 1920)
+	var selected := _make_instance(clip, 1920)
+	var hidden_free := _make_instance(clip, 1920)
+	var hidden_blocked := _make_instance(clip, 1920)
+	hidden_blocked.start_ticks = 960
+	var blocker := _make_instance(other, 960)
+	blocker.start_ticks = 3000
+	var t1 = _track_with([selected])
+	var t2 = _track_with([hidden_free])
+	var t3 = _track_with([hidden_blocked, blocker])
+	_bind(menu, [selected])
+	_recorded.clear()
+	_history_util.test_recorder = func(cmd) -> void: _recorded.append(cmd)
+	menu.scale_selected(2.0, [t1, t2, t3])
+	_history_util.test_recorder = Callable()
+	_assert(selected.duration_ticks == 3840 and hidden_free.duration_ticks == 3840,
+		"unselected instance on another track doubles")
+	_assert(hidden_blocked.duration_ticks == 2040,
+		"unselected instance is clamped at its neighbour, got %d" % hidden_blocked.duration_ticks)
+	_assert(blocker.duration_ticks == 960, "the unrelated clip is untouched")
+	_assert(_recorded.size() == 1, "one undo step")
+	_recorded[0].undo()
+	_assert(selected.duration_ticks == 1920 and hidden_free.duration_ticks == 1920
+		and hidden_blocked.duration_ticks == 1920 and clip.content_length_ticks == 1920,
+		"undo restores every instance")
 	menu.free()

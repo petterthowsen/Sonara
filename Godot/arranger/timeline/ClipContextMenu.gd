@@ -291,17 +291,27 @@ func _on_transpose_pressed(semitones: int) -> void:
 ## Scale the selected MIDI clips' time axis by `factor` (0.5 or 2.0) as one undo step. Like
 ## Transpose it edits the source clip, so every instance of a shared clip scales with it.
 func _on_scale_pressed(factor: float) -> void:
+	var tracks: Array = []
+	if Sonara and Sonara.editor and Sonara.editor.project:
+		tracks = Sonara.editor.project.tracks
+	if scale_selected(factor, tracks):
+		hide()
+
+
+## Scale the bound MIDI clips by `factor`, along with every instance of them on `tracks` (the
+## project's tracks; the bound instances alone when empty). Returns false when nothing applies.
+func scale_selected(factor: float, tracks: Array) -> bool:
 	var clips := _midi_clips_of(selected_instances)
 	if clips.is_empty():
-		return
+		return false
 	var pool: Array = selected_instances.duplicate()
-	if Sonara and Sonara.editor and Sonara.editor.project:
-		pool.clear()
-		for track in Sonara.editor.project.tracks:
-			pool.append_array(track.clip_instances)
+	for track in tracks:
+		for inst in track.clip_instances:
+			if not pool.has(inst):
+				pool.append(inst)
 	ClipScaleActions.scale_clips("Scale Clip %s" % ("Half" if factor < 1.0 else "Double"),
 			clips, pool, factor)
-	hide()
+	return true
 
 
 ## The distinct MIDI source clips of `instances`, in selection order.
