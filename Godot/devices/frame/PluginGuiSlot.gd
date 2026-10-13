@@ -420,6 +420,9 @@ func _update_note() -> void:
 		button = "Reload"
 	elif _deactivated and device.loading_state == "loading":
 		text = "Loading %s..." % device.get_display_name()
+	elif _deactivated and device.loading_state.begins_with("failed:"):
+		text = "%s couldn't be activated: %s\nIt stays deactivated; its state is kept." % [device.get_display_name(), device.loading_state.substr(7)]
+		button = "Retry"
 	elif _deactivated:
 		text = "%s is deactivated and unloaded.\nActivating restores its state." % device.get_display_name()
 		button = "Activate"

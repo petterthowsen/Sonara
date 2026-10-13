@@ -276,6 +276,7 @@ impl SubprocessClapAdapter {
             restore_state: None,
             restore_params: Vec::new(),
             replace_existing: false,
+            previous_instance_id: instance_id,
             alive: Arc::clone(&alive),
             report_active: false,
         }
@@ -747,7 +748,7 @@ impl AudioDevice for SubprocessClapAdapter {
     }
 
     fn is_active(&self) -> bool {
-        self.is_active
+        self.is_active && !self.load.is_activation_failed()
     }
 
     /// Activating respawns the plugin and waits on its host, so the command worker does it with
@@ -1019,6 +1020,9 @@ impl SubprocessClapAdapter {
     /// Command thread, under the lock: the device was deactivated, so activate it again. Builds
     /// the request that respawns the plugin from the saved state (the reload path); the load
     /// reports `DeviceActiveChanged{active:true}` when it finishes.
+    ///
+    /// The request gets a fresh instance id: a load cancelled by the deactivation may still be
+    /// finishing under the old one, and it only ever cleans up that id.
     pub fn begin_activate(&mut self) -> PluginLoadRequest {
         self.is_active = true;
         self.begin_load(true)
@@ -1050,10 +1054,14 @@ impl SubprocessClapAdapter {
 
     /// True while the device is deactivated: no plugin instance exists.
     pub fn is_unloaded(&self) -> bool {
-        self.load.is_unloaded()
+        self.load.is_unloaded() || self.load.is_activation_failed()
     }
 
     fn begin_load(&mut self, report_active: bool) -> PluginLoadRequest {
+        let previous_instance_id = self.instance_id;
+        if report_active {
+            self.instance_id = self.process_manager.allocate_instance_id();
+        }
         self.host = self.desired_host();
         // The old host closes this instance's GUI with it; Godot is told by the caller.
         self.gui_open = false;
@@ -1103,6 +1111,7 @@ impl SubprocessClapAdapter {
             restore_state: self.saved_state(),
             restore_params,
             replace_existing: true,
+            previous_instance_id,
             alive: Arc::clone(&self.alive),
             report_active,
         }
@@ -1758,6 +1767,61 @@ mod tests {
         assert_eq!(request.restore_params, vec![(4, 0.25)]);
         assert!(request.report_active);
         assert!(request.replace_existing);
+    }
+
+    /// Deactivate then activate while the first load is still running: the cancelled load keeps
+    /// its own instance id (and cleans up only that), the activation gets a new one.
+    #[test]
+    fn activation_after_a_cancelled_load_uses_a_fresh_instance_id() {
+        let load = Arc::new(PluginLoad::new());
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        let stale = adapter.load();
+        assert!(stale.is_loading());
+        let stale_id = adapter.instance_id;
+        // The test adapter's hard-coded id predates its manager's counter.
+        adapter.process_manager.allocate_instance_id();
+
+        let (_pm, unloaded_id) = adapter.mark_unloaded();
+        assert_eq!(unloaded_id, stale_id);
+        assert!(stale.is_cancelled());
+
+        let request = adapter.begin_activate();
+        assert_ne!(request.instance_id, stale_id, "the stale load must not share the id");
+        assert_eq!(request.previous_instance_id, stale_id);
+        assert_eq!(adapter.instance_id, request.instance_id);
+        assert!(!request.load.is_cancelled());
+        // Crash reloads keep the id.
+        let reload = adapter.begin_reload();
+        assert_eq!(reload.instance_id, request.instance_id);
+        assert_eq!(reload.previous_instance_id, request.instance_id);
+    }
+
+    /// A failed activation leaves the device deactivated with its state, ready to retry.
+    #[test]
+    fn a_failed_activation_leaves_the_device_deactivated_with_its_state() {
+        let load = Arc::new(PluginLoad::new_unloaded());
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        adapter.mark_unloaded();
+        adapter.set_saved_state(vec![5, 5]);
+        let request = adapter.begin_activate();
+        assert!(adapter.is_active());
+
+        request.load.set_activation_failed("spawn failed".to_string());
+
+        assert!(!adapter.is_active());
+        assert!(adapter.is_unloaded());
+        assert_eq!(
+            adapter.loading_state().as_deref(),
+            Some("failed:spawn failed")
+        );
+        assert_eq!(adapter.saved_state(), Some(vec![5, 5]));
+        // Retrying builds a new activation from the same state.
+        let retry = adapter.begin_activate();
+        assert!(adapter.is_active());
+        assert_eq!(retry.restore_state, Some(vec![5, 5]));
+        assert!(!adapter.load().is_activation_failed());
     }
 
     /// A device created deactivated (a project saved that way) never starts a load, but keeps

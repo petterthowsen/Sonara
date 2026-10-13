@@ -100,7 +100,13 @@ impl CommandWorker {
                     let same_host =
                         host_pid != 0 && load.is_crashed() && load.host_pid() == host_pid;
                     if requested || same_host {
-                        requests.push((id, *path, plugin.begin_reload()));
+                        // A failed activation is Reload's retry: the device is deactivated.
+                        let request = if plugin.is_unloaded() {
+                            plugin.begin_activate()
+                        } else {
+                            plugin.begin_reload()
+                        };
+                        requests.push((id, *path, request));
                     }
                 });
             }

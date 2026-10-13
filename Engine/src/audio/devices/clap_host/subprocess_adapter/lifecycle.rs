@@ -91,6 +91,16 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_activation_is_flagged_and_keeps_the_failed_label() {
+        let load = PluginLoad::new();
+        assert!(!load.is_activation_failed());
+        load.set_activation_failed("no such plugin".to_string());
+        assert!(load.is_activation_failed());
+        assert!(load.is_failed());
+        assert_eq!(load.state_label(), "failed:no such plugin");
+    }
+
+    #[test]
     fn plugin_load_exposes_shared_memory_only_when_ready() {
         let load = PluginLoad::new();
         assert!(load.shared_memory().is_none());
@@ -273,6 +283,9 @@ pub struct PluginLoad {
     /// Set when this load was superseded (the device was deactivated while it was still
     /// loading): the loading thread stops and cleans up instead of publishing a ready plugin.
     cancelled: AtomicBool,
+    /// The spawn of a load that activates a deactivated device failed: the device stays
+    /// deactivated (unloaded, saved state kept) and only shows the failure.
+    activation_failed: AtomicBool,
 }
 
 impl PluginLoad {
@@ -295,6 +308,7 @@ impl PluginLoad {
             activated_rate: AtomicU32::new(0),
             host_pid: AtomicU32::new(0),
             cancelled: AtomicBool::new(false),
+            activation_failed: AtomicBool::new(false),
         }
     }
 
@@ -332,6 +346,18 @@ impl PluginLoad {
     /// lives only in the adapter.
     pub fn is_unloaded(&self) -> bool {
         self.state.load(Ordering::Acquire) == UNLOADED
+    }
+
+    /// Mark the load failed and the device it was activating deactivated again.
+    pub fn set_activation_failed(&self, error: String) {
+        self.activation_failed.store(true, Ordering::Release);
+        self.set_failed(error);
+    }
+
+    /// True when an activation of a deactivated device failed: no instance exists and the device
+    /// is inactive, although the state label reads `failed:`.
+    pub fn is_activation_failed(&self) -> bool {
+        self.activation_failed.load(Ordering::Acquire)
     }
 
     /// Mark this load superseded; see `is_cancelled`.
@@ -449,6 +475,10 @@ pub struct PluginLoadRequest {
     pub restore_params: Vec<(ParamId, ParamValue)>,
     /// Shut the previous instance's host down first (a reload, not a first load).
     pub replace_existing: bool,
+    /// The instance id the previous load used, shut down first when `replace_existing`. An
+    /// activation gets a fresh `instance_id`, so a cancelled load still finishing under the old
+    /// id can only ever clean up its own instance, never the new one.
+    pub previous_instance_id: InstanceId,
     /// Cleared when the adapter is dropped. A load in flight then stops and cleans up instead of
     /// leaving an orphan host behind.
     pub alive: Arc<AtomicBool>,
@@ -484,6 +514,7 @@ fn run_load(request: PluginLoadRequest) {
         restore_state,
         restore_params,
         replace_existing,
+        previous_instance_id,
         alive,
         report_active,
     } = request;
@@ -500,13 +531,13 @@ fn run_load(request: PluginLoadRequest) {
         }
     };
     send_state("loading".to_string());
-    let report_active_changed = || {
+    let report_active_changed = |active: bool| {
         if report_active && !load.is_cancelled() {
             if let Some(ref tx) = status_tx {
                 let _ = tx.send(EngineStatus::DeviceActiveChanged {
                     channel_id,
                     device_path,
-                    active: true,
+                    active,
                 });
             }
         }
@@ -515,7 +546,7 @@ fn run_load(request: PluginLoadRequest) {
     if replace_existing {
         // Drop the old instance binding: after a crash its host is usually already gone; when
         // moving to another host, a shared old host only unloads this instance.
-        process_manager.shutdown_instance(instance_id);
+        process_manager.shutdown_instance(previous_instance_id);
     }
     if !alive.load(Ordering::Acquire) || load.is_cancelled() {
         // The device was removed (or deactivated) while this reload was starting: nothing to load.
@@ -535,10 +566,15 @@ fn run_load(request: PluginLoadRequest) {
     ) {
         Ok(connection) => connection,
         Err(e) => {
-            load.set_failed(e.clone());
+            if report_active {
+                // Activation failed: the device ends up deactivated, the saved state kept.
+                load.set_activation_failed(e.clone());
+            } else {
+                load.set_failed(e.clone());
+            }
             error!("❌ Failed to spawn plugin subprocess: {}", e);
             send_state(format!("failed:{}", e));
-            report_active_changed();
+            report_active_changed(false);
             return;
         }
     };
@@ -682,7 +718,7 @@ fn run_load(request: PluginLoadRequest) {
         param_count
     );
     send_state("ready".to_string());
-    report_active_changed();
+    report_active_changed(true);
     if let Some(ref tx) = status_tx {
         let _ = tx.send(EngineStatus::PluginHost {
             channel_id,

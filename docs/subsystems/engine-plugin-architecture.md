@@ -159,17 +159,18 @@
   `cancel`led, so a load still in flight stops and shuts its instance down instead of publishing.
   The reported latency is kept, so latency compensation doesn't shift. The engine reports
   `loading_state = "unloaded"` then `active = 0`.
-  `activate 1` goes through the reload path (`begin_activate`, `PluginLoadRequest::report_active`):
-  fresh host, saved blob restored, cached parameters re-sent, `DeviceReady`; the load reports
-  `active = 1` once it finished, ready or failed (a failure shows as `failed:`, and Reload works).
+  `activate 1` goes through the reload path (`begin_activate`, `PluginLoadRequest::report_active`)
+  under a fresh instance id (a load cancelled by the deactivation may still be finishing under the
+  old id and only cleans that one up): fresh host, saved blob restored, cached parameters re-sent,
+  `DeviceReady`; the load reports `active = 1` once it is ready. If the spawn fails the device
+  ends up deactivated again (`PluginLoad::set_activation_failed`): `loading_state = failed:...`
+  plus `active = 0`, the saved state kept; activating again, or Reload, retries.
   A plugin added with `active = 0` (project load) is created `UNLOADED` and loads nothing;
   `state/load` on it only stores the blob, and `state/save` writes the stored blob (size 0 when
   there is none), so a project saved while a plugin is deactivated keeps its state. Parameter writes
   made while unloaded update the cache and are sent after the next load. Built-in devices keep
   `AudioDevice::activate/deactivate`; the adapter's trait methods refuse, since they would block
-  under the lock. Known race: reactivating within the seconds a cancelled load is still
-  finishing can make that load shut down the new instance (it shares the instance id); it then
-  shows as crashed and Reload fixes it.
+  under the lock.
 - State blobs: the host implements CLAP's state extension (`save`/`load` on the main thread).
   `mark_dirty` (HostState registered) or any parameter change sets the adapter's dirty flag; the
   command thread refreshes the blob at most once per 30 s while dirty, and on `{device}/state/save`
