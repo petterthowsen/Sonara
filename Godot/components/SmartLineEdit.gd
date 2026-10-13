@@ -31,6 +31,14 @@ var _value_string := "0.0"
 ## Whether to allow editing via double-click on the label
 @export var edit_via_click := true
 
+## When true, the label's text width counts toward this control's minimum size, so a container
+## (e.g. a context menu header) grows to fit the full text instead of clipping it or letting it
+## run under a neighbouring control. Off by default: the control is normally sized by its parent.
+@export var fit_text_width := false:
+	set(v):
+		fit_text_width = v
+		update_minimum_size()
+
 ## Tracks if currently in edit mode
 var is_editing := false
 
@@ -141,6 +149,12 @@ func _get_typed_value() -> Variant:
 		return _value_string
 
 
+func _get_minimum_size() -> Vector2:
+	if fit_text_width and label:
+		return Vector2(label.get_minimum_size().x, 0.0)
+	return Vector2.ZERO
+
+
 ## Internal: update label display based on current value
 func _update_label_from_value() -> void:
 	if value_type == ValueType.NUMERIC:
@@ -150,6 +164,8 @@ func _update_label_from_value() -> void:
 			label.text += suffix
 	else:
 		label.text = _value_string
+	if fit_text_width:
+		update_minimum_size()
 
 
 ## Set validation callback that will be called before accepting values

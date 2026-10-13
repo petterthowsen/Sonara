@@ -60,6 +60,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 value_type = 1
 display_format = "%s"
+fit_text_width = true
 
 [node name="LineEdit" parent="VBoxContainer/Header/HBox/Label" index="1" unique_id=1087718571]
 max_length = 200
