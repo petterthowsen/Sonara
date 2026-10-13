@@ -66,6 +66,7 @@ static func create_default() -> ToolRegistry:
 	reg.register(DeleteTool.new())
 	reg.register(SetMixerTool.new())
 	reg.register(RouteChannelTool.new())
+	reg.register(MoveTrackTool.new())
 	reg.register(AddSendTool.new())
 	reg.register(CreateBusTool.new())
 	reg.register(AddDeviceTool.new())

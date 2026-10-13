@@ -114,17 +114,20 @@ func _tracks() -> String:
 	var p := _project()
 	if p == null:
 		return "_No project open._"
-	var lines: PackedStringArray = ["| name | type | channel | clips |", "|---|---|---|---|"]
+	var lines: PackedStringArray = ["| name | type | parent | channel | clips |", "|---|---|---|---|---|"]
 	var extra := 0
-	for i in range(p.tracks.size()):
+	var ordered := p.get_visual_track_list()
+	for i in range(ordered.size()):
 		if i >= TABLE_CAP:
-			extra = p.tracks.size() - TABLE_CAP
+			extra = ordered.size() - TABLE_CAP
 			break
-		var t: Track = p.tracks[i]
+		var t: Track = ordered[i]
+		var parent_track := p.get_track_by_id(t.parent_track_id) if t.parent_track_id >= 0 else null
+		var parent_cell := _md_cell(parent_track.name) if parent_track else "—"
 		var ch := t.get_linked_channel()
 		var ch_cell := _md_cell(ch.name) if ch and not DeviceNaming.names_equal(ch.name, t.name) else "—"
-		lines.append("| %s | %s | %s | %d |" % [
-			_md_cell(t.name), AiTool.track_kind(t), ch_cell, t.clip_instances.size()
+		lines.append("| %s | %s | %s | %s | %d |" % [
+			_md_cell(t.name), AiTool.track_kind(t), parent_cell, ch_cell, t.clip_instances.size()
 		])
 	if extra > 0:
 		lines.append("_%d more tracks omitted._" % extra)

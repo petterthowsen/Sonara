@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "List arrangement tracks: name, type, channel (only if it differs from the track name), clip_count, color."
+	return "List arrangement tracks: name, type, parent (when nested; rows are in arranger tree order), channel (only if it differs from the track name), clip_count, color."
 
 
 func execute(_args: Dictionary) -> Dictionary:
@@ -15,6 +15,6 @@ func execute(_args: Dictionary) -> Dictionary:
 	if project is Dictionary:
 		return project
 	var tracks: Array = []
-	for t in project.tracks:
+	for t in project.get_visual_track_list():
 		tracks.append(compact_track(t))
 	return ok({"tracks": tracks})
