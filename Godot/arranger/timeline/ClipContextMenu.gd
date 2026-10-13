@@ -17,6 +17,8 @@ static var logger := Log.make("ClipContextMenu")
 @onready var merge: Button = $VBoxContainer/Merge
 @onready var transpose_down: Button = $VBoxContainer/Transpose/OctaveDown
 @onready var transpose_up: Button = $VBoxContainer/Transpose/OctaveUp
+@onready var scale_half: Button = $VBoxContainer/TimeScale/ScaleHalf
+@onready var scale_double: Button = $VBoxContainer/TimeScale/ScaleDouble
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
 @onready var make_unique_per_track: Button = $VBoxContainer/MakeUniquePerTrack
 @onready var delete: Button = $VBoxContainer/Delete
@@ -55,6 +57,10 @@ func _ready() -> void:
 		transpose_down.pressed.connect(_on_transpose_pressed.bind(-OCTAVE_SEMITONES))
 	if is_instance_valid(transpose_up):
 		transpose_up.pressed.connect(_on_transpose_pressed.bind(OCTAVE_SEMITONES))
+	if is_instance_valid(scale_half):
+		scale_half.pressed.connect(_on_scale_pressed.bind(0.5))
+	if is_instance_valid(scale_double):
+		scale_double.pressed.connect(_on_scale_pressed.bind(2.0))
 	if is_instance_valid(cut):
 		cut.pressed.connect(_on_cut_pressed)
 	if is_instance_valid(copy):
@@ -138,6 +144,12 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 		transpose_down.disabled = not all_midi
 	if transpose_up:
 		transpose_up.disabled = not all_midi
+
+	# Scaling rewrites note timing too, so it needs MIDI clips only.
+	if scale_half:
+		scale_half.disabled = not all_midi
+	if scale_double:
+		scale_double.disabled = not all_midi
 
 	# Reverse is an audio-clip feature: shown only when every selected instance is audio.
 	if reverse_checkbox:
@@ -273,6 +285,22 @@ func _on_transpose_pressed(semitones: int) -> void:
 		"Clips" if clips.size() > 1 else "Clip",
 		"Up" if semitones > 0 else "Down",
 	], before)
+	hide()
+
+
+## Scale the selected MIDI clips' time axis by `factor` (0.5 or 2.0) as one undo step. Like
+## Transpose it edits the source clip, so every instance of a shared clip scales with it.
+func _on_scale_pressed(factor: float) -> void:
+	var clips := _midi_clips_of(selected_instances)
+	if clips.is_empty():
+		return
+	var pool: Array = selected_instances.duplicate()
+	if Sonara and Sonara.editor and Sonara.editor.project:
+		pool.clear()
+		for track in Sonara.editor.project.tracks:
+			pool.append_array(track.clip_instances)
+	ClipScaleActions.scale_clips("Scale Clip %s" % ("Half" if factor < 1.0 else "Double"),
+			clips, pool, factor)
 	hide()
 
 
