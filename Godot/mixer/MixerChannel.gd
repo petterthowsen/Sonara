@@ -1047,7 +1047,7 @@ func _on_output_menu_selected(item_id: int) -> void:
 	"""Handle output menu selection."""
 	if not channel or not project:
 		return
-	ChannelOutputMenu.apply(channel, item_id)
+	ChannelMultiEdit.apply_route(channel, item_id, ChannelMultiEdit.peers_of(channel, self), project)
 	_update_output_button_text()
 	logger.info("Channel %d routed to %d" % [channel.id, item_id])
 
