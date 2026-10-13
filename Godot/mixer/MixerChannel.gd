@@ -1097,7 +1097,11 @@ func _sync_children_slide(animate := false) -> void:
 
 	if foldout_toggle:
 		foldout_toggle.visible = show_fold
-		foldout_toggle.set_pressed_no_signal(expanded)
+		# ToggleIconButton.set_state also swaps the icon; set_pressed_no_signal alone leaves it stale.
+		if foldout_toggle is ToggleIconButton:
+			(foldout_toggle as ToggleIconButton).set_state(expanded)
+		else:
+			foldout_toggle.set_pressed_no_signal(expanded)
 
 	if children_slide:
 		if show_fold and channel:
