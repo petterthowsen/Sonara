@@ -100,6 +100,10 @@ pub enum AudioCommand {
         id: ChannelId,
         mute: bool,
     },
+    SetChannelEnabled {
+        id: ChannelId,
+        enabled: bool,
+    },
     SetChannelSolo {
         id: ChannelId,
         solo: bool,
@@ -795,6 +799,9 @@ fn dispatch(
             channel::set_channel_pan_width(state, id, width)
         }
         AudioCommand::SetChannelMute { id, mute } => channel::set_channel_mute(state, id, mute),
+        AudioCommand::SetChannelEnabled { id, enabled } => {
+            channel::set_channel_enabled(state, id, enabled)
+        }
         AudioCommand::SetChannelSolo { id, solo } => channel::set_channel_solo(state, id, solo),
         AudioCommand::SetChannelRoute { id, output_id } => {
             channel::set_channel_route(state, id, output_id)

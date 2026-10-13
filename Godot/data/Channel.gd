@@ -44,6 +44,8 @@ signal pan_changed(pan_left: float, pan_right: float)
 signal pan_mode_changed(pan_mode: PanMode)
 signal mute_changed(value: bool)
 signal solo_changed(value: bool)
+signal hidden_changed(value: bool)
+signal enabled_changed(value: bool)
 signal peak_updated(left: float, right: float, rms_left: float, rms_right: float)
 signal route_changed(output_id: int)
 signal hierarchy_changed
@@ -90,6 +92,14 @@ var pan_mode: PanMode = PanMode.STEREO_BALANCE
 
 var mute: bool = false
 var solo: bool = false
+## Visual only (issue 70): the strip and its linked tracks are left out of the views unless
+## "Show hidden" is on.
+var hidden: bool = false
+## False deactivates the channel's devices in the engine (issue 70) and, with the channel's
+## children, leaves it out of the views unless "Show disabled" is on.
+var enabled: bool = true
+## The enabled state last sent to the engine (effective: includes parents). Not persisted.
+var _engine_enabled: bool = true
 var phase_invert: bool = false
 
 # Channel type and properties
@@ -273,6 +283,13 @@ func sync_to_engine() -> void:
 	_send_pan_to_engine()
 	AudioEngineOSC.send("/channel/%d/mute" % id, [1 if mute else 0])
 	AudioEngineOSC.send("/channel/%d/solo" % id, [1 if solo else 0])
+	# The engine creates channels enabled; tell it only when this one is not. Routed tracks are
+	# not linked yet, so Project re-applies once every track is connected.
+	_engine_enabled = true
+	var project := get_project()
+	if project and ItemVisibility.channel_disabled(project, self):
+		_engine_enabled = false
+		AudioEngineOSC.send("/channel/%d/enabled" % id, [0])
 
 	# Sync MIDI routing config
 	AudioEngineOSC.send("/channel/%d/midi_input_device" % id, [midi_input_device])
@@ -462,6 +479,44 @@ func set_mute(value: bool) -> void:
 	if _is_connected:
 		AudioEngineOSC.send("/channel/%d/mute" % id, [1 if mute else 0])
 	mute_changed.emit(mute)
+
+
+## Show or hide this channel and its linked tracks (visual only).
+func set_hidden(value: bool) -> void:
+	if hidden == value:
+		return
+	hidden = value
+	hidden_changed.emit(hidden)
+	_notify_project_visibility()
+
+
+## Enable or deactivate this channel (and, through the hierarchy, its children).
+func set_enabled(value: bool) -> void:
+	if enabled == value:
+		return
+	enabled = value
+	enabled_changed.emit(enabled)
+	_notify_project_visibility()
+
+
+func _notify_project_visibility() -> void:
+	var project := get_project()
+	if project:
+		project.notify_item_visibility_changed()
+
+
+## Send the effective enabled state (own flag, mixer parents, routed tracks' ancestors) to the
+## engine when it differs from what it has.
+func apply_enabled_to_engine() -> void:
+	var project := get_project()
+	var effective := true
+	if project:
+		effective = not ItemVisibility.channel_disabled(project, self)
+	if effective == _engine_enabled:
+		return
+	_engine_enabled = effective
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/enabled" % id, [1 if effective else 0])
 
 
 func set_solo(value: bool) -> void:
@@ -1069,7 +1124,7 @@ func to_json() -> Dictionary:
 ## Plain fields copied by JsonFields; defaults come from the initializers and _init().
 const JSON_FIELDS: Array[String] = [
 	"name", "order", "device_output_id", "volume", "pan", "pan_width", "pan_left", "pan_right",
-	"mute", "solo", "phase_invert", "output_channel_id", "parent_channel_id",
+	"mute", "solo", "hidden", "enabled", "phase_invert", "output_channel_id", "parent_channel_id",
 	"is_children_expanded", "aux_bus_index", "aux_pad_note", "midi_input_device", "record_armed",
 	"drum_view",
 ]

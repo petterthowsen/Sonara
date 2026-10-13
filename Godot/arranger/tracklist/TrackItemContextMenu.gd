@@ -22,6 +22,10 @@ const ROUTE_NEW := TrackRouteChannelCommand.CREATE_NEW
 @onready var bus_link_option: OptionButton = $VBoxContainer/BusLink
 @onready var channel_route_option: OptionButton = $VBoxContainer/ChannelRoute
 
+## Issue 70: visual-only hide and full deactivation, for every bound track.
+var hidden_check: CheckBox
+var enabled_check: CheckBox
+
 var current_track: Track = null
 var current_project: Project = null
 ## Every track the menu acts on (the selection); a single entry for a single track.
@@ -41,6 +45,16 @@ func _ready() -> void:
 	duplicate_button.pressed.connect(_on_duplicate_pressed.bind(false))
 	duplicate_with_channel_button.pressed.connect(_on_duplicate_pressed.bind(true))
 	make_unique_button.pressed.connect(_on_make_unique_pressed)
+	hidden_check = CheckBox.new()
+	hidden_check.text = "Hidden"
+	hidden_check.tooltip_text = "Leave out of the track list (visual only). Show Hidden brings it back"
+	hidden_check.toggled.connect(_on_hidden_toggled)
+	enabled_check = CheckBox.new()
+	enabled_check.text = "Enabled"
+	enabled_check.tooltip_text = "Off deactivates the channel's devices (and its children's) to save CPU"
+	enabled_check.toggled.connect(_on_enabled_toggled)
+	$VBoxContainer.add_child(hidden_check)
+	$VBoxContainer.add_child(enabled_check)
 	bus_link_option.item_selected.connect(_on_bus_link_selected)
 	channel_route_option.item_selected.connect(_on_channel_route_selected)
 	# The dropdown popups must not steal focus from (and close) this menu.
@@ -122,6 +136,14 @@ func _update_action_buttons() -> void:
 		if TrackDuplicateCommand.can_duplicate(t):
 			any_duplicable = true
 			any_duplicable_with_channel = any_duplicable_with_channel or has_channel
+	if hidden_check and enabled_check:
+		var all_hidden := not current_tracks.is_empty()
+		var all_enabled := not current_tracks.is_empty()
+		for t in current_tracks:
+			all_hidden = all_hidden and t.hidden
+			all_enabled = all_enabled and t.enabled
+		hidden_check.set_pressed_no_signal(all_hidden)
+		enabled_check.set_pressed_no_signal(all_enabled)
 	if make_unique_button:
 		make_unique_button.visible = not _per_track_commands().is_empty()
 		make_unique_button.tooltip_text = "Give each track its own copy of the clips it shares with other tracks"
@@ -149,6 +171,18 @@ func _per_track_commands() -> Array[Command]:
 	if current_project == null:
 		return [] as Array[Command]
 	return Timeline.make_unique_per_track_commands(current_project, instances)
+
+
+func _on_hidden_toggled(pressed: bool) -> void:
+	for t in current_tracks:
+		t.set_hidden(pressed)
+	hide()
+
+
+func _on_enabled_toggled(pressed: bool) -> void:
+	for t in current_tracks:
+		t.set_enabled(pressed)
+	hide()
 
 
 func _on_make_unique_pressed() -> void:

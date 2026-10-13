@@ -565,6 +565,17 @@ mod tests {
     }
 
     #[test]
+    fn disabled_track_is_silent_and_skips_its_devices() {
+        let mut state = track_bus_master_state();
+        let calls = add_test_device(state.channels.get_mut(&3).unwrap(), 0.25);
+        state.channels.get_mut(&3).unwrap().enabled = false;
+        let output = mix(&mut state);
+
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert!(output.iter().all(|sample| sample.abs() < 1e-6));
+    }
+
+    #[test]
     fn routed_bus_devices_run_without_input() {
         // A silent track still routed into the bus: its reverb tail must keep ringing
         let mut state = track_bus_master_state();

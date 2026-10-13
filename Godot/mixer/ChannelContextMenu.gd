@@ -16,6 +16,7 @@ var channel : Channel = null
 @onready var color_picker: ColorPickerButton = $VBoxContainer/Header/HBox/ColorPicker
 @onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
 @onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
+var hidden_checkbox: CheckBox
 @onready var unnest_button: Button = $VBoxContainer/UnnestButton
 @onready var delete_button: Button = $VBoxContainer/DeleteButton
 
@@ -30,6 +31,13 @@ func _ready() -> void:
 	color_picker.pressed.connect(_on_color_picker_pressed)
 	label.value_changed.connect(_on_label_changed)
 	active_checkbox.toggled.connect(_on_active_toggled)
+	# Issue 70: Hidden is visual only; Enabled (the Active checkbox) also deactivates the devices.
+	hidden_checkbox = CheckBox.new()
+	hidden_checkbox.text = "Hidden"
+	hidden_checkbox.tooltip_text = "Leave out of the mixer (visual only). Show Hidden brings it back"
+	hidden_checkbox.toggled.connect(_on_hidden_toggled)
+	active_checkbox.add_sibling(hidden_checkbox)
+	active_checkbox.tooltip_text = "Off deactivates this channel's devices (and its children's) to save CPU"
 	if unnest_button:
 		unnest_button.pressed.connect(_on_unnest_pressed)
 	delete_button.pressed.connect(_on_delete_pressed)
@@ -48,7 +56,11 @@ func bind_to_channel(ch : Channel):
 	if label.is_editing:
 		label.cancel_editing()
 	label.set_value(channel.name)
-	
+	active_checkbox.set_pressed_no_signal(channel.enabled)
+	active_checkbox.disabled = channel.is_master
+	hidden_checkbox.set_pressed_no_signal(channel.hidden)
+	hidden_checkbox.disabled = channel.is_master
+
 	# Master can't be deleted; a plugin return only goes with its parent or its source device.
 	delete_button.disabled = channel.is_master or channel.is_plugin_return()
 	if unnest_button:
@@ -71,8 +83,14 @@ func _on_label_changed(new_name : String):
 
 func _on_active_toggled(_active : bool):
 	if not channel: return
-	# TODO: channels don't have active/inactive state yet.
-	#channel.set_active(_active)
+	channel.set_enabled(_active)
+	hide()
+
+
+func _on_hidden_toggled(pressed: bool) -> void:
+	if not channel: return
+	channel.set_hidden(pressed)
+	hide()
 
 
 ## Un-nest this mixer child from its Group parent.

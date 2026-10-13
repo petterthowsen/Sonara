@@ -44,6 +44,8 @@ var current_size_mode: MixerChannel.SizeMode = MixerChannel.SizeMode.MEDIUM
 
 # Project reference
 var current_project: Project = null
+var show_hidden_toggle: Button
+var show_disabled_toggle: Button
 ## Channel -> the bound hierarchy_changed callable, kept so it can be disconnected.
 var _channel_hierarchy_cbs: Dictionary[Channel, Callable] = {}
 
@@ -118,6 +120,11 @@ func _ready():
 	sends_toggle.toggled.connect(_on_sends_toggled)
 	devices_toggle.toggled.connect(_on_devices_toggled)
 	big_meters_toggle.toggled.connect(_on_big_meters_toggled)
+	# Issue 70: bring back hidden and disabled strips.
+	show_hidden_toggle = _make_view_toggle(
+		"Show hidden channels", preload("res://assets/icons/eye.svg"), "show_hidden")
+	show_disabled_toggle = _make_view_toggle(
+		"Show disabled channels", preload("res://assets/icons/power.svg"), "show_disabled")
 	
 	# Connect context menu signals
 	channel_ctx_menu.delete_requested.connect(_on_channel_delete_requested)
@@ -144,6 +151,10 @@ func _on_project_opened(project: Project) -> void:
 	# Connect to project signals
 	project.channel_added.connect(_on_channel_added)
 	project.channel_removed.connect(_on_channel_removed)
+	project.item_visibility_changed.connect(_apply_item_states)
+	project.mixer_view_changed.connect(_on_mixer_view_changed)
+	show_hidden_toggle.set_pressed_no_signal(project.get_mixer_view("show_hidden"))
+	show_disabled_toggle.set_pressed_no_signal(project.get_mixer_view("show_disabled"))
 
 	# Nested children spawn inside fold-outs; root panes list parent_channel_id < 0, sorted by order.
 	var roots: Array[Channel] = []
@@ -158,6 +169,7 @@ func _on_project_opened(project: Project) -> void:
 	)
 	for ch in roots:
 		_spawn_root_channel_ui(ch)
+	_apply_item_states()
 
 
 func _on_project_closed() -> void:
@@ -171,6 +183,10 @@ func _unbind() -> void:
 	if current_project:
 		if current_project.channel_added.is_connected(_on_channel_added):
 			current_project.channel_added.disconnect(_on_channel_added)
+		if current_project.item_visibility_changed.is_connected(_apply_item_states):
+			current_project.item_visibility_changed.disconnect(_apply_item_states)
+		if current_project.mixer_view_changed.is_connected(_on_mixer_view_changed):
+			current_project.mixer_view_changed.disconnect(_on_mixer_view_changed)
 		if current_project.channel_removed.is_connected(_on_channel_removed):
 			current_project.channel_removed.disconnect(_on_channel_removed)
 		for ch in current_project.channels:
@@ -258,6 +274,7 @@ func wire_channel_item(channel_item: MixerChannel) -> void:
 	if not channel_item.gui_input.is_connected(_on_channel_item_gui_input.bind(channel)):
 		channel_item.gui_input.connect(_on_channel_item_gui_input.bind(channel))
 	_apply_toggle_states_to_channel(channel_item)
+	_apply_item_state(channel_item)
 	if selection.has(channel):
 		channel_item.is_selected = true
 
@@ -674,6 +691,40 @@ func _on_sends_toggled(pressed: bool) -> void:
 func _on_devices_toggled(pressed: bool) -> void:
 	get_tree().call_group("mixer_channel", "set_devices_visible", pressed)
 	logger.info("Devices panel: ", pressed)
+
+
+## A toolbar toggle for a project mixer_view flag, added after the existing toggles.
+func _make_view_toggle(tooltip: String, icon: Texture2D, key: String) -> Button:
+	var button := Button.new()
+	button.tooltip_text = tooltip
+	button.toggle_mode = true
+	button.icon = icon
+	button.toggled.connect(func(pressed: bool):
+		if current_project:
+			current_project.set_mixer_view(key, pressed))
+	big_meters_toggle.get_parent().add_child(button)
+	return button
+
+
+func _on_mixer_view_changed(_key: String, _value: bool) -> void:
+	_apply_item_states()
+
+
+## List or dim every strip from its hidden/enabled state and the mixer's Show toggles.
+func _apply_item_states() -> void:
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		if node is MixerChannel and is_ancestor_of(node):
+			_apply_item_state(node)
+
+
+func _apply_item_state(mc: MixerChannel) -> void:
+	if current_project == null or mc.channel == null:
+		return
+	var ch := mc.channel
+	mc.visible = ItemVisibility.channel_listed(current_project, ch)
+	mc.modulate.a = ItemVisibility.dim_alpha(
+		ItemVisibility.channel_hidden(current_project, ch),
+		ItemVisibility.channel_disabled(current_project, ch))
 
 
 func _on_big_meters_toggled(pressed: bool):

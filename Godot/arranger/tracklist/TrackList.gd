@@ -740,6 +740,9 @@ func _sync_track_item_visibility(rows: Array) -> void:
 	for child in get_children():
 		if child is TrackItem and (child as TrackItem).track:
 			child.visible = shown.has((child as TrackItem).track)
+			(child as Control).modulate.a = ItemVisibility.dim_alpha(
+				ItemVisibility.track_hidden(current_project, child.track),
+				ItemVisibility.track_disabled(current_project, child.track))
 			# Nesting changes (children added/removed) change whether a folder shows its fold
 			# button; _update_visual_order runs on every layout change.
 			child._update_foldout_toggle()

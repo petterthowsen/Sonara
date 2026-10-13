@@ -153,7 +153,7 @@ pub(super) fn assign_solo_roles(
         let Some(channel) = channel_map.get(&id) else {
             continue;
         };
-        let role = if channel.mute {
+        let role = if channel.mute || !channel.enabled {
             SoloRole::Silent
         } else if !has_solo
             || id == MASTER_CHANNEL_ID

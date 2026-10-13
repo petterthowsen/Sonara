@@ -70,6 +70,13 @@ pub(super) fn set_channel_mute(state: &mut EngineState, id: ChannelId, mute: boo
     }
 }
 
+/// Enable or disable a channel. A disabled channel is silent and skips its device chain.
+pub(super) fn set_channel_enabled(state: &mut EngineState, id: ChannelId, enabled: bool) {
+    if let Some(channel) = state.channels.get_mut(&id) {
+        channel.enabled = enabled;
+    }
+}
+
 /// Solo or unsolo a channel.
 pub(super) fn set_channel_solo(state: &mut EngineState, id: ChannelId, solo: bool) {
     if let Some(channel) = state.channels.get_mut(&id) {

@@ -34,6 +34,10 @@ signal connection_state_changed(state: ConnectionState)
 signal tracks_layout_changed
 ## An arranger_view flag changed (see set_arranger_view).
 signal arranger_view_changed(key: String, value: bool)
+## A track or channel changed its hidden/enabled state (issue 70); views re-filter.
+signal item_visibility_changed
+## A mixer_view flag changed (see set_mixer_view).
+signal mixer_view_changed(key: String, value: bool)
 ## The project scale changed (see set_scale).
 signal scale_changed(root: int, type_id: String)
 ## A clip_editor_view flag changed (see set_clip_editor_view).
@@ -101,7 +105,13 @@ var tempo_map: TempoMap = TempoMap.new():
 ## Arranger track list display toggles (view state, saved with the project but not undoable):
 ## "automation" shows automation lanes and the header automation buttons, "routing" the header
 ## IO button, "automation_follows_clips" makes a clip move drag the lane points under it (REQ-025).
-var arranger_view: Dictionary = {"automation": true, "routing": true, "automation_follows_clips": false}
+var arranger_view: Dictionary = {
+	"automation": true, "routing": true, "automation_follows_clips": false,
+	"show_hidden": false, "show_disabled": false,
+}
+
+## Mixer toggles saved with the project: bring back hidden and disabled strips (issue 70).
+var mixer_view: Dictionary = {"show_hidden": false, "show_disabled": false}
 
 ## Project scale (spec 026): root pitch class 0..11 (0 = C) and a MusicalScale type id.
 ## Saved with the project; the engine only gets its pitch-class mask (`/project/scale`, spec 027) so
@@ -256,6 +266,9 @@ func _on_engine_confirmed_connected() -> void:
 	_sync_time_signature_map_to_engine()
 	_sync_key_change_map_to_engine()
 	_sync_loop_to_engine()
+
+	# Tracks are linked to channels now, so effective enabled states are final.
+	notify_item_visibility_changed()
 
 	logger.info("[Project] Connected to audio engine")
 	_schedule_device_state_resync()
@@ -1389,13 +1402,35 @@ func set_arranger_view(key: String, value: bool) -> void:
 		return
 	arranger_view[key] = value
 	arranger_view_changed.emit(key, value)
-	if key == "automation":
+	if key == "automation" or key == "show_hidden" or key == "show_disabled":
 		tracks_layout_changed.emit()
 
 
 ## Current arranger_view flag; unknown keys read as shown.
 func get_arranger_view(key: String) -> bool:
 	return bool(arranger_view.get(key, true))
+
+
+## Set a mixer_view flag.
+func set_mixer_view(key: String, value: bool) -> void:
+	if mixer_view.get(key, false) == value:
+		return
+	mixer_view[key] = value
+	mixer_view_changed.emit(key, value)
+
+
+## Current mixer_view flag; unknown keys read as off.
+func get_mixer_view(key: String) -> bool:
+	return bool(mixer_view.get(key, false))
+
+
+## Re-evaluate hidden/enabled after a track or channel changed: push each channel's effective
+## enabled state to the engine, then tell the views. Cheap when nothing changed.
+func notify_item_visibility_changed() -> void:
+	for ch in channels:
+		ch.apply_enabled_to_engine()
+	item_visibility_changed.emit()
+	tracks_layout_changed.emit()
 
 
 ## Set the project scale. An unknown type id becomes "none" and the root wraps into 0..11.
@@ -1849,6 +1884,7 @@ func to_json() -> Dictionary:
 		"time_signature_map": time_signature_map.to_json(),
 		"key_changes": key_change_map.to_json(),
 		"arranger_view": arranger_view.duplicate(),
+		"mixer_view": mixer_view.duplicate(),
 		"scale": {"root": scale_root, "type": scale_type},
 		"clip_editor_view": clip_editor_view.duplicate(),
 		"clips": clips_array,
@@ -1888,6 +1924,9 @@ static func from_json(data: Dictionary) -> Project:
 		# Fall back to this build's default per key, so a project saved before a flag existed
 		# (e.g. "automation_follows_clips") loads with that flag's default, not `true`.
 		project.arranger_view[key] = bool(saved_view.get(key, project.arranger_view[key]))
+	var saved_mixer_view: Dictionary = data.get("mixer_view", {})
+	for key in project.mixer_view:
+		project.mixer_view[key] = bool(saved_mixer_view.get(key, project.mixer_view[key]))
 	var saved_scale: Dictionary = data.get("scale", {})
 	var loaded_scale := MusicalScale.make(int(saved_scale.get("root", 0)), str(saved_scale.get("type", "none")))
 	project.scale_root = loaded_scale.root
