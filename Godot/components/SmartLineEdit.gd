@@ -52,6 +52,11 @@ var _owns_label_settings := false
 const EDIT_TEXT_COLOR := Color.WHITE
 var _font_color: Variant = null
 
+## Draw order of the floating editor (above everything in the normal UI).
+const FLOAT_Z_INDEX := 2000
+var _floating := false
+var _saved_layout := {}
+
 
 func _ready() -> void:
 	label.visible = true
@@ -163,6 +168,7 @@ func start_editing() -> void:
 		return
 
 	label.visible = false
+	_float_line_edit()
 	line_edit.visible = true
 	_apply_line_edit_color(EDIT_TEXT_COLOR)
 	line_edit.grab_click_focus.call_deferred()
@@ -180,7 +186,50 @@ func cancel_editing() -> void:
 	line_edit.release_focus()
 	release_focus()
 	line_edit.visible = false
+	_dock_line_edit()
 	label.visible = true
+
+
+## Lift the LineEdit out of the parent clip/draw-order chain while editing: top_level escapes
+## ancestor clip_contents (e.g. a mixer group's children clip) and the high absolute z_index draws
+## it above later siblings (neighbouring channels). Position and size mirror this control's rect.
+func _float_line_edit() -> void:
+	if _floating:
+		return
+	_floating = true
+	_saved_layout = {
+		"al": line_edit.anchor_left, "at": line_edit.anchor_top,
+		"ar": line_edit.anchor_right, "ab": line_edit.anchor_bottom,
+		"ol": line_edit.offset_left, "ot": line_edit.offset_top,
+		"or": line_edit.offset_right, "ob": line_edit.offset_bottom,
+	}
+	var rect := get_global_rect()
+	line_edit.top_level = true
+	line_edit.z_as_relative = false
+	line_edit.z_index = FLOAT_Z_INDEX
+	line_edit.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	line_edit.size = Vector2(rect.size.x, maxf(rect.size.y, line_edit.get_combined_minimum_size().y))
+	# Vertically centred on the label if the edit is taller than it.
+	line_edit.global_position = Vector2(rect.position.x, rect.position.y + (rect.size.y - line_edit.size.y) * 0.5)
+
+
+## Undo _float_line_edit: back into normal layout under this control.
+func _dock_line_edit() -> void:
+	if not _floating:
+		return
+	_floating = false
+	line_edit.top_level = false
+	line_edit.z_as_relative = true
+	line_edit.z_index = 0
+	var d := _saved_layout
+	line_edit.anchor_left = d["al"]
+	line_edit.anchor_top = d["at"]
+	line_edit.anchor_right = d["ar"]
+	line_edit.anchor_bottom = d["ab"]
+	line_edit.offset_left = d["ol"]
+	line_edit.offset_top = d["ot"]
+	line_edit.offset_right = d["or"]
+	line_edit.offset_bottom = d["ob"]
 
 
 ## Stop editing: apply the entered value
