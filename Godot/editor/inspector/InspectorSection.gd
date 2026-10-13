@@ -1,6 +1,6 @@
 # InspectorSection.gd
-# Base class for one block of the Inspector: a collapsible header over a two-column grid of
-# label and editor rows. InspectorPanel owns the sections and shows those that handle the current
+# Base class for one block of the Inspector: a collapsible header over a vertical stack of rows,
+# each a dim caption above its editor (the dock is narrow, so captions don't take a column). InspectorPanel owns the sections and shows those that handle the current
 # selection.
 #
 # To add a section: extend this class, override `handles()` (static), `_build()` (create rows),
@@ -18,7 +18,6 @@ class_name InspectorSection extends VBoxContainer
 
 ## Shown in a field whose selected objects disagree.
 const MIXED_TEXT := "—"
-const LABEL_MIN_WIDTH := 72.0
 
 ## Header caption.
 var title: String = "":
@@ -36,7 +35,7 @@ var _built := false
 var _refreshing := false
 var _collapsed := false
 var _header: Button
-var _grid: GridContainer
+var _grid: VBoxContainer
 var _watched: Array = []
 
 
@@ -130,18 +129,19 @@ func get_project() -> Project:
 # ROW HELPERS
 # ============================================================================
 
-## Add a row: a dim caption in the left column and `editor` in the right. Returns the caption.
+## Add a row: a dim caption with `editor` below it. Returns the caption.
 func add_row(caption: String, editor: Control) -> Label:
 	_ensure_built()
 	var label := Label.new()
 	label.text = caption
-	label.custom_minimum_size.x = LABEL_MIN_WIDTH
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	label.add_theme_color_override(&"font_color", UiColors.role(&"text_dim"))
-	_grid.add_child(label)
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override(&"separation", 2)
+	row.add_child(label)
 	editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_grid.add_child(editor)
+	row.add_child(editor)
+	_grid.add_child(row)
 	return label
 
 
@@ -225,8 +225,7 @@ func _ensure_built() -> void:
 	_header.focus_mode = Control.FOCUS_NONE
 	_header.pressed.connect(_toggle_collapsed)
 	add_child(_header)
-	_grid = GridContainer.new()
-	_grid.columns = 2
+	_grid = VBoxContainer.new()
 	add_child(_grid)
 	_update_header()
 	_build()

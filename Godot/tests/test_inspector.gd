@@ -79,7 +79,7 @@ func _test_sections_follow_selection() -> void:
 	var a = _make_instance("A")
 	panel.set_selection([a])
 	var sections = panel.get_visible_sections()
-	_assert(sections.size() == 1 and sections[0].get_script() == load("res://editor/inspector/ClipInspector.gd"), "ClipInspector shows for a clip")
+	_assert(sections.size() == 2 and sections[0].get_script() == load("res://editor/inspector/ClipInspector.gd") and sections[1].get_script() == load("res://editor/inspector/MidiClipInspector.gd"), "ClipInspector and the velocity section show for a MIDI clip")
 	_assert(not panel.get_node("%EmptyLabel").visible, "empty state hides while a section shows")
 	var first = sections[0]
 	panel.set_selection([])
