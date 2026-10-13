@@ -10,6 +10,8 @@ signal engine_stats_received(stats: Stats)
 signal channel_perf_received(perf: ChannelPerf)
 ## Emitted for each /status/engine_perf report (every 500 ms while subscribed).
 signal engine_perf_received(perf: EnginePerf)
+## Emitted for each /status/engine_memory report (every 500 ms while subscribed).
+signal engine_memory_received(memory: EngineMemory)
 
 
 ## One /status/engine_stats report.
@@ -82,6 +84,28 @@ class EnginePerf:
 		return perf
 
 
+## One /status/engine_memory report: i engine_kib, i plugins_kib, i plugin_hosts. PSS, so memory
+## shared between the engine and the plugin hosts is counted once.
+class EngineMemory:
+	var engine_bytes: int = 0
+	## Sum over the plugin host processes.
+	var plugin_bytes: int = 0
+	var plugin_hosts: int = 0
+
+	func total_bytes() -> int:
+		return engine_bytes + plugin_bytes
+
+	## Null for a short message.
+	static func from_osc(args: Array) -> EngineMemory:
+		if args.size() < 3:
+			return null
+		var memory := EngineMemory.new()
+		memory.engine_bytes = int(args[0]) * 1024
+		memory.plugin_bytes = int(args[1]) * 1024
+		memory.plugin_hosts = int(args[2])
+		return memory
+
+
 var _listening: bool = false
 
 
@@ -92,6 +116,7 @@ func start() -> void:
 	AudioEngineOSC.listen("/status/engine_stats", _on_engine_stats)
 	AudioEngineOSC.listen("/status/channel_perf", _on_channel_perf)
 	AudioEngineOSC.listen("/status/engine_perf", _on_engine_perf)
+	AudioEngineOSC.listen("/status/engine_memory", _on_engine_memory)
 	_listening = true
 
 
@@ -102,6 +127,7 @@ func stop() -> void:
 	AudioEngineOSC.unlisten("/status/engine_stats", _on_engine_stats)
 	AudioEngineOSC.unlisten("/status/channel_perf", _on_channel_perf)
 	AudioEngineOSC.unlisten("/status/engine_perf", _on_engine_perf)
+	AudioEngineOSC.unlisten("/status/engine_memory", _on_engine_memory)
 	_listening = false
 
 
@@ -119,6 +145,12 @@ func _on_channel_perf(values: Array) -> void:
 	var perf := ChannelPerf.from_osc(values)
 	if perf != null:
 		channel_perf_received.emit(perf)
+
+
+func _on_engine_memory(values: Array) -> void:
+	var memory := EngineMemory.from_osc(values)
+	if memory != null:
+		engine_memory_received.emit(memory)
 
 
 func _on_engine_perf(values: Array) -> void:

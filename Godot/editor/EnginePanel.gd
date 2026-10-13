@@ -39,6 +39,13 @@ const CHANNEL_PERF_STALE_MSEC := 1000
 var _channel_perf: Dictionary = {}
 var _perf_subscribed: bool = false
 var _engine_perf: EngineStatus.EnginePerf = null
+var _engine_memory: EngineStatus.EngineMemory = null
+## The popup is open, which keeps the engine reporting.
+var _popup_open: bool = false
+## A device tooltip asked for load and RAM; the engine keeps reporting until this time.
+var _device_stats_until_msec: int = 0
+## How long a device-header hover keeps the engine reporting, so the tooltip has figures.
+const DEVICE_STATS_HOLD_MSEC := 5000
 
 const POPUP_REOPEN_GUARD_MSEC := 250
 var _popup_hidden_msec: int = -1000000
@@ -66,6 +73,7 @@ func _ready() -> void:
 	_engine_status.engine_stats_received.connect(_on_engine_stats_received)
 	_engine_status.channel_perf_received.connect(_on_channel_perf_received)
 	_engine_status.engine_perf_received.connect(_on_engine_perf_received)
+	_engine_status.engine_memory_received.connect(_on_engine_memory_received)
 	AudioEngineOSC.engine_connected.connect(_on_engine_connected)
 	performance_text.tooltip_text = PERFORMANCE_TOOLTIP
 	_engine_status.start()
@@ -104,14 +112,28 @@ func _on_performance_button_pressed() -> void:
 	var origin := Vector2i(performance_button.get_screen_position()
 			+ Vector2(0, performance_button.size.y))
 	performance_popup.popup(Rect2i(origin, Vector2i.ZERO))
-	_set_perf_subscribed(true)
+	_popup_open = true
+	_update_perf_subscription()
 	performance_button.set_pressed_no_signal(true)
 
 
 func _on_performance_popup_hidden() -> void:
 	_popup_hidden_msec = Time.get_ticks_msec()
-	_set_perf_subscribed(false)
+	_popup_open = false
+	_update_perf_subscription()
 	performance_button.set_pressed_no_signal(false)
+
+
+## A device header was hovered: keep the engine reporting load and RAM for a few seconds, so the
+## tooltip about to show (or the next one) has figures. Cheap to call on every hover.
+func request_device_stats() -> void:
+	_device_stats_until_msec = Time.get_ticks_msec() + DEVICE_STATS_HOLD_MSEC
+	_update_perf_subscription()
+
+
+## Subscribed while the popup is open or a device tooltip asked recently.
+func _update_perf_subscription() -> void:
+	_set_perf_subscribed(_popup_open or Time.get_ticks_msec() < _device_stats_until_msec)
 
 
 ## Subscribe to (or leave) the engine's perf reports. Guarded so the engine's subscriber count
@@ -126,6 +148,7 @@ func _set_perf_subscribed(on: bool) -> void:
 		_engine_status.unsubscribe_perf()
 		_channel_perf.clear()
 		_engine_perf = null
+		_engine_memory = null
 
 
 ## The engine restarted with no subscribers: subscribe again while the popup is open.
@@ -136,6 +159,21 @@ func _on_engine_connected() -> void:
 
 func _on_engine_perf_received(perf: EngineStatus.EnginePerf) -> void:
 	_engine_perf = perf
+
+
+func _on_engine_memory_received(memory: EngineStatus.EngineMemory) -> void:
+	_engine_memory = memory
+
+
+## "RAM: engine 310 MB · plugins 1.20 GB (3 hosts) · total 1.50 GB". Empty without a report.
+static func memory_header(memory: EngineStatus.EngineMemory) -> String:
+	if memory == null:
+		return ""
+	var text := "RAM: engine %s" % DeviceInstance.Usage.format_bytes(memory.engine_bytes)
+	if memory.plugin_hosts > 0:
+		text += " · plugins %s (%d host%s)" % [DeviceInstance.Usage.format_bytes(memory.plugin_bytes),
+				memory.plugin_hosts, "" if memory.plugin_hosts == 1 else "s"]
+	return text + " · total %s" % DeviceInstance.Usage.format_bytes(memory.total_bytes())
 
 
 ## "N threads · realtime" header of the popup text. Empty without a report.
@@ -202,6 +240,17 @@ static func _colored_static(text: String, color: String) -> String:
 
 func _on_channel_perf_received(perf: EngineStatus.ChannelPerf) -> void:
 	_channel_perf[perf.channel_id] = {"perf": perf, "msec": Time.get_ticks_msec()}
+	# Hand each top-level device its own load, for its header tooltip.
+	var project: Project = Sonara.editor.project if Sonara.editor else null
+	var channel: Channel = project.get_channel_by_id(perf.channel_id) if project else null
+	if channel != null:
+		apply_device_loads(perf, channel.devices)
+
+
+## Give `devices` (a channel's chain) the per-device loads of `perf`, by chain index.
+static func apply_device_loads(perf: EngineStatus.ChannelPerf, devices: Array) -> void:
+	for i in mini(perf.device_count(), devices.size()):
+		devices[i].set_load(perf.device_avg[i], perf.device_peak[i])
 
 
 ## Dot + state on the connect button; the click action goes in the tooltip.
@@ -272,12 +321,16 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 
 
 func _exit_tree() -> void:
+	_popup_open = false
+	_device_stats_until_msec = 0
 	_set_perf_subscribed(false)
 	_engine_status.stop()
 
 
 ## Show a stall warning when OSC is up but the audio callback has gone quiet.
 func _process(_delta: float) -> void:
+	if _perf_subscribed and not _popup_open:
+		_update_perf_subscription()
 	if not _show_connected:
 		return
 	if _last_engine_load_msec == 0:
@@ -333,6 +386,9 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 	var latency := latency_header(_engine_perf)
 	if not latency.is_empty():
 		parts.insert(0, latency)
+	var memory := memory_header(_engine_memory)
+	if not memory.is_empty():
+		parts.insert(0, memory)
 	var header := threads_header(_engine_perf)
 	if not header.is_empty():
 		parts.insert(0, header)

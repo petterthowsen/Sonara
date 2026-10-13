@@ -21,6 +21,7 @@ signal loading_state_changed(state: String)  # "idle", "loading", "ready", "fail
 signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
 signal stats_changed()  # New processing stats for a CLAP plugin (1 Hz); see plugin_stats
+signal usage_changed()  # New load or RAM figure (2 Hz while the engine is asked for them); see usage
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
 signal gui_opened(size: Vector2i, resizable: bool, floating: bool)  # After every successful GUI open; see gui_size
 signal gui_size_changed(size: Vector2i)  # Plugin GUI resized (on request or by itself)
@@ -269,6 +270,60 @@ class PluginStats:
 
 ## Processing stats of a CLAP plugin (null until the engine reports them).
 var plugin_stats: PluginStats = null
+
+
+## Load and RAM of a device as the engine measures them, for the header tooltip. The engine only
+## reports while asked (EnginePanel subscribes while the performance popup is open or a device
+## tooltip was just hovered), so figures go stale and then read as unknown.
+class Usage:
+	## Older than this reads as unknown: the engine stopped reporting.
+	const FRESH_MSEC := 5000
+
+	## Share of the block time (1.0 = 100%): the device's process call as the engine times it,
+	## including the IPC round trip for a plugin. Top-level devices only.
+	var load_avg: float = 0.0
+	var load_peak: float = 0.0
+	var load_msec: int = 0
+	## RAM in bytes; -1 = the engine has no figure for this device.
+	var memory_bytes: int = -1
+	## Plugins in the same host process share `memory_bytes`; 1 = not shared.
+	var memory_shared_by: int = 1
+	## An estimate or lower bound (SFZ).
+	var memory_approximate: bool = false
+	var memory_msec: int = 0
+
+	func has_load(now_msec: int) -> bool:
+		return load_msec > 0 and now_msec - load_msec <= FRESH_MSEC
+
+	func has_memory(now_msec: int) -> bool:
+		return memory_bytes >= 0 and memory_msec > 0 and now_msec - memory_msec <= FRESH_MSEC
+
+	## "412 MB", "1.25 GB", "96 KB".
+	static func format_bytes(bytes: int) -> String:
+		var mb := bytes / 1048576.0
+		if mb >= 1024.0:
+			return "%.2f GB" % (mb / 1024.0)
+		if mb >= 10.0:
+			return "%.0f MB" % mb
+		if mb >= 1.0:
+			return "%.1f MB" % mb
+		return "%.0f KB" % (bytes / 1024.0)
+
+	## "Load 3.2% (peak 7.1%) · RAM 412 MB (shared by 2)". The parts the engine hasn't reported
+	## lately are left out; empty when there are none.
+	func describe(now_msec: int) -> String:
+		var parts: PackedStringArray = []
+		if has_load(now_msec):
+			parts.append("Load %.1f%% (peak %.1f%%)" % [load_avg * 100.0, load_peak * 100.0])
+		if has_memory(now_msec):
+			var ram := "RAM %s%s" % ["~" if memory_approximate else "", format_bytes(memory_bytes)]
+			if memory_shared_by > 1:
+				ram += " (shared by %d)" % memory_shared_by
+			parts.append(ram)
+		return " · ".join(parts)
+
+
+var usage := Usage.new()
 
 ## Pid of the last crashed host that showed a popup. A shared host crash reports once per
 ## device in it; one popup (with one Reload, which restores them all) is enough.
@@ -1770,6 +1825,7 @@ func connect_to_engine() -> void:
 	var crashed_addr = osc_addr("crashed")
 	var host_addr = osc_addr("host")
 	var stats_addr = osc_addr("stats")
+	var memory_addr = osc_addr("memory")
 	var state_saved_addr = osc_addr("state/saved")
 
 	AudioEngineOSC.listen(osc_addr("keys/info"), _on_key_info_received)
@@ -1785,6 +1841,7 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.listen(host_addr, _on_host_received)
 	AudioEngineOSC.listen(stats_addr, _on_stats_received)
+	AudioEngineOSC.listen(memory_addr, _on_memory_received)
 	AudioEngineOSC.listen(state_saved_addr, _on_plugin_state_saved_received)
 
 	# Use wildcard pattern to listen for ALL parameter changes for this device
@@ -1819,6 +1876,7 @@ func disconnect_from_engine() -> void:
 	var crashed_addr = osc_addr("crashed")
 	var host_addr = osc_addr("host")
 	var stats_addr = osc_addr("stats")
+	var memory_addr = osc_addr("memory")
 	var state_saved_addr = osc_addr("state/saved")
 
 	AudioEngineOSC.unlisten(osc_addr("keys/info"), _on_key_info_received)
@@ -1842,6 +1900,7 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.unlisten(host_addr, _on_host_received)
 	AudioEngineOSC.unlisten(stats_addr, _on_stats_received)
+	AudioEngineOSC.unlisten(memory_addr, _on_memory_received)
 	AudioEngineOSC.unlisten(state_saved_addr, _on_plugin_state_saved_received)
 	for child in children:
 		child.disconnect_from_engine()
@@ -1983,6 +2042,25 @@ func _on_stats_received(values: Array) -> void:
 		return
 	plugin_stats = PluginStats.from_osc(values, Time.get_ticks_msec())
 	stats_changed.emit()
+
+
+func _on_memory_received(values: Array) -> void:
+	"""RAM of the device (or of the plugin host it runs in): i kib, i shared_by, i approximate."""
+	if values.size() < 3:
+		return
+	usage.memory_bytes = int(values[0]) * 1024
+	usage.memory_shared_by = maxi(1, int(values[1]))
+	usage.memory_approximate = int(values[2]) != 0
+	usage.memory_msec = Time.get_ticks_msec()
+	usage_changed.emit()
+
+
+## Store the engine-measured load of this top-level device (from /status/channel_perf).
+func set_load(avg: float, peak: float) -> void:
+	usage.load_avg = avg
+	usage.load_peak = peak
+	usage.load_msec = Time.get_ticks_msec()
+	usage_changed.emit()
 
 
 ## True when the plugin missed several processing deadlines in a row in its last report.

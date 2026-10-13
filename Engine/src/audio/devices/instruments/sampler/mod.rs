@@ -202,7 +202,22 @@ impl SamplerDevice {
     }
 }
 
+impl SamplerDevice {
+    /// Bytes of decoded sample data held by the single zone and every multisample zone.
+    fn sample_bytes(&self) -> u64 {
+        let zones = std::iter::once(&self.single).chain(self.zones.iter());
+        zones
+            .filter_map(|zone| zone.sample.as_ref())
+            .map(|sample| (sample.samples.len() * std::mem::size_of::<f32>()) as u64)
+            .sum()
+    }
+}
+
 impl AudioDevice for SamplerDevice {
+    fn memory_bytes(&self) -> Option<u64> {
+        Some(self.sample_bytes())
+    }
+
     fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         let interleaved = (sample_count * 2).min(outputs.len());
         outputs[..interleaved].fill(0.0);

@@ -15,6 +15,7 @@ use crate::audio::midi_types::{cc14_from_unit, cc14_to_unit, to_u7, NoteEvent};
 use crossbeam::channel::Sender;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 
@@ -150,6 +151,9 @@ pub struct SfizzDevice {
     // Key labels and keyswitches declared by the loaded SFZ (spec 014)
     key_info: Arc<Mutex<Vec<KeyInfo>>>,
     key_info_changed: Arc<Mutex<bool>>,
+    /// `sfizz_get_num_bytes` of the loaded synth (0 when none): the buffers sfizz manages, mostly
+    /// preloaded sample data. Set once when a load finishes, read by the command thread.
+    loaded_bytes: Arc<AtomicU64>,
     playable_ranges: Arc<Mutex<Vec<(u8, u8)>>>,
 
     // Pre-allocated buffers for planar audio conversion
@@ -285,6 +289,7 @@ impl SfizzDevice {
             parameters_changed: Arc::new(Mutex::new(false)),
             key_info: Arc::new(Mutex::new(Vec::new())),
             key_info_changed: Arc::new(Mutex::new(false)),
+            loaded_bytes: Arc::new(AtomicU64::new(0)),
             playable_ranges: Arc::new(Mutex::new(Vec::new())),
             left_buffer: vec![0.0; max_buffer_size],
             right_buffer: vec![0.0; max_buffer_size],
@@ -399,6 +404,7 @@ impl SfizzDevice {
             let mut state = self.loading_state.lock().unwrap();
             *state = LoadingState::Loading;
         }
+        self.loaded_bytes.store(0, Ordering::Relaxed);
 
         // Send loading state
         if let Some(ref tx) = self.status_tx {
@@ -422,6 +428,7 @@ impl SfizzDevice {
         let parameters_changed = Arc::clone(&self.parameters_changed);
         let key_info = Arc::clone(&self.key_info);
         let key_info_changed = Arc::clone(&self.key_info_changed);
+        let loaded_bytes = Arc::clone(&self.loaded_bytes);
         let playable_ranges = Arc::clone(&self.playable_ranges);
         let sample_rate = self.sample_rate;
         let max_buffer_size = self.max_buffer_size;
@@ -518,6 +525,8 @@ impl SfizzDevice {
                             }
 
                             // Update state to Ready
+                            let allocated = unsafe { sfizz::sfizz_get_num_bytes(synth.as_raw()) };
+                            loaded_bytes.store(allocated.max(0) as u64, Ordering::Relaxed);
                             let mut state = loading_state.lock().unwrap();
                             *state = LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
 
@@ -568,6 +577,19 @@ impl SfizzDevice {
 }
 
 impl AudioDevice for SfizzDevice {
+    /// sfizz's own count of the buffers it manages (preloaded sample data and the like). The
+    /// library says the real usage can be higher, so it is reported as approximate.
+    fn memory_bytes(&self) -> Option<u64> {
+        match self.loaded_bytes.load(Ordering::Relaxed) {
+            0 => None,
+            bytes => Some(bytes),
+        }
+    }
+
+    fn memory_is_approximate(&self) -> bool {
+        true
+    }
+
     fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         // Handle inactive state (device not loaded)
         if !self.is_active {

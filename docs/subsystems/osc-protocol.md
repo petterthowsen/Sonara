@@ -1203,6 +1203,27 @@ state: `granted`, `denied`, `partial` (only some got it) or `none` (no workers).
 path into any pair), and `over_limit_channels` counts channels whose path latency exceeds 1 s and
 was capped.
 
+### `{device}/memory [i:kib, i:shared_by, i:approximate]` (Rust -> Godot)
+
+RAM figure of one device, sent every 500 ms with the perf report, only while subscribed and only
+for devices that have one (nested devices included). `kib` is KiB.
+- Sampler: the decoded sample data it holds (`AudioDevice::memory_bytes`), `shared_by` 1.
+- SFZ sampler: sfizz's own `sfizz_get_num_bytes` of the loaded synth, `approximate` 1 (the library
+  documents it as a lower bound: only buffers sfizz manages count).
+- CLAP and VST3 plugins: the PSS of the plugin host process they run in (`/proc/<pid>/smaps_rollup`,
+  RSS from `statm` as a fallback). `shared_by` is how many reporting plugins are in that process, so
+  the figure is the whole process, not the plugin's share.
+- Other built-ins send nothing.
+
+### `/status/engine_memory [i:engine_kib, i:plugins_kib, i:plugin_hosts]` (Rust -> Godot)
+
+Sent after `/status/engine_perf` of each report. PSS of the engine process, the sum over the plugin
+host processes, and their count. The `/proc` reads happen on the command thread with the state lock
+released, at most once a second; reports in between repeat the cached figures.
+
+The per-device load for a tooltip is the `(avg, peak)` pair of `/status/channel_perf` (top-level
+devices only, timed by the engine so a plugin's figure includes the IPC round trip).
+
 ### `/engine/threads/set [i:threads]` (Godot -> Rust)
 
 Processing threads for the channel worker pool. 0 = Auto: `min(cores / 2, 8)` threads.

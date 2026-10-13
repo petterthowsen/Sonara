@@ -16,6 +16,7 @@ pub mod mixing;
 pub mod modulation;
 pub mod pipewire;
 pub mod preview;
+pub mod proc_mem;
 pub mod processing;
 pub mod project;
 pub mod realtime;

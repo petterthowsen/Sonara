@@ -365,6 +365,8 @@ func _unbind() -> void:
 		device.host_changed.disconnect(_update_header_tooltip)
 	if device.stats_changed.is_connected(_update_header_tooltip):
 		device.stats_changed.disconnect(_update_header_tooltip)
+	if device.usage_changed.is_connected(_update_header_tooltip):
+		device.usage_changed.disconnect(_update_header_tooltip)
 	if device.preset_changed.is_connected(_update_preset_tooltip):
 		device.preset_changed.disconnect(_update_preset_tooltip)
 	if reload_button:
@@ -389,6 +391,12 @@ func _on_device_loading_state_changed(_state: String) -> void:
 	_update_reload_button_visibility()
 
 
+## Hovering the header may show its tooltip: ask the engine for load and RAM figures.
+func _on_header_hovered() -> void:
+	if Sonara.editor and Sonara.editor.engine_panel:
+		Sonara.editor.engine_panel.request_device_stats()
+
+
 ## Header tooltip: the device type, plus which plugin host process it runs in and how much
 ## time it takes to process (CLAP).
 func _update_header_tooltip() -> void:
@@ -398,6 +406,9 @@ func _update_header_tooltip() -> void:
 	var host := device.host_description()
 	if not host.is_empty():
 		text += "\n" + host
+	var usage: String = device.usage.describe(Time.get_ticks_msec())
+	if not usage.is_empty():
+		text += "\n" + usage
 	if device.plugin_stats != null:
 		text += "\n" + device.plugin_stats.describe()
 	header.tooltip_text = text
@@ -560,6 +571,10 @@ func bind_to_device(dev : DeviceInstance):
 		dev.host_changed.connect(_update_header_tooltip)
 	if not dev.stats_changed.is_connected(_update_header_tooltip):
 		dev.stats_changed.connect(_update_header_tooltip)
+	if not dev.usage_changed.is_connected(_update_header_tooltip):
+		dev.usage_changed.connect(_update_header_tooltip)
+	if not header.mouse_entered.is_connected(_on_header_hovered):
+		header.mouse_entered.connect(_on_header_hovered)
 	if not dev.preset_changed.is_connected(_update_preset_tooltip):
 		dev.preset_changed.connect(_update_preset_tooltip)
 	_update_preset_tooltip()
