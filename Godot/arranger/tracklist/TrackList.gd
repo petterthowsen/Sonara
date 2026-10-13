@@ -72,6 +72,7 @@ func _ready():
 	# Enable drag and drop
 	set_drag_forwarding(Callable(self, "_get_drag_data"), Callable(self, "_can_drop_data"), Callable(self, "_drop_data"))
 	set_process(false)
+	Hotkeys.set_context(self, "tracklist")
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -93,10 +94,112 @@ func _notification(what: int) -> void:
 
 
 ## Escape cancels a track drag; nothing moved, so there is nothing to restore.
+## Tracklist hotkeys (arrows, Enter, Ctrl+A) run only while the pointer is over the list.
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel") and DragDrop.current_drag(self) is TrackDrag:
 		get_viewport().gui_cancel_drag()
 		accept_event()
+		return
+	var key := event as InputEventKey
+	if key == null or not key.pressed or current_project == null or not is_visible_in_tree():
+		return
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		return
+	if not get_global_rect().has_point(get_global_mouse_position()):
+		return
+	if _handle_hotkey(key):
+		get_viewport().set_input_as_handled()
+
+
+## Run the tracklist action *key* triggers. True when it was handled.
+func _handle_hotkey(key: InputEventKey) -> bool:
+	if Hotkeys.pressed(key, "tracklist_select_prev"):
+		move_active_track(-1, false)
+	elif Hotkeys.pressed(key, "tracklist_select_next"):
+		move_active_track(1, false)
+	elif Hotkeys.pressed(key, "tracklist_extend_prev"):
+		move_active_track(-1, true)
+	elif Hotkeys.pressed(key, "tracklist_extend_next"):
+		move_active_track(1, true)
+	elif Hotkeys.pressed(key, "tracklist_rename"):
+		if not key.echo:
+			rename_active_track()
+	elif Hotkeys.double_tapped(key, "tracklist_select_all"):
+		select_all_tracks()
+	elif Hotkeys.pressed(key, "tracklist_select_siblings"):
+		select_sibling_tracks()
+	else:
+		return false
+	return true
+
+
+## Move the active track `step` rows through the visible headers. With *extend* the selection
+## grows (or shrinks when reversing) as a range from the anchor; otherwise it becomes just the
+## new track. With nothing active, Down starts at the first track and Up at the last.
+func move_active_track(step: int, extend: bool) -> void:
+	var visual := _get_visual_tracks()
+	if visual.is_empty():
+		return
+	var index := visual.find(active_track)
+	var target: int
+	if index < 0:
+		target = 0 if step > 0 else visual.size() - 1
+	else:
+		target = clampi(index + step, 0, visual.size() - 1)
+	var track := visual[target]
+	if extend:
+		_select_track(track, false, true)
+	else:
+		# A plain move replaces any multi-selection, even when the target is part of it.
+		selected_tracks.clear()
+		_select_track(track, false, false)
+	var item := _find_track_item(track)
+	if item:
+		_ensure_track_item_visible(item)
+
+
+## Start editing the active track's name.
+func rename_active_track() -> bool:
+	var item := _find_track_item(active_track) if active_track else null
+	if item == null:
+		return false
+	_ensure_track_item_visible(item)
+	item.begin_rename()
+	return true
+
+
+## Select every track that shares the active track's parent (top level when none is active).
+func select_sibling_tracks() -> void:
+	var parent_id := active_track.parent_track_id if active_track else -1
+	var siblings: Array[Track] = []
+	for t in _get_visual_tracks():
+		if t.parent_track_id == parent_id:
+			siblings.append(t)
+	_set_selection_list(siblings)
+
+
+## Select every track in the project, including folders, groups and tracks inside collapsed folders.
+func select_all_tracks() -> void:
+	if current_project == null:
+		return
+	var all: Array[Track] = []
+	for t in current_project.tracks:
+		all.append(t)
+	_set_selection_list(all)
+
+
+## Replace the selection with *tracks*, keeping the active track when it is among them.
+func _set_selection_list(tracks: Array[Track]) -> void:
+	if tracks.is_empty():
+		return
+	var active: Track = active_track if tracks.has(active_track) else tracks.back()
+	selected_tracks = tracks
+	active_track = active
+	_selection_anchor = active
+	_refresh_selection_visuals()
+	_notify_editor(true)
+	selection_changed.emit(selected_tracks, active_track)
 
 
 ## Show where a track or device drag lands.
