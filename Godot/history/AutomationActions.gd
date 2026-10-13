@@ -24,6 +24,25 @@ static func create_lane(track: Object, lane: Object) -> void:
 	HistoryUtil.execute(cmd)
 
 
+## Commands that create `lane` on `track` and, when `specs` is not empty, add those points to it,
+## without applying anything. Run them as one macro (`HistoryUtil.execute_many`): `MacroCommand`
+## does children in order and undoes in reverse, so the lane is attached before its points are
+## added and detached after they are removed.
+static func create_lane_commands(track: Object, lane: Object, specs: Array = [], label: String = "Create Lane") -> Array[Command]:
+	var cmds: Array[Command] = []
+	if track == null or lane == null:
+		return cmds
+	cmds.append(_LaneCreateCommand.new(label, track, lane))
+	if not specs.is_empty():
+		cmds.append(_PointsAddCommand.new("Add Points", lane, specs))
+	return cmds
+
+
+## Create `lane` on `track` with `specs` as its initial points, as ONE history entry.
+static func create_lane_with_points(track: Object, lane: Object, specs: Array = [], label: String = "Create Lane") -> void:
+	HistoryUtil.execute_many(label, create_lane_commands(track, lane, specs, label))
+
+
 ## Delete `lane` from `track` as one "Delete Lane" step; undo restores the lane and every point.
 static func delete_lane(track: Object, lane: Object) -> void:
 	if track == null or lane == null:

@@ -40,6 +40,9 @@ Assets:
 - Use `list_assets` to browse a library folder by folder, and `search_assets` (every word must match) to find specific items by name, tag, or folder.
 - Pass the path exactly as shown by these tools to `add_device` / `load_device_file`.
 
+Automation:
+- Automation lanes belong to a track and drive that track's own channel. `param` is `Volume`, `Pan`, `Send <bus>`, `CC <n>`, or a device parameter name with `path` (the device must be on that track's channel). One lane per parameter. `add_automation_lane` seeds the lane with the current value, `remove_automation_lane` deletes it, `list_automation` reads lanes and points in real units.
+
 Composing with sections:
 - Compose and edit music with `read_section` / `write_section`: they work on bars of the song across tracks, and find or create clips for you. Read before rewriting existing music.
 - Score text has one line per track, read left to right, with `|` between bars. Positions come from the values, so every bar must add up to exactly the bar's length; a bar that doesn't is refused with what it added up to. In 7/8 that is seven eighths.
