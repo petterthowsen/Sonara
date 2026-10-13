@@ -21,6 +21,7 @@ func run_tests() -> void:
 	await _test_drag_and_undo()
 	await _test_shift_squashes()
 	await _test_layout()
+	await _test_osc_throttle()
 	util.test_recorder = Callable()
 
 
@@ -145,4 +146,32 @@ func _test_layout() -> void:
 	_assert(label != null, "Name caption exists")
 	var editor: Control = label.get_parent().get_child(1)
 	_assert(label.get_parent() is VBoxContainer and editor is LineEdit, "caption sits above its editor in a vertical row")
+	panel.queue_free()
+
+
+func _test_osc_throttle() -> void:
+	var panel = await _panel()
+	var vels: Array = []
+	for i in 40:
+		vels.append(10 + i * 3)
+	var a = _midi_instance(vels)
+	a.clip._synced_to_engine = true  # count engine syncs without a socket
+	panel.set_selection([a])
+	var s = _section(panel)
+	_recorded.clear()
+	var before: int = a.clip.note_updates_sent
+	s._range_slider.drag_started.emit()
+	for step in 100:
+		s._range_slider.b_value = 127.0 - step * 0.5
+	var mid: int = a.clip.note_updates_sent - before
+	_assert(mid <= 40 * 3, "100 drag steps sync at most a few batches (%d messages for 40 notes)" % mid)
+	_assert(mid < 100 * 40, "far fewer than one message per note per step")
+	s._range_slider.drag_ended.emit()
+	var total: int = a.clip.note_updates_sent - before
+	_assert(total > mid or a.clip._dirty_notes.is_empty(), "release flushes the rest")
+	_assert(a.clip._dirty_notes.is_empty() and not a.clip._note_sync_throttled, "nothing pending, throttle off after release")
+	# A final message exists for every note that moved.
+	var sent_before: int = a.clip.note_updates_sent
+	_recorded[0].undo()
+	_assert(a.clip.note_updates_sent - sent_before == 40, "undo syncs every note at once, got %d" % (a.clip.note_updates_sent - sent_before))
 	panel.queue_free()
