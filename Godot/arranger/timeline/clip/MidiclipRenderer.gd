@@ -82,6 +82,12 @@ func _on_clip_modified():
 
 
 func _draw() -> void:
+	PerfRecorder.begin(&"MidiclipRenderer._draw")
+	_draw_body()
+	PerfRecorder.end(&"MidiclipRenderer._draw")
+
+
+func _draw_body() -> void:
 	if clip_instance and clip_instance.clip and clip_instance.clip.type == Clip.ClipType.MIDI:
 		_draw_midi()
 

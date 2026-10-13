@@ -139,18 +139,45 @@ func _on_grid_helper_changed() -> void:
 	"""Update timeline width when grid_helper properties change (scroll, zoom, etc)."""
 	_update_timeline_width()
 	# Scroll/zoom changes shift which part of the grid is visible. The row backgrounds and the
-	# automation curves only draw the visible range, so they redraw here (a pure scroll doesn't
+	# automation curves only draw the visible range, so they redraw (a pure scroll doesn't
 	# resize anything, so NOTIFICATION_RESIZED won't fire). Track lanes draw nothing themselves.
+	# A zoom frame changes the grid several times; the lane rows redraw once, from _process.
 	queue_redraw()
-	_redraw_lane_rows()
+	_lane_view_dirty = true
 
 
 ## TimelineTracks whose clips were given an on-screen range by the last _update_clip_windows.
 var _rows_on_screen: Dictionary = {}
 
+## Scroll or zoom changed since the lane rows last redrew for it.
+var _lane_view_dirty := false
+## Lane rows that were off screen when the view changed: they redraw when they scroll into view.
+var _stale_lane_rows: Dictionary = {}
+
 
 func _process(_delta: float) -> void:
 	_update_clip_windows()
+	_update_lane_rows()
+
+
+## Redraw the on-screen automation lane rows once after a scroll or zoom. Rows off screen only
+## remember that they are stale, so a frame costs what is visible, however many lanes are open.
+func _update_lane_rows() -> void:
+	if not _lane_view_dirty and _stale_lane_rows.is_empty():
+		return
+	var view := _visible_content_rect() if is_visible_in_tree() else Rect2()
+	for lane_row in _lane_rows.values():
+		if not is_instance_valid(lane_row) or not lane_row.visible:
+			continue
+		var on_screen: bool = view.has_area() and lane_row.position.y < view.end.y \
+				and lane_row.position.y + lane_row.size.y > view.position.y
+		if on_screen:
+			if _lane_view_dirty or _stale_lane_rows.has(lane_row):
+				lane_row.queue_redraw()
+				_stale_lane_rows.erase(lane_row)
+		elif _lane_view_dirty:
+			_stale_lane_rows[lane_row] = true
+	_lane_view_dirty = false
 
 
 ## Tell every clip on an on-screen row which part of it is visible, so its notes are drawn only
@@ -158,18 +185,32 @@ func _process(_delta: float) -> void:
 ## Runs after Arranger._process (parents process first) has applied this frame's scroll and
 ## zoom, and before the deferred redraws those queued.
 func _update_clip_windows() -> void:
+	PerfRecorder.begin(&"Timeline._update_clip_windows")
+	_update_clip_windows_body()
+	PerfRecorder.end(&"Timeline._update_clip_windows")
+
+
+func _update_clip_windows_body() -> void:
 	var view := _visible_content_rect() if is_visible_in_tree() else Rect2()
 	var on_screen: Dictionary = {}
 	if view.has_area():
 		for row in timeline_tracks:
 			if not is_instance_valid(row) or not row.visible:
 				continue
-			if row.position.y >= view.end.y or row.position.y + row.size.y <= view.position.y:
-				continue
-			on_screen[row] = true
+			var row_on_screen: bool = row.position.y < view.end.y and row.position.y + row.size.y > view.position.y
+			if row_on_screen:
+				on_screen[row] = true
 			for clip_ui in row.clip_instances:
-				if is_instance_valid(clip_ui) and clip_ui.clip_renderer:
-					var x0: float = row.position.x + clip_ui.position.x + clip_ui.clip_renderer.position.x
+				if not is_instance_valid(clip_ui):
+					continue
+				# A clip off screen is hidden, so a zoom (which resizes every clip) doesn't redraw
+				# it; it shows again, and draws, when it scrolls into view.
+				var clip_x: float = row.position.x + clip_ui.position.x
+				var shown := row_on_screen and clip_x < view.end.x and clip_x + clip_ui.size.x > view.position.x
+				if clip_ui.visible != shown:
+					clip_ui.visible = shown
+				if shown and clip_ui.clip_renderer:
+					var x0: float = clip_x + clip_ui.clip_renderer.position.x
 					clip_ui.clip_renderer.show_px_range(view.position.x - x0, view.end.x - x0)
 	for row in _rows_on_screen:
 		if on_screen.has(row) or not is_instance_valid(row):
@@ -475,6 +516,7 @@ func _drop_lane_row(lane: AutomationLane) -> void:
 		lane.visibility_changed.disconnect(_on_lane_visibility_changed)
 	automation_selection_manager.forget_lane(lane)
 	var lane_row = _lane_rows.get(lane)
+	_stale_lane_rows.erase(lane_row)
 	if is_instance_valid(lane_row):
 		lane_row.queue_free()
 	_lane_rows.erase(lane)
@@ -1923,6 +1965,12 @@ func get_visible_x_range() -> Vector2:
 
 
 func _draw() -> void:
+	PerfRecorder.begin(&"Timeline._draw")
+	_draw_body()
+	PerfRecorder.end(&"Timeline._draw")
+
+
+func _draw_body() -> void:
 	_draw_row_backgrounds()
 	if not clip_selection_manager:
 		return

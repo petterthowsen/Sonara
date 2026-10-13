@@ -479,6 +479,12 @@ func _notification(what: int) -> void:
 
 
 func _draw() -> void:
+	PerfRecorder.begin(&"TimelineClip._draw")
+	_draw_body()
+	PerfRecorder.end(&"TimelineClip._draw")
+
+
+func _draw_body() -> void:
 	"""Draw the body stylebox, the header band and the clip name."""
 	var style := _get_current_style()
 	if style:

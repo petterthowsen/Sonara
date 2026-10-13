@@ -42,6 +42,8 @@ var _engine_perf: EngineStatus.EnginePerf = null
 
 const POPUP_REOPEN_GUARD_MSEC := 250
 var _popup_hidden_msec: int = -1000000
+## Latest /status/engine_stats report, for filling the popup when it opens.
+var _last_stats: EngineStatus.Stats
 
 var _last_xruns: int = -1
 var _last_lock_misses: int = -1
@@ -103,6 +105,8 @@ func _on_performance_button_pressed() -> void:
 		return
 	var origin := Vector2i(performance_button.get_screen_position()
 			+ Vector2(0, performance_button.size.y))
+	if _last_stats:
+		_rebuild_performance_text(_last_stats, Time.get_ticks_msec())
 	performance_popup.popup(Rect2i(origin, Vector2i.ZERO))
 	_set_perf_subscribed(true)
 	performance_button.set_pressed_no_signal(true)
@@ -241,6 +245,7 @@ func _update_ui_no_project() -> void:
 	performance_popup.hide()
 	_set_load_text("Load")
 	performance_text.text = ""
+	_last_stats = null
 	_show_connected = false
 	_last_engine_load_msec = 0
 
@@ -309,6 +314,26 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 	if engine_load_graph:
 		engine_load_graph.add_point(stats.load_avg)
 
+	_set_load_text("%.0f%%" % (stats.load_avg * 100.0))
+	var load_color := ""
+	if stats.load_peak >= 1.0 or stats.xruns > 0 and now - _xrun_msec < COUNTER_ALERT_MSEC:
+		load_color = COLOR_ALERT
+	elif stats.load_peak >= 0.8:
+		load_color = COLOR_WARN
+	for prop in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		if load_color.is_empty():
+			performance_button.remove_theme_color_override(prop)
+		else:
+			performance_button.add_theme_color_override(prop, Color(load_color))
+
+	_last_stats = stats
+	# Building the popup text (device walks, the channel table, RichTextLabel parsing) took
+	# 6-10 ms per report, so it is only rebuilt while the popup is open, and when it opens.
+	if performance_popup.visible:
+		_rebuild_performance_text(stats, now)
+
+
+func _rebuild_performance_text(stats: EngineStatus.Stats, now: int) -> void:
 	var peak_text := "%.1f%%" % (stats.load_peak * 100.0)
 	if stats.load_peak >= 1.0:
 		peak_text = _colored(peak_text, COLOR_ALERT)
@@ -337,17 +362,6 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 	if not header.is_empty():
 		parts.insert(0, header)
 	performance_text.text = "\n".join(parts) + channel_table
-	_set_load_text("%.0f%%" % (stats.load_avg * 100.0))
-	var load_color := ""
-	if stats.load_peak >= 1.0 or stats.xruns > 0 and now - _xrun_msec < COUNTER_ALERT_MSEC:
-		load_color = COLOR_ALERT
-	elif stats.load_peak >= 0.8:
-		load_color = COLOR_WARN
-	for prop in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-		if load_color.is_empty():
-			performance_button.remove_theme_color_override(prop)
-		else:
-			performance_button.add_theme_color_override(prop, Color(load_color))
 	var totals := "\n\nXruns %d, lock misses %d, plugin dropouts %d since the engine started." % [
 		stats.xruns, stats.lock_misses, stats.plugin_underruns]
 	performance_text.tooltip_text = PERFORMANCE_TOOLTIP + totals + _plugins_tooltip(ranked)

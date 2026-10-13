@@ -1064,6 +1064,12 @@ var _ruler_watch: Array = []
 
 
 func _process(_delta: float) -> void:
+	PerfRecorder.begin(&"ClipEditor._process")
+	_process_body()
+	PerfRecorder.end(&"ClipEditor._process")
+
+
+func _process_body() -> void:
 	if not is_visible_in_tree():
 		return
 	# Line the ruler up with the note grid whatever sits to its left: the offset is the

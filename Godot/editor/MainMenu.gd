@@ -4,11 +4,13 @@ class_name MainMenu extends MenuBar
 
 var logger : Log = Log.make("MainMenu")
 
-enum  MENU { File, Edit, View, AI }
+enum MENU { File, Edit, View, AI, Help }
 
 enum FILE { New, Open, Open_Recent, Close, Sep1, Save, Save_As, Save_Startup, Clear_Startup, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
+
+enum HELP_ITEMS { Perf_Capture }
 
 enum DialogMode { OPEN, SAVE, SAVE_AS, IMPORT_DAWPROJECT, EXPORT_DAWPROJECT, IMPORT_AUDIO_DIR }
 
@@ -23,6 +25,7 @@ var _file_dialog: FileDialog
 var _view_menu: PopupMenu
 var _recent_menu: PopupMenu
 var _ai_menu: PopupMenu
+var _help_menu: PopupMenu
 var _ai_client: OpenRouterClient
 
 func _ready() -> void:
@@ -72,6 +75,12 @@ func _ready() -> void:
 	_ai_menu.add_item("New Conversation", AI_ITEMS.New_Conversation)
 	_ai_menu.add_item("Test Connection", AI_ITEMS.Test_Connection)
 	
+	_help_menu = PopupMenu.new()
+	_help_menu.name = "Help"
+	add_child(_help_menu)
+	_help_menu.add_item("Start Performance Capture", HELP_ITEMS.Perf_Capture)
+	_help_menu.about_to_popup.connect(_update_help_menu)
+
 	# disable project-dependent items initially (no project open yet)
 	_set_project_dependent_items_enabled(false)
 	
@@ -80,6 +89,7 @@ func _ready() -> void:
 	edit.id_pressed.connect(_on_item_pressed.bind(MENU.Edit))
 	_view_menu.id_pressed.connect(_on_view_item_pressed)
 	_ai_menu.id_pressed.connect(_on_item_pressed.bind(MENU.AI))
+	_help_menu.id_pressed.connect(_on_item_pressed.bind(MENU.Help))
 	
 	# connect to editor signals
 	Sonara.editor.project_opened.connect(_on_project_opened)
@@ -137,6 +147,9 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_scan_assets()
 			EDIT.Preferences:
 				_on_preferences()
+	elif menu_id == MENU.Help:
+		if item_id == HELP_ITEMS.Perf_Capture:
+			_toggle_perf_capture()
 	elif menu_id == MENU.AI:
 		match item_id:
 			AI_ITEMS.Toggle_Assistant:
@@ -218,6 +231,22 @@ func _rebuild_recent_menu() -> void:
 		_recent_menu.add_separator()
 		_recent_menu.add_item("Clear Recent", paths.size())
 	file.set_item_disabled(file.get_item_index(FILE.Open_Recent), paths.is_empty())
+
+
+func _update_help_menu() -> void:
+	var text := "Stop Performance Capture" if PerfRecorder.is_recording() else "Start Performance Capture"
+	_help_menu.set_item_text(_help_menu.get_item_index(HELP_ITEMS.Perf_Capture), text)
+
+
+func _toggle_perf_capture() -> void:
+	if not PerfRecorder.is_recording():
+		PerfRecorder.start()
+		logger.info("Performance capture started")
+		return
+	var report: String = PerfRecorder.stop()
+	logger.info("Performance capture stopped (report copied to clipboard, saved in logs/)")
+	Sonara.editor.show_error("Performance capture",
+		"Report copied to the clipboard and saved to the logs folder.\n\n" + report)
 
 
 func _on_recent_item_pressed(item_id: int) -> void:

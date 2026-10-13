@@ -147,6 +147,7 @@ func _ready() -> void:
 	add_child(_samples_timer, false, Node.INTERNAL_MODE_BACK)
 	resized.connect(_on_resized)
 	_on_resized()
+	set_process(is_data_ready())
 	if follow_settings:
 		_read_settings()
 		Settings.setting_changed.connect(_on_setting_changed)
@@ -288,6 +289,8 @@ func _on_data_loaded(_ok: bool) -> void:
 
 
 func _apply_data() -> void:
+	# _process only follows scrolling for a drawn waveform; a MIDI clip's view has no data.
+	set_process(is_data_ready())
 	_samples.reset()
 	_samples.data = data if is_data_ready() else null
 	if not is_data_ready():

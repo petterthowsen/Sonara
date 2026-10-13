@@ -290,6 +290,12 @@ func _refresh_after_visible() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfRecorder.begin(&"Arranger._process")
+	_process_body(delta)
+	PerfRecorder.end(&"Arranger._process")
+
+
+func _process_body(delta: float) -> void:
 	"""Update ruler, playhead, smooth scrolling, and smooth zooming every frame."""
 	# The vertical scrollbar (drag/click) changes scroll_vertical behind our back; adopt it as the
 	# target, otherwise the lerp below drags the view back toward the stale target.

@@ -183,6 +183,12 @@ func _update_clip_sizes(height: int = -1) -> void:
 
 
 func _update_clip_positions() -> void:
+	PerfRecorder.begin(&"TimelineTrack._update_clip_positions")
+	_update_clip_positions_body()
+	PerfRecorder.end(&"TimelineTrack._update_clip_positions")
+
+
+func _update_clip_positions_body() -> void:
 	"""Update positions and widths of all clips based on current zoom."""
 	for clip_ui in clip_instances:
 		if clip_ui and clip_ui.clip_instance and timeline:

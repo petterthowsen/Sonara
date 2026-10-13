@@ -49,6 +49,11 @@ var _pending_sends: Array[Dictionary] = []
 # Maps OSC address pattern to array of callbacks
 var listeners: Dictionary = {}
 var _wildcard_patterns: Array[String] = []  # subset of listeners.keys() that contain "*"
+## The same patterns pre-split and bucketed by segment count: segment count -> Array of
+## [pattern, PackedStringArray parts]. Every device registers a few wildcards, so with a few
+## hundred patterns a linear scan that splits both strings per message cost ~0.3 ms for each
+## meter message. A pattern only matches addresses with as many segments.
+var _wildcards_by_length: Dictionary = {}
 
 var _device_data_regex: RegEx = null  # lazily compiled, cached across /data messages
 
@@ -153,6 +158,10 @@ func listen(address: String, callback: Callable) -> void:
 		listeners[address] = []
 		if address.contains("*") and not _wildcard_patterns.has(address):
 			_wildcard_patterns.append(address)
+			var parts := address.split("/")
+			var bucket: Array = _wildcards_by_length.get(parts.size(), [])
+			bucket.append([address, parts])
+			_wildcards_by_length[parts.size()] = bucket
 
 	if not listeners[address].has(callback):
 		listeners[address].append(callback)
@@ -165,7 +174,14 @@ func unlisten(address: String, callback: Callable) -> void:
 		listeners[address].erase(callback)
 		if listeners[address].is_empty():
 			listeners.erase(address)
-			_wildcard_patterns.erase(address)
+			if _wildcard_patterns.has(address):
+				_wildcard_patterns.erase(address)
+				var size := address.split("/").size()
+				var bucket: Array = _wildcards_by_length.get(size, [])
+				for i in bucket.size():
+					if bucket[i][0] == address:
+						bucket.remove_at(i)
+						break
 		logger.info("Unregistered listener for ", address)
 
 
@@ -181,7 +197,17 @@ func reset_connection() -> void:
 # INTERNAL - OSC message routing
 # ============================================================================
 
-func _on_osc_message_received(address: String, values, _time) -> void:
+func _on_osc_message_received(address: String, values, time) -> void:
+	if not PerfRecorder.is_recording():
+		_route_osc_message(address, values, time)
+		return
+	var scope: StringName = PerfRecorder.osc_scope(address)
+	PerfRecorder.begin(scope)
+	_route_osc_message(address, values, time)
+	PerfRecorder.end(scope)
+
+
+func _route_osc_message(address: String, values, _time) -> void:
 	"""Route incoming OSC messages to registered listeners."""
 
 	# Track if message was handled
@@ -266,11 +292,16 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			callback.call(args)
 		routed = true
 	
-	# Try wildcard patterns
-	for pattern in _wildcard_patterns:
-		if _matches_wildcard(address, pattern):
-			for callback in listeners[pattern]:
-				callback.call(args, address)  # Pass address so callback can parse it
+	# Try wildcard patterns with as many segments as the address
+	var addr_parts := address.split("/")
+	var bucket: Array = _wildcards_by_length.get(addr_parts.size(), [])
+	# Iterate a copy: a callback may listen/unlisten and change the bucket.
+	for entry in bucket.duplicate():
+		if _parts_match(addr_parts, entry[1]):
+			var pattern: String = entry[0]
+			if listeners.has(pattern):
+				for callback in listeners[pattern].duplicate():
+					callback.call(args, address)  # Pass address so callback can parse it
 			routed = true
 	
 	# Debug logging for unrouted messages
@@ -290,22 +321,11 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 
 ## Check if an address matches a wildcard pattern
 ## Pattern format: "/channel/2/device/1/param/*/value" matches "/channel/2/device/1/param/5/value"
-func _matches_wildcard(address: String, pattern: String) -> bool:
-	# Split both into segments
-	var addr_parts = address.split("/")
-	var pattern_parts = pattern.split("/")
-	
-	# Must have same number of segments
-	if addr_parts.size() != pattern_parts.size():
-		return false
-	
-	# Check each segment
-	for i in range(addr_parts.size()):
-		if pattern_parts[i] == "*":
-			continue  # Wildcard matches anything
-		if addr_parts[i] != pattern_parts[i]:
+## Same-length segment lists: equal, or "*" in the pattern.
+static func _parts_match(addr_parts: PackedStringArray, pattern_parts: PackedStringArray) -> bool:
+	for i in addr_parts.size():
+		if pattern_parts[i] != "*" and addr_parts[i] != pattern_parts[i]:
 			return false
-	
 	return true
 
 

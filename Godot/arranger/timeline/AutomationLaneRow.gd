@@ -98,6 +98,8 @@ var _box_click_point_id: int = -1          # RANGE: point under a ctrl-press, to
 
 var _hover_point_id: int = -1
 var _tooltip: ValueTooltip = null
+## Height at the last resize, so a width-only resize doesn't redraw.
+var _drawn_height := -1.0
 
 
 func _ready() -> void:
@@ -110,7 +112,11 @@ func _ready() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
-		queue_redraw()
+		# Only the height changes the drawing: values map to y. A width change comes with a
+		# scroll or zoom, and the Timeline redraws on-screen rows once per frame for those.
+		if size.y != _drawn_height:
+			_drawn_height = size.y
+			queue_redraw()
 	elif what == NOTIFICATION_MOUSE_EXIT:
 		_set_hover(-1)
 		_set_handle_hover(-1)
@@ -320,11 +326,21 @@ func _handle_at(local_pos: Vector2) -> AutomationPoint:
 # ============================================================================
 
 func _draw() -> void:
+	PerfRecorder.begin(&"AutomationLaneRow._draw")
+	_draw_body()
+	PerfRecorder.end(&"AutomationLaneRow._draw")
+
+
+func _draw_body() -> void:
 	if lane:
 		_draw_range()
+		PerfRecorder.begin(&"AutomationLaneRow._draw_curve")
 		_draw_curve()
+		PerfRecorder.end(&"AutomationLaneRow._draw_curve")
 		_draw_tension_handle()
+		PerfRecorder.begin(&"AutomationLaneRow._draw_points")
 		_draw_points()
+		PerfRecorder.end(&"AutomationLaneRow._draw_points")
 		if not lane.resolved:
 			_draw_unresolved_overlay()
 
@@ -344,51 +360,65 @@ func _draw_curve() -> void:
 	colour.a = 0.35 if lane.bypassed else 1.0
 	var visible_range := _visible_x_range()
 
+	# The visible segments are contiguous (points are sorted), so the whole curve is one
+	# polyline: one draw call instead of one per segment, which matters at every zoom frame.
+	var path := PackedVector2Array()
 	var first: AutomationPoint = lane.points[0]
 	var first_x := tick_to_x(first.tick)
 	var first_y := value_to_y(first.value)
 	if first_x > visible_range.x:
-		draw_line(Vector2(visible_range.x, first_y), Vector2(first_x, first_y), colour, CURVE_WIDTH, true)
+		path.append(Vector2(visible_range.x, first_y))
+		path.append(Vector2(first_x, first_y))
 
 	for i in range(lane.points.size() - 1):
-		_draw_segment(lane.points[i], lane.points[i + 1], colour, visible_range)
+		_append_segment(path, lane.points[i], lane.points[i + 1], visible_range)
 
 	var last: AutomationPoint = lane.points[lane.points.size() - 1]
 	var last_x := tick_to_x(last.tick)
 	var last_y := value_to_y(last.value)
 	if last_x < visible_range.y:
-		draw_line(Vector2(last_x, last_y), Vector2(visible_range.y, last_y), colour, CURVE_WIDTH, true)
+		_append_point(path, Vector2(last_x, last_y))
+		path.append(Vector2(visible_range.y, last_y))
+
+	if path.size() >= 2:
+		draw_polyline(path, colour, CURVE_WIDTH, true)
 
 
-func _draw_segment(left: AutomationPoint, right: AutomationPoint, colour: Color, visible_range: Vector2) -> void:
+## Append `p` unless the path already ends there (segments share their end points).
+func _append_point(path: PackedVector2Array, p: Vector2) -> void:
+	if path.is_empty() or path[path.size() - 1] != p:
+		path.append(p)
+
+
+func _append_segment(path: PackedVector2Array, left: AutomationPoint, right: AutomationPoint, visible_range: Vector2) -> void:
 	var x0 := tick_to_x(left.tick)
 	var x1 := tick_to_x(right.tick)
 	if x1 < visible_range.x or x0 > visible_range.y:
 		return
 	var y0 := value_to_y(left.value)
 	var y1 := value_to_y(right.value)
+	_append_point(path, Vector2(x0, y0))
 
 	if left.curve == AutomationPoint.CurveType.STEP:
 		# Hold the left value to the right point's tick, then jump.
-		draw_line(Vector2(x0, y0), Vector2(x1, y0), colour, CURVE_WIDTH, true)
-		draw_line(Vector2(x1, y0), Vector2(x1, y1), colour, CURVE_WIDTH, true)
+		path.append(Vector2(x1, y0))
+		path.append(Vector2(x1, y1))
 		return
 
 	if left.tension == 0.0:
-		draw_line(Vector2(x0, y0), Vector2(x1, y1), colour, CURVE_WIDTH, true)
+		path.append(Vector2(x1, y1))
 		return
 
 	# A warped ramp is sampled through the SHARED tension warp, so the drawn shape is the one the
 	# engine plays (REQ-005). Samples bunch up towards both ends (cosine spacing): a tension warp
 	# can be almost vertical right at an end point, and evenly spaced samples would skip over that
 	# part and draw it as a straight jump.
-	var steps := clampi(int((x1 - x0) / CURVE_SAMPLE_PX), 16, 160)
-	var path := PackedVector2Array([Vector2(x0, y0)])
+	# A ramp only a few pixels wide needs only a few samples (zoomed out, most ramps are).
+	var steps := clampi(int((x1 - x0) / CURVE_SAMPLE_PX), 4, 160)
 	for step in range(1, steps + 1):
 		var t := 0.5 - 0.5 * cos(PI * float(step) / float(steps))
 		var warped := AutomationCurve.apply_tension(t, left.tension)
 		path.append(Vector2(lerpf(x0, x1, t), value_to_y(lerpf(left.value, right.value, warped))))
-	draw_polyline(path, colour, CURVE_WIDTH, true)
 
 
 ## The committed time range from a ctrl-drag, while it belongs to this lane.
@@ -438,6 +468,9 @@ func _handle_ids_to_draw() -> Array:
 
 func _draw_points() -> void:
 	var visible_range := _visible_x_range()
+	var colour := get_curve_color()
+	var dot := _dot_texture()
+	var last := Vector2(-INF, -INF)
 	for point in lane.points:
 		var x := tick_to_x(point.tick)
 		if x < visible_range.x - POINT_RADIUS or x > visible_range.y + POINT_RADIUS:
@@ -445,14 +478,43 @@ func _draw_points() -> void:
 		var centre := Vector2(x, value_to_y(point.value))
 		var selected := selection_manager != null and selection_manager.is_selected(lane, point.id)
 		var hovered := point.id == _hover_point_id
-		var fill := Color.WHITE if selected else get_curve_color()
+		# Zoomed out, many points share a pixel; one dot shows them all.
+		if not selected and not hovered and absf(centre.x - last.x) < 1.0 and absf(centre.y - last.y) < 1.0:
+			continue
+		last = centre
+		var fill := Color.WHITE if selected else colour
 		if hovered and not selected:
 			fill = fill.lightened(0.4)
 		if lane.bypassed:
 			fill.a = 0.45
-		draw_circle(centre, POINT_RADIUS + (1.0 if hovered else 0.0), fill, true, -1.0, true)
+		# A prebaked antialiased dot is one quad; draw_circle builds a feathered polygon per call.
+		var r := POINT_RADIUS + (1.0 if hovered else 0.0) + DOT_FEATHER
+		draw_texture_rect(dot, Rect2(centre - Vector2(r, r), Vector2(r, r) * 2.0), false, fill)
 		if selected:
 			draw_arc(centre, POINT_RADIUS + 2.0, 0.0, TAU, 24, Color(0.4, 0.8, 1.0), 1.5, true)
+
+
+## Soft edge around the dot texture, in pixels at its drawn size.
+const DOT_FEATHER := 1.0
+const DOT_TEXTURE_SIZE := 32
+static var _dot: ImageTexture
+
+
+## White antialiased disc filling a DOT_TEXTURE_SIZE square, minus a feather of DOT_FEATHER
+## (scaled) for the soft edge; drawn tinted and scaled to (radius + DOT_FEATHER) * 2.
+static func _dot_texture() -> ImageTexture:
+	if _dot:
+		return _dot
+	var n := DOT_TEXTURE_SIZE
+	var half := n * 0.5
+	var feather := half * DOT_FEATHER / (POINT_RADIUS + DOT_FEATHER)
+	var image := Image.create_empty(n, n, false, Image.FORMAT_RGBA8)
+	for y in n:
+		for x in n:
+			var d := Vector2(x + 0.5 - half, y + 0.5 - half).length()
+			image.set_pixel(x, y, Color(1, 1, 1, clampf((half - d) / feather, 0.0, 1.0)))
+	_dot = ImageTexture.create_from_image(image)
+	return _dot
 
 
 ## A lane whose target no longer resolves keeps every point but drives nothing (REQ-024); the
@@ -466,8 +528,10 @@ func _draw_unresolved_overlay() -> void:
 func _visible_x_range() -> Vector2:
 	if timeline == null or timeline.grid_helper == null:
 		return Vector2(0.0, size.x)
-	var start_x := clampf(timeline.grid_helper.scroll_position, 0.0, size.x)
-	var end_x := clampf(start_x + timeline.get_viewport_width(), 0.0, size.x)
+	# Not clamped to size.x: the row may be drawn before layout widens it for a zoom in, and
+	# clip_contents trims anything past the edge anyway.
+	var start_x := maxf(0.0, timeline.grid_helper.scroll_position)
+	var end_x := start_x + timeline.get_viewport_width()
 	return Vector2(start_x, end_x)
 
 
