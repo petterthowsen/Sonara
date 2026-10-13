@@ -17,7 +17,7 @@ signal active_changed(active: bool)
 signal sample_source_changed()
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
 signal key_labels_changed()  # SFZ key labels / keyswitches (re)loaded; see key_labels
-signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
+signal loading_state_changed(state: String)  # "idle", "loading", "ready", "unloaded", "failed:{error}", "crashed:{reason}"
 signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
 signal stats_changed()  # New processing stats for a CLAP plugin (1 Hz); see plugin_stats
@@ -177,7 +177,9 @@ var key_info_received := false
 ## Track loaded file path (for devices that support file loading, e.g., SFZ sampler)
 var loaded_file_path: String = ""
 
-## Loading state: "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
+## Loading state: "idle", "loading", "ready", "unloaded", "failed:{error}", "crashed:{reason}".
+## "unloaded" is a deactivated plugin: the engine destroyed the instance (freeing its RAM, CPU and
+## host process) and keeps its state until the device is activated again.
 var loading_state: String = "idle"
 
 ## Seconds between state/get retries while the device is "loading" (see request_state()).
@@ -1677,7 +1679,8 @@ func _set_loading_state(new_state: String) -> void:
 	if loading_state == new_state:
 		return
 	loading_state = new_state
-	if loading_state == "ready":
+	if loading_state == "ready" or loading_state == "unloaded":
+		# An unloaded plugin keeps the state in the engine until it is activated.
 		_restore_plugin_state()
 	loading_state_changed.emit(loading_state)
 
@@ -1687,10 +1690,11 @@ func _set_loading_state(new_state: String) -> void:
 ## ============================================================================
 
 ## Ask the engine to write this plugin's current state to a file; `plugin_state_saved` fires
-## when it answered, and `plugin_state` holds the blob if it had one. Returns false (and emits
-## nothing) when there's nothing to ask: not a loaded CLAP plugin, or not connected.
+## when it answered, and `plugin_state` holds the blob if it had one. A deactivated (unloaded)
+## plugin answers with the state it kept when it was unloaded. Returns false (and emits nothing)
+## when there's nothing to ask: not a CLAP/VST3 plugin, still loading or failed, or not connected.
 func save_plugin_state() -> bool:
-	if not device.has_gui() or not _is_connected or loading_state != "ready":
+	if not device.has_gui() or not _is_connected or (loading_state != "ready" and loading_state != "unloaded"):
 		return false
 	var file_path := _plugin_state_file_path("save")
 	if file_path.is_empty():

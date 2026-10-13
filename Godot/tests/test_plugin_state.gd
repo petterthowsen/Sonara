@@ -29,6 +29,7 @@ func run_tests() -> void:
 	_test_json_round_trip()
 	_test_no_state_not_saved()
 	_test_restore_on_ready()
+	_test_deactivated_plugin_keeps_and_saves_state()
 	_test_save_skips_builtin_and_unloaded()
 	_test_save_reads_engine_file()
 	_test_save_failure_keeps_state()
@@ -147,6 +148,49 @@ func _test_restore_on_ready() -> void:
 	inst._set_loading_state("crashed:test")
 	inst._set_loading_state("ready")
 	_assert(_sends_to(addr, mark).is_empty(), "a reload doesn't send the project state again")
+
+
+## A deactivated plugin is unloaded in the engine, which keeps its state: the project's state is
+## handed over right away (not on "ready", which never comes) and a save asks the engine for it.
+func _test_deactivated_plugin_keeps_and_saves_state() -> void:
+	_disconnect_all()
+	var project: Object = _project_script.new()
+	var ch: Object = project.create_instrument_track("Synth").channel
+	var src := _plugin(ch)
+	var blob := _blob(3000)
+	src.plugin_state = blob
+	var data: Dictionary = JSON.parse_string(JSON.stringify(src.to_json()))
+	ch.remove_device_instance(src)
+	src.disconnect_from_engine()
+	data["active"] = false
+	var inst: Object = _device_instance_script.from_json(data)
+	_assert(not inst.active, "a project saved with the device deactivated loads it deactivated")
+	ch.add_device(inst)
+	inst.connect_to_engine()
+	_connected.append(inst)
+
+	var mark: int = _osc._pending_sends.size()
+	inst._set_loading_state("unloaded")
+	var sends := _sends_to(inst.osc_addr("state/load"), mark)
+	_assert(sends.size() == 1, "the saved state reaches the engine while the plugin is unloaded")
+	if sends.size() == 1:
+		DirAccess.remove_absolute(str(sends[0][0]))
+
+	mark = _osc._pending_sends.size()
+	var results: Array = []
+	inst.plugin_state_saved.connect(func(ok): results.append(ok))
+	_assert(inst.save_plugin_state(), "an unloaded plugin is asked for its state")
+	sends = _sends_to(inst.osc_addr("state/save"), mark)
+	_assert(sends.size() == 1, "state/save is sent to the engine, which answers from the state it kept")
+	if sends.size() == 1:
+		var newer := _blob(40)
+		_answer_save(inst, sends[0], newer)
+		_assert(results == [true] and inst.plugin_state == newer, "the kept state is read back")
+
+	mark = _osc._pending_sends.size()
+	inst._set_loading_state("loading")
+	inst._set_loading_state("ready")
+	_assert(_sends_to(inst.osc_addr("state/load"), mark).is_empty(), "activating doesn't send the project state again")
 
 
 func _test_save_skips_builtin_and_unloaded() -> void:

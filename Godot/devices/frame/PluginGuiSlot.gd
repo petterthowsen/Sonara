@@ -30,6 +30,8 @@ var device: DeviceInstance
 var _mode := Mode.CLOSED
 ## Plugin host died: show the crash note until it reports "ready" again.
 var _crashed := false
+## The device is deactivated: the engine unloaded the plugin, show a note with an Activate button.
+var _deactivated := false
 ## Engine connection lost: show "unavailable".
 var _engine_lost := false
 ## close() ran: stop driving the engine.
@@ -130,6 +132,8 @@ func _init() -> void:
 func bind(dev: DeviceInstance) -> void:
 	device = dev
 	_crashed = dev.loading_state.begins_with("crashed:")
+	_deactivated = not dev.active
+	dev.active_changed.connect(_on_active_changed)
 	dev.gui_opened.connect(_on_gui_opened)
 	dev.gui_size_changed.connect(_on_gui_size_changed)
 	dev.plugin_gui_closed.connect(_on_plugin_gui_closed)
@@ -154,6 +158,7 @@ func _unbind() -> void:
 			[device.plugin_gui_closed, _on_plugin_gui_closed],
 			[device.crashed, _on_crashed],
 			[device.loading_state_changed, _on_loading_state_changed],
+			[device.active_changed, _on_active_changed],
 			[AudioEngineOSC.engine_disconnected, _on_engine_disconnected],
 			[AudioEngineOSC.engine_connected, _on_engine_connected]]:
 		if pair[0].is_connected(pair[1]):
@@ -207,7 +212,7 @@ func _shown() -> bool:
 func _process(_delta: float) -> void:
 	if device == null or _closing:
 		return
-	if _crashed or _engine_lost:
+	if _crashed or _engine_lost or _deactivated:
 		_update_note()
 		return
 	var shown := _shown()
@@ -377,6 +382,17 @@ func _on_loading_state_changed(state: String) -> void:
 		_was_visible = false
 
 
+## Deactivating unloads the plugin (the engine closed its GUI); activating loads it again, and
+## the GUI reopens on the next frame like after a Reload.
+func _on_active_changed(active: bool) -> void:
+	_deactivated = not active
+	_mode = Mode.CLOSED
+	_fit_pending = false
+	_was_visible = false
+	floating_changed.emit(false)
+	queue_redraw()
+
+
 func _on_engine_disconnected() -> void:
 	_engine_lost = true
 	_mode = Mode.CLOSED
@@ -402,6 +418,11 @@ func _update_note() -> void:
 	elif _crashed:
 		text = "%s crashed." % device.get_display_name()
 		button = "Reload"
+	elif _deactivated and device.loading_state == "loading":
+		text = "Loading %s..." % device.get_display_name()
+	elif _deactivated:
+		text = "%s is deactivated and unloaded.\nActivating restores its state." % device.get_display_name()
+		button = "Activate"
 	elif _mode == Mode.OWN_WINDOW:
 		text = "%s is in its own window." % device.get_display_name()
 		button = "Show window"
@@ -422,6 +443,8 @@ func _on_note_button_pressed() -> void:
 		return
 	if _crashed:
 		device.reload()
+	elif _deactivated:
+		device.set_active(true)
 	elif _mode == Mode.CLOSED:
 		_open_now = true
 	else:

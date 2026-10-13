@@ -92,10 +92,14 @@ impl CommandWorker {
             &vendor,
             channel_id,
             &device_path,
+            active,
         ) else {
             return;
         };
         device.set_enabled(enabled);
+        // A plugin added deactivated loads nothing: tell Godot so it shows it as unloaded and
+        // hands over the project's saved state.
+        let unloaded = device.loading_state().filter(|state| state == "unloaded");
 
         let old_taps = {
             let mut state = self.lock_state();
@@ -123,6 +127,13 @@ impl CommandWorker {
         };
         // The replaced pool's buffers drop with the lock released.
         drop(old_taps);
+        if let Some(state) = unloaded {
+            self.send_status(EngineStatus::DeviceLoadingStateChanged {
+                channel_id,
+                device_path,
+                state,
+            });
+        }
     }
 
     /// Detach a device under the lock and drop it afterwards: dropping a CLAP plugin closes its

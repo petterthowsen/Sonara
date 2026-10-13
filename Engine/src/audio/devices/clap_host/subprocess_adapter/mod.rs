@@ -215,7 +215,10 @@ enum PendingBlock {
 
 impl SubprocessClapAdapter {
     /// Create a new subprocess-based CLAP adapter (non-blocking)
-    /// Plugin loads asynchronously in background thread
+    /// Plugin loads asynchronously in background thread.
+    ///
+    /// With `start_active` false the device starts deactivated: nothing is loaded and no host
+    /// process is spawned until it is activated (a project saved with the device deactivated).
     pub fn new(
         process_manager: Arc<ProcessManager>,
         channel_id: u32,
@@ -229,6 +232,7 @@ impl SubprocessClapAdapter {
         command_tx: Option<Sender<AudioCommand>>,
         status_tx: Option<Sender<EngineStatus>>,
         block_clock: Arc<BlockClock>,
+        start_active: bool,
     ) -> Result<Self, String> {
         info!(
             "🚀 Creating subprocess CLAP adapter (async): {} (SR: {}, buffer: {})",
@@ -246,10 +250,15 @@ impl SubprocessClapAdapter {
         let category = DeviceCategory::Effect;
         let param_info_cache = Arc::new(Mutex::new(Vec::new()));
 
-        let load = Arc::new(PluginLoad::new());
+        let load = Arc::new(if start_active {
+            PluginLoad::new()
+        } else {
+            PluginLoad::new_unloaded()
+        });
 
         // Spawn subprocess loading in background thread (non-blocking!)
-        PluginLoadRequest {
+        if start_active {
+            PluginLoadRequest {
             process_manager: Arc::clone(&process_manager),
             instance_id,
             host: host.clone(),
@@ -268,8 +277,10 @@ impl SubprocessClapAdapter {
             restore_params: Vec::new(),
             replace_existing: false,
             alive: Arc::clone(&alive),
+            report_active: false,
         }
         .spawn();
+        }
 
         let adapter = Self {
             device_id: plugin_id.to_string(),
@@ -294,7 +305,7 @@ impl SubprocessClapAdapter {
             state_dirty: Arc::new(AtomicBool::new(false)),
             last_state_save: Instant::now(),
             alive,
-            is_active: false,
+            is_active: start_active,
             is_enabled: true,
             gui_open: false,
             pending_param_writes: Vec::with_capacity(QUEUED_PARAM_CAPACITY),
@@ -330,8 +341,8 @@ impl SubprocessClapAdapter {
         )
     }
 
-    /// Record the result of activating or deactivating through an `ipc_handle` (which
-    /// activates at this adapter's current rate).
+    /// Record the result of (re-)activating the loaded plugin through an `ipc_handle` (which
+    /// activates at this adapter's current rate). Unloading a device is `mark_unloaded`.
     pub fn set_active_state(&mut self, active: bool, latency_frames: u32) {
         self.is_active = active;
         if active {
@@ -445,6 +456,9 @@ impl AudioDevice for SubprocessClapAdapter {
         // Clone the load handle so `shared` doesn't borrow `self` while counters are updated.
         let load = Arc::clone(&self.load);
         let Some(shared) = load.shared() else {
+            // Loading, failed, crashed or deactivated: events staged meanwhile would play as a
+            // burst of stale notes once a plugin is ready again. `clear` doesn't allocate.
+            self.input_events.clear();
             return true;
         };
 
@@ -736,22 +750,21 @@ impl AudioDevice for SubprocessClapAdapter {
         self.is_active
     }
 
+    /// Activating respawns the plugin and waits on its host, so the command worker does it with
+    /// the state lock released (`CommandWorker::activate_plugin`), never through the trait.
     fn activate(&mut self) -> Result<(), String> {
         if self.is_active {
             return Ok(());
         }
-        let latency = self.ipc_handle().activate()?;
-        self.set_active_state(true, latency);
-        Ok(())
+        Err("a plugin is activated by the command worker".to_string())
     }
 
+    /// Deactivating destroys the plugin instance, which waits on its host: see `activate`.
     fn deactivate(&mut self) -> Result<(), String> {
         if !self.is_active {
             return Ok(());
         }
-        self.ipc_handle().deactivate()?;
-        self.set_active_state(false, 0);
-        Ok(())
+        Err("a plugin is deactivated by the command worker".to_string())
     }
 
     fn is_enabled(&self) -> bool {
@@ -1000,6 +1013,47 @@ impl SubprocessClapAdapter {
     /// Runs on the command thread under the engine state lock, which is what makes replacing
     /// `self.load` safe: the audio callback touches the field under the same lock.
     pub fn begin_reload(&mut self) -> PluginLoadRequest {
+        self.begin_load(false)
+    }
+
+    /// Command thread, under the lock: the device was deactivated, so activate it again. Builds
+    /// the request that respawns the plugin from the saved state (the reload path); the load
+    /// reports `DeviceActiveChanged{active:true}` when it finishes.
+    pub fn begin_activate(&mut self) -> PluginLoadRequest {
+        self.is_active = true;
+        self.begin_load(true)
+    }
+
+    /// Command thread, under the lock: deactivate the device. Swaps in an `Unloaded` load state
+    /// (the audio thread passes audio through from its next block, keeping the reported latency
+    /// so latency compensation doesn't shift), cancels a load still in flight and drops what the
+    /// dead instance left staged. The saved state and the cached parameter values stay for the
+    /// next activation.
+    ///
+    /// Returns the process manager and instance to hand to `ProcessManager::shutdown_instance`
+    /// once the lock is released: that destroys the plugin in its host and shuts the host down
+    /// when it was the last instance there.
+    pub fn mark_unloaded(&mut self) -> (Arc<ProcessManager>, InstanceId) {
+        let old = std::mem::replace(&mut self.load, Arc::new(PluginLoad::new_unloaded()));
+        old.cancel();
+        self.load.set_latency_frames(old.latency_frames());
+        self.is_active = false;
+        self.gui_open = false;
+        self.state_dirty.store(false, Ordering::Release);
+        self.input_events.clear();
+        self.pending_output_events.clear();
+        self.consecutive_misses = 0;
+        self.stall = None;
+        self.stats = PluginBlockStats::default();
+        (Arc::clone(&self.process_manager), self.instance_id)
+    }
+
+    /// True while the device is deactivated: no plugin instance exists.
+    pub fn is_unloaded(&self) -> bool {
+        self.load.is_unloaded()
+    }
+
+    fn begin_load(&mut self, report_active: bool) -> PluginLoadRequest {
         self.host = self.desired_host();
         // The old host closes this instance's GUI with it; Godot is told by the caller.
         self.gui_open = false;
@@ -1050,6 +1104,7 @@ impl SubprocessClapAdapter {
             restore_params,
             replace_existing: true,
             alive: Arc::clone(&self.alive),
+            report_active,
         }
     }
 
@@ -1641,6 +1696,98 @@ mod tests {
         assert!(request.alive.load(Ordering::Acquire));
         assert_eq!(request.instance_id, 1);
         assert_eq!(request.host.key, "instance-1");
+    }
+
+    /// Deactivating a plugin unloads it: audio passes through, the saved state and cached
+    /// parameter values stay on the adapter, and activating respawns it from them.
+    #[test]
+    fn deactivating_unloads_and_activating_restores_the_saved_state() {
+        let (load, _memory, _doorbell) = ready_block("sonara_test_unload", 64);
+        load.set_latency_frames(0);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        adapter.set_saved_state(vec![9, 8, 7]);
+        adapter.set_parameter(4, 0.25);
+        // Notes staged for a plugin that is about to go away must not survive the unload.
+        adapter.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 1.0,
+            },
+            0,
+        );
+        let old = adapter.load();
+        assert!(adapter.is_active());
+        assert!(!adapter.is_unloaded());
+
+        adapter.mark_unloaded();
+
+        assert!(adapter.is_unloaded());
+        assert!(!adapter.is_active());
+        assert_eq!(adapter.loading_state().as_deref(), Some("unloaded"));
+        assert!(adapter.load().shared().is_none());
+        assert!(old.is_cancelled(), "a load in flight must not publish");
+        assert!(!adapter.load().is_cancelled());
+        assert_eq!(adapter.saved_state(), Some(vec![9, 8, 7]));
+        assert_eq!(adapter.get_parameter(4), Some(0.25));
+
+        // The audio thread passes the input through and drops staged events.
+        let input: Vec<f32> = (0..128).map(|i| i as f32 * 0.01).collect();
+        let mut out = vec![0.0f32; 128];
+        adapter.process_block(&input, &mut out, 64);
+        assert_eq!(out, input);
+        assert!(adapter.input_events.is_empty());
+        // A note arriving while unloaded is dropped by the next block, not kept for later.
+        adapter.send_note_event(
+            &NoteEvent::On {
+                note_id: 2,
+                key: 61,
+                velocity: 1.0,
+            },
+            0,
+        );
+        adapter.process_block(&input, &mut out, 64);
+        assert!(adapter.input_events.is_empty());
+
+        // Activation goes through the reload path with the saved state and parameter values.
+        let request = adapter.begin_activate();
+        assert!(adapter.is_active());
+        assert!(adapter.load().is_loading());
+        assert_eq!(request.restore_state, Some(vec![9, 8, 7]));
+        assert_eq!(request.restore_params, vec![(4, 0.25)]);
+        assert!(request.report_active);
+        assert!(request.replace_existing);
+    }
+
+    /// A device created deactivated (a project saved that way) never starts a load, but keeps
+    /// a state handed to it for the activation.
+    #[test]
+    fn a_device_created_deactivated_starts_unloaded() {
+        let process_manager = Arc::new(ProcessManager::new());
+        let adapter = SubprocessClapAdapter::new(
+            process_manager,
+            2,
+            DevicePath::root(0),
+            PathBuf::from("/nonexistent/test.clap"),
+            "test.clap",
+            "test",
+            PluginFormat::Clap,
+            48_000.0,
+            64,
+            None,
+            None,
+            Arc::new(BlockClock::with_fraction(0.7)),
+            false,
+        );
+        let mut adapter = adapter.expect("adapter");
+        assert!(adapter.is_unloaded());
+        assert!(!adapter.is_active());
+        assert_eq!(adapter.loading_state().as_deref(), Some("unloaded"));
+        adapter.set_saved_state(vec![1, 2]);
+        let request = adapter.begin_activate();
+        assert_eq!(request.restore_state, Some(vec![1, 2]));
+        assert!(adapter.is_active());
     }
 
     /// A rate change marks an activated plugin for re-activation, and a reload after it loads

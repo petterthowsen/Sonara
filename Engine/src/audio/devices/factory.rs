@@ -53,8 +53,9 @@ impl DeviceFactory {
     }
 
     /// Create a device of `device_type` ("builtin", "clap" or "vst3"). `vendor` is the plugin's
-    /// vendor (plugins only; it picks the host process in "By vendor" hosting). Logs and returns None for
-    /// unknown or failed devices.
+    /// vendor (plugins only; it picks the host process in "By vendor" hosting). A plugin created
+    /// with `active` false is deactivated: nothing loads until it is activated. Logs and returns
+    /// None for unknown or failed devices.
     pub fn create(
         &self,
         device_type: &str,
@@ -63,6 +64,7 @@ impl DeviceFactory {
         vendor: &str,
         channel_id: ChannelId,
         device_path: &DevicePath,
+        active: bool,
     ) -> Option<Box<dyn AudioDevice>> {
         match device_type {
             "builtin" => self.create_builtin(device_id, channel_id, device_path),
@@ -73,6 +75,7 @@ impl DeviceFactory {
                 vendor,
                 channel_id,
                 device_path,
+                active,
             ),
             "vst3" => self.create_plugin(
                 PluginFormat::Vst3,
@@ -81,6 +84,7 @@ impl DeviceFactory {
                 vendor,
                 channel_id,
                 device_path,
+                active,
             ),
             _ => {
                 warn!(
@@ -156,6 +160,7 @@ impl DeviceFactory {
         vendor: &str,
         channel_id: ChannelId,
         device_path: &DevicePath,
+        active: bool,
     ) -> Option<Box<dyn AudioDevice>> {
         let label = format.as_str().to_uppercase();
         if device_file.is_empty() {
@@ -180,6 +185,7 @@ impl DeviceFactory {
             Some(self.command_tx.clone()),
             Some(self.status_tx.clone()),
             Arc::clone(&self.block_clock),
+            active,
         ) {
             Ok(adapter) => {
                 info!(

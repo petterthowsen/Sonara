@@ -186,6 +186,9 @@ func _update_tooltip() -> void:
 		var reason = loading_state.substr(8)
 		tooltip_text = "Crashed: %s — use Reload to bring it back" % reason
 		return
+	elif loading_state == "unloaded":
+		tooltip_text = "Deactivated: the plugin is unloaded to free memory and CPU, and comes back with its state when activated (Ctrl/Shift+click)."
+		return
 	elif _struggling:
 		tooltip_text = "Missing its processing deadline: its audio drops out. The device header tooltip shows its load."
 		return

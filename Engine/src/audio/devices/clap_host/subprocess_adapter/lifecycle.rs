@@ -77,6 +77,20 @@ mod tests {
     }
 
     #[test]
+    fn unloaded_load_passes_audio_through_and_reports_unloaded() {
+        let load = PluginLoad::new_unloaded();
+        assert!(load.is_unloaded());
+        assert!(!load.is_ready());
+        assert!(!load.is_loading());
+        assert!(!load.is_crashed());
+        assert!(load.shared().is_none());
+        assert_eq!(load.state_label(), "unloaded");
+        assert!(!load.is_cancelled());
+        load.cancel();
+        assert!(load.is_cancelled());
+    }
+
+    #[test]
     fn plugin_load_exposes_shared_memory_only_when_ready() {
         let load = PluginLoad::new();
         assert!(load.shared_memory().is_none());
@@ -228,6 +242,9 @@ const FAILED: u8 = 2;
 /// The host process died (or stopped responding) after the plugin was loaded. Distinct from
 /// `FAILED` (loading never finished) because a crashed device can be reloaded.
 const CRASHED: u8 = 3;
+/// The device is deactivated: no plugin instance exists (and its host process is gone if it was
+/// the last one in it). Activating respawns it from the saved state.
+const UNLOADED: u8 = 4;
 
 /// Everything the audio thread needs to run the per-block handshake with one plugin instance:
 /// its shared block and its host's doorbell.
@@ -253,17 +270,31 @@ pub struct PluginLoad {
     /// The host process the instance was loaded into (0 until ready). Kept after a crash, so
     /// Reload can find every device that shared the dead host.
     host_pid: AtomicU32,
+    /// Set when this load was superseded (the device was deactivated while it was still
+    /// loading): the loading thread stops and cleans up instead of publishing a ready plugin.
+    cancelled: AtomicBool,
 }
 
 impl PluginLoad {
     pub fn new() -> Self {
+        Self::with_state(LOADING)
+    }
+
+    /// A load state for a deactivated device: nothing is loaded and the audio thread passes
+    /// audio through.
+    pub fn new_unloaded() -> Self {
+        Self::with_state(UNLOADED)
+    }
+
+    fn with_state(state: u8) -> Self {
         Self {
-            state: AtomicU8::new(LOADING),
+            state: AtomicU8::new(state),
             shared: OnceLock::new(),
             error: Mutex::new(None),
             latency_frames: AtomicU32::new(0),
             activated_rate: AtomicU32::new(0),
             host_pid: AtomicU32::new(0),
+            cancelled: AtomicBool::new(false),
         }
     }
 
@@ -297,6 +328,22 @@ impl PluginLoad {
         self.state.load(Ordering::Acquire) == CRASHED
     }
 
+    /// True while the device is deactivated: the plugin instance was destroyed and its state
+    /// lives only in the adapter.
+    pub fn is_unloaded(&self) -> bool {
+        self.state.load(Ordering::Acquire) == UNLOADED
+    }
+
+    /// Mark this load superseded; see `is_cancelled`.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// True once the device was deactivated (or reloaded) while this load was running.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
     /// True before the plugin has become ready, i.e. nothing can be sent to it yet.
     pub fn is_loading(&self) -> bool {
         self.state.load(Ordering::Acquire) == LOADING
@@ -310,13 +357,14 @@ impl PluginLoad {
             .clone()
     }
 
-    /// The state as `{device}/loading_state` reports it: `loading`, `ready`, `failed:{error}` or
-    /// `crashed:{reason}`.
+    /// The state as `{device}/loading_state` reports it: `loading`, `ready`, `unloaded`,
+    /// `failed:{error}` or `crashed:{reason}`.
     pub fn state_label(&self) -> String {
         match self.state.load(Ordering::Acquire) {
             READY => "ready".to_string(),
             FAILED => format!("failed:{}", self.error().unwrap_or_default()),
             CRASHED => format!("crashed:{}", self.error().unwrap_or_default()),
+            UNLOADED => "unloaded".to_string(),
             _ => "loading".to_string(),
         }
     }
@@ -404,6 +452,9 @@ pub struct PluginLoadRequest {
     /// Cleared when the adapter is dropped. A load in flight then stops and cleans up instead of
     /// leaving an orphan host behind.
     pub alive: Arc<AtomicBool>,
+    /// Report `DeviceActiveChanged{active:true}` once the load finished, ready or failed: this
+    /// load activates a deactivated device.
+    pub report_active: bool,
 }
 
 impl PluginLoadRequest {
@@ -434,6 +485,7 @@ fn run_load(request: PluginLoadRequest) {
         restore_params,
         replace_existing,
         alive,
+        report_active,
     } = request;
 
     info!("🔄 Background thread: Loading plugin subprocess...");
@@ -448,15 +500,26 @@ fn run_load(request: PluginLoadRequest) {
         }
     };
     send_state("loading".to_string());
+    let report_active_changed = || {
+        if report_active && !load.is_cancelled() {
+            if let Some(ref tx) = status_tx {
+                let _ = tx.send(EngineStatus::DeviceActiveChanged {
+                    channel_id,
+                    device_path,
+                    active: true,
+                });
+            }
+        }
+    };
 
     if replace_existing {
         // Drop the old instance binding: after a crash its host is usually already gone; when
         // moving to another host, a shared old host only unloads this instance.
         process_manager.shutdown_instance(instance_id);
     }
-    if !alive.load(Ordering::Acquire) {
-        // The device was removed while this reload was starting: nothing to load.
-        info!("Plugin load abandoned: the device was removed");
+    if !alive.load(Ordering::Acquire) || load.is_cancelled() {
+        // The device was removed (or deactivated) while this reload was starting: nothing to load.
+        info!("Plugin load abandoned: the device was removed or deactivated");
         return;
     }
 
@@ -475,12 +538,13 @@ fn run_load(request: PluginLoadRequest) {
             load.set_failed(e.clone());
             error!("❌ Failed to spawn plugin subprocess: {}", e);
             send_state(format!("failed:{}", e));
+            report_active_changed();
             return;
         }
     };
 
-    if !alive.load(Ordering::Acquire) {
-        // Dropping the adapter during the spawn may have run before the instance was registered;
+    if !alive.load(Ordering::Acquire) || load.is_cancelled() {
+        // Dropping the adapter (or deactivating the device) during the spawn may have run before the instance was registered;
         // shut the fresh host down rather than leave it running with no device behind it.
         info!("Plugin load abandoned after spawn: the device was removed");
         process_manager.shutdown_instance(instance_id);
@@ -593,6 +657,13 @@ fn run_load(request: PluginLoadRequest) {
         error!("❌ Failed to send StartProcessing command: {}", e);
     }
 
+    if load.is_cancelled() {
+        // Deactivated while this load was finishing: the instance must not outlive the request.
+        info!("Plugin load abandoned before it was published: the device was deactivated");
+        process_manager.shutdown_instance(instance_id);
+        return;
+    }
+
     let param_count = params.len();
     *param_cache.lock().unwrap() = params;
     load.set_latency_frames(latency_frames);
@@ -611,6 +682,7 @@ fn run_load(request: PluginLoadRequest) {
         param_count
     );
     send_state("ready".to_string());
+    report_active_changed();
     if let Some(ref tx) = status_tx {
         let _ = tx.send(EngineStatus::PluginHost {
             channel_id,

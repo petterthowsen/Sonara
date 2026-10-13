@@ -196,7 +196,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/modulator/{mod_id}/param/{id}/value` | `f:normalized` | Set a modulator parameter (floats clamp, enums and bools snap; the echo carries the canonical value) |
 | `/channel/{id}/device/{path}/modulator/{mod_id}/route/set` | `s:target, f:amount` | Add, update or (amount 0) remove a route to `param/{id}`, `child/{i.j…}/param/{id}` or `mod/{mod_id}/param/{id}`; amount is clamped to −1..1. A `mod/{mod_id}/param/{id}` target (another modulator's parameter, spec 033) is evaluated, not just stored: it lands one control step (64 frames, ≈1.3 ms) later, which keeps evaluation independent of slot order and bounds mod→mod cycles to delayed feedback |
 | `/channel/{id}/device/{path}/modulator/clear` | - | Remove every modulator and route |
-| `/channel/{id}/device/{path}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
+| `/channel/{id}/device/{path}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload). For a CLAP/VST3 plugin, 0 unloads it (state saved, instance and idle host destroyed, `loading_state` becomes `unloaded`) and 1 reloads it from the saved state; `active=1` is echoed when that load finishes |
 | `/channel/{id}/device/{path}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
 | `/channel/{id}/device/{path}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add a child into a container device |
 | `/channel/{id}/device/{path}/remove_device` | `i:position` | Remove a child from a container |
@@ -290,6 +290,7 @@ like `cc`.
 - **`loading`**: Device is loading in background thread (e.g., loading large SFZ file or initializing plugin subprocess)
 - **`ready`**: Device fully loaded and ready to process audio
 - **`failed:{error}`**: Loading never finished (e.g., "failed:File not found")
+- **`unloaded`**: The plugin device is deactivated: its instance (and host process, if it was the last one) is gone and audio passes through. Its state is kept in the engine; activating the device loads it again
 - **`crashed:{reason}`**: The plugin's host process died after loading. A crashed device passes audio through and the UI offers a Reload
 
 Loading state updates are sent automatically during:
@@ -556,7 +557,10 @@ packets). Paths are absolute. Godot uses `user://plugin_state/`.
   (no device, plugin not ready, write error). Godot reads the file and deletes it.
 - `state/load` reads the raw blob from `file_path` and restores it into the loaded plugin. The
   blob also becomes the plugin's saved state for crash reload. Godot sends it when a
-  project-loaded plugin first reports `ready`, and deletes the file 30 s later.
+  project-loaded plugin first reports `ready` (or `unloaded`), and deletes the file 30 s later.
+  A deactivated (unloaded) plugin only stores it, for the next activation.
+- `state/save` on an unloaded plugin does not query it: it writes the stored blob (`size` 0 when
+  there is none).
 - In `.sonara` projects the blob is stored per device as base64 under `plugin_state`. Godot
   refreshes it from every ready plugin before writing the file (3 s timeout; a plugin that doesn't
   answer keeps its last saved blob).
@@ -566,7 +570,7 @@ packets). Paths are absolute. Godot uses `user://plugin_state/`.
 /channel/{id}/device/{position}/activate [i:active]
 /channel/{id}/device/{position}/enable [i:enabled]
 ```
-- **activate**: Load/unload device (affects RAM, parameters visible/hidden)
+- **activate**: Load/unload device (affects RAM, CPU and plugin host processes; see `engine-plugin-architecture.md` › Deactivated = unloaded)
 - **enable**: Bypass device (zero-latency, maintains state)
 
 **Plugin GUI Control (CLAP plugins only)**
