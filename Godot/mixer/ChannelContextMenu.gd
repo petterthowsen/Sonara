@@ -17,6 +17,7 @@ var channel : Channel = null
 @onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
 @onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
 var hidden_checkbox: CheckBox
+var sends_hidden_checkbox: CheckBox
 @onready var unnest_button: Button = $VBoxContainer/UnnestButton
 @onready var delete_button: Button = $VBoxContainer/DeleteButton
 
@@ -37,6 +38,12 @@ func _ready() -> void:
 	hidden_checkbox.tooltip_text = "Leave out of the mixer (visual only). Show Hidden brings it back"
 	hidden_checkbox.toggled.connect(_on_hidden_toggled)
 	active_checkbox.add_sibling(hidden_checkbox)
+	# Issue 88: buses only; other channels get no send knob for this bus.
+	sends_hidden_checkbox = CheckBox.new()
+	sends_hidden_checkbox.text = "Hide Sends"
+	sends_hidden_checkbox.tooltip_text = "Other channels show no send knob for this bus (visual only). Existing sends keep working"
+	sends_hidden_checkbox.toggled.connect(_on_sends_hidden_toggled)
+	hidden_checkbox.add_sibling(sends_hidden_checkbox)
 	active_checkbox.tooltip_text = "Off deactivates this channel's devices (and its children's) to save CPU"
 	if unnest_button:
 		unnest_button.pressed.connect(_on_unnest_pressed)
@@ -60,6 +67,8 @@ func bind_to_channel(ch : Channel):
 	active_checkbox.disabled = channel.is_master
 	hidden_checkbox.set_pressed_no_signal(channel.hidden)
 	hidden_checkbox.disabled = channel.is_master
+	sends_hidden_checkbox.visible = channel.is_bus
+	sends_hidden_checkbox.set_pressed_no_signal(channel.sends_hidden)
 
 	# Master can't be deleted; a plugin return only goes with its parent or its source device.
 	delete_button.disabled = channel.is_master or channel.is_plugin_return()
@@ -90,6 +99,12 @@ func _on_active_toggled(_active : bool):
 func _on_hidden_toggled(pressed: bool) -> void:
 	if not channel: return
 	channel.set_hidden(pressed)
+	hide()
+
+
+func _on_sends_hidden_toggled(pressed: bool) -> void:
+	if not channel: return
+	channel.set_sends_hidden(pressed)
 	hide()
 
 

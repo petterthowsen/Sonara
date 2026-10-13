@@ -36,6 +36,8 @@ signal tracks_layout_changed
 signal arranger_view_changed(key: String, value: bool)
 ## A track or channel changed its hidden/enabled state (issue 70); views re-filter.
 signal item_visibility_changed
+## A bus turned its send knobs on or off for other channels (issue 88).
+signal sends_visibility_changed(bus: Channel)
 ## A mixer_view flag changed (see set_mixer_view).
 signal mixer_view_changed(key: String, value: bool)
 ## The project scale changed (see set_scale).

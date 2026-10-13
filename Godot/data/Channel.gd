@@ -45,6 +45,7 @@ signal pan_mode_changed(pan_mode: PanMode)
 signal mute_changed(value: bool)
 signal solo_changed(value: bool)
 signal hidden_changed(value: bool)
+signal sends_hidden_changed(value: bool)
 signal enabled_changed(value: bool)
 signal peak_updated(left: float, right: float, rms_left: float, rms_right: float)
 signal route_changed(output_id: int)
@@ -95,6 +96,9 @@ var solo: bool = false
 ## Visual only (issue 70): the strip and its linked tracks are left out of the views unless
 ## "Show hidden" is on.
 var hidden: bool = false
+## Bus only (issue 88): other channels show no send knob for this bus. Visual only, so it is
+## neither sent to the engine nor does it touch existing sends or routing.
+var sends_hidden: bool = false
 ## False deactivates the channel's devices in the engine (issue 70) and, with the channel's
 ## children, leaves it out of the views unless "Show disabled" is on.
 var enabled: bool = true
@@ -488,6 +492,17 @@ func set_hidden(value: bool) -> void:
 	hidden = value
 	hidden_changed.emit(hidden)
 	_notify_project_visibility()
+
+
+## Hide or show the send knob other channels have for this bus (visual only).
+func set_sends_hidden(value: bool) -> void:
+	if sends_hidden == value:
+		return
+	sends_hidden = value
+	sends_hidden_changed.emit(sends_hidden)
+	var project := get_project()
+	if project:
+		project.sends_visibility_changed.emit(self)
 
 
 ## Enable or deactivate this channel (and, through the hierarchy, its children).
@@ -1124,7 +1139,7 @@ func to_json() -> Dictionary:
 ## Plain fields copied by JsonFields; defaults come from the initializers and _init().
 const JSON_FIELDS: Array[String] = [
 	"name", "order", "device_output_id", "volume", "pan", "pan_width", "pan_left", "pan_right",
-	"mute", "solo", "hidden", "enabled", "phase_invert", "output_channel_id", "parent_channel_id",
+	"mute", "solo", "hidden", "sends_hidden", "enabled", "phase_invert", "output_channel_id", "parent_channel_id",
 	"is_children_expanded", "aux_bus_index", "aux_pad_note", "midi_input_device", "record_armed",
 	"drum_view",
 ]

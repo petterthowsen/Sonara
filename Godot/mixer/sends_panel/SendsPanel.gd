@@ -203,6 +203,11 @@ func _on_project_channel_removed(ch: Channel) -> void:
 		_rebuild_sends_ui()
 
 
+## A bus turned its send knobs on or off.
+func _on_project_sends_visibility_changed(_bus: Channel) -> void:
+	_rebuild_sends_ui()
+
+
 ## Rebuild the sends UI based on available BUS channels.
 func _rebuild_sends_ui() -> void:
 	if not channel or not project or not flow_container:
@@ -214,7 +219,7 @@ func _rebuild_sends_ui() -> void:
 
 	var bus_channels: Array[Channel] = []
 	for ch in project.channels:
-		if ch.channel_type == Channel.ChannelType.BUS and ch.id != channel.id:
+		if ch.channel_type == Channel.ChannelType.BUS and ch.id != channel.id and not ch.sends_hidden:
 			bus_channels.append(ch)
 
 	logger.info("Rebuild for channel %d (%s): Found %d bus channels" % [channel.id, Channel.ChannelType.keys()[channel.channel_type], bus_channels.size()])
@@ -370,6 +375,8 @@ func _connect_project_signals() -> void:
 		project.channel_added.connect(_on_project_channel_added)
 	if not project.channel_removed.is_connected(_on_project_channel_removed):
 		project.channel_removed.connect(_on_project_channel_removed)
+	if not project.sends_visibility_changed.is_connected(_on_project_sends_visibility_changed):
+		project.sends_visibility_changed.connect(_on_project_sends_visibility_changed)
 
 
 ## Drop project-level listeners when rebinding or freeing.
@@ -380,6 +387,8 @@ func _disconnect_project_signals() -> void:
 		project.channel_added.disconnect(_on_project_channel_added)
 	if project.channel_removed.is_connected(_on_project_channel_removed):
 		project.channel_removed.disconnect(_on_project_channel_removed)
+	if project.sends_visibility_changed.is_connected(_on_project_sends_visibility_changed):
+		project.sends_visibility_changed.disconnect(_on_project_sends_visibility_changed)
 
 
 ## Disconnect name listeners from every bus this panel was watching.

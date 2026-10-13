@@ -61,4 +61,13 @@ func run_tests() -> void:
 	_assert(control.knob.get_value_text() == "-inf dB", "the bottom of the range reads -inf dB")
 
 	channel.remove_send(bus.id)
+
+	# Issue 88: a bus can hide its send knob from every other channel, and show it again
+	bus.set_sends_hidden(true)
+	_assert(panel._find_send_control(bus.id) == null, "a bus with hidden sends has no send knob")
+	var restored: Object = load("res://data/Channel.gd").from_json(bus.to_json())
+	_assert(restored.sends_hidden, "sends_hidden survives save and load")
+	bus.set_sends_hidden(false)
+	_assert(panel._find_send_control(bus.id) != null, "turning it off brings the send knob back")
+
 	panel.queue_free()
