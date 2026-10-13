@@ -897,23 +897,10 @@ func _on_add_lane_requested(track: Track) -> void:
 func _on_automation_parameter_chosen(track: Track, target: AutomationTarget) -> void:
 	if track == null or target == null:
 		return
-	var lane := AutomationLane.new(_unique_lane_id(track), target)
-	lane.height = track.height if Settings.get_value("arranger/sync_track_and_lane_height") \
-		else Settings.get_value("appearance/automation_lane_height")
+	var lane := AutomationToolUtil.new_lane(track, target)
 	var seed_value: float = target.current_normalized_value(track.get_linked_channel())
 	AutomationActions.create_lane(track, lane)
 	AutomationActions.add_point(lane, 0, seed_value)
-
-
-## A lane id unique within `track`. Ids are per-track because that is the OSC addressing scope.
-func _unique_lane_id(track: Track) -> String:
-	var used: Dictionary = {}
-	for lane in track.automation_lanes:
-		used[lane.id] = true
-	var n := track.automation_lanes.size()
-	while used.has("lane%d" % n):
-		n += 1
-	return "lane%d" % n
 
 
 func _on_lane_bypass_toggled(lane: AutomationLane, bypassed: bool) -> void:

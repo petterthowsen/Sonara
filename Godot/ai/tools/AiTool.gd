@@ -185,6 +185,12 @@ static func compact_track(t: Track) -> Dictionary:
 	var ch := t.get_linked_channel()
 	if ch and not DeviceNaming.names_equal(ch.name, t.name):
 		row["channel"] = ch.name
+	if t.parent_track_id >= 0 and t.get_project_ref():
+		var parent: Track = t.get_project_ref().get_track_by_id(t.parent_track_id)
+		if parent:
+			row["parent"] = parent.name
+	if t.automation_lanes.size() > 0:
+		row["lanes"] = t.automation_lanes.size()
 	return row
 
 

@@ -22,6 +22,7 @@ Folder vs Folder Bus vs Group:
 - Folder: organizational timeline parent, no mixer strip, no clips.
 - Folder Bus: a folder linked to a right-pane bus; children stay top-level left strips and route to that bus.
 - Group: left-pane mix parent with a timeline header; children nest under it and output is locked to the group. Device Multi-Out is a Group.
+- `move_track` reorders tracks or moves them into or out of a group or folder (`into: "top"` un-nests). Moving into a group re-routes the channel to the group.
 
 Devices:
 - Address devices by `path` only (`Channel/Device/Child`, e.g. `Kick/Delay` or `Kick/Chain/Delay 2`).
@@ -38,6 +39,9 @@ Assets:
 - Asset paths are library-relative (e.g. `SFZ/VPO3/Strings/1st-violin-SEC-PERF.sfz`), not absolute filesystem paths.
 - Use `list_assets` to browse a library folder by folder, and `search_assets` (every word must match) to find specific items by name, tag, or folder.
 - Pass the path exactly as shown by these tools to `add_device` / `load_device_file`.
+
+Automation:
+- Automation lanes belong to a track and drive that track's own channel. `param` is `Volume`, `Pan`, `Send <bus>`, `CC <n>`, or a device parameter name with `path` (the device must be on that track's channel). One lane per parameter. `add_automation_lane` seeds the lane with the current value, `remove_automation_lane` deletes it, `list_automation` reads lanes and points in real units.
 
 Composing with sections:
 - Compose and edit music with `read_section` / `write_section`: they work on bars of the song across tracks, and find or create clips for you. Read before rewriting existing music.
