@@ -147,6 +147,30 @@
   (covers plugins without a state extension) and waits for `DeviceReady` to re-advertise the
   parameters. It runs on a background thread (`PluginLoadRequest::spawn`) with a fresh
   `PluginLoad`, so the audio thread keeps passing audio through until the new host is ready.
+- **Deactivated = unloaded.** `<device addr>/activate 0` on a CLAP or VST3 plugin unloads it
+  (`CommandWorker::deactivate_plugin`, lock released for the slow parts): close the GUI, `SaveState`
+  into the adapter's saved blob (a loading, failed or crashed plugin keeps the blob it last
+  saved; without a state extension the cached parameter values are the fallback, as in Reload),
+  then `SubprocessClapAdapter::mark_unloaded` swaps in a `PluginLoad` in the `UNLOADED` state under
+  the lock and `ProcessManager::shutdown_instance` destroys the instance (it unloads from a shared
+  host, or shuts the host process down when it was the last one). The audio thread treats
+  `UNLOADED` like Loading: `load.shared()` is `None`, so audio passes through (silence for an
+  instrument), no IPC, no allocation; staged note events are discarded. The old `PluginLoad` is
+  `cancel`led, so a load still in flight stops and shuts its instance down instead of publishing.
+  The reported latency is kept, so latency compensation doesn't shift. The engine reports
+  `loading_state = "unloaded"` then `active = 0`.
+  `activate 1` goes through the reload path (`begin_activate`, `PluginLoadRequest::report_active`)
+  under a fresh instance id (a load cancelled by the deactivation may still be finishing under the
+  old id and only cleans that one up): fresh host, saved blob restored, cached parameters re-sent,
+  `DeviceReady`; the load reports `active = 1` once it is ready. If the spawn fails the device
+  ends up deactivated again (`PluginLoad::set_activation_failed`): `loading_state = failed:...`
+  plus `active = 0`, the saved state kept; activating again, or Reload, retries.
+  A plugin added with `active = 0` (project load) is created `UNLOADED` and loads nothing;
+  `state/load` on it only stores the blob, and `state/save` writes the stored blob (size 0 when
+  there is none), so a project saved while a plugin is deactivated keeps its state. Parameter writes
+  made while unloaded update the cache and are sent after the next load. Built-in devices keep
+  `AudioDevice::activate/deactivate`; the adapter's trait methods refuse, since they would block
+  under the lock.
 - State blobs: the host implements CLAP's state extension (`save`/`load` on the main thread).
   `mark_dirty` (HostState registered) or any parameter change sets the adapter's dirty flag; the
   command thread refreshes the blob at most once per 30 s while dirty, and on `{device}/state/save`

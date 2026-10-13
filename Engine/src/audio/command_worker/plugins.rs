@@ -100,7 +100,13 @@ impl CommandWorker {
                     let same_host =
                         host_pid != 0 && load.is_crashed() && load.host_pid() == host_pid;
                     if requested || same_host {
-                        requests.push((id, *path, plugin.begin_reload()));
+                        // A failed activation is Reload's retry: the device is deactivated.
+                        let request = if plugin.is_unloaded() {
+                            plugin.begin_activate()
+                        } else {
+                            plugin.begin_reload()
+                        };
+                        requests.push((id, *path, request));
                     }
                 });
             }
@@ -198,7 +204,16 @@ impl CommandWorker {
             return;
         };
 
-        let size = match handle.save_state() {
+        // A deactivated plugin has no instance to ask: its saved state is the state.
+        let unloaded_state = self.with_plugin(channel_id, &device_path, |plugin| {
+            plugin.is_unloaded().then(|| plugin.saved_state())
+        });
+        let saved = match unloaded_state {
+            Some(Some(state)) => Ok(state.unwrap_or_default()),
+            _ => handle.save_state(),
+        };
+
+        let size = match saved {
             Ok(state) => match std::fs::write(&file_path, &state) {
                 Ok(()) => {
                     info!(
@@ -265,6 +280,21 @@ impl CommandWorker {
             }
         };
         let len = state.len();
+        // A deactivated plugin has no instance to hand it to: keep it for the activation.
+        let unloaded = self
+            .with_plugin(channel_id, &device_path, |plugin| {
+                plugin
+                    .is_unloaded()
+                    .then(|| plugin.set_saved_state(state.clone()))
+            })
+            .is_some_and(|stored| stored.is_some());
+        if unloaded {
+            info!(
+                "Kept {} bytes of plugin state for activation (channel {} device {})",
+                len, channel_id, device_path
+            );
+            return;
+        }
         match handle.load_state(state.clone()) {
             Ok(()) => {
                 // Keep it as the saved state too, so a crash before the next refresh restores
@@ -310,7 +340,8 @@ impl CommandWorker {
             .map(f)
     }
 
-    /// Activate or deactivate a subprocess plugin with the lock released.
+    /// Activate or deactivate a subprocess plugin. Deactivating unloads it, activating respawns
+    /// it from its saved state; both run with the state lock released.
     pub(super) fn set_plugin_active(
         &self,
         handle: PluginIpcHandle,
@@ -322,43 +353,100 @@ impl CommandWorker {
         if is_active != Some(!active) {
             return;
         }
-
-        let latency = if active {
-            match handle.activate() {
-                Ok(latency) => latency,
-                Err(e) => {
-                    warn!(
-                        "Failed to activate device at channel {} path {}: {}",
-                        channel_id, device_path, e
-                    );
-                    return;
-                }
-            }
+        if active {
+            self.activate_plugin(channel_id, device_path);
         } else {
-            if let Err(e) = handle.deactivate() {
-                warn!(
-                    "Failed to deactivate device at channel {} path {}: {}",
-                    channel_id, device_path, e
-                );
-                return;
-            }
-            0
-        };
+            self.deactivate_plugin(&handle, channel_id, device_path);
+        }
+    }
 
-        self.with_plugin(channel_id, &device_path, |plugin| {
-            plugin.set_active_state(active, latency)
-        });
+    /// A deactivated plugin is an unloaded plugin: save its state, close its GUI, destroy the
+    /// instance in its host (shutting the host down when it was the last instance there) and
+    /// pass audio through. The state stays on the adapter for `activate_plugin` and for a project
+    /// save.
+    fn deactivate_plugin(
+        &self,
+        handle: &PluginIpcHandle,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+    ) {
+        let (ready, gui_open) = self
+            .with_plugin(channel_id, &device_path, |plugin| {
+                (plugin.load().is_ready(), plugin.is_gui_open())
+            })
+            .unwrap_or((false, false));
+
+        if gui_open {
+            if let Err(e) = handle.close_gui() {
+                warn!(
+                    "Failed to close the GUI of {} before unloading it: {}",
+                    handle.device_name(),
+                    e
+                );
+            }
+            self.send_status(EngineStatus::PluginGuiClosed {
+                channel_id,
+                device_path,
+            });
+        }
+
+        // Only a running instance can answer. One that is loading, failed or crashed keeps the
+        // state it last saved. Without a state extension the activation re-sends the cached
+        // parameter values instead (the reload path).
+        if ready {
+            match handle.save_state() {
+                Ok(state) => {
+                    self.with_plugin(channel_id, &device_path, |plugin| {
+                        plugin.set_saved_state(state)
+                    });
+                }
+                Err(e) => info!(
+                    "Unloading {} without a state blob ({}); its parameter values are kept",
+                    handle.device_name(),
+                    e
+                ),
+            }
+        }
+
+        // Swap the load state under the lock, so the audio thread passes audio through from its
+        // next block, then destroy the instance with the lock released: it waits on the host.
+        let Some((process_manager, instance_id)) =
+            self.with_plugin(channel_id, &device_path, |plugin| plugin.mark_unloaded())
+        else {
+            return;
+        };
+        process_manager.shutdown_instance(instance_id);
+
         info!(
-            "Device {}: channel={} device={}",
-            if active { "activated" } else { "deactivated" },
-            channel_id,
-            device_path
+            "Device deactivated (plugin unloaded): channel={} device={}",
+            channel_id, device_path
         );
+        self.send_status(EngineStatus::DeviceLoadingStateChanged {
+            channel_id,
+            device_path,
+            state: "unloaded".to_string(),
+        });
         self.send_status(EngineStatus::DeviceActiveChanged {
             channel_id,
             device_path,
-            active,
+            active: false,
         });
+    }
+
+    /// Respawn a deactivated plugin through the reload path with its saved state. The load
+    /// reports the device active once it finished (or failed, which `loading_state` shows).
+    fn activate_plugin(&self, channel_id: ChannelId, device_path: DevicePath) {
+        let request = self.with_plugin(channel_id, &device_path, |plugin| {
+            plugin.is_unloaded().then(|| plugin.begin_activate())
+        });
+        let Some(Some(request)) = request else {
+            return;
+        };
+        info!(
+            "Activating plugin at channel {} device {}: loading it from its saved state",
+            channel_id, device_path
+        );
+        request.spawn();
     }
 
     /// Open a subprocess plugin's GUI with the lock released, then report its size so the host
