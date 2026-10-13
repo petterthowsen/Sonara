@@ -127,6 +127,41 @@ static func _set_send(ch: Channel, db: float, bus_id: int) -> void:
 		ch.add_send(bus_id, db, false)
 
 
+# -- Output routing -------------------------------------------------------------------------
+
+## The output menu of `primary` picked `item_id` (an id `ChannelOutputMenu.apply` expects). Route
+## `primary` and every peer to it as one undo step. A peer is skipped when the route does not
+## apply to it: master, route-locked, a route to itself, or one that would create a cycle (the
+## single-channel validity check). A master primary picks a device output, so it has no peers.
+static func apply_route(primary: Channel, item_id: int, peers: Array[Channel], project: Project) -> void:
+	if primary == null:
+		return
+	var old_values := {primary: _route_of(primary)}
+	ChannelOutputMenu.apply(primary, item_id)
+	var new_values := {primary: _route_of(primary)}
+	if not primary.is_master:
+		for peer in peers:
+			if peer.is_master or peer.route_locked() or not _can_route(peer, item_id, project):
+				continue
+			old_values[peer] = _route_of(peer)
+			new_values[peer] = item_id
+	_commit("Set Output", primary, old_values, new_values, _set_route, "")
+
+
+static func _can_route(peer: Channel, item_id: int, project: Project) -> bool:
+	if item_id == 1 or item_id >= AudioConfig.HARDWARE_OUTPUT_BASE:
+		return item_id != peer.id
+	return ChannelOutputMenu.is_valid_route_target(peer, project.get_channel_by_id(item_id), project)
+
+
+static func _route_of(ch: Channel) -> int:
+	return ch.device_output_id if ch.is_master else ch.output_channel_id
+
+
+static func _set_route(ch: Channel, item_id: int) -> void:
+	ChannelOutputMenu.apply(ch, item_id)
+
+
 # -- Shared ---------------------------------------------------------------------------------
 
 ## Apply the peers' values (the primary's is applied already) and record the whole gesture.
