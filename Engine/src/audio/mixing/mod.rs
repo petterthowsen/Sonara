@@ -275,13 +275,14 @@ fn device_prepass(
 /// smoothing state.
 fn apply_fader_and_pan(channel_map: &mut HashMap<ChannelId, Channel>, frames: usize) {
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
-    // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
+    // "post-fader" for metering. Route targets (buses, master) fade and pan in the routing pass, after their devices.
     // Silent channels are cleared. Send-only sources keep their buffer for sends to a soloed bus.
     for channel in channel_map.values_mut() {
         let started = channel.mix.timing.then(Instant::now);
         if is_silenced(channel) {
             channel.clear_buffers();
-        } else {
+        } else if !channel.mix.is_route_target {
+            // Route targets apply their fader after their devices (`route_finished`).
             fader_and_pan(channel, frames);
         }
         if let Some(started) = started {

@@ -69,17 +69,6 @@ fn add_delayed(
     );
 }
 
-/// Apply the channel's pan matrix to its own buffers.
-pub(super) fn apply_pan(channel: &mut Channel, frames: usize) {
-    let pan = channel.get_pan_coefficients();
-    for i in 0..frames {
-        let left_in = channel.buffer_left[i];
-        let right_in = channel.buffer_right[i];
-        channel.buffer_left[i] = left_in * pan.left_to_left + right_in * pan.right_to_left;
-        channel.buffer_right[i] = left_in * pan.left_to_right + right_in * pan.right_to_right;
-    }
-}
-
 /// Reset per-buffer routing state, count each channel's route and send inputs, and mark route
 /// targets. Master is always a target so its devices run after everything has mixed in.
 pub(super) fn count_route_inputs(
@@ -124,7 +113,8 @@ pub(super) fn count_route_inputs(
 
 /// Mix a finished channel into its output and send targets and release their pending inputs.
 ///
-/// Routed audio is scaled by the target's fader; the source's pan was already applied.
+/// Routed audio isn't scaled by the target's fader: that applies after the target's devices
+/// (`route_finished`). The source's pan was already applied.
 /// Pre-fader sends reapply the source's pan so stereo matches the source. Targets that already
 /// finished (only possible in a routing cycle) receive nothing.
 pub(super) fn route_channel(
@@ -159,10 +149,10 @@ pub(super) fn route_channel(
         if let Some(target) = channel_map.get_mut(&target_id) {
             target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
             if audible && (!send_only || target.mix.solo_down) && !target.mix.done {
-                let gain = target.get_gain();
+                // The target's fader applies after its devices, in `route_finished`.
                 match post_ring.as_ref().filter(|_| route_delay > 0) {
-                    Some(ring) => add_delayed(target, ring, route_delay, frames, gain),
-                    None => add_scaled(target, &left, &right, frames, gain),
+                    Some(ring) => add_delayed(target, ring, route_delay, frames, 1.0),
+                    None => add_scaled(target, &left, &right, frames, 1.0),
                 }
             }
         }
@@ -181,7 +171,7 @@ pub(super) fn route_channel(
         if !send_allowed || target.mix.done {
             continue;
         }
-        let gain = fader_gain(send.amount_db) * target.get_gain();
+        let gain = fader_gain(send.amount_db);
         if gain <= 0.0 {
             continue;
         }
@@ -221,8 +211,7 @@ pub(super) fn route_channel(
 
 /// Copy the channel's buffer for its pre-fader sends, if it has any. Call after its devices run.
 ///
-/// Route targets have their fader applied as inputs mix in, so their copy is post-fader and
-/// pre-pan.
+/// Route targets apply their fader after their devices, so their copy is pre-fader and pre-pan.
 pub(super) fn copy_pre_fader(channel: &mut Channel, frames: usize) {
     let mix = &mut channel.mix;
     mix.has_pre_fader_copy = frames > 0
@@ -295,8 +284,8 @@ fn write_latency_rings(channel: &mut Channel, frames: usize) {
     }
 }
 
-/// Complete a channel after its device chain finished: route targets apply their pan (silenced
-/// ones are cleared), then the channel routes onward.
+/// Complete a channel after its device chain finished: route targets apply their fader and pan
+/// (silenced ones are cleared), then the channel routes onward.
 pub(super) fn route_finished(
     channel_map: &mut HashMap<ChannelId, Channel>,
     id: ChannelId,
@@ -309,7 +298,7 @@ pub(super) fn route_finished(
     if channel.mix.is_route_target {
         copy_pre_fader(channel, frames);
         if !channel.mute {
-            apply_pan(channel, frames);
+            super::fader_and_pan(channel, frames);
         }
         if is_silenced(channel) {
             channel.clear_buffers();
@@ -583,9 +572,25 @@ mod tests {
         let calls = add_test_device(state.channels.get_mut(&2).unwrap(), 0.25);
         let output = mix(&mut state);
 
+        // The bus's -6 dB fader scales its device output, not the (silent) input
+        let expected = 0.25 * fader_gain(-6.0);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
-        assert!((output[0] - 0.25).abs() < 1e-5);
-        assert!((output[1] - 0.25).abs() < 1e-5);
+        assert!((output[0] - expected).abs() < 1e-5);
+        assert!((output[1] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn bus_fader_scales_device_output_not_device_input() {
+        // The device adds 0.25 to its input. The fader belongs after it: applying it before the
+        // chain (the bug) would give 0.5 * g * g + 0.25 instead.
+        let mut state = track_bus_master_state();
+        add_test_device(state.channels.get_mut(&2).unwrap(), 0.25);
+        let output = mix(&mut state);
+
+        let g = fader_gain(-6.0);
+        let expected = (0.5 * g + 0.25) * g;
+        assert!((state.channels[&2].buffer_left[0] - expected).abs() < 1e-5);
+        assert!((output[0] - expected).abs() < 1e-5);
     }
 
     #[test]
