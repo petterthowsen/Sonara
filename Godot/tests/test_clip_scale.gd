@@ -25,6 +25,9 @@ func run_tests() -> void:
 	await _test_half_rounding_and_minimum()
 	await _test_instance_loop_and_offset()
 	await _test_shared_clip_scales_once()
+	await _test_double_clamps_to_next_clip()
+	await _test_shared_clip_across_tracks_clamps()
+	await _test_half_trims_note_overlaps()
 
 
 func _make_clip(notes: Array, length: int = 3840) -> Object:
@@ -161,4 +164,65 @@ func _test_shared_clip_scales_once() -> void:
 	_press(menu.scale_double)
 	_assert(_notes(clip) == [[0, 960]], "shared clip scaled once, got %s" % [_notes(clip)])
 	_assert(a.duration_ticks == 7680 and b.duration_ticks == 3840, "each instance scales")
+	menu.free()
+
+
+func _track_with(instances: Array) -> Object:
+	var track = load("res://data/Track.gd").new(900 + randi() % 1000)
+	for inst in instances:
+		track.clip_instances.append(inst)
+		inst.track = track
+	return track
+
+
+func _test_double_clamps_to_next_clip() -> void:
+	var menu := await _open_menu()
+	var clip := _make_clip([[0, 480]], 1920)
+	var other := _make_clip([[0, 480]], 1920)
+	var a := _make_instance(clip, 1920)
+	a.start_ticks = 0
+	var b := _make_instance(other, 1920)
+	b.start_ticks = 2880
+	_track_with([a, b])
+	_bind(menu, [a])
+	_press(menu.scale_double)
+	_assert(a.duration_ticks == 2880, "doubled instance ends at the next clip, got %d" % a.duration_ticks)
+	_assert(clip.content_length_ticks == 3840 and _notes(clip) == [[0, 960]], "clip content still doubles")
+	_assert(b.duration_ticks == 1920 and b.start_ticks == 2880, "neighbour is untouched")
+	_assert(_recorded.size() == 1, "clamping is part of the single undo step")
+	_recorded[0].undo()
+	_assert(a.duration_ticks == 1920 and clip.content_length_ticks == 1920
+		and _notes(clip) == [[0, 480]], "undo restores instance, length and notes")
+	_recorded[0].do()
+	_assert(a.duration_ticks == 2880, "redo keeps the clamp")
+	menu.free()
+
+
+func _test_shared_clip_across_tracks_clamps() -> void:
+	var menu := await _open_menu()
+	var clip := _make_clip([[0, 480]], 1920)
+	var other := _make_clip([[0, 480]], 1920)
+	var a := _make_instance(clip, 1920)
+	var shared := _make_instance(clip, 1920)
+	shared.start_ticks = 960
+	var blocker := _make_instance(other, 960)
+	blocker.start_ticks = 3000
+	_track_with([a])
+	_track_with([shared, blocker])
+	_bind(menu, [a, shared])
+	_press(menu.scale_double)
+	_assert(a.duration_ticks == 3840, "free instance doubles fully, got %d" % a.duration_ticks)
+	_assert(shared.duration_ticks == 2040, "other track's instance is clamped to its neighbour, got %d" % shared.duration_ticks)
+	_recorded[0].undo()
+	_assert(a.duration_ticks == 1920 and shared.duration_ticks == 1920, "undo restores both tracks")
+	menu.free()
+
+
+func _test_half_trims_note_overlaps() -> void:
+	var menu := await _open_menu()
+	var clip := _make_clip([[0, 1], [1, 4]], 960)
+	_bind(menu, [_make_instance(clip, 960)])
+	_press(menu.scale_half)
+	var n: Array = _notes(clip)
+	_assert(n[0][0] + n[0][1] <= n[1][0] or n[0][0] == n[1][0], "same-pitch notes do not overlap, got %s" % [n])
 	menu.free()
