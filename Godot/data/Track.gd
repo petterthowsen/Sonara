@@ -180,7 +180,15 @@ var enabled: bool:
 	set(value):
 		_enabled = value
 
-var armed: bool = false  # Record armed
+var armed: bool = false:  # Record armed
+	set(value):
+		armed = value
+		if value:
+			_remember_as_last_armed()
+
+## Id of the clip track under this group that was record-armed most recently (runtime only;
+## used by the "arm the last armed child" group selection option). -1 = none yet.
+var last_armed_child_id: int = -1
 
 # Connection state
 var _is_connected: bool = false
@@ -365,6 +373,24 @@ func set_solo(value: bool) -> void:
 		ch.set_solo(value)
 	else:
 		_solo = value
+
+
+## Tell every ancestor group that this track is now its most recently armed child.
+func _remember_as_last_armed() -> void:
+	if _parent_track_id < 0 or not has_clips():
+		return
+	var project := get_project_ref()
+	if project == null:
+		return
+	var visited := {}
+	var pid := _parent_track_id
+	while pid >= 0 and not visited.has(pid):
+		visited[pid] = true
+		var parent := project.get_track_by_id(pid)
+		if parent == null:
+			break
+		parent.last_armed_child_id = id
+		pid = parent.parent_track_id
 
 
 func set_armed(value: bool) -> void:
