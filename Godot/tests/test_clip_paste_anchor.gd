@@ -36,6 +36,7 @@ func run_tests() -> void:
 	_test_no_anchor_keeps_source_tracks()
 	_test_overlap_on_anchor_track_blocks()
 	_test_clip_selection_takes_shortcuts_from_automation()
+	_test_track_selection_moves_paste_anchor()
 
 
 ## Timeline with one lane per entry in `types` (Track.TrackType values), in visual order.
@@ -186,4 +187,34 @@ func _test_clip_selection_takes_shortcuts_from_automation() -> void:
 	timeline._on_clip_selection_changed(typed)
 	_assert(not timeline._automation_is_active(), "selecting a clip hands the shortcuts back to the clips")
 	_assert(points.has_clipboard(), "the point clipboard survives for a later paste into a lane")
+	_free(timeline)
+
+
+## Selecting a track in the tracklist moves the paste anchor (insertion track) and keeps the
+## range and clicked tick, so a pending copy pastes onto the newly selected track.
+func _test_track_selection_moves_paste_anchor() -> void:
+	var I: int = _track_script.TrackType.INSTRUMENT
+	var timeline := _timeline([I, I, I])
+	var keys: Object = _lane_track(timeline, 0)
+	var strings: Object = _lane_track(timeline, 2)
+	var manager: Object = _selection_manager_script.new()
+	timeline.clip_selection_manager = manager
+	var arranger: Object = load("res://arranger/Arranger.gd").new()
+	arranger.timeline = timeline
+
+	var inst: Object = _clip_on(keys, 960)
+	manager.set_anchor(keys, 960)
+	manager.set_range_start(1920)
+	var clipboard: Object = _selection([inst])
+	var typed_tracks := Array([], TYPE_OBJECT, &"RefCounted", _track_script)
+	typed_tracks.append(strings)
+	arranger._on_track_list_selection_changed(typed_tracks, strings)
+	_assert(manager.anchor_track == strings, "tracklist selection moves the anchor track")
+	_assert(manager.get_paste_tick(0) == 1920, "range start stays the paste tick")
+	var plan: Array = timeline._plan_placement(clipboard, manager.get_paste_tick(0), manager.anchor_track)
+	_assert(plan.size() == 1 and plan[0].track == strings and plan[0].start == 1920, "paste lands on the selected track")
+
+	arranger._on_track_list_selection_changed(Array([], TYPE_OBJECT, &"RefCounted", _track_script), null)
+	_assert(manager.anchor_track == strings, "clearing the tracklist selection keeps the anchor")
+	arranger.free()
 	_free(timeline)

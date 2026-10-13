@@ -91,6 +91,7 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 
 - **Data model / self-synchronizing model** — `Godot/data/` classes (Project, Track, Channel, Clip, ClipInstance, DeviceInstance). The pattern: UI calls a setter → model updates state, sends OSC, emits a signal → UI refreshes from the signal. UI never sends OSC directly.
 - **`sync_to_engine()`** — full-state resync method on data models, used on (re)connect/project load.
+- **Paste anchor** — where an arranger paste lands: `ClipSelectionManager.anchor_track` (the insertion track) and `anchor_tick`. Set by the last click on a lane, clip or ruler, and by selecting a track in the tracklist (its active track). A range selection is time-only (start/end ticks); it does not contain the anchor track, which only picks the lane that receives the topmost pasted clip. Pasting uses the range start, else `anchor_tick`, else the playhead.
 - **GridHelper** — the shared tempo/zoom/scroll/snap object converting ticks ↔ pixels; views share one instance.
 - **Note map** — labels/colours per pitch on a channel (`NONE`/`AUTO`/`NAMED` mode). Labels only, never sent to the engine. An Auto map comes from the first Drum Machine (pad names) or zoned Layer (slot names per mapped input note) on the root chain.
 - **Project scale** — the key at the start of the project: one root pitch class (C–B) plus a scale type (`MusicalScale`), or none; saved with the project, set from the main toolbar. Its 12-bit mask reaches the engine on `/project/scale` as the base key (specs 026/027).
