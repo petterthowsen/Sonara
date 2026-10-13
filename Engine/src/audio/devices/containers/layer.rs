@@ -69,6 +69,8 @@ impl LayerSlot {
 pub struct LayerDevice {
     slots: Vec<LayerSlot>,
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
     mix_buffer: Vec<f32>,
     child_buffer: Vec<f32>,
     /// Delays the input by the Layer's latency while bypassed. Fed every block.
@@ -82,6 +84,7 @@ impl LayerDevice {
         Self {
             slots: Vec::new(),
             enabled: true,
+            is_active: true,
             mix_buffer: vec![0.0; interleaved],
             child_buffer: vec![0.0; interleaved],
             dry: AlignDelay::default(),
@@ -258,7 +261,7 @@ impl AudioDevice for LayerDevice {
             .min(self.mix_buffer.len())
             .min(self.child_buffer.len());
 
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             self.dry.process(inputs, outputs, sample_count);
             return;
         }
@@ -321,7 +324,7 @@ impl AudioDevice for LayerDevice {
             buf[..n].fill(0.0);
         }
 
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             self.dry.process(inputs, outputs, sample_count);
             return;
         }
@@ -435,6 +438,20 @@ impl AudioDevice for LayerDevice {
         }
         self.mix_buffer.fill(0.0);
         self.child_buffer.fill(0.0);
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {

@@ -13,6 +13,8 @@ static var logger := Log.make("DeviceInstance")
 signal parameter_changed(param_id: int, value: float)
 signal enabled_changed(enabled: bool)
 signal active_changed(active: bool)
+## The engine put the device to sleep (silent input, no MIDI) or woke it. Informational only.
+signal sleep_changed(sleeping: bool)
 ## `sample_source` was replaced by another object (views rebind their waveform listeners).
 signal sample_source_changed()
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
@@ -74,6 +76,9 @@ var active : bool = true
 
 ## Whether this device is enabled (effectively processing audio vs bypassed)
 var enabled : bool = true
+
+## Whether the engine has put this device to sleep to save CPU (set from `/sleep`, never sent).
+var sleeping : bool = false
 
 ## Position in the parent device list (0 = first)
 var position: int = 0
@@ -1775,6 +1780,7 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(osc_addr("keys/info"), _on_key_info_received)
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
+	AudioEngineOSC.listen(osc_addr("sleep"), _on_sleep_received)
 	AudioEngineOSC.listen(param_count_addr, _on_param_count_received)
 	AudioEngineOSC.listen(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.listen(loading_state_addr, _on_loading_state_received)
@@ -1824,6 +1830,7 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(osc_addr("keys/info"), _on_key_info_received)
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
+	AudioEngineOSC.unlisten(osc_addr("sleep"), _on_sleep_received)
 	AudioEngineOSC.unlisten(param_count_addr, _on_param_count_received)
 	AudioEngineOSC.unlisten(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
@@ -1867,6 +1874,15 @@ func _on_enabled_received(values: Array) -> void:
 		if enabled != new_enabled:
 			enabled = new_enabled
 			enabled_changed.emit(enabled)
+
+
+func _on_sleep_received(values: Array) -> void:
+	"""Handle sleep/wake report from engine (informational; the engine wakes it on activity)."""
+	if values.size() >= 1:
+		var new_sleeping = values[0] != 0
+		if sleeping != new_sleeping:
+			sleeping = new_sleeping
+			sleep_changed.emit(sleeping)
 
 
 func _on_loading_state_received(values: Array) -> void:

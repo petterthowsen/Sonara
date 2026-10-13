@@ -118,6 +118,26 @@ fn check_bypass_is_bit_exact(id: &str, wrapped: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn check_deactivate_and_activate_round_trip(id: &str, wrapped: bool) -> Result<(), String> {
+    let mut device = make_for(id, wrapped);
+    if !device.is_active() {
+        return Err("a new device is not active".into());
+    }
+    device.deactivate()?;
+    if device.is_active() {
+        return Err("still active after deactivate".into());
+    }
+    let input = noise_then_silence(0.5, 0.0);
+    if render(device.as_mut(), &input, &[512]) != input {
+        return Err("deactivated output differs from the input".into());
+    }
+    device.activate()?;
+    if !device.is_active() {
+        return Err("not active after activate".into());
+    }
+    Ok(())
+}
+
 fn check_mix_zero_is_bit_exact_dry(id: &str, wrapped: bool) -> Result<(), String> {
     let mut device = make_for(id, wrapped);
     let Some(mix) = device.parameters().into_iter().find(|p| p.name == "Mix") else {
@@ -246,6 +266,10 @@ const CHECKS: &[(&str, fn(&str, bool) -> Result<(), String>)] = &[
     ("modulation offsets", check_modulation_offsets),
     ("defaults match metadata", check_defaults_match_metadata),
     ("bypass is bit-exact", check_bypass_is_bit_exact),
+    (
+        "deactivate and activate round-trip",
+        check_deactivate_and_activate_round_trip,
+    ),
     ("Mix 0 is bit-exact dry", check_mix_zero_is_bit_exact_dry),
     ("finite at every rate", check_every_rate_stays_finite),
     ("block-size independent", check_block_size_independence),

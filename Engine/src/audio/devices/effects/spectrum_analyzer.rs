@@ -34,6 +34,10 @@ pub struct SpectrumAnalyzerDevice {
 
     // Parameters
     current_params: HashMap<ParamId, ParamValue>,
+
+    /// Deactivated or bypassed: audio passes through and the analysis stops.
+    is_active: bool,
+    enabled: bool,
 }
 
 /// FFT size a new analyser starts with.
@@ -64,6 +68,8 @@ impl SpectrumAnalyzerDevice {
             last_fft_time: std::time::Instant::now(),
             fft_interval: std::time::Duration::from_secs_f32(hop_size as f32 / sample_rate),
             current_params,
+            is_active: true,
+            enabled: true,
         }
     }
 
@@ -107,11 +113,36 @@ impl AudioDevice for SpectrumAnalyzerDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         // Pass through audio unmodified
         outputs[..sample_count * 2].copy_from_slice(&inputs[..sample_count * 2]);
+        if !self.enabled || !self.is_active {
+            return;
+        }
 
         // Accumulate a mono mix of L+R for the FFT.
         for frame in inputs[..sample_count * 2].chunks_exact(2) {
             self.spectrum.push((frame[0] + frame[1]) * 0.5);
         }
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        Ok(())
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {

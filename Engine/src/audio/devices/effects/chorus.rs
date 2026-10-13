@@ -353,6 +353,8 @@ pub struct ChorusDevice {
     last_mix: f32,
 
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
 
     /// `1 / sample_rate` and `sample_rate / 1000`, so the per-sample path multiplies instead of
     /// dividing.
@@ -393,6 +395,7 @@ impl ChorusDevice {
             wet_gain: 0.0,
             last_mix: f32::NAN,
             enabled: true,
+            is_active: true,
             inv_sample_rate: 1.0 / sample_rate as f64,
             frames_per_ms: sample_rate / 1000.0,
         };
@@ -531,7 +534,7 @@ impl ChorusDevice {
 
 impl AudioDevice for ChorusDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             pass_through(inputs, outputs, sample_count);
             return;
         }
@@ -721,6 +724,21 @@ impl AudioDevice for ChorusDevice {
         ] {
             param.set_ramp(sample_rate, SMOOTH_RAMP_MS);
         }
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        self.reset();
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {

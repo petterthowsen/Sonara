@@ -19,6 +19,8 @@ pub struct ChainDevice {
     /// Linear gain in `[0, 2]` (1.0 = unity).
     volume: f32,
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
     buf_a: Vec<f32>,
     buf_b: Vec<f32>,
     /// Delays the input by the children's latency while bypassed (spec 042: bypass keeps
@@ -34,6 +36,7 @@ impl ChainDevice {
             children: Vec::new(),
             volume: 1.0,
             enabled: true,
+            is_active: true,
             buf_a: vec![0.0; interleaved],
             buf_b: vec![0.0; interleaved],
             dry: AlignDelay::default(),
@@ -76,7 +79,7 @@ impl AudioDevice for ChainDevice {
         // The note phase runs even while bypassed, so note effects inside keep their queues
         // drained and their schedules moving.
         run_note_phase(&mut self.children, sample_count, None);
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             self.dry.process(inputs, outputs, sample_count);
             return;
         }
@@ -229,6 +232,20 @@ impl AudioDevice for ChainDevice {
         }
         self.buf_a.fill(0.0);
         self.buf_b.fill(0.0);
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {

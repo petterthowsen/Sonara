@@ -517,6 +517,8 @@ pub struct CompressorDevice {
     phase: usize,
     smooth: f32,
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
     sleep: TailSleep,
 
     subscribed: bool,
@@ -592,6 +594,7 @@ impl CompressorDevice {
             phase: 0,
             smooth: 0.0,
             enabled: true,
+            is_active: true,
             sleep,
             subscribed: false,
             frames_since_poll: 0,
@@ -927,7 +930,7 @@ impl CompressorDevice {
 impl AudioDevice for CompressorDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         let n = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             pass_through(inputs, outputs, n);
             return;
         }
@@ -1012,6 +1015,21 @@ impl AudioDevice for CompressorDevice {
     fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
         self.configure_rate(sample_rate);
         self.reset();
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        self.reset();
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {

@@ -431,6 +431,8 @@ pub struct NoteFxHost<P: NoteProcessor> {
     offset: Vec<f32>,
     sample_rate: f32,
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
     /// Bypass toggled: release everything at the next note phase.
     release_pending: bool,
     /// Transport stopped or jumped: release clip-origin outputs at the next note phase.
@@ -463,6 +465,7 @@ impl<P: NoteProcessor> NoteFxHost<P> {
             norm,
             sample_rate,
             enabled: true,
+            is_active: true,
             release_pending: false,
             discontinuity_pending: false,
             now: 0,
@@ -586,7 +589,7 @@ impl<P: NoteProcessor> AudioDevice for NoteFxHost<P> {
         }
 
         self.input.sort();
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             // Bypassed: input passes through unchanged (REQ-008).
             for i in 0..self.input.len() {
                 let note = self.input.as_slice()[i];
@@ -811,6 +814,26 @@ impl<P: NoteProcessor> AudioDevice for NoteFxHost<P> {
     fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
         self.sample_rate = sample_rate;
         self.processor.set_sample_rate(sample_rate);
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        if !self.is_active {
+            self.release_pending = true;
+        }
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        if self.is_active {
+            self.release_pending = true;
+        }
+        self.is_active = false;
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {

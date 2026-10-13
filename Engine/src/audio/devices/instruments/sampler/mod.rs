@@ -80,6 +80,8 @@ pub struct SamplerDevice {
     /// A pitch parameter changed: recompute the increment of sounding voices next block.
     pitch_dirty: bool,
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
     sleep_state: DeviceSleepState,
     channel_id: usize,
     device_path: DevicePath,
@@ -123,6 +125,7 @@ impl SamplerDevice {
             resonance: SmoothedParam::new(p.resonance, sample_rate, FILTER_RAMP_MS),
             pitch_dirty: false,
             enabled: true,
+            is_active: true,
             sleep_state: DeviceSleepState::new(),
             channel_id,
             device_path,
@@ -207,7 +210,7 @@ impl AudioDevice for SamplerDevice {
         let interleaved = (sample_count * 2).min(outputs.len());
         outputs[..interleaved].fill(0.0);
 
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             return;
         }
         if self.pitch_dirty {
@@ -350,6 +353,21 @@ impl AudioDevice for SamplerDevice {
         self.resonance.set_ramp(self.sample_rate, FILTER_RAMP_MS);
         self.queued_midi.clear();
         self.midi_scratch.clear();
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        self.reset();
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {

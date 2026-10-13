@@ -220,6 +220,8 @@ pub struct MultibandDevice {
     sm_mix: SmoothedParam,
     sm_out: SmoothedParam,
     enabled: bool,
+    /// Dormant (deactivated) devices bypass like a disabled one.
+    is_active: bool,
     /// Latency compensation (spec 042 part D): each band position is delayed up to the slowest
     /// child, so the bands sum aligned.
     align: [AlignDelay; BAND_COUNT],
@@ -265,6 +267,7 @@ impl MultibandDevice {
             sm_mix: smoother(1.0),
             sm_out: smoother(1.0),
             enabled: true,
+            is_active: true,
             align: std::array::from_fn(|_| AlignDelay::default()),
             dry_align: AlignDelay::default(),
             thru: AlignDelay::default(),
@@ -506,7 +509,7 @@ impl DeviceContainer for MultibandDevice {
 
 impl AudioDevice for MultibandDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
-        if !self.enabled {
+        if !self.enabled || !self.is_active {
             self.thru.process(inputs, outputs, sample_count);
             return;
         }
@@ -666,6 +669,21 @@ impl AudioDevice for MultibandDevice {
             self.apply_topology();
             self.fade = Fade::Steady;
         }
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        self.reset();
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {
