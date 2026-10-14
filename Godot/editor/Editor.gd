@@ -177,6 +177,8 @@ const MIN_WINDOW_SIZE := Vector2i(1200, 700)
 
 func _ready():
 	get_window().min_size = MIN_WINDOW_SIZE
+	# The window close button asks first when the project has unsaved changes (request_quit)
+	get_tree().auto_accept_quit = false
 	render_service = RenderService.new()
 	render_service.name = "RenderService"
 	add_child(render_service)
@@ -538,6 +540,7 @@ func save_project(path: String = "", allow_startup: bool = false) -> bool:
 	var file = FileAccess.open(save_path, FileAccess.WRITE)
 	if file == null:
 		push_error("[Editor] Failed to open file for writing: ", save_path)
+		show_error("Couldn't save project", "Failed to write %s (error %d)." % [save_path, FileAccess.get_open_error()])
 		return false
 	
 	file.store_string(json_string)
@@ -1424,6 +1427,55 @@ func _on_playing_received(values) -> void:
 # ============================================================================
 # APP LIFECYCLE
 # ============================================================================
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		request_quit()
+
+
+var _quit_requested := false
+
+## Quit entry point for every close path (window button, Quit menu item, WM close request).
+## Asks Save / Save As / Cancel first when the project has unsaved changes.
+func request_quit() -> void:
+	if _quit_requested:
+		return
+	_quit_requested = true
+	var proceed := await _confirm_quit()
+	_quit_requested = false
+	if proceed:
+		quit()
+
+
+func _confirm_quit() -> bool:
+	if not QuitGuard.needs_prompt(project != null, is_modified):
+		return true
+	if Utils.is_test_mode():
+		return false
+	if _quit_prompt == null:
+		_quit_prompt = QuitPromptDialog.new()
+		add_child(_quit_prompt)
+	while true:
+		var choice: int = await _quit_prompt.ask()
+		if choice == QuitGuard.Choice.CANCEL:
+			return false
+		var has_path := not project_path.is_empty() and not Sonara.is_startup_project_path(project_path)
+		var outcome: int = await QuitGuard.resolve(choice, has_path,
+				func() -> bool: return await save_project(),
+				_save_as_interactive)
+		if outcome == QuitGuard.Outcome.QUIT:
+			return true
+		if outcome == QuitGuard.Outcome.STAY:
+			return false
+	return false
+
+
+var _quit_prompt: QuitPromptDialog
+
+## Runs the Save As file dialog (owned by MainMenu) and reports how it ended.
+func _save_as_interactive() -> int:
+	return await main_menu.save_as_for_quit()
+
 
 func quit() -> void:
 	"""Stop playback, close project, then quit the application."""

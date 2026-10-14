@@ -36,5 +36,5 @@ func _on_maximize_pressed() -> void:
 
 
 func _on_quit_pressed() -> void:
-	# Delegate shutdown to Editor for unified behavior
-	Sonara.editor.quit()
+	# Delegate shutdown to Editor; it asks about unsaved changes first
+	Sonara.editor.request_quit()

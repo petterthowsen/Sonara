@@ -19,6 +19,9 @@ enum DialogMode { OPEN, SAVE, SAVE_AS, IMPORT_DAWPROJECT, EXPORT_DAWPROJECT, IMP
 
 signal item_pressed(menu_id : int, id : int)
 
+signal _quit_save_as_finished(result: int)
+
+var _awaiting_quit_save_as := false
 var _current_dialog_mode: DialogMode
 var _pending_import_path: String
 var _file_dialog: FileDialog
@@ -103,6 +106,7 @@ func _ready() -> void:
 	_file_dialog = Sonara.editor.file_dialog
 	_file_dialog.file_selected.connect(_on_file_dialog_file_selected)
 	_file_dialog.dir_selected.connect(_on_file_dialog_dir_selected)
+	_file_dialog.canceled.connect(_on_file_dialog_canceled)
 
 
 func _on_item_pressed(item_id : int, menu_id : int):
@@ -358,6 +362,22 @@ func _on_save_project_as() -> void:
 	_file_dialog.popup_centered_ratio(0.6)
 
 
+## Save As for the quit prompt: opens the dialog and waits. Returns a QuitGuard.SaveAsResult.
+func save_as_for_quit() -> int:
+	if not _file_dialog or Utils.is_test_mode():
+		return QuitGuard.SaveAsResult.CANCELLED
+	_awaiting_quit_save_as = true
+	_on_save_project_as()
+	var result: int = await _quit_save_as_finished
+	_awaiting_quit_save_as = false
+	return result
+
+
+func _on_file_dialog_canceled() -> void:
+	if _awaiting_quit_save_as:
+		_quit_save_as_finished.emit(QuitGuard.SaveAsResult.CANCELLED)
+
+
 func _on_import_dawproject() -> void:
 	"""Show file dialog to pick a .dawproject to import."""
 	if not _file_dialog:
@@ -401,12 +421,8 @@ func _import_dawproject(path: String, audio_dir: String = "") -> void:
 
 func _on_quit() -> void:
 	"""Quit application."""
-	# TODO: Prompt to save if modified
-	if Sonara.editor.is_modified:
-		logger.warn("[MainMenu] Quitting without saving")
-
-	# Delegate shutdown to Editor for unified behavior
-	Sonara.editor.quit()
+	# Editor asks about unsaved changes first
+	Sonara.editor.request_quit()
 
 
 # ============================================================================
@@ -496,7 +512,9 @@ func _on_file_dialog_file_selected(path: String) -> void:
 			# Ensure .sonara extension
 			if not path.ends_with(".sonara"):
 				path += ".sonara"
-			await Sonara.editor.save_project(path)
+			var saved: bool = await Sonara.editor.save_project(path)
+			if _awaiting_quit_save_as:
+				_quit_save_as_finished.emit(QuitGuard.SaveAsResult.OK if saved else QuitGuard.SaveAsResult.FAILED)
 		DialogMode.IMPORT_DAWPROJECT:
 			await _import_dawproject(path)
 		DialogMode.EXPORT_DAWPROJECT:
