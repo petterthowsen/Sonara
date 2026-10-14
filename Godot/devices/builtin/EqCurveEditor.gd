@@ -32,10 +32,10 @@ const ANALYSER_FLOOR_DB := -90.0
 const ANALYSER_CEIL_DB := 0.0
 ## Analyser frames start with [flag, sample_rate, lo_hz, hi_hz] (eq.rs `SPECTRUM_HEADER_LEN`).
 const SPECTRUM_HEADER_LEN := 4
-## Speed of the ease of the drawn analyser toward the latest frame (1 / s); higher is snappier.
-const ANALYSER_EASE_RATE := 18.0
-## Below this many dB from its target a displayed point counts as arrived.
-const ANALYSER_SETTLE_DB := 0.05
+## The drawn analyser moves linearly from where it is to each new frame over one frame interval,
+## measured from the frames' arrival (smoothed, clamped to this range in seconds).
+const ANALYSER_INTERVAL_MIN := 1.0 / 120.0
+const ANALYSER_INTERVAL_MAX := 0.1
 ## The display tilt pivots here: this frequency reads the same at every tilt.
 const TILT_PIVOT_HZ := 1000.0
 ## The analyser is drawn as a monotone cubic: up to SMOOTH_MAX_SUB sub-segments per engine
@@ -111,6 +111,14 @@ var _pre_points := PackedFloat32Array()
 var _post_points := PackedFloat32Array()
 var _pre_target := PackedFloat32Array()
 var _post_target := PackedFloat32Array()
+## Where the current interpolation started, and how far along it is (0..1).
+var _pre_from := PackedFloat32Array()
+var _post_from := PackedFloat32Array()
+var _pre_t := 1.0
+var _post_t := 1.0
+## Smoothed time between analyser frames (s), and when the last post frame arrived (µs).
+var _frame_interval := 1.0 / 30.0
+var _last_frame_usec := 0
 var _points_lo_hz := 20.0
 ## Scratch buffers of `_draw_points`, reused every frame.
 var _raw_points := PackedVector2Array()
@@ -233,16 +241,12 @@ func on_spectrum_frame(frame: PackedFloat32Array) -> void:
 	_points_hi_hz = frame[3]
 	var post := frame[0] >= 0.5
 	if post:
+		_measure_frame_interval()
 		_post_target = points
+		_post_t = _start_lerp(_post_points, _post_from, points)
 	else:
 		_pre_target = points
-	# The first frame and a resolution change snap; later frames are eased in `_process`.
-	var shown := _post_points if post else _pre_points
-	if shown.size() != points.size():
-		if post:
-			_post_points = points.duplicate()
-		else:
-			_pre_points = points.duplicate()
+		_pre_t = _start_lerp(_pre_points, _pre_from, points)
 	set_process(is_visible_in_tree() and state.analyser != EqViewState.Analyser.OFF)
 	if frame[1] > 0.0 and not is_equal_approx(frame[1], sample_rate):
 		sample_rate = frame[1]
@@ -250,28 +254,52 @@ func on_spectrum_frame(frame: PackedFloat32Array) -> void:
 
 
 func _process(delta: float) -> void:
-	var k := 1.0 - exp(-ANALYSER_EASE_RATE * delta)
-	var settled := _ease_points(_pre_points, _pre_target, k)
-	settled = _ease_points(_post_points, _post_target, k) and settled
+	var step := delta / _frame_interval
+	_pre_t = _lerp_points(_pre_points, _pre_from, _pre_target, _pre_t, step)
+	_post_t = _lerp_points(_post_points, _post_from, _post_target, _post_t, step)
 	queue_redraw()
-	if settled:
+	if _is_analyser_settled():
 		set_process(false)
 
 
 ## True when both displayed spectra have reached their targets.
 func _is_analyser_settled() -> bool:
-	return _ease_points(_pre_points, _pre_target, 0.0) and _ease_points(_post_points, _post_target, 0.0)
+	return _pre_t >= 1.0 and _post_t >= 1.0
 
 
-## Move `current` a fraction `k` toward `target`, in place; true when it has arrived.
-func _ease_points(current: PackedFloat32Array, target: PackedFloat32Array, k: float) -> bool:
-	var settled := true
-	for i in mini(current.size(), target.size()):
-		var diff := target[i] - current[i]
-		if absf(diff) > ANALYSER_SETTLE_DB:
-			settled = false
-		current[i] += diff * k
-	return settled
+## Smooth the time between post frames (pre and post arrive together) into `_frame_interval`.
+func _measure_frame_interval() -> void:
+	var now := Time.get_ticks_usec()
+	if _last_frame_usec > 0:
+		var dt := clampf((now - _last_frame_usec) / 1000000.0, ANALYSER_INTERVAL_MIN, ANALYSER_INTERVAL_MAX)
+		_frame_interval = lerpf(_frame_interval, dt, 0.2)
+	_last_frame_usec = now
+
+
+## Start interpolating `shown` from where it is now to `target`, copying it into `from` in place.
+## The first frame and a resolution change snap. Returns the new progress (0, or 1 when snapped).
+func _start_lerp(shown: PackedFloat32Array, from: PackedFloat32Array, target: PackedFloat32Array) -> float:
+	if shown.size() != target.size():
+		shown.resize(target.size())
+		for i in target.size():
+			shown[i] = target[i]
+		return 1.0
+	from.resize(shown.size())
+	for i in shown.size():
+		from[i] = shown[i]
+	return 0.0
+
+
+## Advance progress `t` by `step` and set `shown` in place to the linear blend of `from` and
+## `target`. Returns the new progress.
+func _lerp_points(shown: PackedFloat32Array, from: PackedFloat32Array, target: PackedFloat32Array, t: float, step: float) -> float:
+	if t >= 1.0:
+		return t
+	t = minf(t + step, 1.0)
+	var n := mini(shown.size(), mini(from.size(), target.size()))
+	for i in n:
+		shown[i] = lerpf(from[i], target[i], t)
+	return t
 
 
 # ============================================================================
@@ -324,6 +352,9 @@ func clear_analyser() -> void:
 	_post_points = PackedFloat32Array()
 	_pre_target = PackedFloat32Array()
 	_post_target = PackedFloat32Array()
+	_pre_t = 1.0
+	_post_t = 1.0
+	_last_frame_usec = 0
 	set_process(false)
 	queue_redraw()
 

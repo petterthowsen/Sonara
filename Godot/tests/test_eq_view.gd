@@ -26,7 +26,7 @@ func run_tests() -> void:
 	_test_view_persists_state()
 	_test_display_menu_sends_analyser_options()
 	_test_tilt_lifts_the_highs()
-	_test_analyser_eases_over_time()
+	_test_analyser_interpolates_over_time()
 	_test_selection_and_piano()
 	_test_hidden_view_stops_interaction()
 	_test_footer_band_selector()
@@ -391,9 +391,9 @@ func _spectrum_frame(flag: float, points: int, db: float) -> PackedFloat32Array:
 	return frame
 
 
-## New analyser frames set a target; the drawn spectrum eases toward it in `_process`, settles and
-## stops processing, and snaps when the first frame arrives or the point count changes.
-func _test_analyser_eases_over_time() -> void:
+## New analyser frames set a target; the drawn spectrum moves linearly toward it over one frame
+## interval in `_process`, then stops, and snaps when the first frame arrives or the point count changes.
+func _test_analyser_interpolates_over_time() -> void:
 	var editor := EqCurveEditor.new()
 	editor.size = Vector2(600, 300)
 	root.add_child(editor)
@@ -404,14 +404,18 @@ func _test_analyser_eases_over_time() -> void:
 	_assert(not editor.is_processing(), "no processing once settled")
 	editor.on_spectrum_frame(_spectrum_frame(1.0, 64, -20.0))
 	_assert(editor._post_points[10] == -60.0 and editor._post_target[10] == -20.0, "a new frame does not jump")
-	editor._process(1.0 / 60.0)
-	var step: float = editor._post_points[10]
-	_assert(step > -60.0 and step < -20.0, "one tick moves part of the way")
-	_assert(editor.is_processing(), "still processing while easing")
-	for i in 120:
-		editor._process(1.0 / 60.0)
-	_assert(absf(editor._post_points[10] + 20.0) < 0.1, "it converges to the target")
-	_assert(not editor.is_processing(), "processing stops when settled")
+	editor._frame_interval = 0.05
+	editor._process(0.025)
+	_assert(absf(editor._post_points[10] + 40.0) < 0.001, "halfway through the frame interval it is halfway (linear)")
+	_assert(editor.is_processing(), "still processing while interpolating")
+	editor.on_spectrum_frame(_spectrum_frame(1.0, 64, 0.0))
+	_assert(absf(editor._post_points[10] + 40.0) < 0.001, "a frame mid-way restarts from where the line is")
+	editor._frame_interval = 0.05
+	editor._process(0.025)
+	_assert(absf(editor._post_points[10] + 20.0) < 0.001, "and blends linearly toward the new target")
+	editor._process(0.05)
+	_assert(editor._post_points[10] == 0.0, "it lands exactly on the target")
+	_assert(not editor.is_processing(), "processing stops when it arrives")
 	editor.on_spectrum_frame(_spectrum_frame(1.0, 128, -30.0))
 	_assert(editor._post_points.size() == 128 and editor._post_points[100] == -30.0, "a point count change snaps")
 	editor.clear_analyser()
