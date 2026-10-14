@@ -8,7 +8,8 @@
 ## its time-proportional curve; a sidechain draws its output history (spec 044: the engine's
 ## dense `kind 4` peaks, a 2 s time-stamped buffer scrolled by elapsed time and drawn on a fixed
 ## 0..1 scale); every other kind draws a ~2 s ring-buffer trace of recent values, with the dot at
-## the newest point. Missing state (old engine, before the first payload) leaves
+## the newest point. A knob shows no shape: it hosts a real `RotaryKnob` bound to its Value
+## (the options pane keeps only Polarity). Missing state (old engine, before the first payload) leaves
 ## the static shape with no dot.
 class_name ModulatorDisplay extends Control
 
@@ -42,8 +43,14 @@ const TRACE_SAMPLES := 40
 ## Sidechain history window in seconds.
 const SC_WINDOW := 2.0
 
+## Side of the hosted knob of a `knob` modulator, in pixels.
+const KNOB_SIDE := 48
+
 var device = null
 var mod_id := -1
+
+## The hosted Value knob's slot (null unless this modulator is a knob).
+var _knob_slot: ModParamSlot = null
 
 ## Newest live values for the generic trace, oldest first.
 var _trace: PackedFloat32Array = PackedFloat32Array()
@@ -79,6 +86,30 @@ func setup(p_device, p_mod_id: int) -> void:
 	if device != null:
 		device.modulator_changed.connect(_on_modulator_changed)
 	tree_exiting.connect(_unbind)
+	_build_knob()
+
+
+## A knob modulator hosts its Value (param 0) as a real knob, bound like an options-pane slot.
+func _build_knob() -> void:
+	if _knob_slot != null and is_instance_valid(_knob_slot):
+		_knob_slot.get_parent().queue_free()
+		_knob_slot = null
+	var mod := _modulator()
+	if mod == null or mod.kind != "knob":
+		return
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(centre)
+	_knob_slot = ModParamSlot.new()
+	_knob_slot.param_id = 0
+	_knob_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var knob := RotaryKnob.new()
+	knob.custom_minimum_size = Vector2(KNOB_SIDE, KNOB_SIDE)
+	knob.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_knob_slot.add_child(knob)
+	centre.add_child(_knob_slot)
+	_knob_slot.bind(mod)
 
 
 func _unbind() -> void:
@@ -248,6 +279,8 @@ func _sidechain_dot(rect: Rect2, now: float) -> Variant:
 
 func _on_modulator_changed(changed_mod_id: int) -> void:
 	if changed_mod_id == mod_id:
+		if _knob_slot != null:
+			_knob_slot.refresh()
 		queue_redraw()
 
 
@@ -257,7 +290,7 @@ func _on_modulator_changed(changed_mod_id: int) -> void:
 
 func _draw() -> void:
 	var mod = _modulator()
-	if mod == null:
+	if mod == null or _is_knob():
 		return
 	var line := UiColors.role(&"accent_primary")
 	var rect := Rect2(Vector2(3, 3), size - Vector2(6, 6))
