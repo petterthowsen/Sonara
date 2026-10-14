@@ -764,8 +764,27 @@ after subscribing.
 - `"lufs"` - Integrated loudness (future)
 - `"modulation"` - Live modulation values (spec 018 Phase 9), produced by the
   `ModulatedDevice` wrapper of a device that carries modulators, not the device itself
+- `"sidechain"` - Source spectrum of one `sidechain` modulator (spec 044), produced by the
+  `ModulatedDevice` wrapper; see the sidechain stream below
 - `"curve"` - Saturator transfer curve, operating point and harmonics (spec 031, one
   fixed-size 584-byte record per poll; see the Saturator curve stream below)
+
+**Sidechain stream** (spec 044, data type `"sidechain"`, owned by the `ModulatedDevice` wrapper).
+Subscribe with `data/subscribe "sidechain"`, then select the modulator with
+`data/configure "sidechain" "mod_id" <id>` (float; required after every subscribe, the first
+configure builds the analysis off the audio thread). While subscribed and configured the engine
+sends about 30 frames a second (one poll per audio buffer at most), little-endian f32:
+
+```
+[mod_id, sample_rate, low_cut_hz, high_cut_hz,   // cuts are the effective (modulated) values, 0 = bypassed
+ lo_hz, hi_hz,                                   // MiniAnalyser header: axis range
+ 128 × pre dBFS,                                 // after Gain, before the cuts
+ 128 × post dBFS]                                // after the cuts (what the follower sees)
+```
+
+Points are log-spaced from `lo_hz` to `hi_hz` (point *i* at `lo_hz * (hi_hz / lo_hz)^(i / 127)`),
+floor -160 dB (`dsp/mini_analyser.rs`: 4096-point FFT at 48 kHz, 1/6-octave bands, medium
+ballistics). Nothing runs or is sent while unsubscribed.
 
 **Device Data Stream (Rust → Godot):**
 ```
@@ -801,7 +820,7 @@ after subscribing.
   `Vec`, so it never reallocates or allocates at all.
 
   ```
-  u16 ext_count            (record_count of kind 2/3 records; 0 when nothing to report)
+  u16 ext_count            (record_count of kind 2/3/4 records; 0 when nothing to report)
   ext_count × record:
     u8  kind
     u8  len                (payload length in bytes; unknown kinds are skipped by len)
@@ -816,6 +835,12 @@ after subscribing.
   - `modulator-param offset` (kind 3, len 9): `u8 mod_id, u32 param_id, f32 offset`, one
     per evaluated mod→mod route target (`mod/{mod_id}/param/{param_id}`), the summed
     normalized offset currently applied to that modulator parameter.
+
+  - `sidechain history` (kind 4, len `6 + count`, spec 044): `u8 mod_id, f32 point_seconds,
+    u8 count, count × u8 peak`, one per `sidechain` modulator that collected points since the
+    last payload. Each point is the modulator's output (after Amount) peak over one control
+    step (64 frames, `point_seconds` = 64 / sample rate), `peak / 255` = 0…1, oldest first,
+    `count` ≤ 249. Collected only while `"modulation"` is subscribed.
 
   Old decoders stop after the counted kind 0/1 list and never read the trailing block;
   the block is purely additive, and decoders that walk it skip any kind they don't know

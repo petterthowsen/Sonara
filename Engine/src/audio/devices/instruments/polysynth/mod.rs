@@ -2814,4 +2814,17 @@ mod slot_tests {
             "an all-bypassed FX slot is skipped"
         );
     }
+
+    #[test]
+    fn voice_state_stays_bounded() {
+        let spec = std::mem::size_of::<VoiceModSpec>();
+        let per_voice = MAX_MODULATORS * std::mem::size_of::<Option<ModulatorState>>();
+        let all_voices = MAX_POLYPHONY * per_voice;
+        println!(
+            "VoiceModSpec = {spec} B; voice modulators = {per_voice} B per voice, \
+             {all_voices} B per instance"
+        );
+        assert!(spec <= 64 * 1024, "VoiceModSpec is {spec} B");
+        assert!(all_voices <= 1 << 20, "{all_voices} B of voice modulators");
+    }
 }

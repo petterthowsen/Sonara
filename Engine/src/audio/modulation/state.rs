@@ -1252,7 +1252,10 @@ mod tests {
         let end = sc.advance(signal.len(), &t);
         let peak = sc.take_sc_peak();
         assert!(end < 0.2, "the end-of-step value has decayed: {end}");
-        assert!((peak - 0.9).abs() < 0.02, "the peak keeps the burst: {peak}");
+        assert!(
+            (peak - 0.9).abs() < 0.02,
+            "the peak keeps the burst: {peak}"
+        );
         // A second take restarts from the current level, not the old peak.
         assert!(sc.take_sc_peak() <= end + 1e-6);
     }

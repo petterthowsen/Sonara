@@ -28,6 +28,9 @@ the stream reports nothing for the parameter. Views don't subscribe this stream 
 `DeviceView.show_view`/`hide_view` drive it. Only device views (Simple View and the custom panel
 and window views) do today; the Parameters/CCs lists and the compact panels don't subscribe yet.
 
+The Sidechain modulator options (spec 044) are the exception: they subscribe `"sidechain"`
+themselves in `setup`, configure `mod_id`, and unsubscribe in `_exit_tree`.
+
 **XY pads** (spec 036) are a Godot-level pairing of two engine modulators: an `xyx`
 immediately followed by an `xyy` in the device's modulator array (`DeviceInstance.xy_pairs()`).
 The pair adds, renames, duplicates, deletes and drags-reorders as one tile

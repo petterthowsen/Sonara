@@ -108,11 +108,7 @@ impl MiniAnalyser {
         }
         out.reserve((2 + 2 * self.points) * 4);
         let head = [self.a_log.lo_hz(), self.a_log.hi_hz()];
-        for v in head
-            .iter()
-            .chain(self.a_log.db())
-            .chain(self.b_log.db())
-        {
+        for v in head.iter().chain(self.a_log.db()).chain(self.b_log.db()) {
             out.extend_from_slice(&v.to_le_bytes());
         }
     }
@@ -151,9 +147,7 @@ mod tests {
         let a = &v[2..2 + points];
         let b = &v[2 + points..];
         let expected = ((1_000.0f32 / lo).ln() / (hi / lo).ln() * (points - 1) as f32).round();
-        let peak = (0..points)
-            .max_by(|&i, &j| a[i].total_cmp(&a[j]))
-            .unwrap();
+        let peak = (0..points).max_by(|&i, &j| a[i].total_cmp(&a[j])).unwrap();
         assert!(
             (peak as f32 - expected).abs() <= 1.0,
             "peak at {peak}, expected {expected}"

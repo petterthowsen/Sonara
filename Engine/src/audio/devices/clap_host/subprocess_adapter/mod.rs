@@ -259,28 +259,28 @@ impl SubprocessClapAdapter {
         // Spawn subprocess loading in background thread (non-blocking!)
         if start_active {
             PluginLoadRequest {
-            process_manager: Arc::clone(&process_manager),
-            instance_id,
-            host: host.clone(),
-            plugin_path: plugin_path.clone(),
-            plugin_id: plugin_id.to_string(),
-            format,
-            sample_rate,
-            max_buffer_size,
-            load: Arc::clone(&load),
-            param_cache: Arc::clone(&param_info_cache),
-            channel_id: channel_id as usize,
-            device_path: device_path.clone(),
-            command_tx: command_tx.clone(),
-            status_tx: status_tx.clone(),
-            restore_state: None,
-            restore_params: Vec::new(),
-            replace_existing: false,
-            previous_instance_id: instance_id,
-            alive: Arc::clone(&alive),
-            report_active: false,
-        }
-        .spawn();
+                process_manager: Arc::clone(&process_manager),
+                instance_id,
+                host: host.clone(),
+                plugin_path: plugin_path.clone(),
+                plugin_id: plugin_id.to_string(),
+                format,
+                sample_rate,
+                max_buffer_size,
+                load: Arc::clone(&load),
+                param_cache: Arc::clone(&param_info_cache),
+                channel_id: channel_id as usize,
+                device_path: device_path.clone(),
+                command_tx: command_tx.clone(),
+                status_tx: status_tx.clone(),
+                restore_state: None,
+                restore_params: Vec::new(),
+                replace_existing: false,
+                previous_instance_id: instance_id,
+                alive: Arc::clone(&alive),
+                report_active: false,
+            }
+            .spawn();
         }
 
         let adapter = Self {
@@ -1787,7 +1787,10 @@ mod tests {
         assert!(stale.is_cancelled());
 
         let request = adapter.begin_activate();
-        assert_ne!(request.instance_id, stale_id, "the stale load must not share the id");
+        assert_ne!(
+            request.instance_id, stale_id,
+            "the stale load must not share the id"
+        );
         assert_eq!(request.previous_instance_id, stale_id);
         assert_eq!(adapter.instance_id, request.instance_id);
         assert!(!request.load.is_cancelled());
@@ -1808,7 +1811,9 @@ mod tests {
         let request = adapter.begin_activate();
         assert!(adapter.is_active());
 
-        request.load.set_activation_failed("spawn failed".to_string());
+        request
+            .load
+            .set_activation_failed("spawn failed".to_string());
 
         assert!(!adapter.is_active());
         assert!(adapter.is_unloaded());

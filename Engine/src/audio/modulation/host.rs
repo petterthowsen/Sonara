@@ -2929,7 +2929,11 @@ mod tests {
     /// Parse the `modulation` payload's trailing block of a route-less device into
     /// `(kind, record bytes)` pairs.
     fn decode_ext(bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
-        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0, "no route records");
+        assert_eq!(
+            u16::from_le_bytes([bytes[0], bytes[1]]),
+            0,
+            "no route records"
+        );
         let count = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
         let mut at = 4;
         let mut out = Vec::new();
@@ -2976,6 +2980,7 @@ mod tests {
     #[test]
     fn a_subscribed_wrapper_sends_sidechain_history() {
         let mut m = sidechain_delay();
+        m.set_modulator_param(0, SC_RELEASE, 0.0).unwrap();
         m.subscribe_data("modulation").unwrap();
         // 0 dBFS for the first 10 ms, then silence: one burst the 20 Hz snapshot would miss.
         let mut signal = sine(1_000.0, SR, 480, 1.0);
@@ -3052,8 +3057,8 @@ mod tests {
         let (lo, hi) = (v[4], v[5]);
         let pre = &v[6..6 + SC_STREAM_POINTS];
         let post = &v[6 + SC_STREAM_POINTS..];
-        let at = ((50.0f32 / lo).ln() / (hi / lo).ln() * (SC_STREAM_POINTS - 1) as f32).round()
-            as usize;
+        let at =
+            ((50.0f32 / lo).ln() / (hi / lo).ln() * (SC_STREAM_POINTS - 1) as f32).round() as usize;
         let peak = (0..SC_STREAM_POINTS)
             .max_by(|&i, &j| pre[i].total_cmp(&pre[j]))
             .unwrap();
@@ -3079,12 +3084,18 @@ mod tests {
         m.subscribe_data("sidechain").unwrap();
         // Subscribed but not configured: still nothing.
         assert!(!has(&run_polled(&mut m, &signal)));
-        let build = m.configure_data("sidechain", "mod_id", 0.0).unwrap().unwrap();
+        let build = m
+            .configure_data("sidechain", "mod_id", 0.0)
+            .unwrap()
+            .unwrap();
         m.apply_data_build(build());
         assert!(has(&run_polled(&mut m, &signal)), "frames once configured");
 
         m.unsubscribe_data("sidechain");
-        assert!(!has(&run_polled(&mut m, &signal)), "stops after unsubscribe");
+        assert!(
+            !has(&run_polled(&mut m, &signal)),
+            "stops after unsubscribe"
+        );
         assert!(m.configure_data("sidechain", "bogus", 0.0).is_err());
         assert!(m.configure_data("sidechain", "mod_id", 99.0).is_err());
     }

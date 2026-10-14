@@ -8,37 +8,38 @@ Engine commands run from `Engine/`. Godot tests: `Godot/tests/run_all.sh <words>
 
 ## Phase 1 — engine foundations
 
-- [ ] **T-001** [REQ-011] Raise the capacity: `MAX_MODULATORS` = 32, `MAX_ROUTES` = 128.
+- [x?] **T-001** [REQ-011] Raise the capacity: `MAX_MODULATORS` = 32, `MAX_ROUTES` = 128.
   - _Files_: `Engine/src/audio/modulation/mod.rs`, `Engine/src/audio/modulation/matrix.rs`, `Engine/src/audio/modulation/host.rs` (test)
   - _Output_: the constants are raised; new test `a_device_holds_32_modulators_and_128_routes`
   - _Verify_: `cargo test a_device_holds_32_modulators_and_128_routes` passes; `cargo test modulation` passes (all capacity-sized arrays recompile and the existing tests still pass)
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-011] Bound the PolySynth's per-instance modulator memory.
+- [x?] **T-002** [REQ-011] Bound the PolySynth's per-instance modulator memory.
   - _Files_: `Engine/src/audio/devices/instruments/polysynth/mod.rs` (test)
   - _Output_: `voice_state_stays_bounded` prints and asserts `size_of::<VoiceModSpec>()` and `MAX_POLYPHONY × MAX_MODULATORS × size_of::<Option<ModulatorState>>()` (bound 1 MB)
   - _Verify_: `cargo test voice_state_stays_bounded -- --nocapture` passes; record the printed sizes in this task
+  - _Recorded_: `VoiceModSpec` = 6192 B; `ModulatorState` = 360 B; voice modulators = 11520 B per voice, 737280 B (0.74 MB) per instance (64 voices x 32 slots)
   - _Depends on_: T-001, T-004
 
-- [ ] **T-003** [REQ-001, REQ-002] Add the Gain (50) and Amount (60) parameters to the sidechain table.
+- [x?] **T-003** [REQ-001, REQ-002] Add the Gain (50) and Amount (60) parameters to the sidechain table.
   - _Files_: `Engine/src/audio/modulation/kinds.rs`
   - _Output_: `SC_GAIN`, `SC_AMOUNT`, `SC_SPECS` with 7 entries, `SC_SLOTS: [u8; 70]`, `MAX_KIND_PARAMS` = 7; the kind table test lists them with their defaults (0 dB and 100 %)
   - _Verify_: `cargo test kinds` passes
   - _Depends on_: —
 
-- [ ] **T-004** [REQ-001, REQ-002, REQ-003] Sidechain DSP: gain before the filters, 24 dB/oct cuts, Amount on the output.
+- [x?] **T-004** [REQ-001, REQ-002, REQ-003] Sidechain DSP: gain before the filters, 24 dB/oct cuts, Amount on the output.
   - _Files_: `Engine/src/audio/modulation/state.rs`
   - _Output_: `ScState` uses `Hp24` / `Lp24` and caches the gain; `ScState::update` takes the gain; `sc_value()` = `amount × map(level)`; new tests `the_sidechain_gain_lifts_the_follower`, `the_sidechain_amount_scales_the_output`, `the_sidechain_cuts_are_24_db_per_octave`
   - _Verify_: `cargo test the_sidechain` passes, including the existing `the_sidechain_cuts_drop_out_of_band_tones` and `the_sidechain_follower_maps_the_level_onto_the_value`; `state_is_copy_and_bounded` passes
   - _Depends on_: T-003
 
-- [ ] **T-005** [REQ-004, REQ-006, REQ-007] Peak tracking, the sample tap and the effective cuts on `ModulatorState`.
+- [x?] **T-005** [REQ-004, REQ-006, REQ-007] Peak tracking, the sample tap and the effective cuts on `ModulatorState`.
   - _Files_: `Engine/src/audio/modulation/state.rs`
   - _Output_: `feed_sidechain_tap(mono, impl FnMut(f32, f32))` with `feed_sidechain` delegating to it; `take_sc_peak()` (mapped, scaled, then reset); the silent decay in `advance` tracks the peak; `sc_cuts()` returns 0 for a bypassed filter; test `the_sidechain_peak_catches_a_short_transient`, plus a test that the tap sees the gained pre sample and the filtered post sample
   - _Verify_: `cargo test the_sidechain` passes
   - _Depends on_: T-004
 
-- [ ] **T-006** [REQ-006] Reusable `MiniAnalyser`.
+- [x?] **T-006** [REQ-006] Reusable `MiniAnalyser`.
   - _Files_: `Engine/src/audio/dsp/mini_analyser.rs` (new), `Engine/src/audio/dsp/mod.rs`
   - _Output_: `new(sample_rate, points)`, `push(a, b)`, `reset()`, `due(frames)`, `write_points(&mut Vec<u8>)`; tests: a 1 kHz tone pushed on A peaks at the nearest point in A while B stays at the floor; `write_points` appends `(2 + 2 × points) × 4` bytes; `due` fires about 30 times a second
   - _Verify_: `cargo test mini_analyser` passes
@@ -46,13 +47,13 @@ Engine commands run from `Engine/`. Godot tests: `Godot/tests/run_all.sh <words>
 
 ## Phase 2 — engine streams
 
-- [ ] **T-007** [REQ-004, REQ-009] Kind 4 history records in the `modulation` stream.
+- [x?] **T-007** [REQ-004, REQ-009] Kind 4 history records in the `modulation` stream.
   - _Files_: `Engine/src/audio/modulation/host.rs`
   - _Output_: `SC_HISTORY_CAP` = 249; `sc_hist` and `sc_hist_len` appended once per control step while `stream_subscribed`; kind 4 records in `modulation_payload` with `point_seconds = CONTROL_STEP / sample_rate`; the capacity formula is extended; test `a_subscribed_wrapper_sends_sidechain_history`; `the_payload_capacity_covers_the_maximal_trailing_block` covers 32 sidechain modulators with full histories
   - _Verify_: `cargo test modulation::host` passes
   - _Depends on_: T-001, T-005
 
-- [ ] **T-008** [REQ-006, REQ-007, REQ-009] The `"sidechain"` data stream on `ModulatedDevice`.
+- [x?] **T-008** [REQ-006, REQ-007, REQ-009] The `"sidechain"` data stream on `ModulatedDevice`.
   - _Files_: `Engine/src/audio/modulation/host.rs`
   - _Output_: `subscribe_data` / `unsubscribe_data` handle `"sidechain"`; `configure_data("sidechain", "mod_id", id)` sets `sc_mod` and returns a `DataBuild` for a `MiniAnalyser` the first time; `apply_data_build` installs a downcast `MiniAnalyser` and otherwise forwards; `feed_device_in` and `feed_sidechain` tap the selected modulator while subscribed; `poll_device_data` sends `[mod_id, sample_rate, low_cut_hz, high_cut_hz]` + `write_points` when due, after `modulation` and before the inner device; tests `the_sidechain_stream_reports_pre_and_post`, `an_unsubscribed_wrapper_sends_no_sidechain_data`; the existing `modulation`-starves-`spectrum` regression test still passes
   - _Verify_: `cargo test modulation::host` passes; `cargo test` (all) passes; `cargo fmt --check` is clean
@@ -104,7 +105,7 @@ Engine commands run from `Engine/`. Godot tests: `Godot/tests/run_all.sh <words>
 
 ## Phase 4 — docs
 
-- [ ] **T-016** [REQ-004, REQ-006] Protocol and subsystem docs.
+- [x?] **T-016** [REQ-004, REQ-006] Protocol and subsystem docs.
   - _Files_: `docs/subsystems/osc-protocol.md`, `docs/subsystems/godot-osc.md`
   - _Output_: the kind 4 record documented in the `modulation` section; the `"sidechain"` data type, its configure key, its blob and the `MiniAnalyser` point layout documented; one line in godot-osc.md on the options' own subscription
   - _Verify_: both docs mention kind 4, `"sidechain"` and the `mod_id` configure key; the layouts match the T-007 and T-008 code
