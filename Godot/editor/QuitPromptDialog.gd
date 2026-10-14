@@ -1,11 +1,12 @@
 # QuitPromptDialog.gd
-# "Save changes before closing?" dialog with Save / Save As / Cancel. Built in code; ask() resolves
+# "Save changes before closing?" dialog with Save / Save As / Don't Save / Cancel. Built in code; ask() resolves
 # with a QuitGuard.Choice. Closing the window or Escape counts as Cancel.
 class_name QuitPromptDialog extends ConfirmationDialog
 
 signal chosen(choice: int)
 
 const ACTION_SAVE_AS := "save_as"
+const ACTION_DISCARD := "discard"
 
 var _done := false
 
@@ -16,6 +17,7 @@ func _init() -> void:
 	ok_button_text = "Save"
 	cancel_button_text = "Cancel"
 	add_button("Save As", false, ACTION_SAVE_AS)
+	add_button("Don't Save", false, ACTION_DISCARD)
 	exclusive = true
 	confirmed.connect(_finish.bind(QuitGuard.Choice.SAVE))
 	canceled.connect(_finish.bind(QuitGuard.Choice.CANCEL))
@@ -25,6 +27,8 @@ func _init() -> void:
 func _on_custom_action(action: StringName) -> void:
 	if action == ACTION_SAVE_AS:
 		_finish(QuitGuard.Choice.SAVE_AS)
+	elif action == ACTION_DISCARD:
+		_finish(QuitGuard.Choice.DISCARD)
 
 
 func _finish(choice: int) -> void:

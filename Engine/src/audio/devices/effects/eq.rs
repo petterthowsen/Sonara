@@ -770,10 +770,11 @@ impl EqDevice {
         }
         let listen = self.listen_start + (self.listen_level - self.listen_start) * t;
         if self.listen_start > 0.0 || self.listen_level > 0.0 {
-            // Unity at the peak: the raw band output peaks at Q.
+            // Unity at the peak: the raw band output peaks at Q. Fed with the
+            // EQ'd signal so the listen shows what the bands actually produce.
             let k = self.listen_coefs.k;
-            let bl = self.listen_svf[0].process(in_l, &self.listen_coefs) * k;
-            let br = self.listen_svf[1].process(in_r, &self.listen_coefs) * k;
+            let bl = self.listen_svf[0].process(l, &self.listen_coefs) * k;
+            let br = self.listen_svf[1].process(r, &self.listen_coefs) * k;
             l += listen * (bl - l);
             r += listen * (br - r);
         }
@@ -1236,12 +1237,13 @@ mod tests {
     }
 
     #[test]
-    fn listen_band_outputs_a_band_pass_at_unity() {
+    fn listen_band_outputs_the_eqd_signal_band_passed() {
         let mut d = device();
         configure(&mut d, 4, 0, 2_000.0, 12.0, 4.0, 1);
         set(&mut d, LISTEN_BAND, 5.0);
         let centre = measured_db(&mut d, 2_000.0);
-        assert!(centre.abs() < 0.1, "unity at the band frequency: {centre}");
+        // Listens to the post-EQ signal, so the band's own +12 dB is audible.
+        assert!((centre - 12.0).abs() < 0.2, "post-EQ level at the band frequency: {centre}");
         let off = measured_db(&mut d, 200.0);
         assert!(off < -20.0, "{off}");
         set(&mut d, LISTEN_BAND, 0.0);

@@ -68,6 +68,8 @@ func _test_save_as() -> void:
 
 
 func _test_cancel_and_dialog_guard() -> void:
+	var d: int = await _resolve(QuitGuard.Choice.DISCARD, true, false, QuitGuard.SaveAsResult.FAILED)
+	_assert(d == QuitGuard.Outcome.QUIT, "discard quits without saving")
 	var o: int = await _resolve(QuitGuard.Choice.CANCEL, true, true, QuitGuard.SaveAsResult.OK)
 	_assert(o == QuitGuard.Outcome.STAY and _saves == 0 and _save_ases == 0, "Cancel keeps the app open and saves nothing")
 	var dialog := QuitPromptDialog.new()

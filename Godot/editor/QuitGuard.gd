@@ -4,7 +4,7 @@
 class_name QuitGuard extends RefCounted
 
 ## What the user picked in the unsaved-changes dialog.
-enum Choice { SAVE, SAVE_AS, CANCEL }
+enum Choice { SAVE, SAVE_AS, CANCEL, DISCARD }
 ## Result of an interactive Save As.
 enum SaveAsResult { OK, FAILED, CANCELLED }
 ## What the app does after a choice has been carried out.
@@ -22,7 +22,7 @@ static func needs_prompt(project_open: bool, is_modified: bool) -> bool:
 ## `has_path`: false for a project with no file yet (or the protected startup project), where
 ## Save has to go through Save As, like File > Save does.
 ## QUIT only after a successful save; a failed save stays open (the error is shown by the save flow);
-## a cancelled Save As goes back to the dialog.
+## a cancelled Save As goes back to the dialog. DISCARD quits without saving.
 static func resolve(choice: int, has_path: bool, save_cb: Callable, save_as_cb: Callable) -> int:
 	match choice:
 		Choice.SAVE:
@@ -32,6 +32,8 @@ static func resolve(choice: int, has_path: bool, save_cb: Callable, save_as_cb: 
 			return await _run_save_as(save_as_cb)
 		Choice.SAVE_AS:
 			return await _run_save_as(save_as_cb)
+		Choice.DISCARD:
+			return Outcome.QUIT
 	return Outcome.STAY
 
 
