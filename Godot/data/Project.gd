@@ -133,6 +133,7 @@ var next_marker_id: int = 1
 # Async clip load tracking
 var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
 var _request_clip_lookup: Dictionary = {}  # req_id -> clip_id
+var _placeholder_commands: Dictionary = {}  # clip_id -> Array[ClipInstanceCreateCommand] awaiting the decoded length
 var _request_device_lookup: Dictionary = {}  # req_id -> DeviceInstance
 ## AudioFileService request id -> AudioSourceInfo for sources that no clip or device owns directly
 ## (Sampler multisample zones).
@@ -570,6 +571,39 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 	var clip := _get_clip_by_req_id(req_id)
 	if clip:
 		clip.update_content_length_from_metadata(tempo, ppq)
+		_apply_length_to_placeholder_instances(clip)
+
+
+## Remember the create command of an instance dropped on the timeline before its audio file's
+## duration was known. The instance starts at the placeholder length; `_on_audiofile_decode_ready`
+## corrects it (see `_apply_length_to_placeholder_instances`).
+func track_placeholder_instance(clip: Clip, create_cmd: ClipInstanceCreateCommand) -> void:
+	if clip == null or create_cmd == null or create_cmd.instance == null:
+		return
+	if not _placeholder_commands.has(clip.id):
+		_placeholder_commands[clip.id] = []
+	_placeholder_commands[clip.id].append(create_cmd)
+
+
+## Stretch the instances created together with `clip` from placeholder to the real length.
+## This is a fix-up of the drop, not a user edit: it adds no history entry and instead updates the
+## recorded create command, so undo removes the instance and redo restores the corrected length.
+## Instances the user resized in the meantime (no longer at the placeholder) are left alone.
+func _apply_length_to_placeholder_instances(clip: Clip) -> void:
+	var cmds: Array = _placeholder_commands.get(clip.id, [])
+	_placeholder_commands.erase(clip.id)
+	var placeholder := ppq * 4
+	var length := clip.content_length_ticks
+	if length <= 0 or length == placeholder:
+		return
+	for cmd: ClipInstanceCreateCommand in cmds:
+		var inst := cmd.instance
+		if inst == null or inst.clip_id != clip.id or inst.duration_ticks != placeholder:
+			continue
+		inst.set_duration(length)
+		if inst.loop_length_ticks == placeholder:
+			inst.loop_length_ticks = length
+		cmd.duration_ticks = length
 
 
 ## Requests of the Browser's preview and info panel (PreviewPlayer); they belong to no clip or device.
@@ -1144,6 +1178,7 @@ func remove_clip(clip_id: String) -> bool:
 	if _connection_state == ConnectionState.CONNECTED:
 		AudioEngineOSC.send("/clip/delete", [clip_id])
 
+	_placeholder_commands.erase(clip_id)
 	clips.erase(clip_id)
 	clip_removed.emit(clip_id)
 	return true

@@ -329,11 +329,21 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 	# Create clip from asset
 	var clip = project.create_clip_from_asset(asset, track.color, drop_ticks)
 
+	# Use the file's duration right away when it is already known (same conversion as the decode
+	# callback); otherwise the clip is still at its placeholder length until the engine reports it.
+	var duration_known = clip.type == Clip.ClipType.AUDIO and clip.audio_frames > 0 and clip.audio_sample_rate > 0
+	if duration_known:
+		clip.update_content_length_from_metadata(project.tempo, project.ppq)
+
 	# create_clip_from_asset already adds to the pool; only the instance is undoable here
 	var instance_duration = clip.content_length_ticks
-	HistoryUtil.execute(ClipInstanceCreateCommand.new(
+	var create_cmd := ClipInstanceCreateCommand.new(
 		track, clip, drop_ticks, instance_duration, project, false
-	))
+	)
+	HistoryUtil.execute(create_cmd)
+	if clip.type == Clip.ClipType.AUDIO and not duration_known:
+		# The decode callback will stretch this instance (and the command's redo data) to the file length
+		project.track_placeholder_instance(clip, create_cmd)
 
 	logger.info("Created %s clip from: %s" % [
 		"audio" if asset.is_audio() else "MIDI",
