@@ -88,6 +88,7 @@ func _on_project_opened(project: Project) -> void:
 	"""Handle project opened event."""
 	# Connect to project connection state signal
 	project.connection_state_changed.connect(_on_connection_state_changed)
+	project.connection_failed.connect(_on_connection_failed)
 	
 	# Update UI based on current connection state
 	_update_ui_from_state(project.get_connection_state())
@@ -101,6 +102,12 @@ func _on_project_closed() -> void:
 func _on_connection_state_changed(state: Project.ConnectionState) -> void:
 	"""Handle connection state change."""
 	_update_ui_from_state(state)
+
+
+func _on_connection_failed(reason: String) -> void:
+	_update_ui_from_state(Project.ConnectionState.DISCONNECTED)
+	_set_status("Engine not responding", COLOR_ALERT,
+		reason + " Is the engine running? Click to retry.", true)
 
 
 ## The popup closes itself on a press outside it, which includes a press on this button, so by
@@ -279,8 +286,8 @@ func _on_connect_button_pressed() -> void:
 	
 	var project = Sonara.editor.project
 	
-	if project.is_connected_to_engine():
-		# Disconnect
+	if project.is_connected_to_engine() or project.get_connection_state() == Project.ConnectionState.CONNECTING:
+		# Disconnect (or cancel a connect that is still waiting for the engine)
 		project.disconnect_from_engine()
 	else:
 		# Connect

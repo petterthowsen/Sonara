@@ -30,6 +30,9 @@ signal loop_follow_changed(follows: bool)
 signal marker_added(marker: SongMarker)
 signal marker_removed(marker: SongMarker)
 signal connection_state_changed(state: ConnectionState)
+## The engine never answered the connect handshake (after all retries). The state is back to
+## DISCONNECTED when this fires.
+signal connection_failed(reason: String)
 ## Fired once after a batched parent/order change so TrackList and Timeline can rebuild together.
 signal tracks_layout_changed
 ## An arranger_view flag changed (see set_arranger_view).
@@ -156,6 +159,22 @@ var modified_date: int = 0
 # Connection state
 var _connection_state: ConnectionState = ConnectionState.DISCONNECTED
 
+## The handshake (`/project/init` answered by `/status/connected`) is UDP with a single reply, so
+## a lost packet used to leave the project in CONNECTING forever. While CONNECTING we resend it
+## every HANDSHAKE_RETRY_SEC, up to HANDSHAKE_MAX_ATTEMPTS sends, then give up (connection_failed).
+const HANDSHAKE_RETRY_SEC := 1.5
+const HANDSHAKE_MAX_ATTEMPTS := 6
+enum HandshakeStep { RETRY, FAIL }
+## Bumped whenever a handshake starts or is cancelled, so stale watchdogs exit.
+var _handshake_id: int = 0
+var _handshake_attempts: int = 0
+var _handshake_started_msec: int = 0
+
+
+## What to do when a handshake send went unanswered for HANDSHAKE_RETRY_SEC.
+static func handshake_step(attempts_sent: int, max_attempts: int = HANDSHAKE_MAX_ATTEMPTS) -> HandshakeStep:
+	return HandshakeStep.RETRY if attempts_sent < max_attempts else HandshakeStep.FAIL
+
 ## Depth of nested place_track / apply_track_layout batches (UI skips per-track rebuilds).
 var _track_layout_batch: int = 0
 
@@ -227,11 +246,49 @@ func connect_to_engine() -> void:
 	# Clear any previous project state in engine, then initialize. The audio settings and the
 	# hosting policy go first, so devices are created at the right rate and plugins load
 	# straight into the right host process.
+	_handshake_id += 1
+	_handshake_attempts = 1
+	_handshake_started_msec = Time.get_ticks_msec()
+	_send_handshake()
+	_run_handshake_watchdog(_handshake_id)
+
+
+func _send_handshake() -> void:
+	logger.info("[Project] Handshake send %d/%d (OSC ready: %s, engine seen: %s)" % [
+		_handshake_attempts, HANDSHAKE_MAX_ATTEMPTS, AudioEngineOSC._is_ready,
+		AudioEngineOSC._is_engine_connected])
 	AudioConfig.sync_to_engine()
 	AssetService.plugin_hosting.sync_to_engine()
 	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
 	_send_scale_to_engine()
+
+
+func _run_handshake_watchdog(id: int) -> void:
+	var tree := _get_scene_tree()
+	if tree == null:
+		return
+	while true:
+		await tree.create_timer(HANDSHAKE_RETRY_SEC).timeout
+		if id != _handshake_id or _connection_state != ConnectionState.CONNECTING:
+			return
+		if handshake_step(_handshake_attempts) == HandshakeStep.FAIL:
+			_fail_handshake()
+			return
+		_handshake_attempts += 1
+		logger.warn("[Project] No answer from the engine after %d ms, resending handshake" % (
+			Time.get_ticks_msec() - _handshake_started_msec))
+		_send_handshake()
+
+
+func _fail_handshake() -> void:
+	var waited := Time.get_ticks_msec() - _handshake_started_msec
+	var reason := "The engine did not answer after %d attempts (%.1f s)." % [_handshake_attempts, waited / 1000.0]
+	logger.error("[Project] Connect failed: " + reason)
+	_handshake_id += 1
+	_connection_state = ConnectionState.DISCONNECTED
+	connection_state_changed.emit(ConnectionState.DISCONNECTED)
+	connection_failed.emit(reason)
 
 
 func _on_engine_confirmed_connected() -> void:
@@ -246,7 +303,8 @@ func _on_engine_confirmed_connected() -> void:
 		connect_to_engine()
 		return
 
-	logger.info("[Project] Engine confirmed connection, syncing project data...")
+	logger.info("[Project] Engine confirmed connection after %d ms (%d handshake sends), syncing project data..." % [
+		Time.get_ticks_msec() - _handshake_started_msec, _handshake_attempts])
 	
 	# Mark as connected so sync methods work
 	_connection_state = ConnectionState.CONNECTED
@@ -617,6 +675,7 @@ func disconnect_from_engine() -> void:
 	for channel in channels:
 		channel.disconnect_from_engine()
 
+	_handshake_id += 1  # cancels a pending handshake watchdog
 	var was_connected := _connection_state != ConnectionState.DISCONNECTED
 	if was_connected:
 		logger.info("[Project] Disconnecting from audio engine...")

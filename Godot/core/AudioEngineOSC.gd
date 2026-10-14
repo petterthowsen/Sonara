@@ -41,6 +41,7 @@ var osc_server: OSCServer
 var _is_engine_connected: bool = false
 var _last_heartbeat_time: float = 0.0  # Time.get_ticks_msec() of last heartbeat
 var _last_process_msec: int = 0  # Time.get_ticks_msec() of the previous _process
+var _logged_idle_heartbeat: bool = false  # log the first un-handshaken heartbeat only
 var _is_ready: bool = false  # Whether OSC server/client are fully initialized
 ## Messages sent before the UDP client is bound; flushed from `_ready()`.
 var _pending_sends: Array[Dictionary] = []
@@ -237,6 +238,9 @@ func _route_osc_message(address: String, values, _time) -> void:
 			logger.info("Engine connected (via /status/playing)")
 		routed = true
 	elif address == "/status/heartbeat":
+		if not _is_engine_connected and not _logged_idle_heartbeat:
+			_logged_idle_heartbeat = true
+			logger.info("Heartbeat received while no project handshake has completed (engine is up)")
 		# Update last heartbeat time
 		_last_heartbeat_time = Time.get_ticks_msec()
 		routed = true
