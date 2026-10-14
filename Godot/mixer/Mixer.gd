@@ -129,6 +129,7 @@ func _ready():
 	# Connect context menu signals
 	channel_ctx_menu.delete_requested.connect(_on_channel_delete_requested)
 	channel_ctx_menu.unnest_requested.connect(_on_channel_unnest_requested)
+	channel_ctx_menu.delete_many_requested.connect(_on_channels_delete_requested)
 	
 	# Strip drags (un-nest, reorder) and devices dropped on empty space (new channel) on both panes.
 	var left_hbox := left_pane.get_node_or_null("HBox") as Control
@@ -350,6 +351,17 @@ func _on_channel_delete_requested(channel: Channel) -> void:
 	if not current_project or channel == null or channel.is_master or channel.is_plugin_return():
 		return
 	HistoryUtil.execute(ChannelDeleteCommand.new(current_project, channel))
+
+
+## Delete several channels (context menu on a multi-selection) as one undoable step.
+func _on_channels_delete_requested(channels: Array[Channel]) -> void:
+	if not current_project:
+		return
+	var cmds: Array[Command] = []
+	for ch in channels:
+		if ch != null and not ch.is_master and not ch.is_plugin_return():
+			cmds.append(ChannelDeleteCommand.new(current_project, ch))
+	HistoryUtil.execute_many("Delete Channels", cmds)
 
 
 func deselect_channel(ch : Channel, erase := true, emit_deselect := true, emit_changed := true):
@@ -783,7 +795,10 @@ func _rebuild_all_sends_panels() -> void:
 func _on_channel_request_context_menu(channel : Channel):
 	var mc : MixerChannel = find_mixer_channel_ui_for_channel(channel)
 	if mc:
-		channel_ctx_menu.bind_to_channel(channel)
+		# Like the tracklist: a channel outside the selection becomes the selection.
+		if not selection.has(channel):
+			select_channel(channel)
+		channel_ctx_menu.bind_to_channel(channel, get_multi_edit_peers(channel))
 		ContextMenuPopup.popup_at_mouse(channel_ctx_menu)
 
 
@@ -846,7 +861,10 @@ func _process(_delta: float) -> void:
 		else:
 			_hide_drop_indicator()
 	elif can_drop_new_channel(data, mouse):
+		var slot := new_channel_slot(mouse)
 		var rect := _new_channel_line_rect(new_channel_side(mouse) == SIDE_BUSES)
+		if not slot.is_empty():
+			rect = MixerChannelDropTarget.insert_line_rect(slot["box"], slot["after"])
 		_drop_indicator = DropIndicator.place(self, _drop_indicator, rect, false, drop_indicator_color)
 	else:
 		_hide_drop_indicator()
@@ -864,9 +882,55 @@ func _hide_drop_indicator() -> void:
 	DropIndicator.hide_indicator(_drop_indicator)
 
 
+## Width in pixels of the band at a root strip's left/right edge where a device drop inserts a
+## new channel beside it instead of adding to the strip's chain.
+const INSERT_EDGE := 14.0
+
+
+## Insert slot for a new channel at `mouse`: the gap between two root strips, or the edge band of
+## one (before the first strip included). Returns {"box": ChannelsBox, "after": Channel (null =
+## first), "buses": bool}, or {} when the pointer is on a strip body or empty pane space (empty
+## space appends). The channel's mixer order follows the strips' order; track order is untouched
+## (same as a strip reorder).
+func new_channel_slot(mouse: Vector2) -> Dictionary:
+	for buses in [false, true]:
+		var pane: Control = right_pane if buses else left_pane
+		var box := (right_channels if buses else left_channels) as ChannelsBox
+		if box == null or not DragDrop.is_point_visible(pane, mouse):
+			continue
+		var box_rect := box.get_global_rect()
+		if mouse.y < box_rect.position.y or mouse.y > box_rect.end.y:
+			continue
+		var prev: MixerChannel = null
+		for child in box.get_children():
+			if not child is MixerChannel or not child.visible or child.is_queued_for_deletion():
+				continue
+			var mc := child as MixerChannel
+			if mc.channel == null:
+				continue
+			var rect := mc.get_global_rect()
+			var prev_ch: Channel = prev.channel if prev else null
+			if rect.has_point(mouse):
+				var edge := minf(INSERT_EDGE, rect.size.x * 0.25)
+				if mouse.x < rect.position.x + edge:
+					return {"box": box, "after": prev_ch, "buses": buses}
+				if mouse.x > rect.end.x - edge:
+					return {"box": box, "after": mc.channel, "buses": buses}
+				return {}
+			if prev and mouse.x > prev.get_global_rect().end.x and mouse.x < rect.position.x:
+				return {"box": box, "after": prev_ch, "buses": buses}
+			prev = mc
+	return {}
+
+
 ## Pane under `mouse` that a device drop would add a channel to: SIDE_TRACKS (left),
-## SIDE_BUSES (right), or SIDE_NONE over a strip (strips take device drops themselves) or elsewhere.
+## SIDE_BUSES (right), or SIDE_NONE over a strip body (strips take device drops themselves) or
+## elsewhere. The gaps between root strips and the outer INSERT_EDGE pixels of each strip count
+## as a pane (see new_channel_slot).
 func new_channel_side(mouse: Vector2) -> int:
+	var slot := new_channel_slot(mouse)
+	if not slot.is_empty():
+		return SIDE_BUSES if slot["buses"] else SIDE_TRACKS
 	for node in get_tree().get_nodes_in_group("mixer_channel"):
 		if node is MixerChannel and is_ancestor_of(node) and DragDrop.is_point_visible(node as Control, mouse):
 			return SIDE_NONE
@@ -899,10 +963,15 @@ func drop_new_channel(data: Variant, mouse: Vector2) -> Array[Channel]:
 	if not can_drop_new_channel(data, mouse):
 		return created
 	var buses := new_channel_side(mouse) == SIDE_BUSES
+	var slot := new_channel_slot(mouse)
+	var after: Channel = slot.get("after")
 	for item in (data if data is Array else [data]):
 		var channel := DeviceDropUtil.create_channel_for(current_project, item, buses)
 		if channel:
 			created.append(channel)
+			if not slot.is_empty():
+				place_root_strip(channel, after)
+				after = channel
 	if data is DeviceDrag and not created.is_empty():
 		(data as DeviceDrag).did_commit = true
 	return created

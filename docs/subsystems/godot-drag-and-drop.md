@@ -22,6 +22,9 @@ Implementations (payload, resolver, owner, test):
     (`Mixer.new_channel_side` / `DeviceDropUtil.new_channel_kind`): on the left pane an instrument
     track for instruments and containers, an audio track for effects; on the right pane a bus for
     effects. The indicator is a line after the pane's last strip.
+    Dropping in a gap between root strips, or on the outer `Mixer.INSERT_EDGE` px of a strip,
+    inserts the new channel at that position (`Mixer.new_channel_slot`, same insert line as a strip
+    reorder); it only sets mixer order, like a reorder, not track order.
 - Devices on the arranger tracklist (Device/SFZ assets, asset arrays, `DeviceDrag`):
   `arranger/tracklist/TrackDeviceDropTarget.gd`, `arranger/tracklist/TrackList.gd`,
   `tests/test_track_device_drop.gd`

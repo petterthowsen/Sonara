@@ -72,8 +72,7 @@ func _ready() -> void:
 	collapse_button.gui_input.connect(_on_collapse_button_gui_input)
 	collapse_button.mouse_entered.connect(_set_button_hovered.bind(true))
 	collapse_button.mouse_exited.connect(_set_button_hovered.bind(false))
-	# Rename lives in the context menu; the name is a shift+click window target instead.
-	name_label.edit_via_click = false
+	# Double-click the name to rename inline (shift+click on it still opens the window).
 	name_label.mouse_entered.connect(_set_name_hovered.bind(true))
 	name_label.mouse_exited.connect(_set_name_hovered.bind(false))
 	name_label.value_changed.connect(_on_name_edited)

@@ -154,12 +154,12 @@ func _insert_in_box(
 	else:
 		return
 	after_sibling = after
-	indicator_rect = _insert_line_rect(box, after)
+	indicator_rect = insert_line_rect(box, after)
 
 
 ## Thin vertical rect at the left edge of the strip following `after` (or the first strip).
 ## Uses the strips' current layout; the dragged strip stays in place until the drop.
-static func _insert_line_rect(box: ChannelsBox, after: Channel) -> Rect2:
+static func insert_line_rect(box: ChannelsBox, after: Channel) -> Rect2:
 	var box_rect := box.get_global_rect()
 	var x := box_rect.position.x
 	var found_after := after == null

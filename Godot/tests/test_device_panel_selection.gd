@@ -314,7 +314,7 @@ func _test_panes_slide_and_fade() -> void:
 	var lane := await _lane(ch)
 	var pa: Control = lane.find_device_panel(a)
 	_assert(not pa.view_pane.visible, "a device with no view keeps its View pane closed")
-	_assert(pa.name_label.text == a.get_display_name(), "the header shows the name as a plain label")
+	_assert(pa.name_label.get_value() == a.get_display_name(), "the header shows the device name (SmartLineEdit, double-click renames)")
 	_assert(pa.name_label.mouse_filter == Control.MOUSE_FILTER_PASS, "the name label lets clicks pass")
 	_assert(pa.vertical_name_label.mouse_filter == Control.MOUSE_FILTER_PASS, "the vertical name lets clicks pass")
 

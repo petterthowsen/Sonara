@@ -39,6 +39,7 @@ func run_tests() -> void:
 	await _test_container_body_takes_drops()
 	await _test_lists_drop_panels_of_moved_devices()
 	await _test_empty_mixer_space_creates_channels()
+	await _test_gap_between_strips_inserts_channel()
 
 
 ## Registered fake device `device_id`.
@@ -302,3 +303,75 @@ func _test_empty_mixer_space_creates_channels() -> void:
 	_assert(drag.did_commit, "the drag is marked committed")
 	var rect: Rect2 = mixer._new_channel_line_rect(false)
 	_assert(rect.size.x <= 4.0 and rect.size.y > 100.0, "new-channel indicator is a vertical line")
+
+
+func _strip_order(mixer: Control) -> Array:
+	var ids: Array = []
+	for c in mixer.left_channels.get_children():
+		if c is Control and c.get("channel") and not c.is_queued_for_deletion():
+			ids.append(c.channel.id)
+	return ids
+
+
+func _test_gap_between_strips_inserts_channel() -> void:
+	_fresh_project()
+	var mixer: Control = (load("res://mixer/Mixer.tscn") as PackedScene).instantiate()
+	mixer.size = Vector2(1400, 600)
+	root.add_child(mixer)
+	_nodes.append(mixer)
+	mixer._on_project_opened(_project)
+	var a: Object = _project.create_instrument_track("A").channel
+	var b: Object = _project.create_instrument_track("B").channel
+	var c: Object = _project.create_instrument_track("C").channel
+	await process_frame
+	await process_frame
+	var synth: Object = _device("test.synth2", _device_script.DeviceCategory.Instrument)
+	var fx: Object = _device("test.fx.gap", _device_script.DeviceCategory.Effect)
+	var synth_asset := _asset(_asset_script.TYPE.Device, synth.device_id)
+	var fx_asset := _asset(_asset_script.TYPE.Device, fx.device_id)
+	var ui_a: Control = mixer.find_mixer_channel_ui_for_channel(a)
+	var ui_b: Control = mixer.find_mixer_channel_ui_for_channel(b)
+	var ui_c: Control = mixer.find_mixer_channel_ui_for_channel(c)
+	var ra: Rect2 = ui_a.get_global_rect()
+	var rb: Rect2 = ui_b.get_global_rect()
+	var rc: Rect2 = ui_c.get_global_rect()
+	var y := ra.get_center().y
+	_assert(_strip_order(mixer) == [a.id, b.id, c.id], "starting order A B C")
+
+	# Body of a strip keeps appending to its chain: no slot.
+	_assert(mixer.new_channel_slot(rb.get_center()).is_empty(), "strip body is not an insert slot")
+	# Edge band between A and B.
+	var between := Vector2(rb.position.x + 3, y)
+	var slot: Dictionary = mixer.new_channel_slot(between)
+	_assert(not slot.is_empty() and slot["after"] == a, "B's left edge inserts after A")
+	_assert(mixer.can_drop_new_channel(synth_asset, between), "instrument accepted at the gap")
+	var line: Rect2 = _mixer_drop_target().insert_line_rect(slot["box"], slot["after"])
+	_assert(absf(line.get_center().x - rb.position.x) < 2.0 and line.size.x <= 4.0, "indicator is the reorder line before B")
+	var tracks_before: int = _project.tracks.size()
+	var made: Array = mixer.drop_new_channel(synth_asset, between)
+	_assert(made.size() == 1 and not made[0].is_bus, "one channel created")
+	_assert(_strip_order(mixer) == [a.id, made[0].id, b.id, c.id], "new channel sits between A and B: %s" % str(_strip_order(mixer)))
+	_assert(_project.tracks.size() == tracks_before + 1, "a track was created too")
+	_assert(not made[0].devices.is_empty(), "new channel holds the dropped instrument")
+	_assert(made[0].order == 1 and b.order == 2, "channel order follows the strips")
+
+	# Before the first strip: A's left edge.
+	await process_frame
+	var first := Vector2(ra.position.x + 2, y)
+	slot = mixer.new_channel_slot(first)
+	_assert(not slot.is_empty() and slot["after"] == null, "first strip's left edge inserts first")
+	var made2: Array = mixer.drop_new_channel(fx_asset, first)
+	_assert(_strip_order(mixer)[0] == made2[0].id, "effect channel is first")
+
+	# After the last strip's right edge.
+	await process_frame
+	var rc2: Rect2 = mixer.find_mixer_channel_ui_for_channel(c).get_global_rect()
+	var last := Vector2(rc2.end.x - 2, y)
+	slot = mixer.new_channel_slot(last)
+	_assert(not slot.is_empty() and slot["after"] == c, "last strip's right edge inserts after it")
+	var made3: Array = mixer.drop_new_channel(synth_asset, last)
+	_assert(_strip_order(mixer).back() == made3[0].id, "new channel is last")
+
+
+func _mixer_drop_target() -> GDScript:
+	return load("res://mixer/MixerChannelDropTarget.gd")

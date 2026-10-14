@@ -1195,6 +1195,10 @@ func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	if data is MixerChannelDrag:
 		var mixer := _find_mixer()
 		return mixer != null and mixer.can_drop_channel_drag(data as MixerChannelDrag)
+	# The strip's edge band is a gap between strips: a new channel is inserted there.
+	var gap_mixer := _find_mixer()
+	if gap_mixer and not gap_mixer.new_channel_slot(get_global_mouse_position()).is_empty():
+		return gap_mixer.can_drop_new_channel(data, get_global_mouse_position())
 	if device_list and DeviceDropTarget.resolve_for(device_list, data).is_valid():
 		return true
 	# Anywhere else on the strip appends to the chain (devices from other channels too).
@@ -1208,6 +1212,11 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		var mixer := _find_mixer()
 		if mixer:
 			mixer.drop_channel_drag(data as MixerChannelDrag)
+		return
+	var gap_mixer := _find_mixer()
+	if gap_mixer and not gap_mixer.new_channel_slot(get_global_mouse_position()).is_empty():
+		gap_mixer._hide_drop_indicator()
+		gap_mixer.drop_new_channel(data, get_global_mouse_position())
 		return
 	if device_list:
 		var target := DeviceDropTarget.resolve_for(device_list, data)

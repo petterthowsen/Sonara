@@ -21,7 +21,7 @@ var logger : Log = Log.make("DevicePanel")
 
 # light button toggles inactive/active and enabled/disabled
 @onready var device_light: DeviceLightButton = $VBox/TopHeader/HBox/DeviceLight
-@onready var name_label : Label = $VBox/TopHeader/HBox/Name
+@onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
 
 ## Opens the preset menu (save, load, show in browser).
 @onready var preset_button: Button = $VBox/TopHeader/HBox/Preset
@@ -152,8 +152,9 @@ func _ready() -> void:
 	file_load_button.pressed.connect(_on_load_file_pressed)
 	file_dialog.file_selected.connect(_on_file_selected)
 
-	# The header shows the name as a plain Label (mouse PASS, so clicks and drags pass through);
-	# renaming goes through the context menu (DeviceActions.rename).
+	# Double-click the header name to rename inline (the context menu's name field also works);
+	# single clicks and drags still pass through to selection and drag-and-drop.
+	name_label.value_changed.connect(_on_name_edited)
 
 	# Initial state: only the View open. The Parameters tab opens by itself only for a device
 	# with no view (`_apply_default_tab`).
@@ -289,8 +290,9 @@ func _fit_name_to_tabs() -> void:
 		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_label.custom_minimum_size.x = 0
 		return
-	var font := name_label.get_theme_font("font")
-	var width := font.get_string_size(name_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, name_label.get_theme_font_size("font_size")).x
+	var text_label := name_label.label
+	var font := text_label.get_theme_font("font")
+	var width := font.get_string_size(text_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_label.get_theme_font_size("font_size")).x
 	name_label.size_flags_horizontal = Control.SIZE_FILL
 	name_label.custom_minimum_size.x = minf(ceilf(width) + 4.0, NAME_MAX_WIDTH)
 
@@ -516,10 +518,20 @@ func _on_reload_pressed() -> void:
 		device.reload()
 
 
+## Commit an inline rename from the header's SmartLineEdit.
+func _on_name_edited(value) -> void:
+	if device == null:
+		return
+	var new_name := DeviceActions.rename(device, str(value))
+	name_label.set_value(new_name)
+	vertical_name_label.text = new_name
+	_fit_name_to_tabs()
+
+
 ## Refresh the header when the instance is renamed.
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
-		name_label.text = new_name
+		name_label.set_value(new_name)
 		vertical_name_label.text = new_name
 		_fit_name_to_tabs()
 
@@ -560,7 +572,8 @@ func bind_to_device(dev : DeviceInstance):
 			return
 	device_light.bind_to_device_instance(dev)
 	_update_note_fx_stripe()
-	name_label.text = dev.get_display_name()
+	name_label.set_value(dev.get_display_name())
+	name_label.disabled = DeviceSlots.is_slot_chain(dev)  # a device slot keeps its name
 	vertical_name_label.text = dev.get_display_name()
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)

@@ -12,6 +12,7 @@ func suite_name() -> String:
 func run_tests() -> void:
 	await _test_menu("res://mixer/ChannelContextMenu.tscn", "color_picker", "label")
 	await _test_menu("res://arranger/tracklist/TrackItemContextMenu.tscn", "color_picker_button", "name_label")
+	await _test_device_menu()
 
 
 func _test_menu(path: String, button_prop: String, name_prop: String) -> void:
@@ -34,5 +35,26 @@ func _test_menu(path: String, button_prop: String, name_prop: String) -> void:
 	menu.popup(Rect2i(0, 0, 10, 10))
 	await process_frame
 	_assert(menu.size.x >= need, "%s: popup width %s fits the name" % [path, menu.size.x])
+	menu.hide()
+	menu.queue_free()
+
+
+
+## The device menu has no colour button: its name field alone must widen the popup.
+func _test_device_menu() -> void:
+	var menu: PopupPanel = (load("res://devices/DeviceContextMenu.tscn") as PackedScene).instantiate()
+	root.add_child(menu)
+	menu.hide()
+	await process_frame
+	var base_w := menu.get_contents_minimum_size().x
+	(menu.get("label") as SmartLineEdit).set_value("A very long device name that must not be clipped by the device context menu")
+	await process_frame
+	var need: float = (menu.get("label") as SmartLineEdit).label.get_minimum_size().x
+	var min_w: float = menu.get_contents_minimum_size().x
+	_assert(min_w >= need, "device menu: min width %s >= name %s" % [min_w, need])
+	_assert(min_w > base_w, "device menu: grew (%s -> %s)" % [base_w, min_w])
+	menu.popup(Rect2i(0, 0, 10, 10))
+	await process_frame
+	_assert(menu.size.x >= need, "device menu: popup width %s fits the name" % menu.size.x)
 	menu.hide()
 	menu.queue_free()
