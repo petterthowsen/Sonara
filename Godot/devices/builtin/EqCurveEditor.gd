@@ -201,7 +201,7 @@ func _on_parameter_changed(param_id: int, _value: float) -> void:
 ## Write one parameter of band `band` in real units (Hz, dB, enum index) through the device.
 func set_band_param(band: int, offset: int, real_value: float) -> void:
 	if device != null:
-		device.set_parameter_real(band * EqResponse.BAND_STRIDE + offset, real_value)
+		ParameterActions.set_real(device, band * EqResponse.BAND_STRIDE + offset, real_value)
 
 
 # ============================================================================

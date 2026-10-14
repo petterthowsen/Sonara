@@ -236,17 +236,7 @@ func _on_slider_changed(value: float) -> void:
 
 	# Update device parameter (sends to engine, doesn't emit signal)
 	logger.info("slider param_id=", parameter_id, " normalized=", value)
-	var old_value = current_value
-	device_instance.set_parameter_normalized(parameter_id, value)
-	var cmd := PropertyCommand.new(
-		"Set Parameter",
-		device_instance,
-		"",
-		[parameter_id, old_value],
-		[parameter_id, value]
-	)
-	cmd.set_callable(func(id, v): device_instance.set_parameter_normalized(id, v)).set_unpack_array(true).set_mergeable(true)
-	HistoryUtil.record(cmd)
+	ParameterActions.set_normalized(device_instance, parameter_id, value)
 
 	# Update value display immediately for responsive feedback
 	if value_label_node and show_value:
@@ -297,7 +287,7 @@ func _on_checkbox_toggled(pressed: bool) -> void:
 	if not device_instance or parameter_id < 0:
 		return
 	var normalized := 1.0 if pressed else 0.0
-	device_instance.set_parameter_normalized(parameter_id, normalized)
+	ParameterActions.set_normalized(device_instance, parameter_id, normalized)
 
 func _on_option_selected(index: int) -> void:
 	if not device_instance or parameter_id < 0:
@@ -305,4 +295,4 @@ func _on_option_selected(index: int) -> void:
 	var n: int = max(1, parameter.enum_values.size())
 	var normalized: float = 0.0 if n <= 1 else float(index) / float(n - 1)
 	logger.info("option param_id=", parameter_id, " index=", index, " normalized=", normalized)
-	device_instance.set_parameter_normalized(parameter_id, normalized)
+	ParameterActions.set_normalized(device_instance, parameter_id, normalized)

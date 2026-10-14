@@ -230,7 +230,7 @@ func drag_threshold_to(y: float) -> void:
 	if device == null:
 		return
 	var threshold := clampf(y_to_db(y), CompressorData.MIN_DB, 0.0)
-	device.set_parameter_real(CompressorData.P_THRESHOLD, threshold)
+	ParameterActions.set_real(device, CompressorData.P_THRESHOLD, threshold)
 	threshold_db = threshold
 	queue_redraw()
 

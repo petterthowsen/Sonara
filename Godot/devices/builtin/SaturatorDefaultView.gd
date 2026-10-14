@@ -295,7 +295,7 @@ func _param_id(param_name: String) -> int:
 
 func _on_knob_changed(value: float, param_name: String) -> void:
 	if device != null:
-		device.set_parameter_real(_param_id(param_name), value)
+		ParameterActions.set_real(device, _param_id(param_name), value)
 
 
 func _on_knob_reset(param_name: String) -> void:
@@ -303,7 +303,7 @@ func _on_knob_reset(param_name: String) -> void:
 		return
 	var param := device.get_parameter(_param_id(param_name))
 	if param != null:
-		device.set_parameter_real(_param_id(param_name), param.default_value)
+		ParameterActions.set_real(device, _param_id(param_name), param.default_value)
 
 
 func _on_fader_changed(value: float, param_name: String) -> void:
@@ -312,12 +312,12 @@ func _on_fader_changed(value: float, param_name: String) -> void:
 
 func _on_check_toggled(pressed: bool, param_name: String) -> void:
 	if device != null:
-		device.set_parameter_real(_param_id(param_name), 1.0 if pressed else 0.0)
+		ParameterActions.set_real(device, _param_id(param_name), 1.0 if pressed else 0.0)
 
 
 func _on_segment_selected(index: int, param_name: String) -> void:
 	if device != null:
-		device.set_parameter_real(_param_id(param_name), float(index))
+		ParameterActions.set_real(device, _param_id(param_name), float(index))
 
 
 # ============================================================================

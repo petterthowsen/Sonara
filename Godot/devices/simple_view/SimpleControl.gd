@@ -544,7 +544,7 @@ func _refresh_eq_band() -> void:
 func _commit(index: int, normalized: float) -> void:
 	if _updating or instance == null or index >= _param_ids.size():
 		return
-	instance.set_parameter_normalized(_param_ids[index], normalized)
+	ParameterActions.set_normalized(instance, _param_ids[index], normalized)
 
 
 ## Send a real (unnormalized) value for the `index`-th bound parameter, e.g. envelope seconds.
@@ -554,7 +554,7 @@ func _commit_real(index: int, real_value: float) -> void:
 	var param := _param(index)
 	if param == null:
 		return
-	instance.set_parameter_normalized(_param_ids[index], param.value_to_normalized(real_value))
+	ParameterActions.set_normalized(instance, _param_ids[index], param.value_to_normalized(real_value))
 
 
 ## Value text for a single-parameter control's tooltip/inline display. A Time knob whose Sync is

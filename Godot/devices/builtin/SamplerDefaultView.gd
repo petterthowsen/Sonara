@@ -435,7 +435,7 @@ func _on_knob_reset(param_name: String) -> void:
 		return
 	var param := device.get_parameter(device.get_parameter_id_by_name(param_name))
 	if param != null:
-		device.set_parameter_real(param.id, param.default_value)
+		ParameterActions.set_real(device, param.id, param.default_value)
 
 
 func _on_segment_selected(index: int, param_name: String) -> void:
@@ -454,7 +454,7 @@ func _set_real(param_name: String, value: float) -> void:
 		return
 	var id := device.get_parameter_id_by_name(param_name)
 	if id >= 0:
-		device.set_parameter_real(id, value)
+		ParameterActions.set_real(device, id, value)
 
 
 ## Edit the focused zone from a control (`value` in parameter units). Mergeable undo.
@@ -476,14 +476,7 @@ func _on_envelope_changed(value: float, param_name: String) -> void:
 	var param_id := device.get_parameter_id_by_name(param_name) if device != null else -1
 	if _syncing or param_id < 0:
 		return
-	var old_value := device.get_parameter_normalized(param_id)
-	device.set_parameter_real(param_id, value)
-	var new_value := device.get_parameter_normalized(param_id)
-	if absf(new_value - old_value) < 0.0001:
-		return
-	var cmd := PropertyCommand.new("Set Parameter", device, "", [param_id, old_value], [param_id, new_value])
-	cmd.set_callable(func(id, v): device.set_parameter_normalized(id, v)).set_unpack_array(true).set_mergeable(true)
-	HistoryUtil.record(cmd)
+	ParameterActions.set_real(device, param_id, value)
 
 
 # ============================================================================

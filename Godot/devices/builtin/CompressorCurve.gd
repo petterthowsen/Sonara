@@ -181,8 +181,8 @@ func drag_corner_to(pos: Vector2) -> void:
 	if top > threshold + 0.05:
 		new_ratio = threshold / (threshold - top)
 	new_ratio = clampf(new_ratio, 1.0, CompressorData.RATIO_MAX)
-	device.set_parameter_real(CompressorData.P_THRESHOLD, threshold)
-	device.set_parameter_real(CompressorData.P_RATIO, new_ratio)
+	ParameterActions.set_real(device, CompressorData.P_THRESHOLD, threshold)
+	ParameterActions.set_real(device, CompressorData.P_RATIO, new_ratio)
 	threshold_db = threshold
 	ratio = new_ratio
 	queue_redraw()

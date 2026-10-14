@@ -376,13 +376,13 @@ func _on_device_parameter_changed(param_id: int, _value: float) -> void:
 
 func _write(param_id: int, value: float) -> void:
 	if device != null:
-		device.set_parameter_real(param_id, value)
+		ParameterActions.set_real(device, param_id, value)
 
 
 func _reset(param_id: int) -> void:
 	var p := device.get_parameter(param_id) if device != null else null
 	if p != null:
-		device.set_parameter_real(param_id, p.default_value)
+		ParameterActions.set_real(device, param_id, p.default_value)
 
 
 ## `field` -1 = the Lower lane's current field.

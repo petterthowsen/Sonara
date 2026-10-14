@@ -313,12 +313,12 @@ func _refresh_output() -> void:
 
 func _on_band_knob_changed(value: float, offset: int) -> void:
 	if device != null and _band >= 0:
-		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + offset, value)
+		ParameterActions.set_real(device, _band * EqResponse.BAND_STRIDE + offset, value)
 
 
 func _on_type_selected(index: int) -> void:
 	if device != null and _band >= 0:
-		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(index))
+		ParameterActions.set_real(device, _band * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(index))
 
 
 ## Solo the selected band (`LISTEN_BAND = band + 1`); pressing it while soloed goes back to Off.
@@ -329,12 +329,12 @@ func _on_solo_toggled(pressed: bool) -> void:
 
 func _on_enabled_toggled(pressed: bool) -> void:
 	if device != null and _band >= 0:
-		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + EqResponse.P_ENABLED, 1.0 if pressed else 0.0)
+		ParameterActions.set_real(device, _band * EqResponse.BAND_STRIDE + EqResponse.P_ENABLED, 1.0 if pressed else 0.0)
 
 
 func _on_param_knob_changed(value: float, param_id: int) -> void:
 	if device != null:
-		device.set_parameter_real(param_id, value)
+		ParameterActions.set_real(device, param_id, value)
 
 
 # ============================================================================

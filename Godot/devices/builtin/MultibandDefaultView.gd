@@ -246,26 +246,14 @@ func _refresh_values() -> void:
 func _on_knob_changed(value: float, param_id: int) -> void:
 	if device == null:
 		return
-	var old := device.get_parameter_normalized(param_id)
-	device.set_parameter_real(param_id, value)
-	_record_param("Set Parameter", param_id, old)
+	ParameterActions.set_real(device, param_id, value)
 
 
 func _on_flag_toggled(on: bool, param_id: int) -> void:
 	if device == null:
 		return
-	var old := device.get_parameter_normalized(param_id)
-	device.set_parameter_normalized(param_id, 1.0 if on else 0.0)
-	_record_param("Set Parameter", param_id, old, false)
+	ParameterActions.set_normalized(device, param_id, 1.0 if on else 0.0)
 
-
-func _record_param(label: String, param_id: int, old: float, mergeable := true) -> void:
-	var now := device.get_parameter_normalized(param_id)
-	if is_equal_approx(old, now):
-		return
-	var target := device
-	var cmd := PropertyCommand.new(label, null, "", old, now).set_mergeable(mergeable)
-	HistoryUtil.record(cmd.set_callable(func(v): target.set_parameter_normalized(param_id, v)))
 
 
 func _on_band_toggled(on: bool, position: int) -> void:

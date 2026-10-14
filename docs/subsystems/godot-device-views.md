@@ -89,6 +89,12 @@
 - Choice: `DeviceViewFactory` maps the device to this scene in `BUILTIN_PANEL_SCENES`. The generated Simple View still takes over when the device's "Simple" toggle (`devices/simple_view/<id>`) is on, as for any device with a Panel view (see "Simple View" above).
 - Headless tests: `tests/test_step_lane.gd`, `tests/test_step_playhead.gd`, `tests/test_step_sequencer_view.gd`.
 
+## Parameter undo
+
+Every control that a user drives a device parameter with (parameter list `CompactParameterControl`, `SimpleControl`, and the device views) calls `ParameterActions.set_normalized` / `set_real` / `reset` (`history/ParameterActions.gd`) instead of the `DeviceInstance` setters. It runs the normal setter (OSC and `parameter_changed`) and records one `ParameterChangeCommand`; undo and redo call `set_parameter_normalized` again. Engine echoes, modulation, automation, presets, AI tools and `DeviceInstance` setters called directly record nothing.
+
+A gesture is one step: while the left mouse button is held (tracked per frame, so it works in floating device windows) or between `ParameterActions.begin_gesture()` / `end_gesture()`, edits of one device merge, including several parameters moved together (EQ node). Typed values, clicks and wheel notches are separate steps. Plugin parameters (#124) are `DeviceInstance` parameters too: their controls call the same functions. Undo/redo of a plugin parameter takes the normal path (setter, OSC `param/{id}`, engine, plugin_host IPC); a value the plugin itself changes (its native GUI, automation) arrives as an engine echo and records nothing. Edits inside a plugin's native GUI are not recorded (CLAP gesture begin/end events would allow it later). Exceptions that record their own steps: `MultibandStrip` crossover drag, `SampleDisplayBinder` sample points, zone edits.
+
 ## Parameter Typing
 - `DeviceParameter.param_type` is one of `"float"`, `"bool"`, or `"enum"`; `"enum"` parameters must populate `enum_values` with display strings where the index matches the engine payload.
 - Keep `default_value`, `min_value`, and `max_value` aligned with the declared type: booleans stay in `[0,1]`, enums use integer indices, floats can still mark `is_logarithmic`. `default_value` is a real value (an index for enums), never normalized.

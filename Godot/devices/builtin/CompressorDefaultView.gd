@@ -257,7 +257,7 @@ func _auto_makeup_db() -> float:
 
 func _on_fader_changed(value: float, param_id: int) -> void:
 	if device != null:
-		device.set_parameter_real(param_id, value)
+		ParameterActions.set_real(device, param_id, value)
 
 
 func _on_slider_changed(normalized: float, param_id: int) -> void:
@@ -265,7 +265,7 @@ func _on_slider_changed(normalized: float, param_id: int) -> void:
 		return
 	var param := device.get_parameter(param_id)
 	if param != null:
-		device.set_parameter_real(param_id, param.normalized_to_value(normalized))
+		ParameterActions.set_real(device, param_id, param.normalized_to_value(normalized))
 
 
 func _on_reset_requested(param_id: int) -> void:
@@ -273,17 +273,17 @@ func _on_reset_requested(param_id: int) -> void:
 		return
 	var param := device.get_parameter(param_id)
 	if param != null:
-		device.set_parameter_real(param_id, param.default_value)
+		ParameterActions.set_real(device, param_id, param.default_value)
 
 
 func _on_toggle_toggled(pressed: bool, param_id: int) -> void:
 	if device != null:
-		device.set_parameter_real(param_id, 1.0 if pressed else 0.0)
+		ParameterActions.set_real(device, param_id, 1.0 if pressed else 0.0)
 
 
 func _on_option_selected(index: int, param_id: int) -> void:
 	if device != null:
-		device.set_parameter_real(param_id, float(index))
+		ParameterActions.set_real(device, param_id, float(index))
 
 
 # ============================================================================

@@ -62,7 +62,7 @@ func _on_device_parameter_changed(param_id: int, value: float) -> void:
 
 func _on_knob_changed(normalized: float) -> void:
 	if device and _volume_id >= 0:
-		device.set_parameter_normalized(_volume_id, normalized)
+		ParameterActions.set_normalized(device, _volume_id, normalized)
 
 
 func _format_volume(normalized: float) -> String:
