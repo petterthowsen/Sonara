@@ -33,6 +33,10 @@ func run_tests() -> void:
 	_test_type_icons_cover_all_types()
 	_test_disabled_band_stays_editable()
 	_test_companion_solo_and_type()
+	_test_footer_modulation_follows_the_band()
+	_test_editor_draws_live_modulation()
+	_test_view_feeds_live_modulation()
+	ModLive.reset()
 	await _test_draws_in_the_tree()
 
 
@@ -56,17 +60,20 @@ func _make_instance() -> Object:
 		freq.max_value = 20000.0
 		freq.is_logarithmic = true
 		freq.default_value = freqs[band]
+		freq.is_modulatable = true
 		device.add_parameter(freq)
 		var gain := DeviceParameter.new(base + EqResponse.P_GAIN, "Gain", "dB")
 		gain.min_value = -24.0
 		gain.max_value = 24.0
 		gain.default_value = 0.0
+		gain.is_modulatable = true
 		device.add_parameter(gain)
 		var q := DeviceParameter.new(base + EqResponse.P_Q, "Q")
 		q.min_value = 0.1
 		q.max_value = 30.0
 		q.is_logarithmic = true
 		q.default_value = 0.71
+		q.is_modulatable = true
 		device.add_parameter(q)
 		var slope := DeviceParameter.new(base + EqResponse.P_SLOPE, "Slope")
 		slope.param_type = "enum"
@@ -557,3 +564,98 @@ func _test_companion_solo_and_type() -> void:
 	var icon: Texture2D = companion._items[5]["type"].get_item_icon(EqResponse.Type.TILT)
 	_assert(icon != null and icon.get_size().x > 0, "and its item icon is the band-coloured curve")
 	companion.free()
+
+
+# ============================================================================
+# Modulation: the footer shows the selected band's, the curve shows every band's
+# ============================================================================
+
+## Deliver a `modulation` payload of offset records `[[param, offset], ...]` for `inst`, as if
+## the engine had sent it (ModLive subscribed to the device's stream).
+func _emit_offsets(inst: Object, records: Array) -> void:
+	var live := ModLive.holder()
+	if not live._paths.has(inst.osc_path()):
+		live._subscribe(inst)
+	var blob := PackedByteArray()
+	blob.resize(2)
+	blob.encode_u16(0, records.size())
+	for record in records:
+		var entry := PackedByteArray()
+		entry.resize(11)
+		entry.encode_u8(0, 0)  # kind 0: offset
+		entry.encode_u8(1, 0)  # no child path
+		entry.encode_u32(2, int(record[0]))
+		entry.encode_u8(6, 1)
+		entry.encode_float(7, float(record[1]))
+		blob.append_array(entry)
+	live._on_data(inst.osc_path(), ModLive.DATA_TYPE, blob)
+
+
+func _test_footer_modulation_follows_the_band() -> void:
+	ModLive.reset()
+	var inst := _make_instance()
+	_enable(inst, 1, EqResponse.Type.BELL, 2000.0, 0.0)
+	_enable(inst, 3, EqResponse.Type.BELL, 520.0, 0.0)
+	var view = _make_panel_view(inst)
+	var gain_3 := 3 * EqResponse.BAND_STRIDE + EqResponse.P_GAIN
+	_emit_offsets(inst, [[gain_3, -0.1]])
+	_assert(view._band == 1 and view._gain_slider.mod_live_values.is_empty(), "band 2's gain slider shows no modulation from band 4")
+	view.editor.select_band(3)
+	var expected: float = inst.get_parameter_normalized(gain_3) - 0.1
+	var markers: PackedFloat32Array = view._gain_slider.mod_live_values
+	_assert(markers.size() == 1 and is_equal_approx(markers[0], expected), "selecting band 4 re-points the slider at its modulation (%s, expected %.3f)" % [str(markers), expected])
+	view.editor.select_band(1)
+	_assert(view._gain_slider.mod_live_values.is_empty(), "and back on band 2 the modulation leaves the slider")
+	_emit_offsets(inst, [[gain_3, -0.2]])
+	_assert(view._gain_slider.mod_live_values.is_empty(), "band 4's next payload doesn't reach the slider showing band 2")
+	view.free()
+	ModLive.reset()
+
+
+func _test_editor_draws_live_modulation() -> void:
+	var inst := _make_instance()
+	_enable(inst, 2, EqResponse.Type.BELL, 1000.0, 6.0)
+	var editor := _make_editor(inst)
+	editor._update_curves()
+	_assert(not editor.has_live() and editor._live_total.is_empty(), "without modulation there is no live curve")
+	var values: Array = []
+	for band in EqResponse.BAND_COUNT:
+		values.append({"gain": -6.0} if band == 2 else {})
+	editor.set_live(values)
+	_assert(editor.has_live() and editor._live_dirty, "live values mark the live curves dirty")
+	editor._update_live_curves()
+	var at_1k := editor._curve_freqs.size() / 2
+	for i in editor._curve_freqs.size():
+		if absf(editor._curve_freqs[i] - 1000.0) < absf(editor._curve_freqs[at_1k] - 1000.0):
+			at_1k = i
+	_assert(editor._total[at_1k] > 5.0 and editor._live_total[at_1k] < -5.0, "the live total follows the modulated gain (set %.1f dB, live %.1f dB)" % [editor._total[at_1k], editor._live_total[at_1k]])
+	_assert(editor._is_live(2) and not editor._is_live(1), "only the modulated band gets a live curve")
+	var set_pos := editor.node_position(editor.bands[2])
+	var live_pos := editor.node_position(editor.live_band(2))
+	_assert(live_pos.y > set_pos.y + 10.0 and is_equal_approx(live_pos.x, set_pos.x), "the ghost node sits at the live gain")
+	editor.clear_live()
+	editor._update_live_curves()
+	_assert(not editor.has_live() and editor._live_total.is_empty(), "clearing drops the live curves")
+	editor.free()
+
+
+func _test_view_feeds_live_modulation() -> void:
+	ModLive.reset()
+	var inst := _make_instance()
+	_enable(inst, 4, EqResponse.Type.BELL, 1150.0, 3.0)
+	var view = _make_panel_view(inst)
+	view.show_view()
+	var gain_5 := 4 * EqResponse.BAND_STRIDE + EqResponse.P_GAIN
+	_emit_offsets(inst, [[gain_5, -0.125]])
+	var expected: float = inst.get_parameter(gain_5).normalized_to_value(inst.get_parameter_normalized(gain_5) - 0.125)
+	var live: Dictionary = view.editor.live_bands[4]
+	_assert(live.has("gain") and absf(float(live["gain"]) - expected) < 0.01, "a payload hands band 5's live gain to the editor (%s, expected %.2f)" % [str(live.get("gain")), expected])
+	_assert(view.editor.live_bands[0].is_empty() and is_nan(view.editor.live_output_gain_db), "unmodulated bands and Output stay set")
+	_emit_offsets(inst, [])
+	_assert(not view.editor.has_live(), "a heartbeat with no records clears the live display")
+	_emit_offsets(inst, [[gain_5, -0.125]])
+	view.hide_view()
+	_assert(not view.editor.has_live(), "hiding the view drops the live display")
+	_assert(not ModLive.holder().live_values_changed.is_connected(view._on_live_values_changed), "and its listener")
+	view.free()
+	ModLive.reset()

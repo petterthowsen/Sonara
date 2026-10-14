@@ -5,6 +5,11 @@
 ## double-click = disable the band, right-click = Type / Slope / Stereo menu, Alt or middle button
 ## held = listen to the band. Double-click on empty space enables the first free band there.
 ##
+## Modulation (a sidechain modulator making a dynamic EQ, say) is pushed in by the view through
+## `set_live`: a modulated band is drawn with a translucent fill between its set curve and its live
+## curve, and a ghost node where the modulation has moved it. The total curve then follows the
+## live response, with the set total as a faint line behind it.
+##
 ## The editor never talks to the engine: every edit goes through `device.set_parameter_real`
 ## (the DeviceInstance setter), and the curve redraws from `parameter_changed`. It references no
 ## autoloads, so tests can drive it headless.
@@ -40,6 +45,12 @@ const TOTAL_COLOR := Color(0.96, 0.96, 0.96, 0.95)
 var _post_line := UiColors.role(&"accent_primary").lightened(0.2)
 var _post_fill := Color(_post_line, 0.3)
 const PRE_LINE := Color(1, 1, 1, 0.22)
+## The set total while modulation moves the live one.
+const SET_TOTAL_COLOR := Color(0.96, 0.96, 0.96, 0.3)
+const LIVE_FILL_ALPHA := 0.3
+const LIVE_LINE_ALPHA := 0.8
+## A ghost node shows only once the live position is this far (px) from the set one.
+const LIVE_NODE_MIN_DISTANCE := 2.0
 
 ## The DeviceInstance (typed loosely: this script must not depend on autoload-using classes).
 var device: RefCounted = null:
@@ -77,6 +88,16 @@ var _curve_freqs := PackedFloat32Array()
 var _curves: Array[PackedFloat32Array] = []
 var _total := PackedFloat32Array()
 var _curves_dirty := true
+## Live values per band from the modulation stream (`set_live`): the fields a modulator moves
+## right now ({freq, gain, q}, real units), {} for a band nothing modulates.
+var live_bands: Array = []
+## Live Output gain (dB), NAN while it isn't modulated.
+var live_output_gain_db := NAN
+## Per-band live curves (the set curve for an unmodulated band) and their total; the total is
+## empty while nothing is modulated.
+var _live_curves: Array[PackedFloat32Array] = []
+var _live_total := PackedFloat32Array()
+var _live_dirty := false
 ## Analyser points (dBFS), log-spaced from `_points_lo_hz` to `_points_hi_hz`.
 var _pre_points := PackedFloat32Array()
 var _post_points := PackedFloat32Array()
@@ -103,8 +124,10 @@ func _ready() -> void:
 
 func _reset_bands() -> void:
 	bands = []
+	live_bands = []
 	for i in EqResponse.BAND_COUNT:
 		bands.append(EqResponse.default_band(i))
+		live_bands.append({})
 
 
 # ============================================================================
@@ -117,6 +140,7 @@ func set_device(value: RefCounted) -> void:
 	device = value
 	if device != null:
 		device.parameter_changed.connect(_on_parameter_changed)
+	clear_live()
 	refresh_all()
 
 
@@ -199,6 +223,51 @@ func on_spectrum_frame(frame: PackedFloat32Array) -> void:
 	if frame[1] > 0.0 and not is_equal_approx(frame[1], sample_rate):
 		sample_rate = frame[1]
 	queue_redraw()
+
+
+# ============================================================================
+# MODULATION
+# ============================================================================
+
+## Show the live (modulated) values: one Dictionary per band holding the fields a modulator moves
+## ({freq, gain, q}, real units; {} when none), and the live Output gain (NAN when unmodulated).
+## Redraws only when something changed.
+func set_live(values: Array, output_gain_db := NAN) -> void:
+	var same_output := is_nan(output_gain_db) == is_nan(live_output_gain_db) \
+			and (is_nan(output_gain_db) or output_gain_db == live_output_gain_db)
+	if same_output and values == live_bands:
+		return
+	live_bands = []
+	for i in EqResponse.BAND_COUNT:
+		live_bands.append((values[i] as Dictionary).duplicate() if i < values.size() else {})
+	live_output_gain_db = output_gain_db
+	_live_dirty = true
+	queue_redraw()
+
+
+func clear_live() -> void:
+	var none: Array = []
+	none.resize(EqResponse.BAND_COUNT)
+	none.fill({})
+	set_live(none)
+
+
+## True while a modulator moves any band or the Output gain.
+func has_live() -> bool:
+	if not is_nan(live_output_gain_db):
+		return true
+	for live: Dictionary in live_bands:
+		if not live.is_empty():
+			return true
+	return false
+
+
+## Band `band` with its live values in place of the set ones.
+func live_band(band: int) -> Dictionary:
+	var merged: Dictionary = bands[band].duplicate()
+	if band < live_bands.size():
+		merged.merge(live_bands[band], true)
+	return merged
 
 
 func clear_analyser() -> void:
@@ -538,6 +607,23 @@ func _update_curves() -> void:
 	_curves = EqResponse.band_curves(bands, _curve_freqs, sample_rate)
 	_total = EqResponse.total_curve(_curves, count, output_gain_db)
 	_curves_dirty = false
+	_update_live_curves()
+
+
+## Recompute only the modulated bands' curves (the live values arrive about 20 times a second).
+func _update_live_curves() -> void:
+	_live_dirty = false
+	_live_curves = []
+	_live_total = PackedFloat32Array()
+	if not has_live():
+		return
+	for i in bands.size():
+		if i < live_bands.size() and not live_bands[i].is_empty() and bands[i]["enabled"]:
+			_live_curves.append(EqResponse.band_curves([live_band(i)], _curve_freqs, sample_rate)[0])
+		else:
+			_live_curves.append(_curves[i] if i < _curves.size() else PackedFloat32Array())
+	var out_db := output_gain_db if is_nan(live_output_gain_db) else live_output_gain_db
+	_live_total = EqResponse.total_curve(_live_curves, _curve_freqs.size(), out_db)
 
 
 func _curve_points(curve: PackedFloat32Array) -> PackedVector2Array:
@@ -554,6 +640,8 @@ func _draw() -> void:
 	_update_layout()
 	if _curves_dirty:
 		_update_curves()
+	elif _live_dirty:
+		_update_live_curves()
 	var plot := plot_rect()
 	draw_rect(plot, _bg_color)
 	var font := _font if _font != null else ThemeDB.fallback_font
@@ -568,9 +656,18 @@ func _draw() -> void:
 		var color := band_color(i)
 		if i == hot:
 			_draw_band_fill(points, color)
+		if _is_live(i):
+			_draw_live_band(points, _curve_points(_live_curves[i]), color)
 		draw_polyline(points, Color(color, 0.85 if i == hot else 0.55), 1.5, true)
-	if _total.size() > 1:
+	if _live_total.size() > 1:
+		if _total.size() > 1:
+			draw_polyline(_curve_points(_total), SET_TOTAL_COLOR, 1.5, true)
+		draw_polyline(_curve_points(_live_total), TOTAL_COLOR, 2.0, true)
+	elif _total.size() > 1:
 		draw_polyline(_curve_points(_total), TOTAL_COLOR, 2.0, true)
+	for i in bands.size():
+		if bands[i]["enabled"] and _is_live(i):
+			_draw_live_node(i)
 	for i in bands.size():
 		if bands[i]["enabled"]:
 			_draw_node(i, i == hot)
@@ -588,6 +685,35 @@ func _draw_band_fill(points: PackedVector2Array, color: Color) -> void:
 		lines.append(Vector2(points[i].x, zero_y))
 		lines.append(points[i])
 	draw_multiline(lines, Color(color, 0.14), 2.0)
+
+
+## True when band `band` has a live curve of its own to draw.
+func _is_live(band: int) -> bool:
+	return band < live_bands.size() and not live_bands[band].is_empty() \
+			and band < _live_curves.size() and not _live_curves[band].is_empty()
+
+
+## The modulation of one band: a translucent fill between its set and live curves, and the live
+## curve itself.
+func _draw_live_band(set_points: PackedVector2Array, live_points: PackedVector2Array, color: Color) -> void:
+	var lines := PackedVector2Array()
+	for i in mini(set_points.size(), live_points.size()):
+		lines.append(set_points[i])
+		lines.append(live_points[i])
+	draw_multiline(lines, Color(color, LIVE_FILL_ALPHA), 2.0)
+	draw_polyline(live_points, Color(color, LIVE_LINE_ALPHA), 1.0, true)
+
+
+## A ghost node where the modulation has moved band `band`, tied to its set node.
+func _draw_live_node(band: int) -> void:
+	var set_pos := node_position(bands[band])
+	var live_pos := node_position(live_band(band))
+	if set_pos.distance_to(live_pos) < LIVE_NODE_MIN_DISTANCE:
+		return
+	var color := band_color(band)
+	draw_line(set_pos, live_pos, Color(color, 0.45), 1.0, true)
+	draw_circle(live_pos, NODE_RADIUS - 1.5, Color(color, 0.35))
+	draw_arc(live_pos, NODE_RADIUS - 1.5, 0.0, TAU, 20, Color(color, 0.9), 1.0, true)
 
 
 func _draw_node(band: int, hot: bool) -> void:

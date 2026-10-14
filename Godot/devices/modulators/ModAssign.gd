@@ -246,6 +246,36 @@ static func attach_modulator(node: Control, device, mod_id: int, param_id: int) 
 	_attach_target(node, device, mod_id, param_id)
 
 
+## Point an attached control at another parameter of `device`: a view that reuses one control
+## for several parameters (the EQ footer, which shows the selected band) calls this instead of
+## `attach`, which ignores a control that is already attached.
+static func retarget(node: Control, device, param_id: int) -> void:
+	detach(node)
+	attach(node, device, param_id)
+
+
+## Undo `attach`: drop the control's connections and live feed, and clear what it shows.
+static func detach(node: Control) -> void:
+	if node == null or not node.get_meta("mod_attached", false):
+		return
+	var cleanup: Variant = node.get_meta("mod_cleanup", null)
+	if cleanup is Callable:
+		(cleanup as Callable).call()
+		if node.tree_exiting.is_connected(cleanup):
+			node.tree_exiting.disconnect(cleanup)
+	node.remove_meta("mod_cleanup")
+	node.remove_meta("mod_attached")
+	ModLive.detach(node)
+	var no_ranges: Array[Dictionary] = []
+	node.set("mod_ranges", no_ranges)
+	node.set("mod_hint_active", false)
+	node.set("mod_assign_active", false)
+	if "mod_live_values" in node:
+		node.set("mod_live_values", PackedFloat32Array())
+	if "mod_live_value" in node:
+		node.set("mod_live_value", -1.0)
+
+
 static func _attach_target(node: Control, device, mod_id: int, param_id: int) -> void:
 	if node == null or device == null:
 		return
@@ -263,22 +293,28 @@ static func _attach_target(node: Control, device, mod_id: int, param_id: int) ->
 	if "mod_amount_text_callback" in node:
 		node.set("mod_amount_text_callback", func(amount) -> String:
 			return amount_text(device, mod_id, param_id, amount))
-	node.mod_amount_changed.connect(func(amount: float): _on_node_amount_changed(amount, node, device, mod_id, param_id))
+	var on_amount: Callable = func(amount: float): _on_node_amount_changed(amount, node, device, mod_id, param_id)
 	var on_changed: Callable = func(): _refresh_node(node, device, mod_id, param_id)
 	var on_route: Callable = func(_id, _target, _amount): _refresh_node(node, device, mod_id, param_id)
 	var on_mod_changed: Callable = func(_id): _refresh_node(node, device, mod_id, param_id)
+	node.mod_amount_changed.connect(on_amount)
 	holder().changed.connect(on_changed)
 	device.route_changed.connect(on_route)
 	if mod_id >= 0:
 		device.modulator_changed.connect(on_mod_changed)
-	# The holder outlives the control, so drop its connection as the control leaves the tree.
-	node.tree_exiting.connect(func():
+	# The holder outlives the control, so drop its connection as the control leaves the tree
+	# (or `detach` re-points it).
+	var cleanup: Callable = func():
+		if node.mod_amount_changed.is_connected(on_amount):
+			node.mod_amount_changed.disconnect(on_amount)
 		if holder().changed.is_connected(on_changed):
 			holder().changed.disconnect(on_changed)
 		if is_instance_valid(device) and device.route_changed.is_connected(on_route):
 			device.route_changed.disconnect(on_route)
 		if is_instance_valid(device) and device.modulator_changed.is_connected(on_mod_changed):
-			device.modulator_changed.disconnect(on_mod_changed))
+			device.modulator_changed.disconnect(on_mod_changed)
+	node.set_meta("mod_cleanup", cleanup)
+	node.tree_exiting.connect(cleanup)
 	_refresh_node(node, device, mod_id, param_id)
 
 

@@ -23,6 +23,10 @@ const DATA_TYPE := "modulation"
 
 ## A payload with a trailing ext block arrived for `device` (its kind 2 states were replaced).
 signal modulator_states_changed(device)
+## `reporter`'s live values changed (a payload arrived, or it stopped reporting). Views that draw
+## modulation themselves (the EQ curve) read `live_value` for the parameters they show when this
+## fires for their device or an ancestor.
+signal live_values_changed(reporter)
 
 static var _instance: ModLive
 
@@ -71,7 +75,7 @@ static func attach(node: Control, device, param_id: int) -> void:
 	list.append(node)
 	h._controls[key] = list
 	h._targets[key] = {"device": device, "param": param_id, "mod_id": -1}
-	node.tree_exiting.connect(func() -> void: detach(node), CONNECT_ONE_SHOT)
+	h._connect_exit(node)
 	h._apply(key)
 
 
@@ -93,11 +97,20 @@ static func attach_modulator(node: Control, device, mod_id: int, param_id: int) 
 	list.append(node)
 	h._controls[key] = list
 	h._targets[key] = {"device": device, "param": param_id, "mod_id": mod_id}
-	node.tree_exiting.connect(func() -> void: detach(node), CONNECT_ONE_SHOT)
+	h._connect_exit(node)
 	h._apply(key)
 
 
-## Drop a control that left the tree.
+## Drop the control when it leaves the tree. Once per control: `ModAssign.retarget` attaches the
+## same control again under another key.
+func _connect_exit(node: Control) -> void:
+	if node.has_meta("mod_live_exit"):
+		return
+	node.set_meta("mod_live_exit", true)
+	node.tree_exiting.connect(func() -> void: detach(node))
+
+
+## Drop a control (it left the tree, or `ModAssign.detach` re-points it).
 static func detach(node: Control) -> void:
 	var h := holder()
 	for key in h._controls.keys():
@@ -206,6 +219,7 @@ func _clear_reporter(device) -> void:
 			affected[key] = true
 	for key in affected:
 		_apply(key)
+	live_values_changed.emit(device)
 
 
 # ============================================================================
@@ -314,6 +328,7 @@ func _on_data(osc_path: String, data_type: String, blob: PackedByteArray) -> voi
 		modulator_states_changed.emit(device)
 	for key in affected:
 		_apply(key)
+	live_values_changed.emit(device)
 
 
 ## Decode a payload into records: `{kind, path, param, values}` (kind 1) or
@@ -423,43 +438,13 @@ static func _resolve(device, child_path: Array, param_id: int) -> String:
 # PUSHING TO CONTROLS
 # ============================================================================
 
-## Recompute a key's live value and push it to its controls. A `values` record wins over
-## `offset` records for the same parameter (it already contains their contributions);
-## offsets sum onto the parameter's base value.
+## Recompute a key's live value and push it to its controls.
 func _apply(key: String) -> void:
 	var controls: Array = _controls.get(key, [])
 	if controls.is_empty():
 		return
-	var target: Dictionary = _targets.get(key, {})
-	var live_value := -1.0
-	var values := PackedFloat32Array()
-	var reports: Dictionary = _live.get(key, {})
-	if not reports.is_empty():
-		var offset := 0.0
-		var has_values_record := false
-		for _reporter in reports:
-			var record: Dictionary = reports[_reporter]
-			if record.get("kind", 0) == 1:
-				has_values_record = true
-				values = record.get("values", PackedFloat32Array())
-			else:
-				offset += record.get("offset", 0.0)
-		# Offsets only: one effective value on top of the base. A values record with no
-		# sounding voice leaves `values` empty, so the arc returns to the set value.
-		if not has_values_record:
-			var device = target.get("device")
-			var base := 0.5
-			if device != null and is_instance_valid(device):
-				var mod_id: int = int(target.get("mod_id", -1))
-				if mod_id >= 0:
-					var mod = device.get_modulator(mod_id)
-					if mod != null:
-						base = mod.get_param(int(target.get("param", 0)))
-				else:
-					base = device.get_parameter_normalized(int(target.get("param", 0)))
-			values = PackedFloat32Array([clampf(base + offset, 0.0, 1.0)])
-		if not values.is_empty():
-			live_value = values[values.size() - 1]
+	var values := _values(key, _targets.get(key, {}))
+	var live_value := values[values.size() - 1] if not values.is_empty() else -1.0
 	for node in controls.duplicate():
 		if node == null or not is_instance_valid(node):
 			controls.erase(node)
@@ -470,9 +455,53 @@ func _apply(key: String) -> void:
 			node.mod_live_value = live_value
 
 
+## The live values (0..1) of `key`, empty when nothing reports it. A `values` record wins over
+## `offset` records for the same parameter (it already contains their contributions); offsets
+## sum onto the base value of `target` ({device, param, mod_id}).
+func _values(key: String, target: Dictionary) -> PackedFloat32Array:
+	var reports: Dictionary = _live.get(key, {})
+	if reports.is_empty():
+		return PackedFloat32Array()
+	var values := PackedFloat32Array()
+	var offset := 0.0
+	var has_values_record := false
+	for _reporter in reports:
+		var record: Dictionary = reports[_reporter]
+		if record.get("kind", 0) == 1:
+			has_values_record = true
+			values = record.get("values", PackedFloat32Array())
+		else:
+			offset += record.get("offset", 0.0)
+	# A values record with no sounding voice leaves `values` empty: back to the set value.
+	if has_values_record:
+		return values
+	# Offsets only: one effective value on top of the base.
+	var device = target.get("device")
+	var base := 0.5
+	if device != null and is_instance_valid(device):
+		var mod_id: int = int(target.get("mod_id", -1))
+		if mod_id >= 0:
+			var mod = device.get_modulator(mod_id)
+			if mod != null:
+				base = mod.get_param(int(target.get("param", 0)))
+		else:
+			base = device.get_parameter_normalized(int(target.get("param", 0)))
+	return PackedFloat32Array([clampf(base + offset, 0.0, 1.0)])
+
+
 # ============================================================================
 # HELPERS
 # ============================================================================
+
+## The newest live value (normalized) of parameter `param_id` of `device`, or -1 when nothing
+## modulates it right now. Works without an attached control; the device's view must be shown
+## (`view_shown`) for the stream to be subscribed.
+static func live_value(device, param_id: int) -> float:
+	if device == null or not is_instance_valid(device):
+		return -1.0
+	var values := holder()._values(_key(device, param_id), {"device": device, "param": param_id, "mod_id": -1})
+	return values[values.size() - 1] if not values.is_empty() else -1.0
+
 
 ## Control key for parameter `param_id` of `device`.
 static func _key(device, param_id: int) -> String:

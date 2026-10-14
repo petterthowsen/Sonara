@@ -29,7 +29,7 @@ static func configure(knob: RotaryKnob, device: Object, param_id: int, format: S
 		if is_freq:
 			return FreqAxis.format_hz(value) + " Hz"
 		return (format % value) + unit_suffix
-	ModAssign.attach(knob, device, param_id)
+	ModAssign.retarget(knob, device, param_id)
 
 
 ## The same for the footer's `CompactSlider`s (no label of its own: the text names the control,
@@ -42,7 +42,8 @@ static func make_compact(text: String, on_changed: Callable) -> CompactSlider:
 
 
 ## Point `slider` at `param_id`'s range and curve (real units; the device converts), the same
-## binding `configure` gives a knob.
+## binding `configure` gives a knob. Re-aiming a slider at another band re-points its modulation
+## display too (`ModAssign.retarget`).
 static func configure_compact(slider: CompactSlider, device: Object, param_id: int, format: String, unit_suffix: String) -> void:
 	var param = device.get_parameter(param_id)
 	if param == null:
@@ -57,7 +58,7 @@ static func configure_compact(slider: CompactSlider, device: Object, param_id: i
 		if is_freq:
 			return FreqAxis.format_hz(value) + " Hz"
 		return (format % value) + unit_suffix
-	ModAssign.attach(slider, device, param_id)
+	ModAssign.retarget(slider, device, param_id)
 
 
 ## Gain means nothing for cuts, notches and band passes: dim it rather than shifting the layout.

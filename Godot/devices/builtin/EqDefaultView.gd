@@ -8,6 +8,10 @@
 ## the device's `"spectrum"` stream while shown (and the analyser isn't off) and unsubscribes when
 ## hidden. Resolution and speed are engine options (`data/configure`), sent after subscribing and
 ## whenever they change; tilt is applied only when drawing.
+##
+## Modulation: while shown, the view follows `ModLive.live_values_changed` for the device and its
+## ancestors and hands each band's live Freq/Gain/Q (and the live Output gain) to the editor
+## (`EqCurveEditor.set_live`), which draws them over the set curve.
 class_name EqDefaultView extends DeviceView
 
 const STRIP_HEIGHT := 78.0
@@ -17,6 +21,8 @@ const SPEED_LABELS: Array[String] = ["Fast", "Medium", "Slow"]
 const MENU_RESOLUTION := 0
 const MENU_SPEED := 10
 const MENU_TILT := 20
+## The band fields the modulation display follows, by parameter offset.
+const LIVE_FIELDS := {EqResponse.P_FREQ: "freq", EqResponse.P_GAIN: "gain", EqResponse.P_Q: "q"}
 
 var editor: EqCurveEditor = null
 ## Read and write the view state. Default: the app config (Sonara autoload); tests replace them.
@@ -225,6 +231,7 @@ func _fallback_band() -> int:
 func _on_unbind() -> void:
 	_shown = false
 	_sync_subscription()
+	_sync_live_feed()
 	if editor != null:
 		editor.device = null
 
@@ -433,14 +440,69 @@ func _send_analyser_options() -> void:
 func _on_view_shown() -> void:
 	_shown = true
 	_sync_subscription()
+	_sync_live_feed()
 
 
 func _on_view_hidden() -> void:
 	_shown = false
 	_sync_subscription()
+	_sync_live_feed()
 	if editor != null:
 		editor.end_interaction()
 		editor.clear_analyser()
+
+
+# ============================================================================
+# MODULATION
+# ============================================================================
+
+## Follow the live modulation values while shown (`DeviceView.show_view` already subscribes the
+## device's stream); hidden, drop the listener and the editor's live state.
+func _sync_live_feed() -> void:
+	var live := ModLive.holder()
+	var want := _shown and device != null
+	if want and not live.live_values_changed.is_connected(_on_live_values_changed):
+		live.live_values_changed.connect(_on_live_values_changed)
+	elif not want and live.live_values_changed.is_connected(_on_live_values_changed):
+		live.live_values_changed.disconnect(_on_live_values_changed)
+	if want:
+		_refresh_live()
+	elif editor != null:
+		editor.clear_live()
+
+
+## Live values reach this EQ from its own stream or an ancestor's (a container's modulator).
+func _on_live_values_changed(reporter) -> void:
+	var walk = device
+	while walk != null:
+		if walk == reporter:
+			_refresh_live()
+			return
+		walk = walk.get_parent_device()
+
+
+## Read every band's live Freq/Gain/Q and the live Output gain into the editor.
+func _refresh_live() -> void:
+	if device == null or editor == null:
+		return
+	var values: Array = []
+	for band in EqResponse.BAND_COUNT:
+		var live := {}
+		for offset: int in LIVE_FIELDS:
+			var real := _live_real(band * EqResponse.BAND_STRIDE + offset)
+			if not is_nan(real):
+				live[LIVE_FIELDS[offset]] = real
+		values.append(live)
+	editor.set_live(values, _live_real(EqResponse.OUTPUT_GAIN))
+
+
+## The live value of `param_id` in real units, NAN when nothing modulates it.
+func _live_real(param_id: int) -> float:
+	var normalized := ModLive.live_value(device, param_id)
+	var param = device.get_parameter(param_id)
+	if normalized < 0.0 or param == null:
+		return NAN
+	return param.normalized_to_value(normalized)
 
 
 func _on_spectrum_received(osc_path: String, frame: PackedFloat32Array) -> void:
