@@ -1,51 +1,52 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene format=3 uid="uid://dxcygpy0jp0go"]
 
-[ext_resource type="Script" path="res://devices/modulators/options/ModulatorOptions.gd" id="1_options"]
-[ext_resource type="Script" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
-[ext_resource type="Script" path="res://components/RotaryKnob.gd" id="3_knob"]
+[ext_resource type="Script" uid="uid://db2vpu3v231rr" path="res://devices/modulators/options/ModulatorOptions.gd" id="1_options"]
+[ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
 
-[node name="KnobOptions" type="CenterContainer"]
+[node name="KnobOptions" type="CenterContainer" unique_id=661931226]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
 
-[node name="HBox" type="HBoxContainer" parent="."]
+[node name="HBox" type="VBoxContainer" parent="." unique_id=1631218134]
 layout_mode = 2
 theme_override_constants/separation = 20
 
-[node name="Value" type="VBoxContainer" parent="HBox"]
+[node name="Value" type="VBoxContainer" parent="HBox" unique_id=865026766]
 custom_minimum_size = Vector2(60, 0)
 layout_mode = 2
 size_flags_vertical = 4
 theme_override_constants/separation = 4
 script = ExtResource("2_slot")
 
-[node name="Caption" type="Label" parent="HBox/Value"]
+[node name="Caption" type="Label" parent="HBox/Value" unique_id=106133574]
 layout_mode = 2
 theme_type_variation = &"Caption"
 text = "Value"
 horizontal_alignment = 1
 
-[node name="Knob" type="Control" parent="HBox/Value"]
+[node name="Knob" type="Control" parent="HBox/Value" unique_id=2935912]
 custom_minimum_size = Vector2(56, 56)
 layout_mode = 2
 size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
 script = ExtResource("3_knob")
 
-[node name="Polarity" type="VBoxContainer" parent="HBox"]
+[node name="Polarity" type="VBoxContainer" parent="HBox" unique_id=584177842]
 layout_mode = 2
 size_flags_vertical = 4
 theme_override_constants/separation = 4
 script = ExtResource("2_slot")
 param_id = 10
 
-[node name="Caption" type="Label" parent="HBox/Polarity"]
+[node name="Caption" type="Label" parent="HBox/Polarity" unique_id=1442102168]
 layout_mode = 2
 theme_type_variation = &"Caption"
 text = "Polarity"
 horizontal_alignment = 1
 
-[node name="Menu" type="OptionButton" parent="HBox/Polarity"]
+[node name="Menu" type="OptionButton" parent="HBox/Polarity" unique_id=1403805983]
 custom_minimum_size = Vector2(112, 0)
 layout_mode = 2
 clip_text = true
