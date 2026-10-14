@@ -28,6 +28,7 @@ use crate::audio::devices::container::{
 use crate::audio::devices::{
     apply_transport_to, AudioDevice, DeviceContainer, DevicePath, ParamId,
 };
+use crate::audio::dsp::mini_analyser::MiniAnalyser;
 use crate::audio::midi_types::{cc14_to_unit, NoteEvent};
 use crate::audio::modulation::kinds::{CC_NUMBER, LFO_RETRIGGER};
 use crate::audio::transport::Transport;
@@ -42,6 +43,14 @@ const LIVE_VALUES_MAX: usize = 16;
 
 /// Frames between control steps: the mono path updates its offsets this often.
 pub const CONTROL_STEP: usize = 64;
+
+/// Peak points one sidechain modulator buffers between `modulation` payloads (spec 044): a kind 4
+/// record is `u8 mod_id, f32 point_seconds, u8 count, count × u8`, so `6 + count` fits its
+/// `u8 len` up to 249. At 20 Hz and 64-frame steps a poll covers about 38 points at 48 kHz.
+pub const SC_HISTORY_CAP: usize = 249;
+
+/// Points per signal in the `sidechain` data stream.
+pub const SC_STREAM_POINTS: usize = 128;
 
 /// Notes the wrapper holds between a `send_note_event` and the block that consumes them.
 const MIDI_QUEUE: usize = 256;
@@ -188,6 +197,19 @@ pub struct ModulatedDevice {
     stream_subscribed: bool,
     stream_frames: usize,
     stream_interval: usize,
+    /// Per sidechain modulator, the output peak of each control step since the last
+    /// `modulation` payload (0…255), appended only while `stream_subscribed` (spec 044
+    /// REQ-004, REQ-009). Drained into the kind 4 records.
+    sc_hist: [[u8; SC_HISTORY_CAP]; MAX_MODULATORS],
+    sc_hist_len: [u8; MAX_MODULATORS],
+    /// `sidechain` data stream: subscribed, the selected modulator, and its analysis (built
+    /// off the lock by a `DataBuild`, kept idle while unsubscribed so it is never dropped
+    /// under the lock).
+    sc_subscribed: bool,
+    sc_mod: Option<u8>,
+    sc_analysis: Option<Box<MiniAnalyser>>,
+    /// Frames since the analysis was last asked whether a frame is due.
+    sc_frames: usize,
     applied: [(ModTarget, f32); MAX_ROUTES],
     applied_len: usize,
     transport: Transport,
@@ -222,6 +244,12 @@ impl ModulatedDevice {
             stream_subscribed: false,
             stream_frames: 0,
             stream_interval: mod_interval(sample_rate),
+            sc_hist: [[0; SC_HISTORY_CAP]; MAX_MODULATORS],
+            sc_hist_len: [0; MAX_MODULATORS],
+            sc_subscribed: false,
+            sc_mod: None,
+            sc_analysis: None,
+            sc_frames: 0,
             applied: [(NO_TARGET, 0.0); MAX_ROUTES],
             applied_len: 0,
             transport: Transport::default(),
@@ -350,7 +378,10 @@ impl ModulatedDevice {
         // 12 bytes, MAX_ROUTES × kind 3 at 11 bytes), so the audio-thread payload never
         // reallocates.
         let mut bytes = Vec::with_capacity(
-            2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4) + 2 + MAX_MODULATORS * 12 + MAX_ROUTES * 11,
+            2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4)
+                + 2
+                + MAX_MODULATORS * (12 + 2 + 6 + SC_HISTORY_CAP)
+                + MAX_ROUTES * 11,
         );
         bytes.extend_from_slice(&((contrib_len + poly_len) as u16).to_le_bytes());
         for i in 0..contrib_len {
@@ -384,7 +415,10 @@ impl ModulatedDevice {
         // Trailing block (spec 033): `u16 ext_count`, then `{u8 kind, u8 len, bytes}` records.
         // Old decoders stop before it; unknown kinds are skippable via `len`.
         let occupied = self.mods.iter().filter(|m| m.is_some()).count();
-        bytes.extend_from_slice(&((occupied + mod_contrib_len) as u16).to_le_bytes());
+        let histories = (0..MAX_MODULATORS)
+            .filter(|&i| self.sc_hist_len[i] > 0 && self.is_sidechain(i))
+            .count();
+        bytes.extend_from_slice(&((occupied + mod_contrib_len + histories) as u16).to_le_bytes());
         // kind 2 — modulator display state (12 bytes): mod id, stage, x, value.
         for (mod_id, state) in self.mods.iter().enumerate() {
             let Some(state) = state else { continue };
@@ -404,7 +438,55 @@ impl ModulatedDevice {
             bytes.extend_from_slice(&param_id.to_le_bytes());
             bytes.extend_from_slice(&offset.to_le_bytes());
         }
+        // kind 4 — sidechain output history (6 + count bytes, spec 044): mod id, seconds per
+        // point, count, then one peak per control step, 0…255 for output 0…1, oldest first.
+        let point_seconds = CONTROL_STEP as f32 / self.sample_rate;
+        for mod_id in 0..MAX_MODULATORS {
+            let count = self.sc_hist_len[mod_id] as usize;
+            self.sc_hist_len[mod_id] = 0;
+            if count == 0 || !self.is_sidechain(mod_id) {
+                continue;
+            }
+            bytes.push(4);
+            bytes.push((6 + count) as u8);
+            bytes.push(mod_id as u8);
+            bytes.extend_from_slice(&point_seconds.to_le_bytes());
+            bytes.push(count as u8);
+            bytes.extend_from_slice(&self.sc_hist[mod_id][..count]);
+        }
         bytes
+    }
+
+    fn is_sidechain(&self, slot: usize) -> bool {
+        self.mods[slot]
+            .as_ref()
+            .is_some_and(|state| state.kind() == ModulatorKind::Sidechain)
+    }
+
+    /// Append one output peak per control step of `frames` for every sidechain modulator
+    /// (a whole-block step appends one per `CONTROL_STEP`, so the time axis holds). Drops the
+    /// oldest points when a stalled poll lets the buffer fill.
+    fn record_sc_history(&mut self, frames: usize) {
+        let points = frames.div_ceil(CONTROL_STEP).max(1);
+        for slot in 0..MAX_MODULATORS {
+            let Some(state) = self.mods[slot].as_mut() else {
+                continue;
+            };
+            if state.kind() != ModulatorKind::Sidechain {
+                continue;
+            }
+            let peak = (state.take_sc_peak().clamp(0.0, 1.0) * 255.0).round() as u8;
+            for _ in 0..points {
+                let len = self.sc_hist_len[slot] as usize;
+                if len == SC_HISTORY_CAP {
+                    self.sc_hist[slot].copy_within(1.., 0);
+                    self.sc_hist[slot][len - 1] = peak;
+                } else {
+                    self.sc_hist[slot][len] = peak;
+                    self.sc_hist_len[slot] = (len + 1) as u8;
+                }
+            }
+        }
     }
 
     /// Feed every `sidechain` modulator whose Source is Device In (0) with this step's input
@@ -433,8 +515,17 @@ impl ModulatedDevice {
                 let right = inputs.get(base + 1).copied().unwrap_or(0.0);
                 *sample = 0.5 * (left + right);
             }
-            for state in self.mods.iter_mut().flatten() {
+            for (slot, state) in self.mods.iter_mut().enumerate() {
+                let Some(state) = state else { continue };
                 if state.kind() == ModulatorKind::Sidechain && Self::is_device_in(state) {
+                    if self.sc_subscribed && self.sc_mod == Some(slot as u8) {
+                        if let Some(analysis) = self.sc_analysis.as_mut() {
+                            state.feed_sidechain_tap(&mono[..count], |pre, post| {
+                                analysis.push(pre, post)
+                            });
+                            continue;
+                        }
+                    }
                     state.feed_sidechain(&mono[..count]);
                 }
             }
@@ -605,6 +696,12 @@ impl ModulatedDevice {
         }
 
         self.advance(frames);
+        if self.stream_subscribed {
+            self.record_sc_history(frames);
+        }
+        if self.sc_subscribed {
+            self.sc_frames = self.sc_frames.saturating_add(frames);
+        }
 
         let mut acc = [0.0f32; MAX_ROUTES];
         self.routes.accumulate(&self.values, &mut acc);
@@ -1049,6 +1146,12 @@ impl Modulated for ModulatedDevice {
             Err(_) => return,
         };
         if let Some(state) = self.mods[slot].as_mut() {
+            if self.sc_subscribed && self.sc_mod == Some(mod_id) {
+                if let Some(analysis) = self.sc_analysis.as_mut() {
+                    state.feed_sidechain_tap(mono, |pre, post| analysis.push(pre, post));
+                    return;
+                }
+            }
             state.feed_sidechain(mono);
         }
     }
@@ -1378,6 +1481,18 @@ impl AudioDevice for ModulatedDevice {
         for state in self.mods.iter_mut().flatten() {
             state.prepare(self.sample_rate);
         }
+        // A new rate needs a new analysis; rebuilding allocates, but `prepare` is rare and the
+        // EQ does the same.
+        if self
+            .sc_analysis
+            .as_ref()
+            .is_some_and(|a| a.sample_rate() != self.sample_rate)
+        {
+            self.sc_analysis = Some(Box::new(MiniAnalyser::new(
+                self.sample_rate,
+                SC_STREAM_POINTS,
+            )));
+        }
         self.dev_mut().prepare(sample_rate, max_frames);
         self.push_voice_mod_spec();
     }
@@ -1440,6 +1555,20 @@ impl AudioDevice for ModulatedDevice {
         if data_type == "modulation" {
             self.stream_subscribed = true;
             self.stream_frames = 0;
+            // Start the history clean: peaks tracked while nobody listened are stale.
+            self.sc_hist_len = [0; MAX_MODULATORS];
+            for state in self.mods.iter_mut().flatten() {
+                state.take_sc_peak();
+            }
+            return Ok(());
+        }
+        if data_type == "sidechain" {
+            self.sc_subscribed = true;
+            self.sc_mod = None;
+            self.sc_frames = 0;
+            if let Some(analysis) = self.sc_analysis.as_mut() {
+                analysis.reset();
+            }
             return Ok(());
         }
         self.dev_mut().subscribe_data(data_type)
@@ -1448,6 +1577,10 @@ impl AudioDevice for ModulatedDevice {
     fn unsubscribe_data(&mut self, data_type: &str) {
         if data_type == "modulation" {
             self.stream_subscribed = false;
+            return;
+        }
+        if data_type == "sidechain" {
+            self.sc_subscribed = false;
             return;
         }
         self.dev_mut().unsubscribe_data(data_type);
@@ -1459,14 +1592,49 @@ impl AudioDevice for ModulatedDevice {
         key: &str,
         value: f32,
     ) -> Result<Option<crate::audio::devices::DataBuild>, String> {
-        self.dev_mut().configure_data(data_type, key, value)
+        if data_type != "sidechain" {
+            return self.dev_mut().configure_data(data_type, key, value);
+        }
+        if key != "mod_id" {
+            return Err(format!("sidechain stream has no '{key}' option"));
+        }
+        let id = value.round();
+        if !(0.0..MAX_MODULATORS as f32).contains(&id) {
+            return Err(format!("sidechain mod_id {value} is out of range"));
+        }
+        if self.sc_mod != Some(id as u8) {
+            self.sc_mod = Some(id as u8);
+            if let Some(analysis) = self.sc_analysis.as_mut() {
+                analysis.reset();
+            }
+        }
+        if self.sc_analysis.is_some() {
+            return Ok(None);
+        }
+        let sample_rate = self.sample_rate;
+        Ok(Some(Box::new(move || {
+            Box::new(MiniAnalyser::new(sample_rate, SC_STREAM_POINTS))
+                as Box<dyn std::any::Any + Send>
+        })))
     }
 
     fn apply_data_build(
         &mut self,
         built: Box<dyn std::any::Any + Send>,
     ) -> Option<Box<dyn std::any::Any + Send>> {
-        self.dev_mut().apply_data_build(built)
+        match built.downcast::<MiniAnalyser>() {
+            Ok(analysis) => {
+                // Built for another rate meanwhile: hand it back to be dropped.
+                if analysis.sample_rate() != self.sample_rate {
+                    return Some(analysis);
+                }
+                self.sc_frames = 0;
+                self.sc_analysis
+                    .replace(analysis)
+                    .map(|old| old as Box<dyn std::any::Any + Send>)
+            }
+            Err(other) => self.dev_mut().apply_data_build(other),
+        }
     }
 
     /// The wrapper owns the `modulation` stream (spec 018 Phase 9); every other type belongs
@@ -1479,7 +1647,38 @@ impl AudioDevice for ModulatedDevice {
             self.stream_frames = 0;
             return Some(("modulation".to_string(), self.modulation_payload()));
         }
+        if let Some(bytes) = self.sidechain_payload() {
+            return Some(("sidechain".to_string(), bytes));
+        }
         self.dev_mut().poll_device_data()
+    }
+}
+
+impl ModulatedDevice {
+    /// The `sidechain` stream frame when subscribed, configured and due: the header
+    /// `[mod_id, sample_rate, low_cut_hz, high_cut_hz]` (the effective cuts, 0 for a bypassed
+    /// filter) followed by [`MiniAnalyser::write_points`], little-endian f32 (spec 044).
+    fn sidechain_payload(&mut self) -> Option<Vec<u8>> {
+        if !self.sc_subscribed {
+            return None;
+        }
+        let mod_id = self.sc_mod?;
+        let state = self.mods[mod_id as usize].as_ref()?;
+        if state.kind() != ModulatorKind::Sidechain {
+            return None;
+        }
+        let (low, high) = state.sc_cuts();
+        let analysis = self.sc_analysis.as_mut()?;
+        let frames = std::mem::take(&mut self.sc_frames);
+        if !analysis.due(frames) {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity((4 + 2 + 2 * analysis.points()) * 4);
+        for value in [mod_id as f32, self.sample_rate, low, high] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        analysis.write_points(&mut bytes);
+        Some(bytes)
     }
 }
 
@@ -1538,7 +1737,7 @@ mod tests {
     use crate::audio::dsp::test_util::{render, sine, stereo, white_noise};
     use crate::audio::modulation::kinds::{
         CC_NUMBER, CC_SMOOTH, ENV_RELEASE, KNOB_POLARITY, KNOB_VALUE, LFO_RATE, SC_ATTACK,
-        SC_RELEASE, SC_SOURCE,
+        SC_LOW_CUT, SC_RELEASE, SC_SOURCE,
     };
     use std::any::Any;
     use std::time::Duration;
@@ -2672,6 +2871,10 @@ mod tests {
         for id in 0..8u8 {
             m.add_modulator(id, ModulatorKind::Lfo).unwrap();
         }
+        // The rest of the capacity is sidechains, each with a full history to report.
+        for id in 8..MAX_MODULATORS as u8 {
+            m.add_modulator(id, ModulatorKind::Sidechain).unwrap();
+        }
         // A route into every modulator parameter that exists (self-routes included), so every
         // kind 3 record the device could report is populated.
         for target in 0..8u8 {
@@ -2680,14 +2883,210 @@ mod tests {
             }
         }
         m.control_step(CONTROL_STEP, &[]);
+        m.sc_hist_len = [SC_HISTORY_CAP as u8; MAX_MODULATORS];
         let bytes = m.modulation_payload();
-        let expected =
-            2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4) + 2 + MAX_MODULATORS * 12 + MAX_ROUTES * 11;
+        let expected = 2
+            + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4)
+            + 2
+            + MAX_MODULATORS * (12 + 2 + 6 + SC_HISTORY_CAP)
+            + MAX_ROUTES * 11;
+        assert!(
+            bytes.len() >= 24 * (2 + 6 + SC_HISTORY_CAP),
+            "the kind 4 records were written"
+        );
         assert_eq!(
             bytes.capacity(),
             expected,
             "the audio-thread payload reallocated"
         );
+    }
+
+    #[test]
+    fn a_device_holds_32_modulators_and_128_routes() {
+        let mut m = ModulatedDevice::new(delay(), SR);
+        for id in 0..32u8 {
+            m.add_modulator(id, ModulatorKind::Lfo).expect("ids 0–31");
+        }
+        assert!(m.add_modulator(32, ModulatorKind::Lfo).is_err());
+        let mut accepted = 0;
+        let mut first_rejected = None;
+        'all: for source in 0..32u8 {
+            for spec in ModulatorKind::Lfo.table().specs {
+                let target = format!("mod/{}/param/{}", (source + 1) % 32, spec.id);
+                match m.set_modulator_route(source, &target, 0.1) {
+                    Ok(_) => accepted += 1,
+                    Err(_) => {
+                        first_rejected = Some(accepted);
+                        break 'all;
+                    }
+                }
+            }
+        }
+        assert_eq!(first_rejected, Some(128), "the 129th route is rejected");
+        assert_eq!(m.modulator_routes().len(), 128);
+    }
+
+    /// Parse the `modulation` payload's trailing block of a route-less device into
+    /// `(kind, record bytes)` pairs.
+    fn decode_ext(bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0, "no route records");
+        let count = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+        let mut at = 4;
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let (kind, len) = (bytes[at], bytes[at + 1] as usize);
+            out.push((kind, bytes[at + 2..at + 2 + len].to_vec()));
+            at += 2 + len;
+        }
+        assert_eq!(at, bytes.len(), "records cover the payload");
+        out
+    }
+
+    fn sc_norm(id: ParamId, real: f32) -> f32 {
+        ModulatorKind::Sidechain
+            .table()
+            .spec(id)
+            .unwrap()
+            .to_norm(real)
+    }
+
+    /// A delay with a Device In sidechain at slot 0, instant attack.
+    fn sidechain_delay() -> ModulatedDevice {
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::Sidechain).unwrap();
+        m.set_modulator_param(0, SC_ATTACK, 0.0).unwrap();
+        m
+    }
+
+    /// Process `signal` (mono) in 512-frame blocks, polling once per block as the mixer does,
+    /// and return every `(type, bytes)` that came back.
+    fn run_polled(m: &mut ModulatedDevice, signal: &[f32]) -> Vec<(String, Vec<u8>)> {
+        let mut got = Vec::new();
+        for chunk in signal.chunks(512) {
+            let block = stereo(chunk);
+            let mut out = vec![0.0; block.len()];
+            m.process_block(&block, &mut out, chunk.len());
+            if let Some(item) = m.poll_device_data() {
+                got.push(item);
+            }
+        }
+        got
+    }
+
+    #[test]
+    fn a_subscribed_wrapper_sends_sidechain_history() {
+        let mut m = sidechain_delay();
+        m.subscribe_data("modulation").unwrap();
+        // 0 dBFS for the first 10 ms, then silence: one burst the 20 Hz snapshot would miss.
+        let mut signal = sine(1_000.0, SR, 480, 1.0);
+        signal.resize(48_000 / 2, 0.0);
+        let got = run_polled(&mut m, &signal);
+        let mut points: Vec<u8> = Vec::new();
+        let mut seen = 0;
+        for (kind, bytes) in got.iter().filter(|(k, _)| k == "modulation") {
+            assert_eq!(kind, "modulation");
+            for (ext_kind, record) in decode_ext(bytes) {
+                if ext_kind != 4 {
+                    continue;
+                }
+                assert_eq!(record[0], 0, "mod id");
+                let seconds = f32::from_le_bytes(record[1..5].try_into().unwrap());
+                assert!((seconds - 64.0 / SR).abs() < 1e-9, "{seconds}");
+                let count = record[5] as usize;
+                assert_eq!(record.len(), 6 + count, "len = 6 + count");
+                points.extend_from_slice(&record[6..]);
+                seen += 1;
+            }
+        }
+        assert!(seen >= 2, "history arrived with several polls: {seen}");
+        // Every control step of the half second is covered, except the steps after the last
+        // poll (up to one interval) which wait for the next payload.
+        let steps = signal.len() / CONTROL_STEP;
+        assert!(
+            points.len() + 48_000 / 20 / CONTROL_STEP + 8 >= steps && points.len() <= steps,
+            "{} points for {steps} steps",
+            points.len()
+        );
+        assert!(
+            *points.iter().max().unwrap() >= 250,
+            "the burst reached the top: {}",
+            points.iter().max().unwrap()
+        );
+        assert_eq!(*points.last().unwrap(), 0, "silence at the end");
+    }
+
+    #[test]
+    fn the_sidechain_stream_reports_pre_and_post() {
+        let mut m = sidechain_delay();
+        m.set_modulator_param(0, SC_LOW_CUT, sc_norm(SC_LOW_CUT, 500.0))
+            .unwrap();
+        m.subscribe_data("sidechain").unwrap();
+        let build = m
+            .configure_data("sidechain", "mod_id", 0.0)
+            .unwrap()
+            .expect("the first configure builds an analysis");
+        assert!(m.apply_data_build(build()).is_none(), "nothing to drop yet");
+        // A second configure only selects the modulator.
+        assert!(m
+            .configure_data("sidechain", "mod_id", 0.0)
+            .unwrap()
+            .is_none());
+
+        let signal = sine(50.0, SR, 48_000, 0.5);
+        let got = run_polled(&mut m, &signal);
+        let (kind, bytes) = got
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "sidechain")
+            .expect("a sidechain frame");
+        assert_eq!(kind, "sidechain");
+        let v: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        assert_eq!(v.len(), 4 + 2 + 2 * SC_STREAM_POINTS);
+        assert_eq!(v[0], 0.0, "mod id");
+        assert_eq!(v[1], SR);
+        assert!((v[2] - 500.0).abs() < 0.01, "low cut {}", v[2]);
+        assert_eq!(v[3], 0.0, "high cut bypassed");
+        let (lo, hi) = (v[4], v[5]);
+        let pre = &v[6..6 + SC_STREAM_POINTS];
+        let post = &v[6 + SC_STREAM_POINTS..];
+        let at = ((50.0f32 / lo).ln() / (hi / lo).ln() * (SC_STREAM_POINTS - 1) as f32).round()
+            as usize;
+        let peak = (0..SC_STREAM_POINTS)
+            .max_by(|&i, &j| pre[i].total_cmp(&pre[j]))
+            .unwrap();
+        assert!(peak.abs_diff(at) <= 1, "pre peaks at {peak}, expected {at}");
+        assert!(
+            pre[peak] - post[peak] >= 40.0,
+            "post is {} dB below pre",
+            pre[peak] - post[peak]
+        );
+    }
+
+    #[test]
+    fn an_unsubscribed_wrapper_sends_no_sidechain_data() {
+        let mut m = sidechain_delay();
+        let signal = sine(1_000.0, SR, 9_600, 0.5);
+        let has = |got: &[(String, Vec<u8>)]| got.iter().any(|(k, _)| k == "sidechain");
+        let sc_hist_empty = |m: &ModulatedDevice| m.sc_hist_len.iter().all(|&n| n == 0);
+
+        // Never subscribed: nothing, and no history is collected either.
+        assert!(!has(&run_polled(&mut m, &signal)));
+        assert!(sc_hist_empty(&m), "history collected while hidden");
+
+        m.subscribe_data("sidechain").unwrap();
+        // Subscribed but not configured: still nothing.
+        assert!(!has(&run_polled(&mut m, &signal)));
+        let build = m.configure_data("sidechain", "mod_id", 0.0).unwrap().unwrap();
+        m.apply_data_build(build());
+        assert!(has(&run_polled(&mut m, &signal)), "frames once configured");
+
+        m.unsubscribe_data("sidechain");
+        assert!(!has(&run_polled(&mut m, &signal)), "stops after unsubscribe");
+        assert!(m.configure_data("sidechain", "bogus", 0.0).is_err());
+        assert!(m.configure_data("sidechain", "mod_id", 99.0).is_err());
     }
 
     /// REQ-001/002: knob 0.25 routed to a Delay Mix at amount 0.5 offsets it by +0.125

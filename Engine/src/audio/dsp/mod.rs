@@ -12,6 +12,7 @@ pub mod interleave;
 pub mod ladder;
 pub mod linear_svf;
 pub mod log_spectrum;
+pub mod mini_analyser;
 pub mod noise;
 pub mod one_pole;
 pub mod one_shot_env;

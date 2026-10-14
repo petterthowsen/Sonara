@@ -23,7 +23,7 @@ pub mod state;
 pub mod voice;
 
 /// Modulators one device instance can hold.
-pub const MAX_MODULATORS: usize = 8;
+pub const MAX_MODULATORS: usize = 32;
 
 /// Modulation routes one device instance can hold.
 pub const MAX_ROUTES: usize = matrix::MAX_ROUTES;

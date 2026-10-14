@@ -62,6 +62,10 @@ pub const SC_RELEASE: ParamId = 30;
 /// The tapped source as a channel id (stepped; consumers round): 0 = Device In, 1 = master,
 /// 2–999 user channels. Hardware outputs (≥ 1000) are not sources (spec 036 D2).
 pub const SC_SOURCE: ParamId = 40;
+/// Input gain in dB, applied before the cuts and the follower (spec 044 REQ-001).
+pub const SC_GAIN: ParamId = 50;
+/// Output amount, 0–100 %, scaling the follower value (spec 044 REQ-002).
+pub const SC_AMOUNT: ParamId = 60;
 
 // === Envelope parameter IDs ===
 
@@ -73,8 +77,8 @@ pub const ENV_RELEASE: ParamId = 30;
 /// Envelope times run 0.5 ms to 10 s on a skew-4 curve (625 ms at mid-knob), as in PolySynth.
 const ENV_TIME: Kind = skewed(0.0005, 10.0, 4.0);
 
-/// Largest parameter table of any kind (the LFO's five).
-pub const MAX_KIND_PARAMS: usize = 5;
+/// Largest parameter table of any kind (the sidechain's seven).
+pub const MAX_KIND_PARAMS: usize = 7;
 
 const LFO_SPECS: [ParamSpec; 5] = [
     spec(LFO_SHAPE, "Shape", "LFO", "", Kind::Enum(LFO_SHAPES), 0.0),
@@ -159,7 +163,7 @@ const XY_SPECS: [ParamSpec; 1] = [spec(
 const XY_SLOTS: [u8; 10] = slot_table(&XY_SPECS);
 static XY_TABLE: ParamTable = ParamTable::new(&XY_SPECS, &XY_SLOTS);
 
-const SC_SPECS: [ParamSpec; 5] = [
+const SC_SPECS: [ParamSpec; 7] = [
     spec(
         SC_LOW_CUT,
         "Low Cut",
@@ -193,8 +197,17 @@ const SC_SPECS: [ParamSpec; 5] = [
         linear(0.0, 999.0),
         0.0,
     ),
+    spec(SC_GAIN, "Gain", "Sidechain", "dB", linear(-24.0, 24.0), 0.0),
+    spec(
+        SC_AMOUNT,
+        "Amount",
+        "Sidechain",
+        "%",
+        linear(0.0, 100.0),
+        100.0,
+    ),
 ];
-const SC_SLOTS: [u8; 50] = slot_table(&SC_SPECS);
+const SC_SLOTS: [u8; 70] = slot_table(&SC_SPECS);
 static SC_TABLE: ParamTable = ParamTable::new(&SC_SPECS, &SC_SLOTS);
 
 /// Velocity, release, keytrack and random have no settings.
@@ -445,7 +458,7 @@ mod tests {
 
         let sc = ModParams::new(ModulatorKind::Sidechain);
         assert!(sc.table().len() <= MAX_KIND_PARAMS);
-        assert_eq!(sc.table().len(), 5);
+        assert_eq!(sc.table().len(), 7);
         assert_eq!(sc.real(SC_LOW_CUT), Some(20.0));
         assert_eq!(sc.real(SC_HIGH_CUT), Some(20_000.0));
         // The skewed times round-trip through a powf; hold a tolerance.
@@ -454,6 +467,8 @@ mod tests {
         let release = sc.real(SC_RELEASE).unwrap();
         assert!((release - 150.0).abs() < 1e-2, "release default {release}");
         assert_eq!(sc.real(SC_SOURCE), Some(0.0), "Device In");
+        assert_eq!(sc.real(SC_GAIN), Some(0.0), "0 dB");
+        assert_eq!(sc.real(SC_AMOUNT), Some(100.0), "100 %");
         assert!(ModulatorKind::Sidechain.is_mono_only());
         assert!(!ModulatorKind::Sidechain.bipolar());
         // The Source stores a channel id in 0..=999.

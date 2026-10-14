@@ -12,7 +12,7 @@
 use crate::audio::devices::ParamId;
 
 /// Routes one device can hold. Adding, updating and removing never allocate.
-pub const MAX_ROUTES: usize = 64;
+pub const MAX_ROUTES: usize = 128;
 
 /// One modulator → parameter connection.
 #[derive(Clone, Copy, Debug, PartialEq)]
