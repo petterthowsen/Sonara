@@ -198,7 +198,8 @@ static func amount_for(device, mod_id: int, param_id: int) -> float:
 
 
 ## Assign tooltip for `amount`: octaves for a logarithmic (Hz) parameter — of the device
-## parameter, or of the target modulator's parameter (so a Rate shows octaves) — else percent.
+## parameter, or of the target modulator's parameter (so a Rate shows octaves) — else the signed
+## change in the parameter's own unit ("+6.0 dB"), else percent when it has no unit.
 static func amount_text(device, mod_id: int, param_id: int, amount: float) -> String:
 	var param = null
 	var base := 0.5
@@ -216,6 +217,14 @@ static func amount_text(device, mod_id: int, param_id: int, amount: float) -> St
 		var high: float = param.normalized_to_value(clampf(base + amount, 0.0, 1.0))
 		if low > 0.0 and high > 0.0:
 			return "%+.1f oct" % (log(high / low) / log(2.0))
+	if param != null and not param.unit.is_empty() \
+			and param.param_type != "enum" and param.param_type != "bool":
+		var from_value: float = param.normalized_to_value(base)
+		var to_value: float = param.normalized_to_value(clampf(base + amount, 0.0, 1.0))
+		var delta: float = param.display_value(to_value) - param.display_value(from_value)
+		if is_finite(delta):
+			var text: String = DeviceParameter.format_display(delta, param.unit)
+			return text if text.begins_with("-") else "+" + text
 	return ModDisplay.default_amount_text(amount)
 
 

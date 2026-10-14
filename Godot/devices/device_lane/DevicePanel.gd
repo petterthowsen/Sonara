@@ -98,6 +98,8 @@ var _cc_list: ParameterList
 ## True while the Parameters tab is open only because the device has no view to show, so it
 ## closes again once a view arrives. Any tab click by the user clears it.
 var _params_auto_opened := false
+## True while the remembered tab is re-applied on bind, so it isn't stored again.
+var _restoring_tab := false
 
 ## The shown view's tabs (e.g. Simple View pages), in the top header after the name.
 @onready var header_tabs: TabBar = $VBox/TopHeader/HBox/ViewTabs
@@ -139,6 +141,9 @@ func _ready() -> void:
 	params_button.toggled.connect(_on_tab_toggled.unbind(1))
 	cc_button.toggled.connect(_on_tab_toggled.unbind(1))
 	modulators_button.toggled.connect(_on_tab_toggled.unbind(1))
+	modulators_button.toggled.connect(func(pressed: bool):
+		if device != null and not _restoring_tab:
+			device.modulators_open = pressed)
 	file_button.toggled.connect(_on_tab_toggled.unbind(1))
 	for tab in [params_button, cc_button, modulators_button, file_button]:
 		tab.pressed.connect(func(): _params_auto_opened = false)
@@ -633,6 +638,10 @@ func bind_to_device(dev : DeviceInstance):
 	# Configure file tab visibility and file dialog
 	_configure_file_loading()
 	_update_left_pane_visibility()
+	if dev.modulators_open and modulators_button.visible:
+		_restoring_tab = true
+		modulators_button.button_pressed = true
+		_restoring_tab = false
 	_apply_default_tab()
 
 

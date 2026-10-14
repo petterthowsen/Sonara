@@ -84,6 +84,10 @@ var sleeping : bool = false
 ## Position in the parent device list (0 = first)
 var position: int = 0
 
+## UI state: the Modulators tab is open in the device's panel. Kept here (not synced or saved)
+## so it survives the panel being freed and rebuilt, e.g. when switching tracks.
+var modulators_open: bool = false
+
 ## Nested child devices when this instance is a container (Chain/Layer).
 var children: Array[DeviceInstance] = []
 
