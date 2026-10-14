@@ -26,6 +26,7 @@ func run_tests() -> void:
 	_test_view_persists_state()
 	_test_display_menu_sends_analyser_options()
 	_test_tilt_lifts_the_highs()
+	_test_analyser_eases_over_time()
 	_test_selection_and_piano()
 	_test_hidden_view_stops_interaction()
 	_test_footer_band_selector()
@@ -33,6 +34,8 @@ func run_tests() -> void:
 	_test_type_icons_cover_all_types()
 	_test_disabled_band_stays_editable()
 	_test_companion_solo_and_type()
+	_test_companion_strips_show_toggle_and_solo()
+	_test_spectrum_smoothing()
 	_test_footer_modulation_follows_the_band()
 	_test_editor_draws_live_modulation()
 	_test_view_feeds_live_modulation()
@@ -381,6 +384,44 @@ func _test_display_menu_sends_analyser_options() -> void:
 	view.free()
 
 
+func _spectrum_frame(flag: float, points: int, db: float) -> PackedFloat32Array:
+	var frame := PackedFloat32Array([flag, 48000.0, 20.0, 20000.0])
+	for i in points:
+		frame.append(db)
+	return frame
+
+
+## New analyser frames set a target; the drawn spectrum eases toward it in `_process`, settles and
+## stops processing, and snaps when the first frame arrives or the point count changes.
+func _test_analyser_eases_over_time() -> void:
+	var editor := EqCurveEditor.new()
+	editor.size = Vector2(600, 300)
+	root.add_child(editor)
+	editor.on_spectrum_frame(_spectrum_frame(1.0, 64, -60.0))
+	_assert(editor._post_points[10] == -60.0, "the first frame snaps")
+	_assert(editor.is_processing() and editor._post_target[10] == -60.0, "a frame starts processing")
+	editor._process(0.1)
+	_assert(not editor.is_processing(), "no processing once settled")
+	editor.on_spectrum_frame(_spectrum_frame(1.0, 64, -20.0))
+	_assert(editor._post_points[10] == -60.0 and editor._post_target[10] == -20.0, "a new frame does not jump")
+	editor._process(1.0 / 60.0)
+	var step: float = editor._post_points[10]
+	_assert(step > -60.0 and step < -20.0, "one tick moves part of the way")
+	_assert(editor.is_processing(), "still processing while easing")
+	for i in 120:
+		editor._process(1.0 / 60.0)
+	_assert(absf(editor._post_points[10] + 20.0) < 0.1, "it converges to the target")
+	_assert(not editor.is_processing(), "processing stops when settled")
+	editor.on_spectrum_frame(_spectrum_frame(1.0, 128, -30.0))
+	_assert(editor._post_points.size() == 128 and editor._post_points[100] == -30.0, "a point count change snaps")
+	editor.clear_analyser()
+	_assert(editor._post_points.is_empty() and editor._post_target.is_empty() and not editor.is_processing(), "clear drops both buffers and stops")
+	editor.set_analyser_mode(EqViewState.Analyser.OFF)
+	editor.on_spectrum_frame(_spectrum_frame(1.0, 64, -20.0))
+	_assert(not editor.is_processing(), "no processing while the analyser is off")
+	editor.free()
+
+
 ## Tilt rotates the drawn analyser around 1 kHz: a flat spectrum rises towards the highs.
 func _test_tilt_lifts_the_highs() -> void:
 	var editor := EqCurveEditor.new()
@@ -564,6 +605,65 @@ func _test_companion_solo_and_type() -> void:
 	var icon: Texture2D = companion._items[5]["type"].get_item_icon(EqResponse.Type.TILT)
 	_assert(icon != null and icon.get_size().x > 0, "and its item icon is the band-coloured curve")
 	companion.free()
+
+
+## Regression (#133): the header (enabled toggle, solo) was built but never added to the strip.
+func _test_companion_strips_show_toggle_and_solo() -> void:
+	var inst := _make_instance()
+	var companion = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	root.add_child(companion)  # minimum sizes are only computed in the tree
+	companion.bind_to_device(inst)
+	for band in EqResponse.BAND_COUNT:
+		var item: Dictionary = companion._items[band]
+		for key in ["toggle", "solo"]:
+			var control: Control = item[key]
+			_assert(item["box"].is_ancestor_of(control), "band %d's %s is inside its strip" % [band + 1, key])
+			_assert(control.visible and control.get_combined_minimum_size().x > 0 and control.get_combined_minimum_size().y > 0, "band %d's %s has a size" % [band + 1, key])
+	_assert(companion.get_combined_minimum_size().x > 0, "the companion asks for width")
+	# Solo goes through ParameterActions like the other controls.
+	companion._items[2]["solo"].toggled.emit(true)
+	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 3, "solo still writes LISTEN_BAND")
+	companion.free()
+
+
+## The analyser's display interpolation: keeps the source points, never leaves the range of two
+## neighbours (no dip below the floor, no peak overshoot) and reuses its buffer.
+func _test_spectrum_smoothing() -> void:
+	var src := PackedVector2Array()
+	for ys in [100.0, 20.0, 20.0, 90.0, 95.0, 10.0, 100.0, 100.0]:
+		src.append(Vector2(10.0 * src.size(), ys))
+	var out := PackedVector2Array()
+	var tangents := PackedFloat32Array()
+	var sub := 6
+	EqCurveEditor.smooth_monotone(src, sub, out, tangents)
+	_assert(out.size() == (src.size() - 1) * sub + 1, "sub points per segment")
+	var passes := true
+	var bounded := true
+	var increasing := true
+	for k in src.size():
+		if out[k * sub] != src[k]:
+			passes = false
+	for i in range(1, out.size()):
+		if out[i].x <= out[i - 1].x:
+			increasing = false
+	for k in src.size() - 1:
+		for j in range(sub + 1):
+			var y := out[k * sub + j].y
+			if y < minf(src[k].y, src[k + 1].y) - 0.0001 or y > maxf(src[k].y, src[k + 1].y) + 0.0001:
+				bounded = false
+	_assert(passes, "the curve passes through every source point")
+	_assert(increasing, "x stays increasing")
+	_assert(bounded, "between two points the curve stays within their range (no overshoot)")
+	var rising := true
+	for j in range(1, sub + 1):
+		if out[2 * sub + j].y < out[2 * sub + j - 1].y - 0.0001:
+			rising = false
+	_assert(rising, "a rising segment is monotone")
+	EqCurveEditor.smooth_monotone(src, sub, out, tangents)
+	_assert(out.size() == (src.size() - 1) * sub + 1, "a second call reuses the buffer")
+	var two := PackedVector2Array([Vector2(0, 5), Vector2(4, 9)])
+	EqCurveEditor.smooth_monotone(two, 1, out, tangents)
+	_assert(out.size() == 2 and out[1] == two[1], "sub 1 copies the points")
 
 
 # ============================================================================

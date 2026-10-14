@@ -32,8 +32,16 @@ const ANALYSER_FLOOR_DB := -90.0
 const ANALYSER_CEIL_DB := 0.0
 ## Analyser frames start with [flag, sample_rate, lo_hz, hi_hz] (eq.rs `SPECTRUM_HEADER_LEN`).
 const SPECTRUM_HEADER_LEN := 4
+## Speed of the ease of the drawn analyser toward the latest frame (1 / s); higher is snappier.
+const ANALYSER_EASE_RATE := 18.0
+## Below this many dB from its target a displayed point counts as arrived.
+const ANALYSER_SETTLE_DB := 0.05
 ## The display tilt pivots here: this frequency reads the same at every tilt.
 const TILT_PIVOT_HZ := 1000.0
+## The analyser is drawn as a monotone cubic: up to SMOOTH_MAX_SUB sub-segments per engine
+## segment, fewer when many points would pass SMOOTH_MAX_VERTICES in total.
+const SMOOTH_MAX_SUB := 6
+const SMOOTH_MAX_VERTICES := 1536
 
 ## Plot background: the theme's well colour, refreshed on theme change.
 var _bg_color := UiColors.role(&"well")
@@ -101,7 +109,14 @@ var _live_dirty := false
 ## Analyser points (dBFS), log-spaced from `_points_lo_hz` to `_points_hi_hz`.
 var _pre_points := PackedFloat32Array()
 var _post_points := PackedFloat32Array()
+var _pre_target := PackedFloat32Array()
+var _post_target := PackedFloat32Array()
 var _points_lo_hz := 20.0
+## Scratch buffers of `_draw_points`, reused every frame.
+var _raw_points := PackedVector2Array()
+var _smooth_points := PackedVector2Array()
+var _fill_polygon := PackedVector2Array()
+var _tangents := PackedFloat32Array()
 var _points_hi_hz := 20000.0
 var _menu: PopupMenu
 var _type_menu: PopupMenu
@@ -216,13 +231,47 @@ func on_spectrum_frame(frame: PackedFloat32Array) -> void:
 	var points := frame.slice(SPECTRUM_HEADER_LEN)
 	_points_lo_hz = frame[2]
 	_points_hi_hz = frame[3]
-	if frame[0] >= 0.5:
-		_post_points = points
+	var post := frame[0] >= 0.5
+	if post:
+		_post_target = points
 	else:
-		_pre_points = points
+		_pre_target = points
+	# The first frame and a resolution change snap; later frames are eased in `_process`.
+	var shown := _post_points if post else _pre_points
+	if shown.size() != points.size():
+		if post:
+			_post_points = points.duplicate()
+		else:
+			_pre_points = points.duplicate()
+	set_process(is_visible_in_tree() and state.analyser != EqViewState.Analyser.OFF)
 	if frame[1] > 0.0 and not is_equal_approx(frame[1], sample_rate):
 		sample_rate = frame[1]
 	queue_redraw()
+
+
+func _process(delta: float) -> void:
+	var k := 1.0 - exp(-ANALYSER_EASE_RATE * delta)
+	var settled := _ease_points(_pre_points, _pre_target, k)
+	settled = _ease_points(_post_points, _post_target, k) and settled
+	queue_redraw()
+	if settled:
+		set_process(false)
+
+
+## True when both displayed spectra have reached their targets.
+func _is_analyser_settled() -> bool:
+	return _ease_points(_pre_points, _pre_target, 0.0) and _ease_points(_post_points, _post_target, 0.0)
+
+
+## Move `current` a fraction `k` toward `target`, in place; true when it has arrived.
+func _ease_points(current: PackedFloat32Array, target: PackedFloat32Array, k: float) -> bool:
+	var settled := true
+	for i in mini(current.size(), target.size()):
+		var diff := target[i] - current[i]
+		if absf(diff) > ANALYSER_SETTLE_DB:
+			settled = false
+		current[i] += diff * k
+	return settled
 
 
 # ============================================================================
@@ -273,6 +322,9 @@ func live_band(band: int) -> Dictionary:
 func clear_analyser() -> void:
 	_pre_points = PackedFloat32Array()
 	_post_points = PackedFloat32Array()
+	_pre_target = PackedFloat32Array()
+	_post_target = PackedFloat32Array()
+	set_process(false)
 	queue_redraw()
 
 
@@ -535,6 +587,9 @@ func _notification(what: int) -> void:
 		NOTIFICATION_VISIBILITY_CHANGED:
 			if not is_visible_in_tree():
 				end_interaction()
+				set_process(false)
+			elif not _is_analyser_settled():
+				set_process(true)
 
 
 # ============================================================================
@@ -764,8 +819,8 @@ func _draw_analyser() -> void:
 
 
 ## A spectrum as a line (and optional fill) over the plot. The engine already smoothed it into
-## log-spaced points, so this only places them, adding the display tilt (dB per octave around
-## TILT_PIVOT_HZ).
+## log-spaced points, so this places them, adding the display tilt (dB per octave around
+## TILT_PIVOT_HZ), and draws a monotone cubic through them (`smooth_monotone`, display only).
 func _draw_points(values: PackedFloat32Array, line_color: Color, fill_color: Color) -> void:
 	var count := values.size()
 	if count < 2:
@@ -773,17 +828,71 @@ func _draw_points(values: PackedFloat32Array, line_color: Color, fill_color: Col
 	var plot := plot_rect()
 	var octaves := log(_points_hi_hz / _points_lo_hz) / log(2.0)
 	var pivot_octaves := log(TILT_PIVOT_HZ / _points_lo_hz) / log(2.0)
-	var points := PackedVector2Array()
-	points.resize(count)
+	_raw_points.resize(count)
 	for i in count:
 		var t := float(i) / float(count - 1)
 		var hz := _points_lo_hz * pow(2.0, octaves * t)
 		var db := values[i] + state.tilt_db * (octaves * t - pivot_octaves)
 		var y := clampf((db - ANALYSER_FLOOR_DB) / (ANALYSER_CEIL_DB - ANALYSER_FLOOR_DB), 0.0, 1.0)
-		points[i] = Vector2(freq_axis.hz_to_x(hz), plot.end.y - plot.size.y * y)
+		_raw_points[i] = Vector2(freq_axis.hz_to_x(hz), plot.end.y - plot.size.y * y)
+	var sub := clampi(SMOOTH_MAX_VERTICES / (count - 1), 1, SMOOTH_MAX_SUB)
+	smooth_monotone(_raw_points, sub, _smooth_points, _tangents)
+	var total := _smooth_points.size()
 	if fill_color.a > 0.0:
-		var polygon := points.duplicate()
-		polygon.append(Vector2(points[count - 1].x, plot.end.y))
-		polygon.append(Vector2(points[0].x, plot.end.y))
-		draw_colored_polygon(polygon, fill_color)
-	draw_polyline(points, line_color, 1.0, true)
+		_fill_polygon.resize(total + 2)
+		for i in total:
+			_fill_polygon[i] = _smooth_points[i]
+		_fill_polygon[total] = Vector2(_smooth_points[total - 1].x, plot.end.y)
+		_fill_polygon[total + 1] = Vector2(_smooth_points[0].x, plot.end.y)
+		draw_colored_polygon(_fill_polygon, fill_color)
+	draw_polyline(_smooth_points, line_color, 1.0, true)
+
+
+## Monotone cubic (Fritsch-Carlson / PCHIP) through `src` (x strictly increasing), with `sub`
+## segments between neighbouring points, written into `out` (resized, so reused buffers don't
+## allocate once grown). The source points are kept exactly, and between two of them the curve
+## stays within their y range, so a peak never overshoots and the line never dips below the
+## floor. `tangents` is scratch.
+static func smooth_monotone(src: PackedVector2Array, sub: int, out: PackedVector2Array, tangents: PackedFloat32Array) -> void:
+	var n := src.size()
+	if n < 2 or sub < 2:
+		out.resize(n)
+		for i in n:
+			out[i] = src[i]
+		return
+	tangents.resize(n)
+	for k in range(1, n - 1):
+		var h0 := src[k].x - src[k - 1].x
+		var h1 := src[k + 1].x - src[k].x
+		if h0 <= 0.0 or h1 <= 0.0:
+			tangents[k] = 0.0
+			continue
+		var d0 := (src[k].y - src[k - 1].y) / h0
+		var d1 := (src[k + 1].y - src[k].y) / h1
+		if d0 * d1 <= 0.0:
+			tangents[k] = 0.0
+		else:
+			var w0 := 2.0 * h1 + h0
+			var w1 := h1 + 2.0 * h0
+			tangents[k] = (w0 + w1) / (w0 / d0 + w1 / d1)
+	tangents[0] = _secant(src, 0)
+	tangents[n - 1] = _secant(src, n - 2)
+	out.resize((n - 1) * sub + 1)
+	for k in n - 1:
+		var p0 := src[k]
+		var p1 := src[k + 1]
+		var h := p1.x - p0.x
+		out[k * sub] = p0
+		for j in range(1, sub):
+			var t := float(j) / float(sub)
+			var t2 := t * t
+			var t3 := t2 * t
+			var y := (2.0 * t3 - 3.0 * t2 + 1.0) * p0.y + (t3 - 2.0 * t2 + t) * h * tangents[k] \
+				+ (-2.0 * t3 + 3.0 * t2) * p1.y + (t3 - t2) * h * tangents[k + 1]
+			out[k * sub + j] = Vector2(p0.x + h * t, clampf(y, minf(p0.y, p1.y), maxf(p0.y, p1.y)))
+	out[(n - 1) * sub] = src[n - 1]
+
+
+static func _secant(src: PackedVector2Array, k: int) -> float:
+	var h := src[k + 1].x - src[k].x
+	return (src[k + 1].y - src[k].y) / h if h > 0.0 else 0.0

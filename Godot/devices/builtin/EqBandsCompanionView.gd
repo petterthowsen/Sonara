@@ -40,6 +40,7 @@ func _build_strip(band: int, parent: Control) -> Dictionary:
 	# solo toggle below it, instead of sharing one wide header row.
 	var header := VBoxContainer.new()
 	header.add_theme_constant_override("separation", 2)
+	box.add_child(header)
 	var toggle := CheckBox.new()
 	toggle.text = str(band + 1)
 	toggle.add_theme_color_override("font_color", EqCurveEditor.band_color(band))
@@ -123,7 +124,7 @@ func _on_toggled(pressed: bool, band: int) -> void:
 ## Solo a band (`LISTEN_BAND = band + 1`); pressing it while soloed goes back to Off.
 func _on_solo_toggled(pressed: bool, band: int) -> void:
 	if device != null:
-		device.set_parameter_real(EqResponse.LISTEN_BAND, float(band + 1) if pressed else 0.0)
+		ParameterActions.set_real(device, EqResponse.LISTEN_BAND, float(band + 1) if pressed else 0.0)
 
 
 func _on_type_selected(index: int, band: int) -> void:
