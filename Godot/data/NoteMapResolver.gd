@@ -171,3 +171,62 @@ static func wants_drum_view(channel: Channel) -> bool:
 	if channel.drum_view >= 0:
 		return channel.drum_view == 1
 	return channel.note_map_mode == Channel.NoteMapMode.AUTO and has_row_source(channel)
+
+
+## What the instrument at the front of a Layer slot plays (`slot` is the slot's device or Chain),
+## for the Layer mapping window's Layer piano: an SFZ's key names and playable ranges, a
+## multisample Sampler's zone ranges, a Drum Machine's pads or a nested zoned Layer's inputs.
+## Null when the instrument doesn't say, which means every key may sound.
+static func slot_instrument_map(slot: DeviceInstance) -> NoteMap:
+	var inst := slot
+	# A Chain: MIDI goes to its first device.
+	while inst and inst.is_container() and not inst.device.container_focuses_one_child():
+		inst = inst.children[0] if not inst.children.is_empty() else null
+	if inst == null:
+		return null
+	if AuxReturnSync.is_sfz(inst):
+		return sfz_map(inst) if _has_key_info(inst) else null
+	if AuxReturnSync.is_layer(inst):
+		if not has_zoned_slot(inst):
+			return null
+		var lmap := layer_map(inst)
+		for s in inst.children:
+			if LayerNoteMap.is_full(s.slot_note_map):
+				return lmap  # labels only: that slot plays every key
+		lmap.playable_ranges = note_ranges(lmap.pitches())
+		return lmap
+	var map := NoteMap.new()
+	map.map_name = inst.get_display_name()
+	if AuxReturnSync.is_drum_machine(inst):
+		var pads := PackedInt32Array()
+		for pad in inst.children:
+			if pad.slot_note >= 0:
+				pads.append(pad.slot_note)
+				map.set_entry(pad.slot_note, pad.get_display_name(), SFZ_KEY_COLOR)
+		pads.sort()
+		map.playable_ranges = note_ranges(pads)
+		# No pads loaded: nothing sounds anywhere, which empty ranges can't say.
+		if pads.is_empty():
+			map.playable_ranges = [[-1, -1]]
+		return map
+	if inst.is_sampler() and inst.multisample != null and inst.multisample.active and not inst.multisample.zones.is_empty():
+		var keys := {}
+		for zone in inst.multisample.zones:
+			for k in range(zone.key_lo, zone.key_hi + 1):
+				keys[k] = true
+		var sorted := PackedInt32Array(keys.keys())
+		sorted.sort()
+		map.playable_ranges = note_ranges(sorted)
+		return map
+	return null
+
+
+## Inclusive [lo, hi] runs of consecutive pitches in ascending `pitches`.
+static func note_ranges(pitches: PackedInt32Array) -> Array:
+	var out: Array = []
+	for p in pitches:
+		if not out.is_empty() and out[-1][1] == p - 1:
+			out[-1][1] = p
+		elif out.is_empty() or out[-1][1] < p:
+			out.append([p, p])
+	return out

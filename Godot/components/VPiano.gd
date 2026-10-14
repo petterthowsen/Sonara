@@ -70,6 +70,13 @@ var scale_context: ScaleContext = null:
 
 @export var black_white_ratio := 0.7
 
+## Width of the outline around white keys (and row keys).
+@export var key_border_width := 0.5:
+	set(w):
+		if not is_equal_approx(key_border_width, w):
+			key_border_width = w
+			queue_redraw()
+
 @export var border_width := 1.0
 
 @export var border_color := Color("#222"):
@@ -134,6 +141,21 @@ func set_active_notes(notes: Dictionary) -> void:
 	if notes != active_notes:
 		active_notes = notes.duplicate()
 		queue_redraw()
+
+
+## Pitches drawn as selected (pitch -> true): tinted with `selection_color` and outlined.
+## Set by the owner, e.g. the Layer mapping window's selected inputs.
+var selected_notes: Dictionary = {}:
+	set(sn):
+		if sn != selected_notes:
+			selected_notes = sn
+			queue_redraw()
+
+@export var selection_color := Color(1.0, 0.75, 0.2):
+	set(sc):
+		if selection_color != sc:
+			selection_color = sc
+			queue_redraw()
 
 
 ## Key currently held down by the mouse, -1 for none.
@@ -320,6 +342,8 @@ func _draw_key(note : int):
 	
 	if is_pressed:
 		draw_rect(note_rect, press_color, true, -1.0, true)
+	if selected_notes.has(note):
+		draw_rect(note_rect, Color(selection_color, 0.35), true, -1.0, true)
 	# Hover goes over the press so the key under the mouse always reads as hovered.
 	# A light overlay vanishes on light keys (e.g. inverted black keys), so darken those instead.
 	if note == hovered_note:
@@ -336,7 +360,9 @@ func _draw_key(note : int):
 	
 	# draw border
 	if not black or row_key:
-		draw_rect(note_rect, key_color_border, false, 0.5, true)
+		draw_rect(note_rect, key_color_border, false, key_border_width, key_border_width < 1.0)
+	if selected_notes.has(note):
+		draw_rect(note_rect.grow(-1.0), selection_color, false, 2.0, false)
 	
 	# draw label?
 	if note_has_label(note) or not entry_name.is_empty():

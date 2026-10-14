@@ -33,6 +33,9 @@ func run_tests() -> void:
 	await _test_slot_row_knob_follows_out()
 	await _test_slot_row_name_width()
 	await _test_out_resets_slot_volume()
+	_test_slot_instrument_map()
+	await _test_layer_piano_key_info()
+	await _test_press_and_connect_drag()
 
 
 func _device(ch: Object, device_id: String, title: String) -> Object:
@@ -230,4 +233,88 @@ func _test_out_resets_slot_volume() -> void:
 	row._out.button_pressed = false
 	_assert(not d.slots[0].slot_separate_out and is_equal_approx(d.slots[0].slot_volume, 0.5), "OUT off leaves the slot volume at unity")
 	row.queue_free()
+	await process_frame
+
+
+func _test_slot_instrument_map() -> void:
+	var _resolver: GDScript = load("res://data/NoteMapResolver.gd")
+	var d := _layer(["Synth", "SFZ", "Drums", "Sampler"])
+	_assert(_resolver.slot_instrument_map(d.slots[0]) == null, "a PolySynth says nothing: every key may sound")
+
+	var sfz := _device(d.channel, "sonara.builtin.sfizz", "SFZ")
+	d.channel.add_device(sfz, -1, d.layer)
+	_assert(_resolver.slot_instrument_map(sfz) == null, "an SFZ before its key info arrives says nothing")
+	sfz.playable_ranges = [[36, 48]]
+	sfz.key_labels = [{"key": 24, "keyswitch": true, "label": "Legato"}]
+	var sfz_map: Object = _resolver.slot_instrument_map(sfz)
+	_assert(sfz_map.is_playable(40) and not sfz_map.is_playable(50), "SFZ ranges become playable ranges")
+	_assert(sfz_map.get_name(24) == "Legato", "SFZ keyswitch keeps its label")
+
+	var dm := _device(d.channel, "sonara.builtin.drum_machine", "Drum Machine")
+	d.channel.add_device(dm, -1, d.layer)
+	var empty_dm: Object = _resolver.slot_instrument_map(dm)
+	_assert(empty_dm != null and not empty_dm.is_playable(36), "a Drum Machine with no pads plays nothing")
+
+	var sampler := _device(d.channel, "sonara.builtin.sampler", "Sampler")
+	var ms: Object = sampler.ensure_multisample()
+	_assert(_resolver.slot_instrument_map(sampler) == null, "a single-sample Sampler plays every key")
+	ms.active = true
+	for range_pair in [[48, 50], [52, 52]]:
+		var zone: Object = load("res://data/SamplerZone.gd").new(ms.zones.size() + 1, "")
+		zone.key_lo = range_pair[0]
+		zone.key_hi = range_pair[1]
+		ms.zones.append(zone)
+	var smap: Object = _resolver.slot_instrument_map(sampler)
+	_assert(smap.playable_ranges == [[48, 50], [52, 52]], "multisample zones become ranges (got %s)" % [smap.playable_ranges])
+	_assert(_resolver.note_ranges(PackedInt32Array([1, 2, 3, 7, 9, 10])) == [[1, 3], [7, 7], [9, 10]], "note_ranges merges runs")
+
+
+func _test_layer_piano_key_info() -> void:
+	var d := _layer([])
+	var sfz := _device(d.channel, "sonara.builtin.sfizz", "SFZ")
+	d.channel.add_device(sfz, -1, d.layer)
+	sfz.playable_ranges = [[36, 48]]
+	var w: Window = _window_script.open_for(d.layer)
+	await process_frame
+	sfz.key_labels_changed.emit()  # key info arriving refreshes the window
+	var out_map: Object = w._output_piano.note_map
+	_assert(out_map.is_playable(40) and not out_map.is_playable(60), "Layer piano greys keys the SFZ doesn't play")
+	_assert(w._input_piano.note_map.playable_ranges == [[36, 48]], "full-map slot: Input piano greys inputs nothing sounds on (got %s)" % [w._input_piano.note_map.playable_ranges])
+	sfz.set_slot_note_map(_map({60: 40, 61: 70}))
+	out_map = w._output_piano.note_map
+	_assert(out_map.has_entry(40) and not out_map.get_name(40).contains("silent"), "a mapped output the SFZ plays reads normally")
+	_assert(out_map.get_name(70).contains("silent"), "a mapped output outside the SFZ's ranges is marked silent (got '%s')" % out_map.get_name(70))
+	_assert(w._input_piano.note_map.playable_ranges == [[60, 60]], "zoned: only inputs that land on a played key sound (got %s)" % [w._input_piano.note_map.playable_ranges])
+	w.queue_free()
+	await process_frame
+
+
+func _test_press_and_connect_drag() -> void:
+	var d := _layer(["Kick"])
+	var w: Window = _window_script.open_for(d.layer)
+	await process_frame
+	w._on_input_pressed(36, 100)
+	_assert(w._selection == PackedInt32Array([36]) and w._input_piano.selected_notes.has(36), "pressing a key selects it and the Input piano shows it")
+	w._finish_drag()
+	w._set_selection(PackedInt32Array([36, 37, 38]))
+	w._on_input_pressed(37, 100)
+	_assert(w._selection.size() == 3, "pressing a selected key keeps the selection for dragging")
+	w._finish_drag()
+	_assert(w._selection == PackedInt32Array([37]), "releasing without a drag selects just that key")
+	w._on_input_toggle(39, false)
+	_assert(w._selection == PackedInt32Array([37, 39]), "Ctrl+click toggles a key into the selection")
+
+	# Pressing a row of the connections column drags the selection holding it.
+	w._on_canvas_row_pressed(39)
+	_assert(w._drag_mode == "connect" and w._selection == PackedInt32Array([37, 39]), "a row press starts a connect drag with the selection")
+	w._drag_target = 48
+	w._finish_drag()
+	_assert(LayerNoteMap.output_of(d.slots[0].slot_note_map, 37) == 48 and LayerNoteMap.output_of(d.slots[0].slot_note_map, 39) == 49, "release connects the selection onto consecutive keys")
+	_assert(w._drag_mode == "" and w._output_piano.selected_notes.is_empty(), "the drag preview clears")
+	w._on_canvas_row_pressed(50)
+	_assert(w._selection == PackedInt32Array([50]), "a row press outside the selection selects that row")
+	w._drag_target = -1  # the pointer isn't over the Layer piano or the connections column
+	w._finish_drag()
+	_assert(LayerNoteMap.output_of(d.slots[0].slot_note_map, 50) == -1, "releasing away from the Layer piano connects nothing")
+	w.queue_free()
 	await process_frame
