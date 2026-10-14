@@ -555,7 +555,7 @@ func _test_assign_flow_drag_on_another_panel() -> void:
 	await process_frame
 	await process_frame
 	_assert(_mod_assign.is_active_for(inst, a.mod_id), "selecting B keeps assign mode for A")
-	var rate_knob: RotaryKnob = pane._controls.get(LFO_RATE)
+	var rate_knob: RotaryKnob = pane._options.controls.get(LFO_RATE)
 	_assert(rate_knob != null, "B's detail built its Rate knob")
 	_assert(rate_knob.mod_assign_active, "B's knob is an assign target")
 	var value_before: float = rate_knob.value
@@ -577,7 +577,7 @@ func _test_assign_flow_drag_on_another_panel() -> void:
 	pane._on_panel_clicked(a.mod_id)
 	await process_frame
 	await process_frame
-	var own_knob: RotaryKnob = pane._controls.get(LFO_RATE)
+	var own_knob: RotaryKnob = pane._options.controls.get(LFO_RATE)
 	_assert(own_knob != null and not own_knob.mod_assign_active, "A's own knob is not an assign target")
 	var routes_before: int = inst.get_modulator(a.mod_id).routes.size()
 	own_knob.mod_assign_active = true

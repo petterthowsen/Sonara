@@ -1,0 +1,25 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://devices/modulators/options/GenericOptions.gd" id="1_options"]
+
+[node name="GenericOptions" type="CenterContainer"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_options")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Row" type="HBoxContainer" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="NoSettings" type="Label" parent="VBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "No settings"
+horizontal_alignment = 1

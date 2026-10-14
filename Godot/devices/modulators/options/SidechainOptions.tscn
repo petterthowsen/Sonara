@@ -1,0 +1,120 @@
+[gd_scene format=3 uid="uid://yx22cepnkoug"]
+
+[ext_resource type="Script" uid="uid://p7y18r6bpccp" path="res://devices/modulators/options/SidechainOptions.gd" id="1_options"]
+[ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
+
+[node name="SidechainOptions" type="CenterContainer" unique_id=1204982947]
+offset_right = 175.0
+offset_bottom = 170.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_options")
+
+[node name="VBox" type="VBoxContainer" parent="." unique_id=914893379]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Source" type="HBoxContainer" parent="VBox" unique_id=1999559440]
+layout_mode = 2
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="Caption" type="Label" parent="VBox/Source" unique_id=71327812]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Source"
+
+[node name="SourceMenu" type="OptionButton" parent="VBox/Source" unique_id=1452756698]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+clip_text = true
+fit_to_longest_item = false
+
+[node name="Knobs" type="HFlowContainer" parent="VBox" unique_id=769336158]
+layout_mode = 2
+alignment = 1
+
+[node name="LowCut" type="VBoxContainer" parent="VBox/Knobs" unique_id=1503983131]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+
+[node name="Caption" type="Label" parent="VBox/Knobs/LowCut" unique_id=968795139]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Low Cut"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="VBox/Knobs/LowCut" unique_id=900012207]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="HighCut" type="VBoxContainer" parent="VBox/Knobs" unique_id=1821060941]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 10
+
+[node name="Caption" type="Label" parent="VBox/Knobs/HighCut" unique_id=1845582273]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "High Cut"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="VBox/Knobs/HighCut" unique_id=406948119]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="Attack" type="VBoxContainer" parent="VBox/Knobs" unique_id=864098888]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 20
+
+[node name="Caption" type="Label" parent="VBox/Knobs/Attack" unique_id=105679180]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Attack"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="VBox/Knobs/Attack" unique_id=1003467215]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="Release" type="VBoxContainer" parent="VBox/Knobs" unique_id=247471935]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 30
+
+[node name="Caption" type="Label" parent="VBox/Knobs/Release" unique_id=487554562]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Release"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="VBox/Knobs/Release" unique_id=1487628657]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")

@@ -34,6 +34,7 @@ func run_tests() -> void:
 	await _test_column_major_grid()
 	await _test_square_sizing()
 	await _test_placeholder_add_and_max()
+	await _test_placeholder_icon()
 	await _test_panel_selection_and_wire()
 	await _test_assign_reaches_child_not_sibling()
 	await _test_control_shows_only_focused_source()
@@ -45,6 +46,7 @@ func run_tests() -> void:
 	await _test_xy_wire_buttons()
 	await _test_xy_pad_panel_model()
 	await _test_sidechain_source_menu()
+	await _test_options_fit_the_panel()
 	_mod_assign.end()
 
 
@@ -206,7 +208,8 @@ func _test_pane_tiles_and_add() -> void:
 	pane._on_add_kind(index)
 	_assert(inst.modulators.size() == 2, "the + menu adds a modulator")
 	_assert(pane._tiles.size() == 2 and pane._selected_mod_id == inst.modulators[1].mod_id, "the new tile is selected")
-	_assert(pane._envelope_control != null and pane._envelope.stages == "adsr", "the envelope detail shows an EnvelopeControl")
+	_assert(pane._options.get("envelope_control") != null and pane._options.envelope.stages == "adsr",
+		"the envelope detail shows an EnvelopeControl")
 	pane.queue_free()
 
 
@@ -292,7 +295,7 @@ func _test_square_sizing() -> void:
 	var s := await _pane_bound(4)
 	var pane = s[0]
 	var side: int = pane._side
-	_assert(side >= 56 and side <= 110, "the side is clamped to 56..110 (%d)" % side)
+	_assert(side > 0, "the side follows the pane height (%d)" % side)
 	_assert(pane._layout_count > 0, "the layout ran")
 	var count_before: int = pane._layout_count
 	pane._layout_panel_size()
@@ -300,7 +303,7 @@ func _test_square_sizing() -> void:
 	_assert(pane._layout_count == count_before, "the same height doesn't re-trigger a layout")
 	for column in pane._grid.get_children():
 		for cell in column.get_children():
-			_assert(cell.custom_minimum_size.x == side and cell.custom_minimum_size.y == side,
+			_assert(absf(cell.size.x - side) < 1.5 and absf(cell.size.y - side) < 1.5,
 				"every cell is %d × %d" % [side, side])
 			_assert(absf(cell.size.x - cell.size.y) <= 1.0, "and laid out square")
 	var column0: VBoxContainer = pane._grid.get_child(0)
@@ -309,6 +312,17 @@ func _test_square_sizing() -> void:
 	_assert(absf(b.position.y - (a.position.y + a.size.y) - pane.SEP) <= 1.0, "vertical neighbours are 2 px apart")
 	var col1: VBoxContainer = pane._grid.get_child(1)
 	_assert(absf(col1.position.x - (column0.position.x + column0.size.x) - pane.SEP) <= 1.0, "columns are 2 px apart")
+	pane.queue_free()
+
+	# Three modulators fill column 0; column 1 holds only placeholders and stays narrow.
+	s = await _pane_bound(3)
+	pane = s[0]
+	await process_frame
+	var narrow: VBoxContainer = pane._grid.get_child(1)
+	for cell in narrow.get_children():
+		_assert(cell is Button, "the second column holds only placeholders")
+		_assert(absf(cell.size.x - pane.PLACEHOLDER_COLUMN_WIDTH) < 1.5 and absf(cell.size.y - pane._side) < 1.5,
+			"a placeholder-only column is a narrow rectangle (%s)" % str(cell.size))
 	pane.queue_free()
 
 
@@ -340,6 +354,20 @@ func _test_placeholder_add_and_max() -> void:
 	_assert(pane._placeholders[0].tooltip_text == "Maximum of 8 modulators", "with the capacity tooltip")
 	pane._on_add_kind(index)
 	_assert(inst.modulators.size() == 8, "the disabled menu still can't exceed the maximum")
+	pane.queue_free()
+
+
+## The `+` is the placeholder button's own icon: centered, at its own size, whatever the cell's.
+func _test_placeholder_icon() -> void:
+	var s := await _pane_bound(1)
+	var pane = s[0]
+	_assert(pane._placeholders.size() == 2, "two placeholders trail one panel")
+	for placeholder in pane._placeholders:
+		_assert(placeholder.icon != null and placeholder.get_child_count() == 0,
+			"the + is the button's icon, not a positioned child")
+		_assert(not placeholder.expand_icon, "the icon keeps its own size")
+		_assert(placeholder.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER
+			and placeholder.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER, "and is centered")
 	pane.queue_free()
 
 
@@ -518,7 +546,7 @@ func _test_xy_pad_pane() -> void:
 	_assert(tile._display is XYPadPanel, "its display is an XYPadPanel")
 	_assert(pane._selected_mod_id == inst.modulators[0].mod_id, "the pair is selected")
 	_assert(pane._detail_pad != null and pane._detail_pad.x == tile.pad.x
-		and pane._detail_pad.y == tile.pad.y and pane._detail_pad_slider != null,
+		and pane._detail_pad.y == tile.pad.y and pane._options.get("slider") != null,
 		"the detail shows the pair's XY slider")
 	_assert(pane._detail_title.text == tile.pad.name, "titled after the pad")
 
@@ -620,8 +648,8 @@ func _test_xy_pad_panel_model() -> void:
 	xy_panel.set_values(0.3, 0.8)
 	_assert(is_equal_approx(pad.x.get_param(0), 0.3) and is_equal_approx(pad.y.get_param(0), 0.8),
 		"the compact pad writes both slots' Position")
-	_assert(is_equal_approx(pane._detail_pad_slider.value_x, 0.3)
-		and is_equal_approx(pane._detail_pad_slider.value_y, 0.8),
+	_assert(is_equal_approx(pane._options.slider.value_x, 0.3)
+		and is_equal_approx(pane._options.slider.value_y, 0.8),
 		"the options pad follows the compact pad")
 	inst.set_modulator_param(pad.x.mod_id, 0, 0.6)
 	_assert(is_equal_approx(xy_panel._slider.value_x, 0.6), "the compact pad follows the model")
@@ -641,7 +669,7 @@ func _test_sidechain_source_menu() -> void:
 	var pane = await _pane_for(inst)
 	pane._select(sc.mod_id)
 	await process_frame
-	var menu: OptionButton = pane._source_menu
+	var menu: OptionButton = pane._options.get("source_menu")
 	_assert(menu != null, "the sidechain detail has a Source menu")
 	_assert(menu.get_item_text(0) == "Device In" and int(menu.get_item_metadata(0)) == 0,
 		"Device In is item 0 with channel id 0")
@@ -661,7 +689,7 @@ func _test_sidechain_source_menu() -> void:
 	for i in menu.item_count:
 		if int(menu.get_item_metadata(i)) == ch_b.id:
 			b_index = i
-	pane._on_source_selected(b_index)
+	pane._options._on_source_selected(b_index)
 	var param = sc.get_parameter(40)
 	_assert(is_equal_approx(sc.get_param(40), param.value_to_normalized(float(ch_b.id))),
 		"picking a channel stores its id normalized through set_modulator_param")
@@ -671,14 +699,64 @@ func _test_sidechain_source_menu() -> void:
 	pane._select(sc.mod_id)
 	await process_frame
 	var found_missing := false
-	for i in pane._source_menu.item_count:
-		if pane._source_menu.get_item_text(i) == "(missing channel)":
+	for i in pane._options.source_menu.item_count:
+		if pane._options.source_menu.get_item_text(i) == "(missing channel)":
 			found_missing = true
 	_assert(found_missing, "a stored id that no longer exists shows as (missing channel)")
 
-	var count_before: int = pane._source_menu.item_count
+	var count_before: int = pane._options.source_menu.item_count
 	project.create_instrument_track("Third")
 	await process_frame
-	_assert(pane._source_menu != null and pane._source_menu.item_count == count_before + 1,
+	_assert(pane._options.source_menu != null and pane._options.source_menu.item_count == count_before + 1,
 		"a channel-list change rebuilds the menu")
 	pane.queue_free()
+
+
+## Every options scene stays under `ModulatorOptions.MAX_HEIGHT`, and in a real DevicePanel no
+## kind's options grow the panel past its fixed height (they may widen it). The options content
+## is centered in the detail column.
+func _test_options_fit_the_panel() -> void:
+	var max_height: float = load("res://devices/modulators/options/ModulatorOptions.gd").MAX_HEIGHT
+	var paths: Array = _pane_script.OPTIONS_SCENES.values()
+	paths.append_array([_pane_script.XY_PAD_OPTIONS, _pane_script.GENERIC_OPTIONS])
+	for path in paths:
+		var scene: Control = load(path).instantiate()
+		root.add_child(scene)
+		var min_size := scene.get_combined_minimum_size()
+		_assert(min_size.y <= max_height, "%s is at most %d px tall (%s)" % [path.get_file(), max_height, min_size])
+		scene.free()
+
+	var panel_height: float = load("res://devices/device_lane/DevicePanel.gd").HEIGHT
+	var panel = load("res://devices/device_lane/DevicePanel.tscn").instantiate()
+	root.add_child(panel)
+	await process_frame
+	var inst = _instance()
+	inst.modulators.clear()
+	for kind in ["lfo", "adsr", "knob", "sidechain", "velocity"]:
+		inst.add_modulator(kind)
+	inst.add_xy_pad()
+	await panel.bind_to_device(inst)
+	panel.modulators_button.set_pressed_no_signal(true)
+	panel._update_tab_panes()
+	await create_timer(0.3).timeout
+	var pane = panel.modulators
+	for mod in inst.modulators:
+		if mod.kind == "xyy":
+			continue
+		pane._select(mod.mod_id)
+		await process_frame
+		await process_frame
+		var options: Control = pane._options
+		_assert(options != null, "%s has an options scene" % mod.kind)
+		_assert(panel.get_combined_minimum_size().y <= panel_height + 0.5 and panel.size.y <= panel_height + 0.5,
+			"%s options keep the panel at %d px (min %.0f, size %.0f)"
+				% [mod.kind, panel_height, panel.get_combined_minimum_size().y, panel.size.y])
+		var grid_right: float = pane._grid.get_global_rect().end.x
+		var last_column: Control = pane._grid.get_child(pane._grid.get_child_count() - 1)
+		_assert(absf(last_column.get_global_rect().end.x - grid_right) <= 1.0,
+			"%s: no empty space between the grid's last column and the options" % mod.kind)
+		var content: Control = options.get_child(0)
+		var offset := content.get_global_rect().get_center() - options.get_global_rect().get_center()
+		_assert(absf(offset.x) <= 1.0 and absf(offset.y) <= 1.0,
+			"%s options are centered in the detail column (off by %s)" % [mod.kind, offset])
+	panel.free()

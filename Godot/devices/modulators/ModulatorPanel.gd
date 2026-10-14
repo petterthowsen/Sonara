@@ -87,7 +87,6 @@ func setup_pair(p_pad: XYPad) -> void:
 func _build() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	theme_type_variation = &"DeviceCard" if not _is_selected else &"DeviceCardSelected"
-	custom_minimum_size = Vector2(56, 56)
 
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 2)

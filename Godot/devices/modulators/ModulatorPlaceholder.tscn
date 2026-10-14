@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/icons/plus.svg" id="1_plus"]
+
+[node name="ModulatorPlaceholder" type="Button"]
+size_flags_vertical = 3
+focus_mode = 0
+theme_type_variation = &"DeviceCard"
+tooltip_text = "Add modulator"
+icon = ExtResource("1_plus")
+icon_alignment = 1
+vertical_icon_alignment = 1

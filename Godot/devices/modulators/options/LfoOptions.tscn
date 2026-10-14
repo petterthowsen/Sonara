@@ -1,0 +1,122 @@
+[gd_scene format=3 uid="uid://x34h8ilrq1gn"]
+
+[ext_resource type="Script" uid="uid://db2vpu3v231rr" path="res://devices/modulators/options/ModulatorOptions.gd" id="1_options"]
+[ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
+
+[node name="LfoOptions" type="CenterContainer" unique_id=1905246287]
+offset_right = 188.0
+offset_bottom = 150.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_options")
+
+[node name="HBox" type="HFlowContainer" parent="." unique_id=1244956904]
+layout_mode = 2
+
+[node name="Menus" type="VBoxContainer" parent="HBox" unique_id=904542313]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 6
+
+[node name="Shape" type="HBoxContainer" parent="HBox/Menus" unique_id=1300627698]
+layout_mode = 2
+theme_override_constants/separation = 8
+script = ExtResource("2_slot")
+
+[node name="Caption" type="Label" parent="HBox/Menus/Shape" unique_id=1733068158]
+custom_minimum_size = Vector2(68, 0)
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Shape"
+horizontal_alignment = 2
+
+[node name="Menu" type="OptionButton" parent="HBox/Menus/Shape" unique_id=770347699]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+clip_text = true
+fit_to_longest_item = false
+
+[node name="Sync" type="HBoxContainer" parent="HBox/Menus" unique_id=1720883247]
+layout_mode = 2
+theme_override_constants/separation = 8
+script = ExtResource("2_slot")
+param_id = 20
+
+[node name="Caption" type="Label" parent="HBox/Menus/Sync" unique_id=2106819156]
+custom_minimum_size = Vector2(68, 0)
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Sync"
+horizontal_alignment = 2
+
+[node name="Menu" type="OptionButton" parent="HBox/Menus/Sync" unique_id=1080897503]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+clip_text = true
+fit_to_longest_item = false
+
+[node name="Retrigger" type="HBoxContainer" parent="HBox/Menus" unique_id=1176171755]
+layout_mode = 2
+theme_override_constants/separation = 8
+script = ExtResource("2_slot")
+param_id = 30
+
+[node name="Caption" type="Label" parent="HBox/Menus/Retrigger" unique_id=1931533646]
+custom_minimum_size = Vector2(68, 0)
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Retrigger"
+horizontal_alignment = 2
+
+[node name="Menu" type="OptionButton" parent="HBox/Menus/Retrigger" unique_id=64526142]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+clip_text = true
+fit_to_longest_item = false
+
+[node name="Knobs" type="HBoxContainer" parent="HBox" unique_id=2107185732]
+layout_mode = 2
+size_flags_horizontal = 6
+size_flags_vertical = 4
+theme_override_constants/separation = 12
+
+[node name="Rate" type="VBoxContainer" parent="HBox/Knobs" unique_id=1538934960]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 10
+
+[node name="Caption" type="Label" parent="HBox/Knobs/Rate" unique_id=566674068]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Rate"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="HBox/Knobs/Rate" unique_id=1996960686]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="Phase" type="VBoxContainer" parent="HBox/Knobs" unique_id=421568238]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 40
+
+[node name="Caption" type="Label" parent="HBox/Knobs/Phase" unique_id=268358859]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Phase"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="HBox/Knobs/Phase" unique_id=323674184]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")

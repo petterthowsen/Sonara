@@ -116,6 +116,7 @@ or styleboxes of their own:
 | `FlatButton`, `FlatMenuButton` | Button, MenuButton | Borderless buttons |
 | `RecordButton`, `SoloButton`, `MuteButton` | Button | Toggles whose pressed state is the status colour |
 | `HeaderSmall`, `HeaderMedium`, `HeaderLarge` | Label | 20, 24 and 28 px headings (body text is 14) |
+| `Caption` | Label | Dim caption naming a control (`text_dim`), e.g. above a knob in the modulator options |
 
 ### Opening context menus (`ContextMenuPopup`)
 

@@ -37,6 +37,7 @@ const VARIATIONS := {
 	&"HeaderSmall": &"Label",
 	&"HeaderMedium": &"Label",
 	&"HeaderLarge": &"Label",
+	&"Caption": &"Label",
 }
 
 
@@ -508,6 +509,7 @@ static func _variations(t: Theme, p: ThemePalette) -> void:
 	t.set_stylebox(&"panel", &"DeviceCardSelected", box(p, p.role(&"card"), u, -1.0, p.role(&"border_selected"), 1))
 	t.set_stylebox(&"panel", &"DeviceCardHeader", box(p, p.role(&"card_header"), u))
 	t.set_stylebox(&"panel", &"Well", box(p, p.role(&"well"), u))
+	t.set_color(&"font_color", &"Caption", p.role(&"text_dim"))
 	# Frames a button and its options button as one control. The fill is darker than the buttons,
 	# so the gap between them reads as a divider; the 1 px margin keeps the border clear of them.
 	# Its corners are one pixel rounder than the buttons', so the curves line up across the margin.
