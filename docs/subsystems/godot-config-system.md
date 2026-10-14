@@ -16,6 +16,9 @@
 - `Settings` is registered before other consumer autoloads in `project.godot` and builds its registry in `_init`.
 - Settings that the engine applies live have a model that listens to `Settings.setting_changed` and sends the OSC: `data/PluginHosting.gd` (`plugins/hosting_mode`) and the `AudioConfig` autoload (`audio/output_device`, `audio/sample_rate`, `audio/buffer_size`, with the custom control `settings/AudioSettingControl.tscn` filled from the engine's device list). `audio/processing_threads` (CHOICE `Auto`, `1`..cores; Audio › Performance) is also sent by `AudioConfig`, as `/engine/threads/set` (Auto = 0) on change and on `engine_connected`, never through `/audio/config/set`.
 
+## Default folders
+- `presets/path` defaults to `~/Documents/Sonara/presets`, next to the projects folder. A saved config value always overrides the default. `Settings.migrate_presets_dir()` runs once at startup (`migrations/presets_dir`) for configs without a saved `presets/path`: it renames the old lowercase `~/Documents/sonara/presets` into place if the new folder is absent, otherwise pins `presets/path` to the old folder so no presets are hidden.
+
 ## Shortcuts
 - Keyboard shortcuts are settings too: `Settings` registers one `shortcuts/<action id>` setting (type `SHORTCUT`, an array of at most two chord strings such as `["Ctrl+D"]`) for every row in `HotkeyActions.ACTIONS`. Defaults live only in that table, never in `project.godot`.
 - The `Hotkeys` autoload applies the stored chords to `InputMap` and re-applies them on `setting_changed`. Handlers match with `Hotkeys.pressed(event, "<id>")`, never with `KEY_*` checks or Godot's `ui_*` actions. Matching is exact, so Space does not match Shift+Space.

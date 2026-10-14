@@ -21,7 +21,7 @@ Do the phases in order. Run `Godot/tests/run_all.sh` after each phase. Mark task
 - **CLAP state is the opaque `plugin_state` blob,** fetched fresh through `save_plugin_state()` at save time (the same path `Project.refresh_plugin_states()` uses). `parameter_values` are stored as well, but the blob is authoritative for plugins.
 - **One JSON file per preset, extension `.sonpreset`.**
 - **Folder layout:** `<presets root>/<Device name>/<Preset name>.sonpreset`. The device subfolder is created on save, and users may add their own subfolders anywhere. The browser builds its tree from the folders.
-- **Presets root:** setting `presets/path`, default `~/Documents/sonara/presets`, created on first save.
+- **Presets root:** setting `presets/path`, default `~/Documents/Sonara/presets`, created on first save.
 - **Author** is remembered in config (`presets/author`) and prefilled in the save dialog.
 - **Tags** are entered comma-separated and stored as a trimmed, lower-cased, de-duplicated array. Browser search matches name, tags, author and device name.
 - **Loading into an existing device is supported,** from the preset button menu and by dropping a preset onto a device of the same type. It is one undo step.
@@ -66,7 +66,7 @@ Do the phases in order. Run `Godot/tests/run_all.sh` after each phase. Mark task
 
 ## Phase 1: Preset format, library and settings
 
-- [x?] Settings: register `presets/path` (`Type.PATH`, default `~/Documents/sonara/presets`, category Assets, sub "Presets") in `settings/Settings.gd`. Store `presets/author` with `Sonara.get_config`/`set_config` (no settings row needed, but one under Presets does no harm).
+- [x?] Settings: register `presets/path` (`Type.PATH`, default `~/Documents/Sonara/presets`, category Assets, sub "Presets") in `settings/Settings.gd`. Store `presets/author` with `Sonara.get_config`/`set_config` (no settings row needed, but one under Presets does no harm).
 - [x?] Shared fresh-ID helper: move `TrackDuplicateCommand._refresh_device_ids()` into a static `DeviceInstance.refresh_ids_in_json(data, channel_id)` (recursive: new UUIDs, `channel_id` rewritten, `return_channel_id`/`return_channel_ids` cleared). `TrackDuplicateCommand` calls the helper.
 - [x?] Shared plugin-state refresh: move `Project._collect_plugin_state_requests()` and the wait loop of `refresh_plugin_states()` into a static helper that takes a list of root instances (`DeviceInstance.refresh_plugin_states(roots, timeout)`). Project calls it with every channel's devices, and presets call it with one root.
 - [x?] `data/DevicePreset.gd` (`class_name DevicePreset extends RefCounted`): the fields above, plus:

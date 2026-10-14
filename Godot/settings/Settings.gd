@@ -99,6 +99,11 @@ const CATEGORY_APPEARANCE = "Appearance"
 const CATEGORY_SHORTCUTS = "Shortcuts"
 const CATEGORY_AI = "AI"
 
+## Default device presets folder, next to the projects folder (`Sonara.PROJECTS_DIR_NAME`).
+const DEFAULT_PRESETS_PATH := "~/Documents/Sonara/presets"
+## Pre-#134 default (lowercase). Only used by `migrate_presets_dir`.
+const LEGACY_PRESETS_PATH := "~/Documents/sonara/presets"
+
 var _settings: Dictionary = {}
 
 
@@ -128,6 +133,10 @@ func _migrate_renamed_keys() -> void:
 			Sonara.set_config("assets/enabled_providers", providers)
 		Sonara.set_config("migrations/presets_provider", true)
 		migrated = true
+	if not Utils.is_test_mode() and Sonara.get_config("migrations/presets_dir") == null:
+		migrate_presets_dir()
+		Sonara.set_config("migrations/presets_dir", true)
+		migrated = true
 	for old_key in _RENAMED_KEYS:
 		var old_val = Sonara.get_config(old_key)
 		if old_val != null and Sonara.get_config(_RENAMED_KEYS[old_key]) == null:
@@ -135,6 +144,27 @@ func _migrate_renamed_keys() -> void:
 			migrated = true
 	if migrated:
 		Sonara.save_config()
+
+
+## One-time move of the old lowercase presets folder (#134). A user who saved `presets/path`
+## keeps it (a stored value overrides the default), so only configs on the default are touched.
+## If the new folder does not exist yet, the old one is renamed into place (no copy, nothing
+## overwritten). If both exist, `presets/path` is pinned to the old folder so nothing is hidden.
+## Returns "moved", "pinned" or "" (nothing to do). Paths are parameters for tests.
+func migrate_presets_dir(old_path: String = LEGACY_PRESETS_PATH, new_path: String = DEFAULT_PRESETS_PATH) -> String:
+	if Sonara.get_config("presets/path") != null:
+		return ""
+	var old_dir := Utils.expand_path(old_path)
+	var new_dir := Utils.expand_path(new_path)
+	if old_dir == new_dir or not DirAccess.dir_exists_absolute(old_dir):
+		return ""
+	if not DirAccess.dir_exists_absolute(new_dir):
+		DirAccess.make_dir_recursive_absolute(new_dir.get_base_dir())
+		if DirAccess.rename_absolute(old_dir, new_dir) == OK:
+			return "moved"
+	# Both exist (or the move failed): keep reading the old folder.
+	Sonara.set_config("presets/path", old_path)
+	return "pinned"
 
 
 func _register_all_settings() -> void:
@@ -208,7 +238,7 @@ func _register_all_settings() -> void:
 		"presets/path",
 		"Device Presets Folder",
 		Type.PATH,
-		"~/Documents/sonara/presets",
+		DEFAULT_PRESETS_PATH,
 		CATEGORY_ASSETS,
 		"Folder holding saved device presets (.sonpreset), one subfolder per device. Created on first save.",
 	)).sub("Presets")
