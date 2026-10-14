@@ -113,9 +113,10 @@ Engine commands run from `Engine/`. Godot tests: `Godot/tests/run_all.sh <words>
 
 ## Phase 5 — verification
 
-- [ ] **T-017** [REQ-all] Full gates.
+- [x?] **T-017** [REQ-all] Full gates.
   - _Files_: —
   - _Output_: the gate results recorded here
+  - _Result_ (2026-10-14): `cargo fmt --check` clean; `cargo test` lib 1165 passed, 0 failed, 15 ignored (other targets pass); `Godot/tests/run_all.sh` all 259 scripts passed
   - _Verify_: `cargo fmt --check` and `cargo test` in `Engine/` pass; `Godot/tests/run_all.sh` passes in full
   - _Depends on_: T-001 – T-016
 

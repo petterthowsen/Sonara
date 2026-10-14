@@ -5,8 +5,10 @@
 ## modulator with the `mod_id` configure key, `_exit_tree` unsubscribes. A blob is the header
 ## `[mod_id, sample_rate, low_cut_hz, high_cut_hz]` (little-endian f32; a cut of 0 means the
 ## filter is bypassed) followed by the engine's `MiniAnalyser` points: the input after Gain
-## (gray area) and after the filters (white line), with the cuts as markers. The menu lists "Device In" plus every project channel by name (master included,
-## hardware outputs excluded), item metadata = channel id, and rebuilds when channels come or go.
+## (gray area) and after the filters (white line), with the cuts as markers.
+##
+## The menu lists "Device In" plus every project channel by name (master included, hardware
+## outputs excluded), item metadata = channel id, and rebuilds when channels come or go.
 class_name SidechainOptions extends ModulatorOptions
 
 const SOURCE_PARAM := 40
