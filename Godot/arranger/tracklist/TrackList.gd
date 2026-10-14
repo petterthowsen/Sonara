@@ -53,6 +53,8 @@ var _drop_indicator: DropIndicator = null
 signal selection_changed(tracks: Array[Track], active: Track)
 ## The set of shown rows changed (fold, hide, automation toggle, add/remove, reorder).
 signal visual_order_updated
+## A track header was double-clicked (the header already selected the track).
+signal track_double_clicked(track: Track)
 
 ## Rows from the last _update_visual_order, resized on every fold animation step.
 var _fold_rows: Array = []
@@ -301,6 +303,7 @@ func _on_track_added(track: Track) -> void:
 	track_item.right_clicked.connect(_on_track_item_right_clicked)
 	track_item.select_requested.connect(_on_track_item_select_requested)
 	track_item.select_released.connect(_on_track_item_select_released)
+	track_item.double_clicked.connect(track_double_clicked.emit)
 	track_item.rename_tab_requested.connect(_on_track_item_rename_tab_requested)
 	track_item.automation_disclosure_toggled.connect(_on_automation_disclosure_toggled)
 	track_item.automation_menu_requested.connect(_on_automation_menu_requested)

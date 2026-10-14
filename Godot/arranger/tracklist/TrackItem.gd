@@ -16,6 +16,9 @@ signal right_clicked(track: Track, mouse_position: Vector2)
 signal select_requested(track: Track, additive: bool, range_select: bool)
 ## Left button released after a select_requested press (not emitted once a drag has started).
 signal select_released(track: Track)
+## Left button double-clicked on the header (not the resize gutter, no Ctrl/Shift/Cmd held).
+## Emitted after the press's select_requested.
+signal double_clicked(track: Track)
 ## Tab/Shift+Tab while renaming: apply the name and continue on the adjacent track.
 signal rename_tab_requested(track: Track, reverse: bool)
 ## Disclosure arrow toggled: TrackList shows or hides this track's automation lane rows (REQ-014).
@@ -199,6 +202,8 @@ func _gui_input(event: InputEvent) -> void:
 				var additive := mouse_event.ctrl_pressed or mouse_event.meta_pressed
 				var range_select := mouse_event.shift_pressed
 				select_requested.emit(track, additive, range_select)
+				if mouse_event.double_click and not additive and not range_select:
+					double_clicked.emit(track)
 				accept_event()
 				return
 

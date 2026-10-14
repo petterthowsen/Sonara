@@ -261,6 +261,7 @@ func _connect_ui_signals():
 
 	# Track <-> channel selection sync
 	(arranger.track_list as TrackList).selection_changed.connect(_on_track_list_selection_changed)
+	(arranger.track_list as TrackList).track_double_clicked.connect(open_device_lane_for_track)
 	mixer.selection_changed.connect(_on_mixer_selection_changed)
 
 	if Settings:
@@ -1039,6 +1040,25 @@ func toggle_device_lane():
 		
 		if not seconday_panel.visible:
 			seconday_panel.show()
+
+
+## Open (never close) the Device Lane bound to `track`'s channel. Makes sure the track is the
+## active selection and its channel focused first. A track without a channel does nothing.
+func open_device_lane_for_track(track: Track) -> void:
+	if track == null or project == null:
+		return
+	if focused_track != track:
+		(arranger.track_list as TrackList).set_selection_silent([track] as Array[Track], track)
+		set_track_selection([track] as Array[Track], track)
+	var channel := project.get_channel_by_id(track.default_channel_id) if track.default_channel_id >= 0 else null
+	if channel == null:
+		logger.warn("[Editor] Cannot open device lane: track has no channel")
+		return
+	focus_channel(channel)
+	device_lane.show()
+	device_lane.bind_to_channel(channel)
+	if not seconday_panel.visible:
+		seconday_panel.show()
 
 
 # ============================================================================
