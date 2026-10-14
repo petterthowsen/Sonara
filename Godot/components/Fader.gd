@@ -111,8 +111,10 @@ var ghost_value := NAN:
 ## False: the fader shows its value but ignores input and is drawn dimmed.
 @export var editable := true:
 	set(v):
+		# Re-assigning the same value (a view refresh mid-drag) must not cancel the drag.
+		if v != editable:
+			_dragging = false
 		editable = v
-		_dragging = false
 		self_modulate = Color.WHITE if v else Color(1, 1, 1, 0.45)
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if v else Control.CURSOR_ARROW
 		_refresh_tooltip()

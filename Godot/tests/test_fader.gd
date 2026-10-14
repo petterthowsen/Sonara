@@ -23,6 +23,7 @@ func run_tests() -> void:
 	_test_typed_entry()
 	_test_no_signal_on_noop()
 	_test_fill_origin()
+	_test_refresh_keeps_drag()
 	_test_segmented_control()
 
 
@@ -165,6 +166,21 @@ func _test_fill_origin() -> void:
 	f.max_value = 24.0
 	f.fill_origin = 0.0
 	_assert(is_equal_approx(f.value_to_position(0.0), 1.0 / 3.0), "0 dB sits a third up a -12..24 track")
+	f.free()
+
+
+## A view re-asserting `editable` on every parameter echo (Compressor Output) must not end a drag.
+func _test_refresh_keeps_drag() -> void:
+	var f := _fader()
+	var grab := Vector2(15, f.position_y(0.5))
+	_press(f, grab)
+	f.editable = true # unchanged: a view refresh mid-drag
+	_drag_to(f, grab, grab + Vector2(0, -20))
+	_assert(is_equal_approx(f.value, 60.0), "a no-op editable assignment keeps the drag alive (got %s)" % f.value)
+	f.editable = false
+	_drag_to(f, grab, grab + Vector2(0, -20))
+	_assert(is_equal_approx(f.value, 60.0), "turning editable off still cancels the drag")
+	f.editable = true
 	f.free()
 
 
