@@ -4,7 +4,7 @@
 ## variations.
 ##
 ## The wire button toggles assign mode for this modulator and pulses while active; an XY pad
-## tile (`setup_pair`) shows two of them, one per slot. All wire buttons are flat with label and
+## tile (`setup_pair`) shows two of them, one per slot. All wire buttons are non-flat, with label and
 ## icon colored by their modulator's source colour (REQ-010). A left click selects only on
 ## release without crossing the drag threshold, so a press-and-drag never toggles selection; the
 ## pane starts a swap drag past the threshold. Presses on an XY pad's interactive display never
@@ -138,7 +138,7 @@ func _build() -> void:
 	_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(_display)
 
-	# The wire button(s): flat, colored by their slot's source colour (REQ-010).
+	# The wire button(s): colored by their slot's source colour (REQ-010).
 	if pad != null:
 		var wires := HBoxContainer.new()
 		wires.add_theme_constant_override("separation", 4)
@@ -172,7 +172,7 @@ func _build() -> void:
 func _make_wire_button(label: String) -> Button:
 	var button := Button.new()
 	button.toggle_mode = true
-	button.flat = true
+	button.flat = false
 	button.focus_mode = Control.FOCUS_NONE
 	button.icon = WIRE_ICON
 	if label != "":
@@ -278,7 +278,7 @@ func _sync_one_wire(button: Button, mod_id: int) -> void:
 
 
 func _apply_wire_color(button: Button, mod_id: int) -> void:
-	button.flat = true
+	button.flat = false
 	var color := _color_for_mod(mod_id)
 	for role in WIRE_COLOR_ROLES:
 		button.add_theme_color_override(role, color)
