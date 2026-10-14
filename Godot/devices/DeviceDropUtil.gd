@@ -440,6 +440,14 @@ static func drop_selection(
 		HistoryUtil.execute_many("Move Devices", transfers)
 		return true
 	var host: Array[DeviceInstance] = to_parent.children if to_parent else channel.devices
+	# A selection coming wholly from other hosts on this channel (e.g. onto a device slot tile)
+	# relocates as a block, in order, at the drop point.
+	if list.all(func(d): return d.get_channel() == channel and not host.has(d) and can_drop_instance_on_host(channel, d, to_parent)):
+		var relocations: Array[Command] = []
+		for i in list.size():
+			relocations.append(DeviceRelocateCommand.new(channel, list[i], to_parent, -1 if to_position < 0 else to_position + i))
+		HistoryUtil.execute_many("Move Devices", relocations)
+		return true
 	var moving := list.filter(func(d): return host.has(d)) as Array[DeviceInstance]
 	if moving.size() != list.size():
 		drop_instance(channel, primary, to_parent, to_position)
@@ -642,6 +650,8 @@ static func drop_on_container(
 	if data is DeviceInstance:
 		if DeviceDrag.is_copy(drag_data):
 			copy_instances(channel, (drag_data as DeviceDrag).devices, container, -1)
+		elif drag_data is DeviceDrag and (drag_data as DeviceDrag).devices.size() > 1:
+			drop_selection(channel, (drag_data as DeviceDrag).devices, container, -1)
 		else:
 			drop_instance(channel, data, container, -1)
 		return

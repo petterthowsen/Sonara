@@ -3,13 +3,15 @@
 [ext_resource type="Script" uid="uid://db2vpu3v231rr" path="res://devices/modulators/options/ModulatorOptions.gd" id="1_options"]
 [ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
 
-[node name="KnobOptions" type="CenterContainer" unique_id=661931226]
+[node name="KnobOptions" type="VBoxContainer" unique_id=661931226]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
+alignment = 1
 
 [node name="HBox" type="VBoxContainer" parent="." unique_id=1631218134]
 layout_mode = 2
+size_flags_horizontal = 4
 theme_override_constants/separation = 20
 
 [node name="Polarity" type="VBoxContainer" parent="HBox" unique_id=584177842]

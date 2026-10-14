@@ -5,13 +5,15 @@
 [ext_resource type="Script" path="res://components/RotaryKnob.gd" id="3_knob"]
 [ext_resource type="Script" path="res://components/EnvelopeControl.gd" id="4_envelope"]
 
-[node name="EnvelopeOptions" type="CenterContainer"]
+[node name="EnvelopeOptions" type="VBoxContainer"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
+alignment = 1
 
 [node name="VBox" type="VBoxContainer" parent="."]
 layout_mode = 2
+size_flags_horizontal = 4
 theme_override_constants/separation = 10
 
 [node name="EnvelopeControl" type="Control" parent="VBox"]

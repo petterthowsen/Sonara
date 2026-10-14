@@ -4,15 +4,17 @@
 [ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
 [ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
 
-[node name="CcOptions" type="CenterContainer" unique_id=2085803370]
+[node name="CcOptions" type="VBoxContainer" unique_id=2085803370]
 offset_right = 162.0
 offset_bottom = 76.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
+alignment = 1
 
 [node name="HBox" type="HBoxContainer" parent="." unique_id=423331243]
 layout_mode = 2
+size_flags_horizontal = 4
 theme_override_constants/separation = 16
 
 [node name="Number" type="VBoxContainer" parent="HBox" unique_id=1299235817]

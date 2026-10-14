@@ -14,7 +14,7 @@ var logger : Log = Log.make("CompactDevicePanel")
 @onready var parameters_box : VBoxContainer = %Parameters/VBox
 @onready var header : PanelContainer = %Header
 @onready var device_light: DeviceLightButton = %DeviceLight
-@onready var name_label : SmartLineEdit = %Name
+@onready var name_label : Label = %Name
 @onready var collapse_button : ToggleIconButton = %CollapseToggle
 
 const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
@@ -72,10 +72,9 @@ func _ready() -> void:
 	collapse_button.gui_input.connect(_on_collapse_button_gui_input)
 	collapse_button.mouse_entered.connect(_set_button_hovered.bind(true))
 	collapse_button.mouse_exited.connect(_set_button_hovered.bind(false))
-	# Double-click the name to rename inline (shift+click on it still opens the window).
+	# The name is a plain Label (rename lives in the context menu); shift+click on it opens the window.
 	name_label.mouse_entered.connect(_set_name_hovered.bind(true))
 	name_label.mouse_exited.connect(_set_name_hovered.bind(false))
-	name_label.value_changed.connect(_on_name_edited)
 	# Fires for children too (Godot 4.2+), so the whole panel counts as hovered.
 	mouse_entered.connect(_set_hovered.bind(true))
 	mouse_exited.connect(_set_hovered.bind(false))
@@ -192,7 +191,7 @@ func _update_note_fx_stripe() -> void:
 func _refresh_name_label() -> void:
 	if device_instance == null or name_label == null:
 		return
-	name_label.set_value(device_instance.get_display_name())
+	name_label.text = device_instance.get_display_name()
 	var type_name := device_instance.device.name if device_instance.device else ""
 	name_label.tooltip_text = type_name
 	tooltip_text = type_name
@@ -201,13 +200,6 @@ func _refresh_name_label() -> void:
 ## Keep the compact header in sync with instance renames.
 func _on_device_name_changed(_new_name: String) -> void:
 	_refresh_name_label()
-
-
-## Commit an inline rename from the header's SmartLineEdit.
-func _on_name_edited(value) -> void:
-	if device_instance == null:
-		return
-	name_label.set_value(DeviceActions.rename(device_instance, str(value)))
 
 
 ## Create the shared ParameterList once and host it in the compact panel.

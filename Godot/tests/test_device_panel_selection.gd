@@ -35,6 +35,7 @@ func run_tests() -> void:
 	await _test_left_header_is_a_drag_handle()
 	await _test_drop_selection_moves_the_block()
 	await _test_drop_selection_across_channels()
+	await _test_drop_selection_into_container()
 	await _test_copy_paste_duplicate()
 	await _test_nested_context_menu()
 	await _test_selection_border()
@@ -226,6 +227,19 @@ func _test_drop_selection_across_channels() -> void:
 		"a selection from another channel transfers as a block: %s / %s" % [str(_names(other.devices)), str(_names(ch.devices))])
 
 
+func _test_drop_selection_into_container() -> void:
+	var ch: Object = _fresh_project()
+	var a := _fx(ch, "a")
+	var b := _fx(ch, "b")
+	var layer: Object = _device_instance_script.new(_fresh_device("test.layer2", true), ch.id, -1)
+	ch.add_device(layer)
+	# Same path a device slot tile uses: the whole selection moves into the container.
+	var drag: Object = load("res://devices/DeviceDrag.gd").new(null, a, null, [a, b])
+	_drop_util.drop_on_container(ch, layer, drag)
+	_assert(_names(layer.children) == ["a", "b"] and _names(ch.devices) == ["layer2"],
+		"a selection dropped on a container moves every device: %s / %s" % [str(_names(layer.children)), str(_names(ch.devices))])
+
+
 func _fresh_device(id: String, container := false) -> Object:
 	var registry: Object = root.get_node("AssetService").device_registry
 	var device: Object = registry._devices.get(id)
@@ -314,7 +328,7 @@ func _test_panes_slide_and_fade() -> void:
 	var lane := await _lane(ch)
 	var pa: Control = lane.find_device_panel(a)
 	_assert(not pa.view_pane.visible, "a device with no view keeps its View pane closed")
-	_assert(pa.name_label.get_value() == a.get_display_name(), "the header shows the device name (SmartLineEdit, double-click renames)")
+	_assert(pa.name_label.text == a.get_display_name(), "the header shows the device name (plain Label)")
 	_assert(pa.name_label.mouse_filter == Control.MOUSE_FILTER_PASS, "the name label lets clicks pass")
 	_assert(pa.vertical_name_label.mouse_filter == Control.MOUSE_FILTER_PASS, "the vertical name lets clicks pass")
 

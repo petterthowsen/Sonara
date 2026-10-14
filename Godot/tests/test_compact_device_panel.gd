@@ -69,8 +69,8 @@ func _test_setup_on_ready_panel() -> void:
 	for _i in 3:
 		await process_frame
 
-	_assert(panel.name_label.get_value() == instance.get_display_name(),
-		"setup() on a ready panel sets the name label (got '%s')" % panel.name_label.get_value())
+	_assert(panel.name_label.text == instance.get_display_name(),
+		"setup() on a ready panel sets the name label (got '%s')" % panel.name_label.text)
 	_assert(panel._param_list != null and panel._param_list.device == instance,
 		"setup() on a ready panel binds the parameter list")
 	_assert(panel.device_instance == instance, "setup() on a ready panel keeps the bound instance")
@@ -90,8 +90,8 @@ func _test_setup_before_added_to_tree() -> void:
 	for _i in 3:
 		await process_frame
 
-	_assert(panel.name_label.get_value() == instance.get_display_name(),
-		"setup() before add_child still sets the name label (got '%s')" % panel.name_label.get_value())
+	_assert(panel.name_label.text == instance.get_display_name(),
+		"setup() before add_child still sets the name label (got '%s')" % panel.name_label.text)
 	_assert(panel._param_list != null and panel._param_list.device == instance,
 		"setup() before add_child still binds the parameter list")
 

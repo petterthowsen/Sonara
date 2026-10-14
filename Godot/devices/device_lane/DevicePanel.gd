@@ -21,7 +21,7 @@ var logger : Log = Log.make("DevicePanel")
 
 # light button toggles inactive/active and enabled/disabled
 @onready var device_light: DeviceLightButton = $VBox/TopHeader/HBox/DeviceLight
-@onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
+@onready var name_label : Label = $VBox/TopHeader/HBox/Name
 
 ## Opens the preset menu (save, load, show in browser).
 @onready var preset_button: Button = $VBox/TopHeader/HBox/Preset
@@ -157,9 +157,8 @@ func _ready() -> void:
 	file_load_button.pressed.connect(_on_load_file_pressed)
 	file_dialog.file_selected.connect(_on_file_selected)
 
-	# Double-click the header name to rename inline (the context menu's name field also works);
-	# single clicks and drags still pass through to selection and drag-and-drop.
-	name_label.value_changed.connect(_on_name_edited)
+	# The header name is a plain Label (rename lives in the context menu). Single clicks and drags
+	# pass through to selection and drag-and-drop; a double-click on a header toggles the View.
 
 	# Initial state: only the View open. The Parameters tab opens by itself only for a device
 	# with no view (`_apply_default_tab`).
@@ -295,9 +294,8 @@ func _fit_name_to_tabs() -> void:
 		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_label.custom_minimum_size.x = 0
 		return
-	var text_label := name_label.label
-	var font := text_label.get_theme_font("font")
-	var width := font.get_string_size(text_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_label.get_theme_font_size("font_size")).x
+	var font := name_label.get_theme_font("font")
+	var width := font.get_string_size(name_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, name_label.get_theme_font_size("font_size")).x
 	name_label.size_flags_horizontal = Control.SIZE_FILL
 	name_label.custom_minimum_size.x = minf(ceilf(width) + 4.0, NAME_MAX_WIDTH)
 
@@ -335,8 +333,18 @@ func _gui_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				select_requested.emit(self, mb.ctrl_pressed or mb.meta_pressed, mb.shift_pressed)
+				if mb.double_click and _is_on_header(mb.global_position) and view_button.visible:
+					# Same path as pressing the View chevron (_on_view_toggled).
+					view_button.button_pressed = not view_button.button_pressed
+					accept_event()
 			else:
 				select_released.emit(self)
+
+
+## True when a global point is over the top or left header (buttons stop their own clicks, so
+## only free header areas reach `_gui_input`).
+func _is_on_header(global_pos: Vector2) -> bool:
+	return header.get_global_rect().has_point(global_pos) or left_header.get_global_rect().has_point(global_pos)
 
 
 ## Release engine subscriptions and popups when the panel is freed (e.g.
@@ -523,20 +531,10 @@ func _on_reload_pressed() -> void:
 		device.reload()
 
 
-## Commit an inline rename from the header's SmartLineEdit.
-func _on_name_edited(value) -> void:
-	if device == null:
-		return
-	var new_name := DeviceActions.rename(device, str(value))
-	name_label.set_value(new_name)
-	vertical_name_label.text = new_name
-	_fit_name_to_tabs()
-
-
 ## Refresh the header when the instance is renamed.
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
-		name_label.set_value(new_name)
+		name_label.text = new_name
 		vertical_name_label.text = new_name
 		_fit_name_to_tabs()
 
@@ -577,8 +575,7 @@ func bind_to_device(dev : DeviceInstance):
 			return
 	device_light.bind_to_device_instance(dev)
 	_update_note_fx_stripe()
-	name_label.set_value(dev.get_display_name())
-	name_label.disabled = DeviceSlots.is_slot_chain(dev)  # a device slot keeps its name
+	name_label.text = dev.get_display_name()
 	vertical_name_label.text = dev.get_display_name()
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)

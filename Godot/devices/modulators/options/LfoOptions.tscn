@@ -4,15 +4,17 @@
 [ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
 [ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
 
-[node name="LfoOptions" type="CenterContainer" unique_id=1905246287]
+[node name="LfoOptions" type="VBoxContainer" unique_id=1905246287]
 offset_right = 188.0
 offset_bottom = 150.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
+alignment = 1
 
 [node name="HBox" type="HFlowContainer" parent="." unique_id=1244956904]
 layout_mode = 2
+size_flags_horizontal = 4
 
 [node name="Menus" type="VBoxContainer" parent="HBox" unique_id=904542313]
 layout_mode = 2

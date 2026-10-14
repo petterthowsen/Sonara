@@ -90,16 +90,16 @@ func _test_lane_header_rename() -> void:
 	await process_frame
 	panel.bind_to_device(a)
 	var header: Node = panel.name_label
-	_assert(header.label.text == "Alpha" and not header.disabled, "lane header shows an editable name")
-	header.start_editing()
-	header.line_edit.text = "Pad"
-	header.stop_editing()
-	_assert(a.name == "Pad" and header.label.text == "Pad", "lane header rename reaches the device and header: %s" % a.name)
+	_assert(header is Label and not header.has_method("start_editing"), "lane header name is a plain, non-editable Label")
+	_assert(header.text == "Alpha", "lane header shows the device name: %s" % header.text)
+	_actions.rename(a, "Pad")
+	_assert(a.name == "Pad" and header.text == "Pad", "context-menu rename reaches the device and header: %s" % a.name)
 	a.set_name("Pad 2")
-	_assert(header.label.text == "Pad 2", "header follows name_changed: %s" % header.label.text)
+	_assert(header.text == "Pad 2", "header follows name_changed: %s" % header.text)
+	_assert(panel.vertical_name_label.text == "Pad 2", "vertical name follows name_changed")
 	var compact: Node = load("res://devices/compact/CompactDevicePanel.tscn").instantiate()
 	root.add_child(compact)
 	await process_frame
-	_assert(compact.name_label.edit_via_click, "compact header name renames on double-click")
+	_assert(compact.name_label is Label and not compact.name_label.has_method("start_editing"), "compact header name is a plain, non-editable Label")
 	panel.queue_free()
 	compact.queue_free()

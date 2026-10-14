@@ -22,6 +22,10 @@ const WIRE_ICON := preload("res://assets/icons/cable.svg")
 ## Movement (px) past which a press becomes a drag instead of a click.
 const DRAG_THRESHOLD := 6.0
 
+## Assign-mode wire button pulse: lowest alpha and seconds per half-cycle.
+const PULSE_MIN_ALPHA := 0.15
+const PULSE_HALF_CYCLE := 0.38
+
 const MENU_RENAME := 100000
 const MENU_DUPLICATE := 100001
 const MENU_DELETE := 100002
@@ -283,8 +287,8 @@ func _apply_wire_color(button: Button, mod_id: int) -> void:
 func _start_pulse(button: Button) -> void:
 	_stop_pulse(button)
 	_pulses[button] = create_tween().set_loops()
-	_pulses[button].tween_property(button, "modulate:a", 0.35, 0.5)
-	_pulses[button].tween_property(button, "modulate:a", 1.0, 0.5)
+	_pulses[button].tween_property(button, "modulate:a", PULSE_MIN_ALPHA, PULSE_HALF_CYCLE)
+	_pulses[button].tween_property(button, "modulate:a", 1.0, PULSE_HALF_CYCLE)
 
 
 func _stop_pulse(button: Button) -> void:

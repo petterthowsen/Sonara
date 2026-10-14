@@ -1,5 +1,7 @@
-## Sidechain options: the Source channel menu (spec 036 REQ-006) and the input spectrum on the
-## left, the Gain, filter and follower knobs and the Amount slider on the right (spec 044).
+## Sidechain options (spec 036 REQ-006, spec 044), in three rows: the Source channel menu and
+## Gain on top; the input spectrum, filling the space, with the Amount as a vertical compact
+## slider on its right; and the High Cut, Low Cut, Attack and Release knobs below. The middle row
+## expands vertically and is the one that shrinks first when the panel is short.
 ##
 ## The options own the device's `"sidechain"` data stream: `setup` subscribes it and selects this
 ## modulator with the `mod_id` configure key, `_exit_tree` unsubscribes. A blob is the header

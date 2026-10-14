@@ -2,13 +2,15 @@
 
 [ext_resource type="Script" path="res://devices/modulators/options/GenericOptions.gd" id="1_options"]
 
-[node name="GenericOptions" type="CenterContainer"]
+[node name="GenericOptions" type="VBoxContainer"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
+alignment = 1
 
 [node name="VBox" type="VBoxContainer" parent="."]
 layout_mode = 2
+size_flags_horizontal = 4
 
 [node name="Row" type="HBoxContainer" parent="VBox"]
 unique_name_in_owner = true

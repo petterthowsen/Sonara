@@ -5,15 +5,17 @@
 [ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
 [ext_resource type="Script" uid="uid://bx2ui0xrp1myo" path="res://components/XYSlider.gd" id="4_xy"]
 
-[node name="XYPadOptions" type="CenterContainer" unique_id=626520286]
+[node name="XYPadOptions" type="VBoxContainer" unique_id=626520286]
 offset_right = 150.0
 offset_bottom = 220.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_options")
+alignment = 1
 
 [node name="HBox" type="HFlowContainer" parent="." unique_id=274825553]
 layout_mode = 2
+size_flags_horizontal = 4
 
 [node name="XYSlider" type="Control" parent="HBox" unique_id=605538802]
 unique_name_in_owner = true

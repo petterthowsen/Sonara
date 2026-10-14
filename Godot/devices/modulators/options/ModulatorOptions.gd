@@ -5,9 +5,10 @@
 ##
 ## Layout contract: the pane gives an options scene the device panel's fixed height and as much
 ## width as it asks for. Lay controls out sideways rather than stacking them, never scroll, and
-## keep the scene's minimum height well under `DevicePanel.HEIGHT` (see `MAX_HEIGHT`). The root
-## centers its content in both directions.
-class_name ModulatorOptions extends CenterContainer
+## keep the scene's minimum height well under `DevicePanel.HEIGHT` (see `MAX_HEIGHT`). The root is
+## a VBox with centered alignment, so content is vertically centered unless a child expands to
+## fill the height; give the content `SHRINK_CENTER` horizontally to center it sideways.
+class_name ModulatorOptions extends VBoxContainer
 
 ## Tallest an options scene may be: what's left of `DevicePanel.HEIGHT` below the panel header,
 ## the pane margins and the detail title. Checked by test_modulators_ui.gd for every scene.

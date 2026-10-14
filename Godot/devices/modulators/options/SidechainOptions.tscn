@@ -4,33 +4,38 @@
 [ext_resource type="Script" uid="uid://byv0247wjr3q4" path="res://devices/modulators/options/ModParamSlot.gd" id="2_slot"]
 [ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_knob"]
 [ext_resource type="Script" uid="uid://cxcitn8x6naoo" path="res://components/visualization/MiniSpectrum.gd" id="4_spectrum"]
-[ext_resource type="Script" uid="uid://cg5slchi6vuah" path="res://components/CompactHSlider.gd" id="5_slider"]
+[ext_resource type="Script" uid="uid://10exp0mndx3o" path="res://components/CompactVSlider.gd" id="5_slider"]
 
-[node name="SidechainOptions" type="CenterContainer" unique_id=2073999268]
-offset_right = 432.0
-offset_bottom = 148.0
+[node name="SidechainOptions" type="VBoxContainer" unique_id=2073999268]
+offset_right = 288.0
+offset_bottom = 275.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
+alignment = 1
 script = ExtResource("1_options")
 
-[node name="HBox" type="HBoxContainer" parent="." unique_id=869476124]
+[node name="Layout" type="VBoxContainer" parent="." unique_id=869476124]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="Top" type="HBoxContainer" parent="Layout" unique_id=399017409]
 layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="Left" type="VBoxContainer" parent="HBox" unique_id=399017409]
+[node name="Source" type="HBoxContainer" parent="Layout/Top" unique_id=1296546587]
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
-[node name="Source" type="HBoxContainer" parent="HBox/Left" unique_id=1296546587]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="Caption" type="Label" parent="HBox/Left/Source" unique_id=1444543066]
+[node name="Caption" type="Label" parent="Layout/Top/Source" unique_id=1444543066]
 layout_mode = 2
 theme_type_variation = &"Caption"
 text = "Source"
 
-[node name="SourceMenu" type="OptionButton" parent="HBox/Left/Source" unique_id=1864888767]
+[node name="SourceMenu" type="OptionButton" parent="Layout/Top/Source" unique_id=1864888767]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
@@ -38,134 +43,141 @@ size_flags_horizontal = 3
 clip_text = true
 fit_to_longest_item = false
 
-[node name="Spectrum" type="Control" parent="HBox/Left" unique_id=1804671906]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(220, 120)
+[node name="Gain" type="HBoxContainer" parent="Layout/Top" unique_id=480575990]
 layout_mode = 2
-size_flags_vertical = 3
-script = ExtResource("4_spectrum")
-
-[node name="Params" type="GridContainer" parent="HBox" unique_id=1339946918]
-layout_mode = 2
-theme_override_constants/h_separation = 8
-theme_override_constants/v_separation = 8
-columns = 2
-
-[node name="Gain" type="VBoxContainer" parent="HBox/Params" unique_id=480575990]
-custom_minimum_size = Vector2(60, 0)
-layout_mode = 2
-theme_override_constants/separation = 4
+theme_override_constants/separation = 6
 script = ExtResource("2_slot")
 param_id = 50
 
-[node name="Caption" type="Label" parent="HBox/Params/Gain" unique_id=379849257]
+[node name="Caption" type="Label" parent="Layout/Top/Gain" unique_id=379849257]
 layout_mode = 2
 theme_type_variation = &"Caption"
 text = "Gain"
-horizontal_alignment = 1
 
-[node name="Knob" type="Control" parent="HBox/Params/Gain" unique_id=1079920162]
-custom_minimum_size = Vector2(44, 44)
+[node name="Knob" type="Control" parent="Layout/Top/Gain" unique_id=1079920162]
+custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_vertical = 4
 mouse_default_cursor_shape = 2
 script = ExtResource("3_knob")
 
-[node name="LowCut" type="VBoxContainer" parent="HBox/Params" unique_id=1336067655]
-custom_minimum_size = Vector2(60, 0)
+[node name="Middle" type="HBoxContainer" parent="Layout" unique_id=1339946918]
 layout_mode = 2
-theme_override_constants/separation = 4
-script = ExtResource("2_slot")
+size_flags_vertical = 3
+theme_override_constants/separation = 8
 
-[node name="Caption" type="Label" parent="HBox/Params/LowCut" unique_id=1275478052]
+[node name="Spectrum" type="Control" parent="Layout/Middle" unique_id=1804671906]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 48)
 layout_mode = 2
-theme_type_variation = &"Caption"
-text = "Low Cut"
-horizontal_alignment = 1
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("4_spectrum")
 
-[node name="Knob" type="Control" parent="HBox/Params/LowCut" unique_id=1357953534]
-custom_minimum_size = Vector2(44, 44)
-layout_mode = 2
-size_flags_horizontal = 4
-mouse_default_cursor_shape = 2
-script = ExtResource("3_knob")
-
-[node name="HighCut" type="VBoxContainer" parent="HBox/Params" unique_id=1927857999]
-custom_minimum_size = Vector2(60, 0)
-layout_mode = 2
-theme_override_constants/separation = 4
-script = ExtResource("2_slot")
-param_id = 10
-
-[node name="Caption" type="Label" parent="HBox/Params/HighCut" unique_id=423968813]
-layout_mode = 2
-theme_type_variation = &"Caption"
-text = "High Cut"
-horizontal_alignment = 1
-
-[node name="Knob" type="Control" parent="HBox/Params/HighCut" unique_id=259328956]
-custom_minimum_size = Vector2(44, 44)
-layout_mode = 2
-size_flags_horizontal = 4
-mouse_default_cursor_shape = 2
-script = ExtResource("3_knob")
-
-[node name="Attack" type="VBoxContainer" parent="HBox/Params" unique_id=2140493857]
-custom_minimum_size = Vector2(60, 0)
-layout_mode = 2
-theme_override_constants/separation = 4
-script = ExtResource("2_slot")
-param_id = 20
-
-[node name="Caption" type="Label" parent="HBox/Params/Attack" unique_id=284958717]
-layout_mode = 2
-theme_type_variation = &"Caption"
-text = "Attack"
-horizontal_alignment = 1
-
-[node name="Knob" type="Control" parent="HBox/Params/Attack" unique_id=1968762014]
-custom_minimum_size = Vector2(44, 44)
-layout_mode = 2
-size_flags_horizontal = 4
-mouse_default_cursor_shape = 2
-script = ExtResource("3_knob")
-
-[node name="Release" type="VBoxContainer" parent="HBox/Params" unique_id=833916930]
-custom_minimum_size = Vector2(60, 0)
-layout_mode = 2
-theme_override_constants/separation = 4
-script = ExtResource("2_slot")
-param_id = 30
-
-[node name="Caption" type="Label" parent="HBox/Params/Release" unique_id=1376578204]
-layout_mode = 2
-theme_type_variation = &"Caption"
-text = "Release"
-horizontal_alignment = 1
-
-[node name="Knob" type="Control" parent="HBox/Params/Release" unique_id=1238978719]
-custom_minimum_size = Vector2(44, 44)
-layout_mode = 2
-size_flags_horizontal = 4
-mouse_default_cursor_shape = 2
-script = ExtResource("3_knob")
-
-[node name="Amount" type="VBoxContainer" parent="HBox/Params" unique_id=1079311142]
+[node name="Amount" type="VBoxContainer" parent="Layout/Middle" unique_id=1079311142]
 custom_minimum_size = Vector2(60, 0)
 layout_mode = 2
 theme_override_constants/separation = 4
 script = ExtResource("2_slot")
 param_id = 60
 
-[node name="Caption" type="Label" parent="HBox/Params/Amount" unique_id=1654892403]
+[node name="Caption" type="Label" parent="Layout/Middle/Amount" unique_id=1654892403]
 layout_mode = 2
 theme_type_variation = &"Caption"
 text = "Amount"
 horizontal_alignment = 1
 
-[node name="Slider" type="Control" parent="HBox/Params/Amount" unique_id=1498855428]
-custom_minimum_size = Vector2(60, 34)
+[node name="Slider" type="Control" parent="Layout/Middle/Amount" unique_id=1498855428]
+custom_minimum_size = Vector2(44, 24)
 layout_mode = 2
-size_flags_vertical = 4
+size_flags_horizontal = 4
+size_flags_vertical = 3
 mouse_default_cursor_shape = 2
 script = ExtResource("5_slider")
+
+[node name="Knobs" type="HBoxContainer" parent="Layout" unique_id=1425163301]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HighCut" type="VBoxContainer" parent="Layout/Knobs" unique_id=1927857999]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 10
+
+[node name="Caption" type="Label" parent="Layout/Knobs/HighCut" unique_id=423968813]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "High Cut"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="Layout/Knobs/HighCut" unique_id=259328956]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="LowCut" type="VBoxContainer" parent="Layout/Knobs" unique_id=1336067655]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+
+[node name="Caption" type="Label" parent="Layout/Knobs/LowCut" unique_id=1275478052]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Low Cut"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="Layout/Knobs/LowCut" unique_id=1357953534]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="Attack" type="VBoxContainer" parent="Layout/Knobs" unique_id=2140493857]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 20
+
+[node name="Caption" type="Label" parent="Layout/Knobs/Attack" unique_id=284958717]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Attack"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="Layout/Knobs/Attack" unique_id=1968762014]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
+
+[node name="Release" type="VBoxContainer" parent="Layout/Knobs" unique_id=833916930]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+script = ExtResource("2_slot")
+param_id = 30
+
+[node name="Caption" type="Label" parent="Layout/Knobs/Release" unique_id=1376578204]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "Release"
+horizontal_alignment = 1
+
+[node name="Knob" type="Control" parent="Layout/Knobs/Release" unique_id=1238978719]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_knob")
