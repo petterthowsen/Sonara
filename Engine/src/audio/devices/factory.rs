@@ -245,6 +245,8 @@ pub const EFFECT_IDS: &[&str] = &[
     "sonara.builtin.reverb",
     "sonara.builtin.utility",
     "sonara.builtin.saturator",
+    "sonara.builtin.ms_split",
+    "sonara.builtin.lr_split",
 ];
 
 /// Built-in drum instruments (spec 013). Each is made from the sample rate and block size alone.
@@ -341,6 +343,14 @@ pub fn create_effect(
         "sonara.builtin.reverb" => Box::new(ReverbDevice::new(sample_rate)),
         "sonara.builtin.utility" => Box::new(UtilityDevice::new(sample_rate)),
         "sonara.builtin.saturator" => Box::new(SaturatorDevice::new(sample_rate)),
+        "sonara.builtin.ms_split" => Box::new(super::effects::SplitDevice::mid_side(
+            sample_rate,
+            max_frames,
+        )),
+        "sonara.builtin.lr_split" => Box::new(super::effects::SplitDevice::left_right(
+            sample_rate,
+            max_frames,
+        )),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);

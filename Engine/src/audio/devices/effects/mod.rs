@@ -14,6 +14,7 @@ mod phaser;
 mod reverb;
 mod saturator;
 mod spectrum_analyzer;
+pub mod split;
 mod utility;
 
 pub use chorus::ChorusDevice;
@@ -25,4 +26,5 @@ pub use phaser::PhaserDevice;
 pub use reverb::ReverbDevice;
 pub use saturator::SaturatorDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
+pub use split::SplitDevice;
 pub use utility::UtilityDevice;
