@@ -391,12 +391,18 @@ func _open_menu() -> void:
 		entries = [[pad.x, "X"], [pad.y, "Y"]]
 	elif modulator != null:
 		entries = [[modulator, ""]]
+	# Identical labels (e.g. two same-named children) get " (2)", " (3)" … so each stays distinguishable.
+	var seen: Dictionary = {}
 	for entry in entries:
 		var mod: Modulator = entry[0]
 		var axis: String = entry[1]
 		for target in mod.routes:
 			var prefix := "" if axis == "" else "%s " % axis
-			_menu.add_item("%s%s  %s  ✕" % [prefix, _target_name(String(target)),
+			var label := prefix + _target_name(String(target))
+			seen[label] = int(seen.get(label, 0)) + 1
+			if seen[label] > 1:
+				label += " (%d)" % seen[label]
+			_menu.add_item("%s  %s  ✕" % [label,
 				ModDisplay.default_amount_text(float(mod.routes[target]))], _menu.item_count)
 			_menu.set_item_metadata(_menu.item_count - 1, String(target))
 			_menu_route_mod_ids.append(mod.mod_id)
@@ -433,6 +439,16 @@ func _on_menu_id(id: int) -> void:
 		ModAssign.notify_changed()
 
 
+## A parameter's name, prefixed with its module when several parameters of the device share the
+## name (an EQ's per-band Gain becomes "Band 2 › Gain"); a unique name stays bare.
+func _param_label(device, param) -> String:
+	if param.module != "":
+		for other in device.get_parameters_in_group(param.group if param.group != "" else "param"):
+			if other != param and other.name == param.name:
+				return "%s › %s" % [param.module, param.name]
+	return param.name
+
+
 ## Human-readable name of a route target relative to the owning device.
 func _target_name(target: String) -> String:
 	var owner = modulator.owner()
@@ -441,9 +457,10 @@ func _target_name(target: String) -> String:
 	var parts := target.split("/")
 	if parts.size() >= 2 and parts[0] == "param":
 		var param = owner.get_parameter(int(parts[1]))
-		return param.name if param != null else target
+		return _param_label(owner, param) if param != null else target
 	if parts.size() >= 4 and parts[0] == "child":
 		var device = owner
+		var names: PackedStringArray = []
 		for piece in parts[1].split("."):
 			if device == null or not (piece as String).is_valid_int():
 				return target
@@ -451,8 +468,12 @@ func _target_name(target: String) -> String:
 			if child_index < 0 or child_index >= device.children.size():
 				return target
 			device = device.children[child_index]
+			names.append(device.get_display_name())
 		var child_param = device.get_parameter(int(parts[3])) if device != null else null
-		return child_param.name if child_param != null else target
+		if child_param == null:
+			return target
+		names.append(_param_label(device, child_param))
+		return " › ".join(names)
 	if parts.size() >= 2 and parts[0] == "mod":
 		var other = owner.get_modulator(int(parts[1]))
 		if other == null:

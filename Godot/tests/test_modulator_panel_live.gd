@@ -7,6 +7,9 @@ extends TestBase
 
 const SYNTH_ID := "test.synth12"
 const CHAIN_ID := "test.chain12"
+const BANDED_ID := "test.banded132"
+const GAIN_1 := 3
+const GAIN_2 := 13
 const CUTOFF := 31
 const LFO_RATE := 10
 
@@ -42,6 +45,7 @@ func run_tests() -> void:
 	await _test_velocity_dot_and_unknown_kind()
 	await _test_remove_modulator_cleans_sibling_routes()
 	await _test_target_name_names_mod_targets()
+	await _test_target_name_names_child_targets()
 	await _test_relative_target_and_self_rejection()
 	await _test_assign_flow_drag_on_another_panel()
 
@@ -65,9 +69,17 @@ func _setup() -> void:
 		0,
 	])
 	_registry._on_builtin_info_received([
+		BANDED_ID, "Banded", "effect", "", 1, 1, 2, 0, "", 0,
+		2,
+		GAIN_1, "Gain", "dB", "float", 1, -24.0, 24.0, 0.0, 0, 1.0, 0, "Band 1", 1, 1,
+		GAIN_2, "Gain", "dB", "float", 1, -24.0, 24.0, 0.0, 0, 1.0, 0, "Band 2", 1, 1,
+		0,
+		0,
+	])
+	_registry._on_builtin_info_received([
 		CHAIN_ID, "Chain", "utility", "", 0, 2, 2, 0, "", 0, 0, 1,
 	])
-	for device_id in [SYNTH_ID, CHAIN_ID]:
+	for device_id in [SYNTH_ID, CHAIN_ID, BANDED_ID]:
 		asset_registry._devices[device_id] = _registry.get_device(device_id)
 
 
@@ -480,6 +492,35 @@ func _test_target_name_names_mod_targets() -> void:
 	_assert(name.begins_with(a.name) and name.contains("› Rate"),
 		"a mod target is named \"{modulator} › {param}\" (got \"%s\")" % name)
 	_assert(tile._target_name("mod/%d" % a.mod_id) == a.name, "a bare mod target keeps the modulator name")
+	tile.queue_free()
+
+
+func _test_target_name_names_child_targets() -> void:
+	_clean()
+	var project = _project_script.new()
+	var ch: Object = project.create_instrument_track("Inst").channel
+	var inst = _inst_script.new(_chain(), ch.id, -1)
+	ch.add_device(inst)
+	var inner = _inst_script.new(_chain(), ch.id, -1)
+	ch.add_device(inner, -1, inst)
+	var leaf = _inst_script.new(_synth(), ch.id, -1)
+	ch.add_device(leaf, -1, inner)
+	var banded = _inst_script.new(_registry.get_device(BANDED_ID), ch.id, -1)
+	ch.add_device(banded, -1, inst)
+	var tile: ModulatorPanel = _panel_script.new()
+	root.add_child(tile)
+	tile.setup(inst.add_modulator("lfo"))
+	var leaf_name: String = leaf.get_display_name()
+	var got: String = tile._target_name("child/0.0/param/%d" % CUTOFF)
+	_assert(got == "%s › %s › Cutoff" % [inner.get_display_name(), leaf_name],
+		"nested child targets name every level (got \"%s\")" % got)
+	got = tile._target_name("child/1/param/%d" % GAIN_2)
+	_assert(got == "%s › Band 2 › Gain" % banded.get_display_name(),
+		"a child's same-named band params carry the band (got \"%s\")" % got)
+	_assert(tile._target_name("child/5/param/%d" % CUTOFF) == "child/5/param/%d" % CUTOFF,
+		"an unresolvable child index falls back to the raw target")
+	_assert(tile._target_name("child/0.0/param/9999") == "child/0.0/param/9999",
+		"an unknown child parameter falls back to the raw target")
 	tile.queue_free()
 
 
