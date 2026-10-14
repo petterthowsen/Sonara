@@ -60,43 +60,43 @@ Engine commands run from `Engine/`. Godot tests: `Godot/tests/run_all.sh <words>
 
 ## Phase 3 — Godot
 
-- [ ] **T-009** [REQ-010] A missing modulator parameter reads its default.
+- [x?] **T-009** [REQ-010] A missing modulator parameter reads its default.
   - _Files_: `Godot/data/Modulator.gd`, `Godot/tests/test_sidechain_view.gd` (new)
   - _Output_: `get_param` falls back to `get_parameter(id)`'s normalized default (0.0 when the kind is unknown); a test loads a sidechain without params 50 and 60 and reads 0 dB and 100 %
   - _Verify_: `Godot/tests/run_all.sh sidechain modulators` passes
   - _Depends on_: T-003
 
-- [ ] **T-010** [REQ-011] Godot capacity 32 and the tooltip.
+- [x?] **T-010** [REQ-011] Godot capacity 32 and the tooltip.
   - _Files_: `Godot/data/DeviceInstance.gd`, `Godot/devices/modulators/ModulatorsPane.gd`, `Godot/tests/test_modulators_ui.gd`
   - _Output_: `MAX_MODULATORS := 32`; the tooltip is formatted from the constant; the cap test uses 32 and "Maximum of 32 modulators"
   - _Verify_: `Godot/tests/run_all.sh modulators` passes
   - _Depends on_: —
 
-- [ ] **T-011** [REQ-004] `ModLive` decodes kind 4.
+- [x?] **T-011** [REQ-004] `ModLive` decodes kind 4.
   - _Files_: `Godot/devices/modulators/ModLive.gd`, `Godot/tests/test_sidechain_view.gd`
   - _Output_: `_decode_ext` reads kind 4 into `{kind, mod_id, point_seconds, peaks}`; `_on_data` stores the histories per device; `sidechain_history(device, mod_id)` returns them; a test decodes a hand-built blob with kinds 2, 3 and 4 and an unknown kind 9
   - _Verify_: `Godot/tests/run_all.sh sidechain modulators` passes
   - _Depends on_: T-007
 
-- [ ] **T-012** [REQ-004, REQ-005] Scrolling sidechain line in `ModulatorDisplay`.
+- [x?] **T-012** [REQ-004, REQ-005] Scrolling sidechain line in `ModulatorDisplay`.
   - _Files_: `Godot/devices/modulators/ModulatorDisplay.gd`, `Godot/tests/test_sidechain_view.gd`
   - _Output_: for kind `sidechain`, a 2 s time-stamped buffer filled from `sidechain_history`, scrolled per frame one interval behind, drawn with max-per-column decimation on a 0…1 scale, the dot at the newest point; the generic `_trace` is the fallback when no kind 4 arrives; tests: an 80-point history with one peak gives a highest point equal to it, and a newest value of 0.5 sits at mid-height
   - _Verify_: `Godot/tests/run_all.sh sidechain modulators` passes
   - _Depends on_: T-011
 
-- [ ] **T-013** [REQ-006, REQ-007] Reusable `MiniSpectrum` control.
+- [x?] **T-013** [REQ-006, REQ-007] Reusable `MiniSpectrum` control.
   - _Files_: `Godot/components/visualization/MiniSpectrum.gd` (new), `Godot/tests/test_sidechain_view.gd`
   - _Output_: `set_curves`, `markers`, back and front colours, easing, the `FreqAxis` grid, and a static `decode_points(blob, offset)`; tests: decoding a hand-built blob gives 128 + 128 values and `lo_hz` / `hi_hz`; a marker at 200 Hz is drawn at `hz_to_x(200)`; a marker ≤ 0 is hidden
   - _Verify_: `Godot/tests/run_all.sh sidechain` passes
   - _Depends on_: —
 
-- [ ] **T-014** [REQ-008] `ModParamSlot` binds a `CompactSlider`.
+- [x?] **T-014** [REQ-008] `ModParamSlot` binds a `CompactSlider`.
   - _Files_: `Godot/devices/modulators/options/ModParamSlot.gd`, `Godot/tests/test_modulators_ui.gd`
   - _Output_: `_find_control` finds a `CompactSlider`; it is bound normalized with its default, the text callback, `value_changed` → `set_param` and `ModAssign.attach_modulator`; `refresh` uses `set_value_no_signal`
   - _Verify_: `Godot/tests/run_all.sh modulators` passes
   - _Depends on_: —
 
-- [ ] **T-015** [REQ-006, REQ-007, REQ-008] New Sidechain options layout and stream.
+- [x?] **T-015** [REQ-006, REQ-007, REQ-008] New Sidechain options layout and stream.
   - _Files_: `Godot/devices/modulators/options/SidechainOptions.tscn`, `Godot/devices/modulators/options/SidechainOptions.gd`, `Godot/tests/test_modulators_ui.gd`
   - _Output_: the Source menu and `MiniSpectrum` on the left; the Gain, Low Cut, High Cut, Attack and Release knobs and the Amount `CompactSlider` on the right; `setup` subscribes `"sidechain"` and configures `mod_id`; `_exit_tree` unsubscribes; blobs whose `mod_id` matches are decoded into the spectrum (pre gray, post white, cut markers); `_sidechain_kind_args` gains params 50 and 60; the tests check both new slots are bound and the scene is within `MAX_HEIGHT`
   - _Verify_: `Godot/tests/run_all.sh modulators sidechain` passes

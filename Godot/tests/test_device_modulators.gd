@@ -251,10 +251,10 @@ func _test_add_remove_set_and_osc() -> void:
 	_assert(mod.routes.is_empty(), "amount 0 removes the route")
 
 	# Capacity and id reuse.
-	for i in range(7):
+	for i in range(inst.MAX_MODULATORS - 1):
 		inst.add_modulator("velocity")
-	_assert(inst.modulators.size() == 8, "eight modulators fit")
-	_assert(inst.add_modulator("velocity") == null, "a ninth is refused")
+	_assert(inst.modulators.size() == inst.MAX_MODULATORS, "%d modulators fit" % inst.MAX_MODULATORS)
+	_assert(inst.add_modulator("velocity") == null, "one more is refused")
 	inst.remove_modulator(3)
 	_assert(inst.get_modulator(3) == null, "remove drops it")
 	var reused = inst.add_modulator("velocity")
@@ -474,10 +474,10 @@ func _test_xy_pad_model() -> void:
 	# One free slot is not enough for a pair: refused, nothing added.
 	var full := _instance()
 	full.modulators.clear()
-	for i in range(7):
+	for i in range(full.MAX_MODULATORS - 1):
 		full.add_modulator("velocity")
 	_assert(full.add_xy_pad() == null, "with one free slot an XY pad is refused")
-	_assert(full.modulators.size() == 7, "and nothing was added")
+	_assert(full.modulators.size() == full.MAX_MODULATORS - 1, "and nothing was added")
 	_assert(full.add_modulator("velocity") != null, "a plain modulator still fits")
 
 

@@ -220,12 +220,12 @@ func _rebuild_grid() -> void:
 		# First layout: the parent's height isn't final yet (a `resized` may have fired before the
 		# structure existed), so size the cells after this frame's layout pass.
 		_layout_panel_size.call_deferred()
-	# At the capacity limit the last placeholder (always one at 8) is disabled: REQ-002 keeps
+	# At the capacity limit the last placeholder (always one at the cap) is disabled: REQ-002 keeps
 	# placeholders non-zero without offering an add `add_modulator` would refuse.
 	var full := device.modulators.size() >= device.MAX_MODULATORS
 	for placeholder in _placeholders:
 		placeholder.disabled = full
-		placeholder.tooltip_text = "Maximum of 8 modulators" if full else "Add modulator"
+		placeholder.tooltip_text = ("Maximum of %d modulators" % device.MAX_MODULATORS) if full else "Add modulator"
 	if _selected_mod_id < 0 or device.get_modulator(_selected_mod_id) == null:
 		_selected_mod_id = int(_remembered.get(device.id, device.modulators[0].mod_id if not device.modulators.is_empty() else -1))
 	_refresh_selection()

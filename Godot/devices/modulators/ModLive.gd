@@ -52,6 +52,10 @@ var _live := {}
 ## DeviceInstance id -> {modulator id -> {stage, x, value}}: the latest `kind 2` states,
 ## replaced wholesale per payload (spec 033).
 var _mod_states := {}
+## DeviceInstance id -> {modulator id -> {point_seconds, peaks, time}}: the latest `kind 4`
+## sidechain output histories (spec 044), replaced wholesale per payload. `time` is when the
+## payload arrived, in seconds.
+var _sc_history := {}
 
 var _osc: Node = null
 var _data_connected := false
@@ -211,6 +215,7 @@ func _on_modulator_removed(_mod_id: int, dev) -> void:
 func _clear_reporter(device) -> void:
 	var reporter_id: int = device.get_instance_id()
 	_mod_states.erase(reporter_id)
+	_sc_history.erase(reporter_id)
 	modulator_states_changed.emit(device)
 	var affected := {}
 	for key in _live.keys():
@@ -314,8 +319,13 @@ func _on_data(osc_path: String, data_type: String, blob: PackedByteArray) -> voi
 		# `kind 2` states are replaced wholesale per payload; `kind 3` offsets land on
 		# modulator-param control keys ("{device id}:mod{mod}:{param}").
 		var states := {}
+		var histories := {}
+		var now := Time.get_ticks_usec() / 1000000.0
 		for record in ext:
-			if record["kind"] == 2:
+			if record["kind"] == 4:
+				histories[int(record["mod_id"])] = {"point_seconds": float(record["point_seconds"]),
+					"peaks": record["peaks"], "time": now}
+			elif record["kind"] == 2:
 				states[int(record["mod_id"])] = {"stage": int(record["stage"]),
 					"x": float(record["x"]), "value": float(record["value"])}
 			else:
@@ -325,6 +335,7 @@ func _on_data(osc_path: String, data_type: String, blob: PackedByteArray) -> voi
 				_live[key][reporter_id] = {"kind": 0, "offset": float(record["offset"])}
 				affected[key] = true
 		_mod_states[reporter_id] = states
+		_sc_history[reporter_id] = histories
 		modulator_states_changed.emit(device)
 	for key in affected:
 		_apply(key)
@@ -376,7 +387,8 @@ static func _decode(blob: PackedByteArray) -> Array:
 ## Decode the trailing ext block: `u16 ext_count`, then `{u8 kind, u8 len, bytes}` records.
 ## Returns null when there is no block (an old-format payload), else the decoded records —
 ## `kind 2`: `{kind, mod_id, stage, x, value}`; `kind 3`: `{kind, mod_id, param, offset}`;
-## unknown kinds are skipped by their length byte.
+## `kind 4` (sidechain output history, spec 044): `{kind, mod_id, point_seconds, peaks}` with
+## `peaks` oldest first, 0..1; unknown kinds are skipped by their length byte.
 static func _decode_ext(blob: PackedByteArray) -> Variant:
 	if blob.size() < 2:
 		return null
@@ -417,6 +429,15 @@ static func _decode_ext(blob: PackedByteArray) -> Variant:
 		elif kind == 3 and len >= 9:
 			out.append({"kind": 3, "mod_id": blob.decode_u8(at),
 				"param": blob.decode_u32(at + 1), "offset": blob.decode_float(at + 5)})
+		elif kind == 4 and len >= 6:
+			var n := blob.decode_u8(at + 5)
+			if len >= 6 + n:
+				var peaks := PackedFloat32Array()
+				peaks.resize(n)
+				for j in n:
+					peaks[j] = blob.decode_u8(at + 6 + j) / 255.0
+				out.append({"kind": 4, "mod_id": blob.decode_u8(at),
+					"point_seconds": blob.decode_float(at + 1), "peaks": peaks})
 		at += len
 	return out
 
@@ -517,6 +538,17 @@ static func modulator_state(device, mod_id: int) -> Dictionary:
 	return states.get(mod_id, {})
 
 
+## The newest sidechain output history of modulator `mod_id` on `device`:
+## `{point_seconds, peaks, time}` (`peaks` oldest first, 0..1, one per `point_seconds`; `time` is
+## the arrival time in seconds), or `{}` when no `kind 4` record arrived (old engine, a
+## different kind, or before the first payload).
+static func sidechain_history(device, mod_id: int) -> Dictionary:
+	if device == null or not is_instance_valid(device):
+		return {}
+	var histories: Dictionary = holder()._sc_history.get(device.get_instance_id(), {})
+	return histories.get(mod_id, {})
+
+
 ## `device` and every ancestor, device first.
 static func _chain(device) -> Array:
 	var out: Array = []
@@ -550,3 +582,4 @@ static func reset() -> void:
 	h._targets.clear()
 	h._live.clear()
 	h._mod_states.clear()
+	h._sc_history.clear()

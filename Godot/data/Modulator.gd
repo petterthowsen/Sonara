@@ -7,7 +7,7 @@
 ## or `mod/{mod_id}/param/{id}`; the amount is −1..1 in normalized units.
 class_name Modulator extends RefCounted
 
-## Stable id within the owning device (0–7). Saved with the project.
+## Stable id within the owning device (0–31). Saved with the project.
 var mod_id: int = 0
 
 ## The kind's engine id (`lfo`, `adsr`, ...).
@@ -35,9 +35,16 @@ func owner():
 	return _owner_ref.get_ref() if _owner_ref != null else null
 
 
-## Current normalized value of kind parameter `param_id` (0.0 when unset).
+## Current normalized value of kind parameter `param_id`. A value absent from `params` (an
+## old project saved before the parameter existed) reads the kind's default; 0.0 when the kind
+## doesn't advertise the parameter.
 func get_param(param_id: int) -> float:
-	return float(params.get(param_id, 0.0))
+	if params.has(param_id):
+		return float(params[param_id])
+	var descriptor := get_parameter(param_id)
+	if descriptor != null:
+		return descriptor.value_to_normalized(descriptor.default_value)
+	return 0.0
 
 
 ## Amount of the route to `target` (0.0 when there is none).

@@ -149,8 +149,8 @@ var parameter_values: Dictionary[int, float] = {}
 ## `default_modulators`; a loaded project/preset replaces them. See "MODULATORS".
 var modulators: Array[Modulator] = []
 
-## Capacity of `modulators`, as in the engine (ids 0..7).
-const MAX_MODULATORS := 8
+## Capacity of `modulators`, as in the engine (ids 0..31).
+const MAX_MODULATORS := 32
 
 ## Echoes of our own modulator messages still in flight, keyed by
 ## "add:{id}" / "remove:{id}" / "param:{id}:{pid}" / "route:{id}:{target}" / MOD_CLEAR_KEY

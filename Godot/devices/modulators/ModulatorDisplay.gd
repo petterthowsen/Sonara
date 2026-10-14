@@ -5,8 +5,10 @@
 ## for its device and on `modulator_changed` (shape parameters); while live states flow it also
 ## redraws per frame, interpolating the dot between the last two samples (see INTERP_* above).
 ## Shapes: an LFO draws one cycle of its wave (S&H a fixed staircase glyph); an envelope draws
-## its time-proportional curve; every other kind draws a ~2 s ring-buffer trace of recent values,
-## with the dot at the newest point. Missing state (old engine, before the first payload) leaves
+## its time-proportional curve; a sidechain draws its output history (spec 044: the engine's
+## dense `kind 4` peaks, a 2 s time-stamped buffer scrolled by elapsed time and drawn on a fixed
+## 0..1 scale); every other kind draws a ~2 s ring-buffer trace of recent values, with the dot at
+## the newest point. Missing state (old engine, before the first payload) leaves
 ## the static shape with no dot.
 class_name ModulatorDisplay extends Control
 
@@ -37,11 +39,22 @@ const INTERP_MAX_INTERVAL := 0.2
 ## Trace history: 40 samples at ~20 Hz is about 2 s.
 const TRACE_SAMPLES := 40
 
+## Sidechain history window in seconds.
+const SC_WINDOW := 2.0
+
 var device = null
 var mod_id := -1
 
 ## Newest live values for the generic trace, oldest first.
 var _trace: PackedFloat32Array = PackedFloat32Array()
+
+## Sidechain output points (spec 044): arrival-stamped times (seconds) and 0..1 peaks, oldest
+## first, trimmed to `SC_WINDOW`. `_sc_seen` turns on once a `kind 4` record arrived; an old
+## engine never sends one and the generic `_trace` stays in use.
+var _sc_times := PackedFloat64Array()
+var _sc_values := PackedFloat32Array()
+var _sc_seen := false
+var _sc_last_time := -1.0
 
 ## Interpolation: the previous and latest payload snapshots with timestamps. `_interval`
 ## tracks the observed payload cadence so the blend finishes just as the next sample lands.
@@ -80,6 +93,18 @@ func _on_states_changed(p_device) -> void:
 	if p_device != device:
 		return
 	var state := ModLive.modulator_state(device, mod_id)
+	if _is_sidechain():
+		var history := ModLive.sidechain_history(device, mod_id)
+		if not history.is_empty():
+			ingest_sidechain(history["peaks"], float(history["point_seconds"]), float(history["time"]))
+			queue_redraw()
+			set_process(true)
+			return
+		if state.is_empty():
+			_sc_times.clear()
+			_sc_values.clear()
+			_sc_seen = false
+			_sc_last_time = -1.0
 	if not state.is_empty() and not _is_lfo() and not _is_envelope():
 		_trace.append(float(state["value"]))
 		while _trace.size() > TRACE_SAMPLES:
@@ -143,6 +168,12 @@ func _now() -> float:
 	return Time.get_ticks_usec() / 1000000.0
 
 func _process(_delta: float) -> void:
+	if _sc_seen and is_visible_in_tree():
+		_trim_sidechain(_now())
+		queue_redraw()
+		if _sc_times.is_empty():
+			set_process(false)
+		return
 	if _last_state.is_empty() or not is_visible_in_tree():
 		set_process(false)
 		return
@@ -151,6 +182,68 @@ func _process(_delta: float) -> void:
 	# re-enables processing (a stopped stream leaves the dot parked at the sample).
 	if _now() - _last_time > _interval * 1.25:
 		set_process(false)
+
+
+## Append a sidechain history: `peaks` (oldest first, 0..1) spaced `point_seconds` apart, the
+## newest stamped `time` (seconds, the payload's arrival). A repeated `time` is ignored.
+func ingest_sidechain(peaks: PackedFloat32Array, point_seconds: float, time: float) -> void:
+	_sc_seen = true
+	if peaks.is_empty() or is_equal_approx(time, _sc_last_time):
+		return
+	_sc_last_time = time
+	var n := peaks.size()
+	for i in n:
+		_sc_times.append(time - float(n - 1 - i) * point_seconds)
+		_sc_values.append(peaks[i])
+	_trim_sidechain(maxf(time, _now()))
+
+
+func _trim_sidechain(now: float) -> void:
+	var drop := 0
+	while drop < _sc_times.size() and _sc_times[drop] < now - SC_WINDOW - _interval:
+		drop += 1
+	if drop > 0:
+		_sc_times = _sc_times.slice(drop)
+		_sc_values = _sc_values.slice(drop)
+
+
+## The sidechain line across `rect` at time `now`: the window scrolls by elapsed time and ends
+## one payload interval behind `now` (like the dot), on a fixed 0..1 scale. Each pixel column
+## keeps the maximum of its points, so a short peak survives the decimation.
+func sidechain_points(rect: Rect2, now: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if _sc_times.is_empty() or rect.size.x <= 0.0:
+		return out
+	var t_right := now - _interval
+	var per_second := rect.size.x / SC_WINDOW
+	var column_max := {}
+	for i in _sc_times.size():
+		if _sc_times[i] > t_right:
+			break
+		var x := rect.end.x - (t_right - _sc_times[i]) * per_second
+		if x < rect.position.x:
+			continue
+		var column := int(floor(x - rect.position.x))
+		column_max[column] = maxf(column_max.get(column, 0.0), _sc_values[i])
+	var columns: Array = column_max.keys()
+	columns.sort()
+	for column in columns:
+		out.append(Vector2(rect.position.x + float(column) + 0.5,
+			rect.position.y + (1.0 - clampf(column_max[column], 0.0, 1.0)) * rect.size.y))
+	return out
+
+
+## The dot at the newest drawn point: right edge, at that point's value.
+func _sidechain_dot(rect: Rect2, now: float) -> Variant:
+	var t_right := now - _interval
+	var newest := -1
+	for i in range(_sc_times.size() - 1, -1, -1):
+		if _sc_times[i] <= t_right:
+			newest = i
+			break
+	if newest < 0:
+		return null
+	return Vector2(rect.end.x, rect.position.y + (1.0 - clampf(_sc_values[newest], 0.0, 1.0)) * rect.size.y)
 
 
 func _on_modulator_changed(changed_mod_id: int) -> void:
@@ -188,6 +281,8 @@ func _shape_points(mod: Modulator, rect: Rect2) -> PackedVector2Array:
 		return _envelope_points(mod, rect)
 	if _is_knob():
 		return _knob_points(mod, rect)
+	if _is_sidechain() and _sc_seen:
+		return sidechain_points(rect, _now())
 	return _trace_points(rect)
 
 
@@ -317,6 +412,8 @@ func has_dot() -> bool:
 
 
 func _dot(mod: Modulator, rect: Rect2) -> Variant:
+	if _is_sidechain() and _sc_seen:
+		return _sidechain_dot(rect, _now())
 	var state := _live_state()
 	if state.is_empty():
 		return null
@@ -422,6 +519,10 @@ func _is_lfo() -> bool:
 
 func _is_envelope() -> bool:
 	return _kind() == "adsr" or _kind() == "ad"
+
+
+func _is_sidechain() -> bool:
+	return _kind() == "sidechain"
 
 
 func _is_knob() -> bool:

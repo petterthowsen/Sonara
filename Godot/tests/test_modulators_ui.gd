@@ -123,12 +123,14 @@ func _xy_kind_args(kind_id: String, kind_name: String) -> Array:
 
 
 func _sidechain_kind_args() -> Array:
-	var args: Array = ["sidechain", "Sidechain", 0, 5]
+	var args: Array = ["sidechain", "Sidechain", 0, 7]
 	args.append_array(_float_param(0, "Low Cut", "Hz", 20.0, 20000.0, 20.0, true))
 	args.append_array(_float_param(10, "High Cut", "Hz", 20.0, 20000.0, 20000.0, true))
 	args.append_array(_float_param(20, "Attack", "ms", 0.0, 500.0, 5.0, false))
 	args.append_array(_float_param(30, "Release", "ms", 5.0, 2000.0, 150.0, false))
 	args.append_array(_float_param(40, "Source", "", 0.0, 999.0, 0.0, false))
+	args.append_array(_float_param(50, "Gain", "dB", -24.0, 24.0, 0.0, false))
+	args.append_array(_float_param(60, "Amount", "%", 0.0, 100.0, 100.0, false))
 	return args
 
 
@@ -345,15 +347,15 @@ func _test_placeholder_add_and_max() -> void:
 	_assert(pane._detail_title != null and pane._detail_title.text == inst.modulators[0].name,
 		"the detail column shows the new modulator")
 
-	for i in range(7):
+	for i in range(inst.MAX_MODULATORS - 1):
 		inst.add_modulator("velocity")
 	await process_frame
 	await process_frame
-	_assert(pane._placeholders.size() == 1, "at 8 modulators exactly one placeholder remains")
+	_assert(pane._placeholders.size() == 1, "at the cap exactly one placeholder remains")
 	_assert(pane._placeholders[0].disabled, "and it is disabled")
-	_assert(pane._placeholders[0].tooltip_text == "Maximum of 8 modulators", "with the capacity tooltip")
+	_assert(pane._placeholders[0].tooltip_text == "Maximum of 32 modulators", "with the capacity tooltip")
 	pane._on_add_kind(index)
-	_assert(inst.modulators.size() == 8, "the disabled menu still can't exceed the maximum")
+	_assert(inst.modulators.size() == 32, "the disabled menu still can't exceed the maximum")
 	pane.queue_free()
 
 
@@ -671,6 +673,17 @@ func _test_sidechain_source_menu() -> void:
 	await process_frame
 	var menu: OptionButton = pane._options.get("source_menu")
 	_assert(menu != null, "the sidechain detail has a Source menu")
+	_assert(pane._options.controls.has(50) and pane._options.controls.has(0)
+		and pane._options.controls.has(10) and pane._options.controls.has(20)
+		and pane._options.controls.has(30), "Gain and the four knobs are bound")
+	_assert(pane._options.controls.get(50) is RotaryKnob, "Gain is a knob")
+	_assert(pane._options.controls.get(60) is CompactSlider, "Amount is a CompactSlider")
+	var amount: CompactSlider = pane._options.controls[60]
+	_assert(is_equal_approx(amount.value, 1.0) and is_equal_approx(amount.default_value, 1.0),
+		"Amount reads its 100 % default")
+	amount.value = 0.5
+	_assert(is_equal_approx(sc.get_param(60), 0.5), "dragging Amount sets the model parameter")
+	_assert(pane._options.spectrum != null, "the options carry the spectrum plot")
 	_assert(menu.get_item_text(0) == "Device In" and int(menu.get_item_metadata(0)) == 0,
 		"Device In is item 0 with channel id 0")
 	var ids: Array = []
