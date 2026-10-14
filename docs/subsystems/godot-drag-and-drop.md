@@ -41,6 +41,8 @@ Implementations (payload, resolver, owner, test):
    needs no cleanup.
 2. **No placeholders or gaps.** Don't insert spacer or placeholder nodes, and don't grow margins to
    open a gap. Anything that changes layout while dragging makes the whole UI jump.
+   Exception: the Modulators grid appends one spare placeholder column after its last column during
+   a panel drag (so a panel can be dropped into a new column); nothing before it moves.
 3. **Indicators are overlays.** Draw them on a `top_level = true`, `mouse_filter = IGNORE` control with
    a raised `z_index`, positioned by `global_position`/`size`. Create it lazily, hide it on
    `NOTIFICATION_DRAG_END` and whenever the target is invalid.

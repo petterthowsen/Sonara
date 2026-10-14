@@ -1,7 +1,8 @@
 ## The Modulators pane of the DevicePanel (spec 018, rebuilt in 033): a column-major grid of square
-## modulator panels with trailing `+` placeholder cells, and the selected modulator's settings on
-## the right. The device lane's horizontal scroll is the only scrolling surface — the pane widens
-## one column per growth step.
+## modulator panels, each in its own `Modulator.cell`, with `+` placeholders in every empty cell
+## (gaps and the trailing ones), and the selected modulator's settings on the right. The device
+## lane's horizontal scroll is the only scrolling surface — the pane widens one column per growth
+## step.
 ##
 ## The detail column shows the selected modulator's options: one scene per kind in `options/`
 ## (`OPTIONS_SCENES`), laid out in the editor from `ModParamSlot`s. A kind without a scene gets
@@ -38,6 +39,11 @@ var _kind_menu: PopupMenu = null
 var _detail: VBoxContainer = null
 var _tiles: Array[ModulatorPanel] = []
 var _placeholders: Array[Button] = []
+## Placeholder-only column appended while a drag is in progress, so a panel can be dropped past
+## the last one; null otherwise.
+var _drag_column: VBoxContainer = null
+## Grid cell of the placeholder whose `+` menu is open (the add lands there).
+var _add_cell := -1
 ## Square cell side applied to every cell; 0 until the first layout.
 var _side := 0
 ## Times `_layout_panel_size` actually applied a side (stays put when the height didn't change).
@@ -177,9 +183,11 @@ func _registry():
 # GRID (panels and placeholder cells)
 # ============================================================================
 
-## Rebuild the column-major grid: `C = max(1, tiles / 3 + 1)` columns of `ROWS` cells, panels
-## first in array order, then `3·C − tiles` placeholder cells (1–3). Cheap at ≤ 8 entries.
-## Rebuilt on add/remove/reorder; the selection is kept by `mod_id`.
+## Rebuild the column-major grid: tile `t` sits in cell `t.cell` (column `cell / 3`, row
+## `cell % 3`); every other cell is a placeholder. `C = (last + 1) / 3 + 1` columns, `last` being
+## the highest occupied cell, so at least one placeholder trails the last panel (a whole column
+## of them when its column is full). Rebuilt on add/remove/reorder; the selection is kept by
+## `mod_id`. While a drag runs, `_add_drag_column` adds one more column.
 ##
 ## Pair-aware (spec 036): an adjacent `xyx`+`xyy` becomes ONE tile (`setup_pair`); an orphan
 ## `xyx`/`xyy` (a hand-edited save) degrades to a plain tile.
@@ -187,22 +195,24 @@ func _rebuild_grid() -> void:
 	_clear_grid()
 	if device == null:
 		return
-	var tiles: Array = []
+	var by_cell: Dictionary = {}
+	var last := -1
 	var i := 0
 	while i < device.modulators.size():
 		var mod: Modulator = device.modulators[i]
+		var entry: Variant = mod
 		if mod.kind == "xyx" and i + 1 < device.modulators.size() \
 				and device.modulators[i + 1].kind == "xyy":
 			var pad := XYPad.new()
 			pad.x = mod
 			pad.y = device.modulators[i + 1]
-			tiles.append(pad)
+			entry = pad
 			i += 2
 		else:
-			tiles.append(mod)
 			i += 1
-	var n := tiles.size()
-	var columns := maxi(1, n / ROWS + 1)
+		by_cell[mod.cell] = entry
+		last = maxi(last, mod.cell)
+	var columns := (last + 1) / ROWS + 1
 	for c in columns:
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", SEP)
@@ -210,25 +220,61 @@ func _rebuild_grid() -> void:
 		_grid.add_child(column)
 		for r in ROWS:
 			var k: int = c * ROWS + r
-			if k < n:
-				_add_panel(column, tiles[k])
+			if by_cell.has(k):
+				_add_panel(column, by_cell[k])
 			else:
-				_add_placeholder(column)
+				_add_placeholder(column, k)
+	if _drag != null:
+		_add_drag_column()
 	if _side > 0:
 		_apply_side()
 	else:
 		# First layout: the parent's height isn't final yet (a `resized` may have fired before the
 		# structure existed), so size the cells after this frame's layout pass.
 		_layout_panel_size.call_deferred()
-	# At the capacity limit the last placeholder (always one at the cap) is disabled: REQ-002 keeps
-	# placeholders non-zero without offering an add `add_modulator` would refuse.
+	_sync_placeholders()
+	if _selected_mod_id < 0 or device.get_modulator(_selected_mod_id) == null:
+		_selected_mod_id = int(_remembered.get(device.id, device.modulators[0].mod_id if not device.modulators.is_empty() else -1))
+	_refresh_selection()
+
+
+## At the capacity limit every placeholder is disabled: REQ-002 keeps placeholders non-zero
+## without offering an add `add_modulator` would refuse. A drop on one still moves a panel there.
+func _sync_placeholders() -> void:
 	var full := device.modulators.size() >= device.MAX_MODULATORS
 	for placeholder in _placeholders:
 		placeholder.disabled = full
 		placeholder.tooltip_text = ("Maximum of %d modulators" % device.MAX_MODULATORS) if full else "Add modulator"
-	if _selected_mod_id < 0 or device.get_modulator(_selected_mod_id) == null:
-		_selected_mod_id = int(_remembered.get(device.id, device.modulators[0].mod_id if not device.modulators.is_empty() else -1))
-	_refresh_selection()
+
+
+## During a drag: one more placeholder column after the last, unless that one already holds
+## only placeholders — so a panel can always be dropped into a fresh column.
+func _add_drag_column() -> void:
+	if _drag_column != null or _grid.get_child_count() == 0:
+		return
+	var last_column := _grid.get_child(_grid.get_child_count() - 1)
+	if not last_column.get_children().any(func(cell): return cell is ModulatorPanel):
+		return
+	_drag_column = VBoxContainer.new()
+	_drag_column.add_theme_constant_override("separation", SEP)
+	_drag_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_grid.add_child(_drag_column)
+	var first: int = (_grid.get_child_count() - 1) * ROWS
+	for r in ROWS:
+		_add_placeholder(_drag_column, first + r)
+	if _side > 0:
+		_apply_side()
+	_sync_placeholders()
+
+
+func _remove_drag_column() -> void:
+	if _drag_column == null:
+		return
+	for cell in _drag_column.get_children():
+		_placeholders.erase(cell)
+	_grid.remove_child(_drag_column)
+	_drag_column.queue_free()
+	_drag_column = null
 
 
 func _add_panel(column: VBoxContainer, entry: Variant) -> void:
@@ -244,10 +290,11 @@ func _add_panel(column: VBoxContainer, entry: Variant) -> void:
 	_tiles.append(panel)
 
 
-## Flat `+` cell (`ModulatorPlaceholder.tscn`, its icon centered at its own size): opens the
-## shared kind menu. Placement always trails the panels, so an add lands in the first free cell.
-func _add_placeholder(column: VBoxContainer) -> void:
+## Flat `+` cell (`ModulatorPlaceholder.tscn`, its icon centered at its own size) for empty grid
+## cell `cell` (its `cell` meta): opens the shared kind menu, and the add lands in that cell.
+func _add_placeholder(column: VBoxContainer, cell: int) -> void:
 	var button: Button = load(PLACEHOLDER_SCENE).instantiate()
+	button.set_meta(&"cell", cell)
 	button.pressed.connect(_on_placeholder_pressed.bind(button))
 	_placeholders.append(button)
 	column.add_child(button)
@@ -260,6 +307,7 @@ func _clear_grid() -> void:
 	for column in _grid.get_children():
 		_grid.remove_child(column)
 		column.queue_free()
+	_drag_column = null
 	_tiles.clear()
 	_placeholders.clear()
 
@@ -308,6 +356,7 @@ func _select(mod_id: int) -> void:
 func _on_placeholder_pressed(button: Button) -> void:
 	if device == null or button.disabled:
 		return
+	_add_cell = int(button.get_meta(&"cell", -1))
 	ContextMenuPopup.popup_below_control(_kind_menu, button)
 
 
@@ -317,12 +366,14 @@ func _on_add_kind(id: int) -> void:
 	if id < 0 or id >= _kind_menu.item_count:
 		return
 	var kind_id := String(_kind_menu.get_item_metadata(id))
+	var cell := _add_cell
+	_add_cell = -1
 	if kind_id == "xyx":
-		var pad: XYPad = device.add_xy_pad()
+		var pad: XYPad = device.add_xy_pad(cell)
 		if pad != null:
 			_select(pad.x.mod_id)
 		return
-	var mod = device.add_modulator(kind_id)
+	var mod = device.add_modulator(kind_id, cell)
 	if mod != null:
 		_select(mod.mod_id)
 
@@ -370,15 +421,17 @@ func _on_device_name_changed(_new_name: String) -> void:
 
 
 # ============================================================================
-# SWAP DRAG
+# MOVE DRAG
 # ============================================================================
 
-## A panel crossed the drag threshold: own the drag, follow the mouse, commit on release.
+## A panel crossed the drag threshold: own the drag, follow the mouse, commit on release. The
+## grid grows a spare placeholder column for the drag's duration.
 func _on_panel_drag_started(mod: Modulator) -> void:
 	if device == null or _drag != null:
 		return
 	_drag = ModulatorDrag.start(self, mod)
 	if _drag != null:
+		_add_drag_column()
 		_indicator = DropIndicator.place(self, _indicator, Rect2(), true)
 		DropIndicator.hide_indicator(_indicator)
 
@@ -399,11 +452,14 @@ func _input(event: InputEvent) -> void:
 		_end_drag()
 
 
-## Drop or cancel: free the ghost, hide the indicator. Nothing needs undoing — nothing moved.
+## Drop or cancel: free the ghost, hide the indicator, drop the spare column (a commit already
+## rebuilt the grid). Nothing needs undoing — nothing moved.
 func _end_drag() -> void:
 	if _drag != null:
 		_drag.preview.queue_free()
 		_drag = null
+	if _grid != null:
+		_remove_drag_column()
 	DropIndicator.hide_indicator(_indicator)
 
 

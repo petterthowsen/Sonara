@@ -1,7 +1,8 @@
-# Modulator drag-to-swap (spec 033 phase 2): ModulatorDrag.resolve maps the mouse to a panel cell
-# (invalid over placeholders, the dragged panel, another device or outside the grid), commit swaps
-# through DeviceInstance.swap_modulators, the DropIndicator outlines the target, and a panel selects
-# only on a click that stays under the drag threshold.
+# Modulator drag (spec 033 phase 2): ModulatorDrag.resolve maps the mouse to a grid cell — a panel
+# or a placeholder (invalid over the dragged panel, another device or outside the grid) — commit
+# moves the tile there through DeviceInstance.move_modulator_to_cell (swapping with a panel), the
+# grid grows a spare column during a drag, the DropIndicator outlines the target, and a panel
+# selects only on a click that stays under the drag threshold.
 # Run: godot --headless --path Godot -s tests/test_modulator_drag.gd -- --test
 #
 # Autoload-referencing scripts are loaded with load(), as in test_modulators_ui.gd.
@@ -25,6 +26,8 @@ func run_tests() -> void:
 	_setup()
 	await _test_resolve_targets()
 	await _test_commit_swaps()
+	await _test_drop_on_placeholder_moves()
+	await _test_drag_column()
 	await _test_click_selects_but_drag_does_not()
 
 
@@ -115,8 +118,9 @@ func _test_resolve_targets() -> void:
 	_assert(not _drag_script.resolve(pane, drag, panels[0].get_global_rect().get_center()).is_valid(),
 		"the dragged panel itself is invalid")
 	var placeholder: Button = pane._placeholders[0]
-	_assert(not _drag_script.resolve(pane, drag, placeholder.get_global_rect().get_center()).is_valid(),
-		"a placeholder is invalid")
+	var on_placeholder: Object = _drag_script.resolve(pane, drag, placeholder.get_global_rect().get_center())
+	_assert(on_placeholder.is_valid() and on_placeholder.cell == int(placeholder.get_meta(&"cell")),
+		"a placeholder resolves to its cell")
 	var other: Object = _drag_script.new(pane, "other-device", 0, null)
 	_assert(not _drag_script.resolve(pane, other, panels[1].get_global_rect().get_center()).is_valid(),
 		"another device's panel is invalid")
@@ -144,6 +148,66 @@ func _test_commit_swaps() -> void:
 	var self_target: Object = _drag_script.resolve(pane, drag, pane._tiles[2].get_global_rect().get_center())
 	_assert(not self_target.commit(drag), "an invalid target changes nothing")
 	_assert(fired.size() == 1, "still one reorder")
+	pane.queue_free()
+
+
+## A drop on a placeholder moves the panel into that cell, leaving a gap; the gap survives a save.
+func _test_drop_on_placeholder_moves() -> void:
+	var s := await _pane_bound(2)
+	var pane = s[0]
+	var inst = s[1]
+	var first_id: int = inst.modulators[0].mod_id
+	var drag: Object = _drag_script.start(pane, inst.modulators[0])
+	# Cell 2, the bottom of column 0: empty with two modulators.
+	var target: Object = _drag_script.resolve(pane, drag, Vector2.ZERO)
+	for placeholder in pane._placeholders:
+		if int(placeholder.get_meta(&"cell")) == 2:
+			target = _drag_script.resolve(pane, drag, placeholder.get_global_rect().get_center())
+	_assert(target.is_valid() and target.cell == 2, "the empty cell 2 is a target")
+	_assert(target.commit(drag), "a drop on a placeholder commits")
+	pane._end_drag()
+	await process_frame
+	_assert(inst.get_modulator(first_id).cell == 2, "the modulator moved into the empty cell")
+	_assert(inst.modulators[0].cell == 1 and inst.modulators[1].mod_id == first_id, "the array follows the cells")
+	var column0: VBoxContainer = pane._grid.get_child(0)
+	_assert(column0.get_child(0) is Button and column0.get_child(2) is ModulatorPanel,
+		"cell 0 is now a placeholder, cell 2 the moved panel")
+
+	var data: Dictionary = JSON.parse_string(JSON.stringify(inst.to_json()))
+	var copy = _inst_script.from_json(data)
+	_assert(copy.get_modulator(first_id).cell == 2 and copy.modulators[0].cell == 1, "the cells survive a save")
+	pane.queue_free()
+
+
+## While dragging, a spare placeholder column follows the last one (unless it's empty already).
+func _test_drag_column() -> void:
+	var s := await _pane_bound(2)
+	var pane = s[0]
+	var inst = s[1]
+	_assert(pane._grid.get_child_count() == 1, "two modulators fit one column")
+	pane._on_panel_drag_started(inst.modulators[0])
+	_assert(pane._grid.get_child_count() == 2, "a drag adds a spare column")
+	_assert(pane._placeholders.size() == 4, "of three placeholders")
+	pane._end_drag()
+	_assert(pane._grid.get_child_count() == 1 and pane._placeholders.size() == 1, "the spare column goes on cancel")
+	pane.queue_free()
+
+	s = await _pane_bound(3)
+	pane = s[0]
+	inst = s[1]
+	_assert(pane._grid.get_child_count() == 2, "a full column gets a placeholder column")
+	pane._on_panel_drag_started(inst.modulators[0])
+	_assert(pane._grid.get_child_count() == 2, "no spare column when the last one is all placeholders")
+	pane._end_drag()
+
+	# Drop into the spare column: the grid keeps the moved panel there.
+	inst.move_modulator_to_cell(inst.modulators[0].mod_id, 4)
+	await process_frame
+	pane._on_panel_drag_started(inst.modulators[0])
+	_assert(pane._grid.get_child_count() == 3, "column 1 holds a panel, so the drag adds column 2")
+	var cells: Array = pane._placeholders.map(func(p): return int(p.get_meta(&"cell")))
+	_assert(cells.has(6) and cells.has(7) and cells.has(8), "the spare column's placeholders are cells 6–8")
+	pane._end_drag()
 	pane.queue_free()
 
 

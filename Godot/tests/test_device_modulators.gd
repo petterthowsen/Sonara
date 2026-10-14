@@ -27,6 +27,7 @@ func run_tests() -> void:
 	_test_add_remove_set_and_osc()
 	_test_echoes_are_swallowed()
 	_test_sync_to_engine()
+	_test_engine_clear_keeps_names_and_order()
 	_test_json_round_trip()
 	_test_get_routes_into()
 	_test_swap_modulators()
@@ -321,6 +322,35 @@ func _test_sync_to_engine() -> void:
 	_assert(addresses.has("value"), "sync sends the modulator parameters")
 	var routes := messages.filter(func(item): return str(item.address).ends_with("/route/set"))
 	_assert(routes.size() == 1 and routes[0].args[0] == "param/31", "sync sends the routes")
+
+
+## The engine echoes a sync (and a state resend) as clear + one add per modulator, carrying no
+## names or array order: both must survive.
+func _test_engine_clear_keeps_names_and_order() -> void:
+	var inst := _instance()
+	inst.modulators.clear()
+	var a = inst.add_modulator("lfo")
+	var b = inst.add_modulator("adsr")
+	a.set_name("Wobble")
+	b.set_name("Pluck")
+	inst.swap_modulators(a.mod_id, b.mod_id)
+	var address := "/channel/2/device/0/modulator/clear"
+
+	# Echo of our own sync: clear, then adds.
+	inst.sync_modulators_to_engine()
+	inst._on_modulator_clear_received([], address)
+	inst._on_modulator_add_received([a.mod_id, "lfo"])
+	inst._on_modulator_add_received([b.mod_id, "adsr"])
+	var names: Array = inst.modulators.map(func(m): return m.name)
+	_assert(names == ["Pluck", "Wobble"], "names and order survive the echo of our sync (got %s)" % [names])
+
+	# Unsolicited resend (engine id order, not array order).
+	inst._pending_mod_echoes.clear()
+	inst._on_modulator_clear_received([], address)
+	inst._on_modulator_add_received([a.mod_id, "lfo"])
+	inst._on_modulator_add_received([b.mod_id, "adsr"])
+	names = inst.modulators.map(func(m): return m.name)
+	_assert(names == ["Pluck", "Wobble"], "names and order survive an engine resend (got %s)" % [names])
 
 
 func _test_json_round_trip() -> void:

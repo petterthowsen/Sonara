@@ -567,7 +567,7 @@ func _test_xy_pad_pane() -> void:
 
 
 func _test_xy_pad_drag() -> void:
-	# Plain first, then a pair. Dragging the plain tile onto the pair keeps the pair adjacent.
+	# Plain first, then a pair. A drop on another tile swaps the two cells; the pair stays adjacent.
 	var inst = _instance()
 	inst.modulators.clear()
 	var plain = inst.add_modulator("velocity")
@@ -580,20 +580,27 @@ func _test_xy_pad_drag() -> void:
 	var target: Object = _drag_script.resolve(pane, drag, pane._tiles[1].get_global_rect().get_center())
 	_assert(target.is_valid() and target.mod_id == pad.x.mod_id, "the pair tile is a target")
 	_assert(target.commit(drag), "the drop commits")
-	_assert(inst.modulators[0].kind == "velocity" and inst.modulators[1].kind == "xyx"
-		and inst.modulators[2].kind == "xyy", "the plain tile moved before the pair, still adjacent")
+	pane._end_drag()
+	await process_frame
+	await process_frame
+	_assert(inst.modulators[0].kind == "xyx" and inst.modulators[1].kind == "xyy"
+		and inst.modulators[2].kind == "velocity", "the plain tile swapped past the pair, still adjacent")
+	_assert(pad.x.cell == 0 and pad.y.cell == 0 and plain.cell == 1, "both pair slots share the pair's cell")
 
 	drag = _drag_script.start(pane, pad.x)
 	_assert(drag.mod_count == 2, "the pair drags as one block of two")
 	target = _drag_script.resolve(pane, drag, pane._tiles[1].get_global_rect().get_center())
 	_assert(target.is_valid() and target.mod_id == plain.mod_id, "the plain tile is a target")
 	_assert(target.commit(drag), "committed")
-	_assert(inst.modulators[0].kind == "xyx" and inst.modulators[1].kind == "xyy"
-		and inst.modulators[2].kind == "velocity", "the pair moved past the plain tile, still adjacent")
+	pane._end_drag()
+	await process_frame
+	await process_frame
+	_assert(inst.modulators[0].kind == "velocity" and inst.modulators[1].kind == "xyx"
+		and inst.modulators[2].kind == "xyy", "the pair swapped back, still adjacent")
 	_assert(inst.xy_pairs().size() == 1, "the pair is intact after both drags")
 
 	drag = _drag_script.start(pane, pad.x)
-	_assert(not _drag_script.resolve(pane, drag, pane._tiles[0].get_global_rect().get_center()).is_valid(),
+	_assert(not _drag_script.resolve(pane, drag, pane._tiles[1].get_global_rect().get_center()).is_valid(),
 		"the dragged pair's own tile is invalid")
 	pane.queue_free()
 

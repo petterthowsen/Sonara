@@ -16,6 +16,11 @@ var kind: String = ""
 ## Display name (`LFO 1`, `Filter Env`); unique among the owner's modulators.
 var name: String = ""
 
+## Grid cell in the Modulators pane, column-major in 3-row columns (column `cell / 3`, row
+## `cell % 3`); cells between modulators may be empty. An XY pad's two slots share the X slot's
+## cell. −1 until the owner places it. Saved with the project.
+var cell: int = -1
+
 ## Kind parameter id -> normalized 0.0–1.0 value.
 var params: Dictionary = {}
 

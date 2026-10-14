@@ -47,7 +47,7 @@ signal modulator_removed(mod_id: int)
 signal modulator_changed(mod_id: int)
 ## One route was added, changed or removed (amount 0): `mod_id` → `target`.
 signal route_changed(mod_id: int, target: String, amount: float)
-## Two modulators swapped positions in the array (kept ids; display and save order follow it).
+## Modulators moved to other grid cells (kept ids; the array, display and save order follow).
 signal modulators_reordered()
 
 
@@ -157,6 +157,9 @@ const MAX_MODULATORS := 32
 ## -> [count, first_msec]. Same idea as `_pending_echoes`.
 var _pending_mod_echoes: Dictionary = {}
 const MOD_CLEAR_KEY := "*clear*"
+## Modulators an engine `modulator/clear` dropped. The engine's resend (clear, then one add per
+## modulator) carries no names or grid cells, so the re-adds take both back from here.
+var _cleared_modulators: Array[Modulator] = []
 
 ## Parameter metadata advertised by the engine for THIS instance (SFZ/CLAP
 ## devices whose param list depends on the loaded file/plugin instance).
@@ -652,6 +655,7 @@ func _seed_default_modulators() -> void:
 		if mod != null:
 			modulators.append(mod)
 			next_id += 1
+	_place_modulators()
 
 
 func _build_modulator(mod_id: int, kind: String, mod_name: String, params: Dictionary, routes: Dictionary) -> Modulator:
@@ -709,7 +713,8 @@ func is_modulator_kind_bipolar(kind: String) -> bool:
 
 ## Add a modulator of `kind` with the engine's default parameters. Returns null when the kind is
 ## unknown or the device already holds MAX_MODULATORS of them.
-func add_modulator(kind: String) -> Modulator:
+## `cell` places it in that grid cell when the cell is free; otherwise it takes the first free one.
+func add_modulator(kind: String, cell: int = -1) -> Modulator:
 	var info := get_modulator_kind(kind)
 	if info.is_empty():
 		logger.warn("[%s] Unknown modulator kind '%s'" % [get_display_name(), kind])
@@ -722,7 +727,9 @@ func add_modulator(kind: String) -> Modulator:
 	for param in get_modulator_kind_params(kind):
 		params[param.id] = param.value_to_normalized(param.default_value)
 	var mod := _build_modulator(mod_id, kind, _unique_modulator_name(get_modulator_kind_name(kind)), params, {})
+	mod.cell = _free_cell_or_first(cell)
 	modulators.append(mod)
+	_sort_modulators_by_cell()
 	_expect_mod_echo("add:%d" % mod_id)
 	AudioEngineOSC.send(osc_addr("modulator/add"), [mod_id, kind])
 	modulator_added.emit(mod)
@@ -752,9 +759,10 @@ func _modulator_name_taken(candidate: String) -> bool:
 	return false
 
 
-## Copy `mod_id` (kind, parameters and routes) into a new modulator with the lowest free id.
+## Copy `mod_id` (kind, parameters and routes) into a new modulator with the lowest free id, in
+## the first free grid cell (or `cell`, unchecked — an XY pad's Y copy shares its X copy's cell).
 ## Returns null when the source is missing or the device is full.
-func duplicate_modulator(mod_id: int) -> Modulator:
+func duplicate_modulator(mod_id: int, cell: int = -1) -> Modulator:
 	var source := get_modulator(mod_id)
 	if source == null:
 		return null
@@ -766,7 +774,9 @@ func duplicate_modulator(mod_id: int) -> Modulator:
 		source.params.duplicate(), source.routes.duplicate())
 	if mod == null:
 		return null
+	mod.cell = cell if cell >= 0 else first_free_modulator_cell()
 	modulators.append(mod)
+	_sort_modulators_by_cell()
 	_expect_mod_echo("add:%d" % new_id)
 	AudioEngineOSC.send(osc_addr("modulator/add"), [new_id, mod.kind])
 	for param_id in mod.params:
@@ -806,14 +816,126 @@ func _modulator_index(mod_id: int) -> int:
 
 
 ## ============================================================================
+## GRID CELLS: each tile (a modulator, or an XY pad's pair) sits in its own `cell`; the array is
+## kept sorted by cell, so route colours (array index) follow the display order.
+## ============================================================================
+
+## The smallest grid cell no modulator occupies.
+func first_free_modulator_cell() -> int:
+	var taken := {}
+	for mod in modulators:
+		taken[mod.cell] = true
+	var cell := 0
+	while taken.has(cell):
+		cell += 1
+	return cell
+
+
+func _free_cell_or_first(cell: int) -> int:
+	if cell < 0 or _tile_at_cell(cell).size() > 0:
+		return first_free_modulator_cell()
+	return cell
+
+
+## The array as tiles: `[x, y]` for an adjacent `xyx`+`xyy` pair, `[mod]` for anything else.
+func _modulator_tiles() -> Array:
+	var tiles: Array = []
+	var i := 0
+	while i < modulators.size():
+		if modulators[i].kind == "xyx" and i + 1 < modulators.size() and modulators[i + 1].kind == "xyy":
+			tiles.append([modulators[i], modulators[i + 1]])
+			i += 2
+		else:
+			tiles.append([modulators[i]])
+			i += 1
+	return tiles
+
+
+func _tile_of(mod_id: int) -> Array:
+	for tile in _modulator_tiles():
+		for mod in tile:
+			if mod.mod_id == mod_id:
+				return tile
+	return []
+
+
+func _tile_at_cell(cell: int) -> Array:
+	for tile in _modulator_tiles():
+		if tile[0].cell == cell:
+			return tile
+	return []
+
+
+## Give every tile a unique cell: a saved cell is kept unless an earlier tile already holds it;
+## anything else (an old save without cells, a collision) takes the first free cell, in array
+## order — which reproduces the packed layout of saves made before cells existed.
+func _place_modulators() -> void:
+	var tiles := _modulator_tiles()
+	var taken := {}
+	var unplaced: Array = []
+	for tile in tiles:
+		var cell: int = tile[0].cell
+		if cell >= 0 and not taken.has(cell):
+			taken[cell] = true
+		else:
+			unplaced.append(tile)
+	for tile in unplaced:
+		var cell := 0
+		while taken.has(cell):
+			cell += 1
+		taken[cell] = true
+		tile[0].cell = cell
+	for tile in tiles:
+		for mod in tile:
+			mod.cell = tile[0].cell
+	_sort_modulators_by_cell()
+
+
+## Stable sort by cell; an `xyy` sorts right after the `xyx` sharing its cell.
+func _sort_modulators_by_cell() -> void:
+	var order := {}
+	for i in modulators.size():
+		order[modulators[i]] = i
+	modulators.sort_custom(func(a: Modulator, b: Modulator) -> bool:
+		if a.cell != b.cell:
+			return a.cell < b.cell
+		var a_y := 1 if a.kind == "xyy" else 0
+		var b_y := 1 if b.kind == "xyy" else 0
+		if a_y != b_y:
+			return a_y < b_y
+		return order[a] < order[b])
+
+
+## Move the tile holding `mod_id` (a pair moves whole) to grid `cell`. A tile already there
+## takes the moved tile's old cell (a swap); an empty cell is just taken. No OSC: the engine keys
+## modulators by id, never by position. True when something moved.
+func move_modulator_to_cell(mod_id: int, cell: int) -> bool:
+	var tile := _tile_of(mod_id)
+	if tile.is_empty() or cell < 0:
+		return false
+	var from_cell: int = tile[0].cell
+	if from_cell == cell:
+		return false
+	var other := _tile_at_cell(cell)
+	for mod in other:
+		mod.cell = from_cell
+	for mod in tile:
+		mod.cell = cell
+	_sort_modulators_by_cell()
+	modulators_reordered.emit()
+	return true
+
+
+## ============================================================================
 ## XY PADS (spec 036): a Godot-level pair over two engine slots (`xyx` + `xyy`,
 ## adjacent in the array, X first). The engine sees two plain modulators.
 ## ============================================================================
 
-## Add an XY pad: appends an `xyx` and then an `xyy` modulator at the end of the array. Returns
+## Add an XY pad: an `xyx` and then an `xyy` modulator sharing one grid cell (`cell` when free,
+## else the first free one). Returns
 ## null (nothing added) when the engine doesn't advertise the kinds or fewer than two ids are
 ## free — an XY pad occupies 2 of the MAX_MODULATORS slots.
-func add_xy_pad() -> XYPad:
+func add_xy_pad(cell: int = -1) -> XYPad:
 	if get_modulator_kind("xyx").is_empty() or get_modulator_kind("xyy").is_empty():
 		logger.warn("[%s] Engine does not advertise the XY pad modulator kinds" % get_display_name())
 		return null
@@ -834,8 +956,11 @@ func add_xy_pad() -> XYPad:
 	var x_name := _unique_modulator_name("XY Pad")
 	var x_mod := _build_modulator(x_id, "xyx", x_name, _default_mod_params("xyx"), {})
 	var y_mod := _build_modulator(y_id, "xyy", "%s Y" % x_name, _default_mod_params("xyy"), {})
+	x_mod.cell = _free_cell_or_first(cell)
+	y_mod.cell = x_mod.cell
 	modulators.append(x_mod)
 	modulators.append(y_mod)
+	_sort_modulators_by_cell()
 	for id in [x_id, y_id]:
 		_expect_mod_echo("add:%d" % id)
 		AudioEngineOSC.send(osc_addr("modulator/add"), [id, "xyx" if id == x_id else "xyy"])
@@ -854,7 +979,7 @@ func remove_xy_pad(pad: XYPad) -> void:
 	remove_modulator(pad.y.mod_id)
 
 
-## Copy both slots of `pad` into a new adjacent pair at the end of the array. Returns null when
+## Copy both slots of `pad` into a new pair in the first free cell. Returns null when
 ## either slot is missing or there is no room for the copy pair.
 func duplicate_xy_pad(pad: XYPad) -> XYPad:
 	if pad == null or pad.x == null or pad.y == null:
@@ -862,7 +987,7 @@ func duplicate_xy_pad(pad: XYPad) -> XYPad:
 	var x_copy := duplicate_modulator(pad.x.mod_id)
 	if x_copy == null:
 		return null
-	var y_copy := duplicate_modulator(pad.y.mod_id)
+	var y_copy := duplicate_modulator(pad.y.mod_id, x_copy.cell)
 	if y_copy == null:
 		# No room for the pair: don't leave half of one behind.
 		remove_modulator(x_copy.mod_id)
@@ -890,22 +1015,6 @@ func xy_pairs() -> Array[XYPad]:
 	return out
 
 
-## Move `count` (1 or 2) contiguous array entries starting at `from_index` so the block begins
-## at `to_index` (an index in the array after the removal, as `Array.insert` takes it). Every
-## array mutation that can move a pair goes through here — a swap of two entries would split a
-## pair (spec 036 D4). No OSC: the engine keys modulators by id, never by array order.
-func move_modulator_block(from_index: int, count: int, to_index: int) -> void:
-	if count < 1 or from_index < 0 or from_index + count > modulators.size():
-		return
-	var block := modulators.slice(from_index, from_index + count)
-	for _i in count:
-		modulators.remove_at(from_index)
-	to_index = clampi(to_index, 0, modulators.size())
-	for i in count:
-		modulators.insert(to_index + i, block[i])
-	modulators_reordered.emit()
-
-
 ## The kind's default parameters as a normalized-value dictionary (as `add_modulator` seeds).
 func _default_mod_params(kind: String) -> Dictionary:
 	var params: Dictionary = {}
@@ -914,20 +1023,13 @@ func _default_mod_params(kind: String) -> Dictionary:
 	return params
 
 
-## Swap two modulators' positions in the array. Both keep their `mod_id` (routes name ids, not
-## positions). No OSC: the engine keys modulators by slot id and never by array order, so a
-## reorder is pure UI/persistence state.
+## Swap two modulators' grid cells (pairs move whole). Both keep their `mod_id` (routes name ids,
+## not positions).
 func swap_modulators(a_mod_id: int, b_mod_id: int) -> void:
-	if a_mod_id == b_mod_id:
+	var b := get_modulator(b_mod_id)
+	if a_mod_id == b_mod_id or b == null or get_modulator(a_mod_id) == null:
 		return
-	var a := _modulator_index(a_mod_id)
-	var b := _modulator_index(b_mod_id)
-	if a < 0 or b < 0:
-		return
-	var swap = modulators[a]
-	modulators[a] = modulators[b]
-	modulators[b] = swap
-	modulators_reordered.emit()
+	move_modulator_to_cell(a_mod_id, b.cell)
 
 
 ## Rename a modulator (kept unique among this device's modulators).
@@ -1073,6 +1175,24 @@ func _consume_mod_echo(key: String) -> bool:
 	return true
 
 
+## Consume one expected echo for `key`. True when one was in flight, i.e. the echo is our own
+## — unlike `_consume_mod_echo`, the last one is swallowed too (for messages whose echo must
+## never be re-applied).
+func _take_own_mod_echo(key: String) -> bool:
+	if not _pending_mod_echoes.has(key):
+		return false
+	var pending: Array = _pending_mod_echoes[key]
+	if Time.get_ticks_msec() - int(pending[1]) >= PENDING_ECHO_TIMEOUT_MS:
+		_pending_mod_echoes.erase(key)
+		return false
+	var remaining: int = int(pending[0]) - 1
+	if remaining <= 0:
+		_pending_mod_echoes.erase(key)
+	else:
+		pending[0] = remaining
+	return true
+
+
 ## `{device}/modulator/add [i:mod_id, s:kind]` echo, or a `state/get` resend.
 func _on_modulator_add_received(values: Array, _address: String = "") -> void:
 	if values.size() < 2:
@@ -1089,10 +1209,19 @@ func _on_modulator_add_received(values: Array, _address: String = "") -> void:
 	var params: Dictionary = {}
 	for param in get_modulator_kind_params(kind):
 		params[param.id] = param.value_to_normalized(param.default_value)
-	var mod := _build_modulator(mod_id, kind, get_modulator_kind_name(kind), params, {})
+	# Re-added after an engine clear: keep the name and the cell it had.
+	var previous: Modulator = null
+	for cleared in _cleared_modulators:
+		if cleared.mod_id == mod_id and cleared.kind == kind:
+			previous = cleared
+			break
+	var mod := _build_modulator(mod_id, kind,
+		previous.name if previous != null else get_modulator_kind_name(kind), params, {})
 	if mod == null:
 		return
+	mod.cell = previous.cell if previous != null else first_free_modulator_cell()
 	modulators.append(mod)
+	_sort_modulators_by_cell()
 	modulator_added.emit(mod)
 
 
@@ -1155,9 +1284,13 @@ func _on_modulator_route_received(values: Array, address: String) -> void:
 	route_changed.emit(mod_id, target, amount)
 
 
+## Our own clear (`sync_modulators_to_engine`) is always swallowed: the model already holds what
+## the adds that follow restore, names included. Any other clear (a state resend) drops the
+## modulators but remembers them, so the re-adds that follow keep their names and order.
 func _on_modulator_clear_received(_values: Array, _address: String = "") -> void:
-	if _consume_mod_echo(MOD_CLEAR_KEY) or modulators.is_empty():
+	if _take_own_mod_echo(MOD_CLEAR_KEY) or modulators.is_empty():
 		return
+	_cleared_modulators = modulators.duplicate()
 	var removed_ids: Array[int] = []
 	for mod in modulators:
 		removed_ids.append(mod.mod_id)
@@ -2685,8 +2818,8 @@ func to_json() -> Dictionary:
 	return data
 
 
-## `[{mod_id, kind, name, params: {id: norm}, routes: [{target, amount}]}]`, in array order —
-## display order and save order are the same (spec 033; `from_json` appends in array order).
+## `[{mod_id, kind, name, cell, params: {id: norm}, routes: [{target, amount}]}]`, in array
+## (= cell) order. `from_json` re-places a missing `cell` (older saves) in array order.
 ## Parameter ids and mod_ids travel as strings/ints as JSON requires.
 func _modulators_to_json() -> Array:
 	var out: Array = []
@@ -2702,6 +2835,7 @@ func _modulators_to_json() -> Array:
 			"mod_id": mod.mod_id,
 			"kind": mod.kind,
 			"name": mod.name,
+			"cell": mod.cell,
 			"params": params,
 			"routes": routes,
 		})
@@ -2847,7 +2981,9 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 				mod_params,
 				mod_routes)
 			if mod != null:
+				mod.cell = int(entry.get("cell", -1))
 				instance.modulators.append(mod)
+		instance._place_modulators()
 
 	# Restore loaded file path (will be reloaded after engine connection)
 	instance.loaded_file_path = data.get("loaded_file_path", "")

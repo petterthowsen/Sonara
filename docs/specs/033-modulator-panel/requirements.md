@@ -94,6 +94,11 @@ centered at the bottom of the panel.
 user-rearrangeable order, and WHEN a modulator panel is dragged onto another panel's cell,
 the two modulators' positions shall swap so the dragged one lands in the target cell.
 
+> Amended: each modulator has a saved grid cell (`Modulator.cell`) and cells may be empty. A drop
+> on a panel swaps the two cells; a drop on a placeholder moves the panel into that cell. During
+> a drag the grid shows one extra column of placeholders (unless its last column is already all
+> placeholders).
+
 - **Acceptance:** drag panel A onto panel B → A occupies B's former cell and vice versa; the
   new order is reflected in colour assignment, saved projects, and (for equal settings) audible
   evaluation order-independent behaviour is unchanged.

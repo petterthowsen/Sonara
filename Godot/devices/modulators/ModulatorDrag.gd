@@ -1,9 +1,9 @@
-## Payload for dragging a modulator panel to a sibling (spec 033 phase 2; pairs in 036). Nothing
-## moves until the drop: `resolve` maps the mouse to a target panel, `commit` swaps two plain
-## modulators or moves a block (an XY pad's two slots) through `DeviceInstance`. The pane is the
-## single drop host — a drop on a placeholder, on the dragged panel itself, on another device's
-## panel or outside the grid resolves to nothing (no cleanup needed; a cancelled drag only frees
-## the ghost).
+## Payload for dragging a modulator panel to another grid cell (spec 033 phase 2; pairs in 036).
+## Nothing moves until the drop: `resolve` maps the mouse to a target cell — a panel (the two swap
+## cells) or a placeholder (the panel moves there) — and `commit` moves the tile (an XY pad's two
+## slots together) through `DeviceInstance.move_modulator_to_cell`. The pane is the single drop
+## host — a drop on the dragged panel itself, on another device's grid or outside the grid
+## resolves to nothing (no cleanup needed; a cancelled drag only frees the ghost).
 class_name ModulatorDrag extends RefCounted
 
 ## Device instance id the drag came from.
@@ -29,37 +29,24 @@ func _init(_pane: Control, _device_id: String, _mod_id: int, _preview: Control) 
 ## Where a drop lands.
 class Target extends RefCounted:
 	var valid := false
-	## The panel the drop lands on (the drop indicator outlines it).
+	## The panel or placeholder the drop lands on (the drop indicator outlines it).
 	var panel: Control = null
+	## The target panel's modulator, or −1 over a placeholder.
 	var mod_id: int = -1
+	## Grid cell the dragged tile moves to.
+	var cell: int = -1
 	var indicator_rect: Rect2 = Rect2()
 
 	func is_valid() -> bool:
 		return valid
 
-	## Swap with the target (two plain modulators) or move the block next to it — a swap would
-	## split a pair (spec 036 D4). True when something changed.
+	## Move the dragged tile to the target cell; a tile there takes the dragged one's old cell.
+	## Pairs move whole, so they never split (spec 036 D4). True when something changed.
 	func commit(drag: ModulatorDrag) -> bool:
 		if not valid or drag == null or drag.pane == null or drag.pane.device == null:
 			return false
-		var device = drag.pane.device
-		if device.get_modulator(drag.mod_id) == null or device.get_modulator(mod_id) == null:
+		if not drag.pane.device.move_modulator_to_cell(drag.mod_id, cell):
 			return false
-		var from_index: int = device._modulator_index(drag.mod_id)
-		var target_index: int = device._modulator_index(mod_id)
-		if from_index < 0 or target_index < 0:
-			return false
-		var target_count := 1
-		for pad in device.xy_pairs():
-			if pad.x.mod_id == mod_id or pad.y.mod_id == mod_id:
-				target_count = 2
-		if drag.mod_count == 1 and target_count == 1:
-			device.swap_modulators(drag.mod_id, mod_id)
-		else:
-			# The dragged block takes the target's place: the target index, adjusted for the
-			# dragged block having been removed before it (keeping pairs adjacent either way).
-			var to_index := target_index - drag.mod_count if target_index > from_index else target_index
-			device.move_modulator_block(from_index, drag.mod_count, to_index)
 		drag.did_commit = true
 		return true
 
@@ -86,9 +73,8 @@ static func block_for(device, mod: Modulator) -> Array:
 	return [mod.mod_id, 1]
 
 
-## Resolve the drop target at global `mouse` inside `pane`: the visible panel under the pointer
-## that isn't part of the dragged block. Placeholders, another device's panels and empty space
-## stay invalid.
+## Resolve the drop target at global `mouse` inside `pane`: the visible panel (not the dragged
+## one) or placeholder under the pointer. Another device's grid and empty space stay invalid.
 static func resolve(pane: Control, drag: ModulatorDrag, global_mouse: Vector2) -> Target:
 	var target := Target.new()
 	if pane == null or drag == null or pane.device == null or pane.device.id != drag.device_id:
@@ -103,7 +89,16 @@ static func resolve(pane: Control, drag: ModulatorDrag, global_mouse: Vector2) -
 		target.valid = true
 		target.panel = panel
 		target.mod_id = panel.modulator.mod_id
+		target.cell = panel.modulator.cell
 		target.indicator_rect = panel.get_global_rect()
+		return target
+	for placeholder in pane._placeholders:
+		if not DragDrop.is_point_visible(placeholder, global_mouse):
+			continue
+		target.valid = true
+		target.panel = placeholder
+		target.cell = int(placeholder.get_meta(&"cell", -1))
+		target.indicator_rect = placeholder.get_global_rect()
 		return target
 	return target
 
