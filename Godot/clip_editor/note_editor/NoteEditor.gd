@@ -417,9 +417,9 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	var pixel_x = pos.x
 	var tick_position = pixels_to_ticks(pixel_x)
 
-	# Snap to grid
+	# Snap to the nearest grid line (not the one before the cursor), in both views.
 	if grid_helper:
-		tick_position = grid_helper.floor_ticks(tick_position)
+		tick_position = grid_helper.snap_ticks(tick_position)
 
 	# A new note is one grid step long (REQ-019), in both views: the current snap
 	# interval is the finest visible grid line, so zooming in lets you write 16ths.

@@ -16,6 +16,7 @@ func run_tests() -> void:
 	_test_levels_fade_in()
 	_test_weight_follows_rank()
 	_test_each_tick_once()
+	_test_snap_matches_visible_lines()
 
 
 # Loaded at runtime: GridHelper depends on Project.gd, which names autoloads that don't resolve
@@ -94,3 +95,30 @@ func _test_each_tick_once() -> void:
 			dup = dup or seen.has(key)
 			seen[key] = true
 		_assert(not dup, "no tick is drawn twice at %s px/beat" % ppb)
+
+
+## Issue #118: the snap step is the finest level drawn with real strength; a level just
+## fading in (alpha near 0) is not a snap target.
+func _test_snap_matches_visible_lines() -> void:
+	# 1/2 beat lines reach the 10 px threshold at 20 px/beat; they are at full strength at 40.
+	var g := _grid(21.0)  # 1/2 beat at 10.5 px: fade 0.05, effectively invisible
+	_assert(g.get_snap_interval() == 960, "a barely-faded-in 1/2 beat is not a snap step (%d)" % g.get_snap_interval())
+	g = _grid(30.0)  # 1/2 beat at 15 px: fade 0.5
+	_assert(g.get_snap_interval() == 480, "a half-faded 1/2 beat is a snap step (%d)" % g.get_snap_interval())
+	# Whatever snap_ticks returns lies on a drawn line (alpha >= SNAP_MIN_FADE) or a bar.
+	for ppb in [12.0, 21.0, 30.0, 45.0, 90.0, 200.0, 400.0]:
+		var gg := _grid(ppb)
+		var snap: int = gg.get_snap_interval()
+		var lines: Array = gg.get_visible_grid_lines(0.0, 4000.0)
+		var finest := 0
+		for l in lines:
+			if l.alpha >= _grid_script.SNAP_MIN_FADE:
+				finest = maxi(finest, 1)
+		var snapped: int = gg.snap_ticks(int(snap * 2.6))
+		_assert(snapped == snap * 3, "rounds to nearest at %s px/beat (%d)" % [str(ppb), snapped])
+		var x: float = gg.ticks_to_pixels(snapped)
+		var on_line := false
+		for l in lines:
+			if absf(l.x - x) < 1.0 and l.alpha >= _grid_script.SNAP_MIN_FADE:
+				on_line = true
+		_assert(on_line or snapped % (960 * 4) == 0, "snap target is a drawn line at %s px/beat" % str(ppb))

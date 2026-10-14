@@ -25,11 +25,11 @@ func run_tests() -> void:
 	await rig.build([960], [0.5], [], [60])
 	var ne = rig.midi_editor.note_editor
 	ne.last_note_length = 960
-	var drawn = _draw_note(rig, 720, 60)
+	var drawn = _draw_note(rig, 500, 60)
 	_assert(drawn != null, "the note is still inserted")
 	if drawn != null:
 		_assert(drawn.start_tick + drawn.duration_ticks == 960, "it ends where the next note starts (%d)" % (drawn.start_tick + drawn.duration_ticks))
 	_assert(rig.note(0).start_tick == 960 and rig.note(0).duration_ticks == 240, "the following note is untouched")
-	var other = _draw_note(rig, 720, 62)
+	var other = _draw_note(rig, 500, 62)
 	_assert(other != null and other.duration_ticks == 960, "another pitch keeps the full length")
 	await rig.cleanup()

@@ -106,6 +106,9 @@ const SUBDIVISION_DIVS := [16, 8, 4, 2]
 const BAR_SPACING_FACTOR := 2.0
 ## Bar numbers are drawn on bars at least this many pixels apart.
 const BAR_LABEL_MIN_SPACING := 48.0
+## A grid level is a snap target once its fade (0 at the spacing threshold, 1 at twice it)
+## reaches this, so snapping never lands on a line too faint to see.
+const SNAP_MIN_FADE := 0.5
 ## Line strength steps from the finest visible level up to the strongest.
 const WEIGHT_STEPS := 3.0
 
@@ -209,12 +212,16 @@ func get_snap_interval_at(ticks: int) -> int:
 	return _snap_interval_for(seg["beat_ticks"], seg["bar_ticks"])
 
 func _snap_interval_for(beat: int, bar: int) -> int:
-	# Snap to the finest line that is drawn at all, even one still fading in
-	var subdivision_interval := _subdivision_for(beat)
-	if subdivision_interval > 0:
-		return subdivision_interval
-	elif ticks_to_pixels(beat) >= min_line_spacing:
-		return beat
+	# Snap to the finest line that is actually visible: the same levels and thresholds
+	# _levels_for draws, and a level only counts once it has faded in past SNAP_MIN_FADE,
+	# so the step never drops to a line that is still (nearly) transparent.
+	if beat < bar:
+		var subdivision_interval := _subdivision_for(beat, SNAP_MIN_FADE)
+		if subdivision_interval > 0:
+			return subdivision_interval
+		var beat_px := ticks_to_pixels(beat)
+		if beat_px >= min_line_spacing and fade_of(beat_px, min_line_spacing) >= SNAP_MIN_FADE:
+			return beat
 	return bar
 
 ## True when beats are at least min_line_spacing apart on screen.
@@ -226,11 +233,12 @@ func beat_lines_visible() -> bool:
 func get_subdivision_interval() -> int:
 	return _subdivision_for(get_ticks_per_beat())
 
-func _subdivision_for(beat: int) -> int:
+func _subdivision_for(beat: int, min_fade: float = 0.0) -> int:
 	for div in SUBDIVISION_DIVS:
 		@warning_ignore("integer_division")
 		var interval: int = maxi(1, ppq / div)
-		if interval < beat and ticks_to_pixels(interval) >= min_line_spacing:
+		var px := ticks_to_pixels(interval)
+		if interval < beat and px >= min_line_spacing and fade_of(px, min_line_spacing) >= min_fade:
 			return interval
 	return 0
 
