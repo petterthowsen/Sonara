@@ -343,8 +343,7 @@ func _select(mod_id: int) -> void:
 func _on_placeholder_pressed(button: Button) -> void:
 	if device == null or button.disabled:
 		return
-	_kind_menu.position = Vector2i(button.get_screen_position() + Vector2(0, button.size.y))
-	_kind_menu.popup()
+	ContextMenuPopup.popup_below_control(_kind_menu, button)
 
 
 func _on_add_kind(id: int) -> void:

@@ -118,7 +118,7 @@ func _gui_input(event: InputEvent) -> void:
 
 	if event.button_index == MOUSE_BUTTON_RIGHT:
 		_lane_menu_x = event.position.x
-		_lane_menu.popup(Rect2(get_global_mouse_position() - Vector2.ONE * 10, Vector2.ZERO))
+		ContextMenuPopup.popup_at_mouse(_lane_menu)
 		accept_event()
 		return
 	if event.button_index != MOUSE_BUTTON_LEFT:
@@ -278,8 +278,7 @@ func _on_item_context_menu_requested(marker: SongMarker, global_pos: Vector2) ->
 		return
 	var local_x := global_pos.x - get_global_rect().position.x
 	_marker_menu.bind_to_marker(marker, _snapped_ticks_from_local(local_x))
-	# Nudge so the cursor sits inside the panel; a corner popup closes on mouse-up.
-	_marker_menu.popup(Rect2(global_pos - Vector2(8, 8), _marker_menu.get_contents_minimum_size()))
+	ContextMenuPopup.popup_at_point(_marker_menu, global_pos)
 
 
 func _on_add_marker_requested(marker: SongMarker, tick: int) -> void:

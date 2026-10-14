@@ -212,5 +212,5 @@ func handle_shortcut(event: InputEvent) -> bool:
 
 ## The batch operations menu for the selection (REQ-047), with `zones_under` (the map's stack under
 ## the pointer, REQ-046) listed first.
-func open_batch_menu(screen_position: Vector2, zones_under: Array = []) -> void:
-	batch_menu.open(screen_position, zones_under)
+func open_batch_menu(at: Vector2, zones_under: Array = []) -> void:
+	batch_menu.open(at, zones_under)

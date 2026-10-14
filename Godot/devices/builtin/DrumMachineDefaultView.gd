@@ -266,7 +266,7 @@ func _on_pad_context(note: int) -> void:
 		_pad_menu = PAD_MENU_SCENE.instantiate()
 		add_child(_pad_menu)
 	_pad_menu.bind_to_pad(device, child)
-	_pad_menu.popup(Rect2i(Vector2i(get_global_mouse_position()), Vector2i(_pad_menu.get_contents_minimum_size())))
+	ContextMenuPopup.popup_at_mouse(_pad_menu)
 
 
 ## Send a note-on to this drum machine's channel at the pad's click velocity.

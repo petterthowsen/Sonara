@@ -1845,7 +1845,7 @@ func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Ve
 	var scroll_parent := get_parent()
 	if scroll_parent is Control:
 		bounds = bounds.intersection(scroll_parent.get_global_rect())
-	clip_ctx_menu.popup_docked(clip_ui.get_global_rect(), bounds, mouse_pos_global.x, mouse_pos_global.y)
+	clip_ctx_menu.popup_docked(clip_ui.get_global_rect(), bounds, mouse_pos_global.x)
 
 
 ## Split the clip bound to the context menu at the position that was clicked. One undo step.

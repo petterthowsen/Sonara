@@ -266,7 +266,7 @@ func _open_menu(global_pos: Vector2) -> void:
 		_menu.add_item("Delete", 1)
 	else:
 		_menu.add_item("Add Time Signature", 2)
-	_menu.popup(Rect2(global_pos - Vector2.ONE * 10, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(_menu, global_pos)
 
 
 func _on_menu_id_pressed(id: int) -> void:

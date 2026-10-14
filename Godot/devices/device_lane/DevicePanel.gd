@@ -448,8 +448,7 @@ func _on_preset_button_pressed() -> void:
 		_preset_menu.id_pressed.connect(_on_preset_menu_id)
 		add_child(_preset_menu)
 	_build_preset_menu()
-	_preset_menu.position = Vector2i(preset_button.get_screen_position() + Vector2(0, preset_button.size.y))
-	_preset_menu.popup()
+	ContextMenuPopup.popup_below_control(_preset_menu, preset_button)
 
 
 func _build_preset_menu() -> void:

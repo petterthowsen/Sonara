@@ -25,7 +25,7 @@ var removes_drum_pad := false
 
 func _enter_tree() -> void:
 	# Packed scene is visible for editor authoring; instances must start hidden.
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _ready() -> void:
@@ -56,7 +56,7 @@ func _add_action_button(text: String, handler: Callable) -> Button:
 
 func _on_copy_pressed() -> void:
 	DeviceActions.copy(_targets())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Paste after the device the menu is on, in its host.
@@ -65,12 +65,12 @@ func _on_paste_pressed() -> void:
 		var host := device.get_parent_device()
 		var siblings: Array[DeviceInstance] = host.children if host else device.get_channel().devices
 		DeviceActions.paste(device.get_channel(), host, siblings.find(device) + 1)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_duplicate_pressed() -> void:
 	DeviceActions.duplicate_devices(_targets())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _targets() -> Array[DeviceInstance]:
@@ -125,7 +125,7 @@ func _on_host_individually_toggled(pressed: bool) -> void:
 func _on_load_kit_pressed() -> void:
 	if DrumKit.is_drum_machine(device):
 		DrumKit.apply(device.get_channel(), device)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_remove_pressed() -> void:
@@ -145,7 +145,7 @@ func _on_remove_pressed() -> void:
 				HistoryUtil.execute(clear_slot)
 		elif channel:
 			HistoryUtil.execute(DeviceRemoveCommand.new(channel, device, device.position))
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Return channel of the pad `device` plays, when Remove should take the whole pad.

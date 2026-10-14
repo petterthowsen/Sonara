@@ -254,7 +254,7 @@ func _open_menu(pos: Vector2) -> void:
 		_menu.add_item("Add Point", 1)
 	if not project.tempo_map.is_empty():
 		_menu.add_item("Clear Tempo Automation", 2)
-	_menu.popup(Rect2(get_global_mouse_position() - Vector2.ONE * 10, Vector2.ZERO))
+	ContextMenuPopup.popup_at_mouse(_menu)
 
 
 func _on_menu_id_pressed(id: int) -> void:

@@ -1411,7 +1411,7 @@ func _on_tree_item_context_menu(mouse_position: Vector2, id: int, tree: Tree) ->
 		return
 	var asset = item.get_metadata(0)
 	if _prepare_asset_context_menu(asset):
-		_context_menu.popup(Rect2(tree.get_global_mouse_position(), Vector2.ZERO))
+		ContextMenuPopup.popup_at_mouse(_context_menu)
 
 
 func _on_context_menu_id_pressed(id: int) -> void:

@@ -31,8 +31,6 @@ signal copy_requested(instances: Array[ClipInstance])
 signal split_requested(instances: Array[ClipInstance])
 signal merge_requested(instances: Array[ClipInstance])
 
-const SLIDE_SECONDS := 0.3
-const CLIP_GAP := 4.0
 
 ## Transpose step of the two octave entries.
 const OCTAVE_SEMITONES := 12
@@ -234,7 +232,7 @@ func _on_cut_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	cut_requested.emit(selected_instances.duplicate())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Request Copy for the bound instances.
@@ -242,7 +240,7 @@ func _on_copy_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	copy_requested.emit(selected_instances.duplicate())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Delete the bound instances.
@@ -250,7 +248,7 @@ func _on_delete_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	delete_requested.emit(selected_instances.duplicate())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Request Merge for the bound instances.
@@ -258,7 +256,7 @@ func _on_merge_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	merge_requested.emit(selected_instances.duplicate())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Transpose the selected MIDI clips by `semitones` as one undo step. The edit is destructive:
@@ -285,7 +283,7 @@ func _on_transpose_pressed(semitones: int) -> void:
 		"Clips" if clips.size() > 1 else "Clip",
 		"Up" if semitones > 0 else "Down",
 	], before)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Scale the selected MIDI clips' time axis by `factor` (0.5 or 2.0) as one undo step. Like
@@ -295,7 +293,7 @@ func _on_scale_pressed(factor: float) -> void:
 	if Sonara and Sonara.editor and Sonara.editor.project:
 		tracks = Sonara.editor.project.tracks
 	if scale_selected(factor, tracks):
-		hide()
+		ContextMenuPopup.close(self)
 
 
 ## Scale the bound MIDI clips by `factor`, along with every instance of them on `tracks` (the
@@ -330,7 +328,7 @@ func _on_make_unique_per_track_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	make_unique_per_track_requested.emit(selected_instances.duplicate())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Request Make Unique for the bound instances.
@@ -338,7 +336,7 @@ func _on_make_unique_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	make_unique_requested.emit(selected_instances.duplicate())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Where a split lands, in song ticks. Set by the caller before popup; -1 means "not set".
@@ -361,7 +359,7 @@ func _on_split_pressed() -> void:
 	if clip_instance == null:
 		return
 	split_requested.emit([clip_instance] as Array[ClipInstance])
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Mute or unmute the bound instances as one undo step.
@@ -376,16 +374,9 @@ func _on_mute_toggled(enabled: bool) -> void:
 
 
 ## Show the menu docked to the clip: below it when there is room under `clip_rect` inside
-## `bounds` (all in popup coordinates), otherwise above. The window slides in from `from_pos`.
-func popup_docked(clip_rect: Rect2, bounds: Rect2, from_x: float, from_y: float) -> void:
-	var menu_size := Vector2(get_contents_minimum_size())
-	menu_size.x = maxf(menu_size.x, 192.0)
-	var below := clip_rect.end.y + CLIP_GAP + menu_size.y <= bounds.end.y
-	var target_y := clip_rect.end.y + CLIP_GAP if below else clip_rect.position.y - CLIP_GAP - menu_size.y
-	target_y = clampf(target_y, bounds.position.y, maxf(bounds.position.y, bounds.end.y - menu_size.y))
-	var x := clampf(from_x - 8.0, bounds.position.x, maxf(bounds.position.x, bounds.end.x - menu_size.x))
-	var start_y := from_y
-	popup(Rect2i(Vector2i(int(x), int(start_y)), Vector2i(menu_size)))
-	var tween := create_tween()
-	tween.tween_property(self, "position:y", int(target_y), SLIDE_SECONDS) \
-			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+## `bounds` (all in popup coordinates), otherwise above. It lines up with the click at `from_x`.
+func popup_docked(clip_rect: Rect2, bounds: Rect2, from_x: float) -> void:
+	var anchor := Rect2(from_x - 8.0, clip_rect.position.y, 0.0, clip_rect.size.y)
+	var menu_width := maxf(float(get_contents_minimum_size().x), 192.0)
+	min_size = Vector2i(int(menu_width), min_size.y)
+	ContextMenuPopup.popup_anchored(self, anchor, false, false, bounds)

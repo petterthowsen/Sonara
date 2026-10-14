@@ -700,7 +700,7 @@ func open_context_menu(pos: Vector2) -> void:
 	var under := zones_at(pos)
 	if editor.selected_ids.is_empty() and not under.is_empty():
 		editor.click_zone(under[0].id)
-	editor.open_batch_menu(get_screen_position() + pos, under)
+	editor.open_batch_menu(global_position + pos, under)
 
 
 # ============================================================================

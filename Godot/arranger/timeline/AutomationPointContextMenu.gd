@@ -53,14 +53,14 @@ func open_for(p_points: Array, global_position: Vector2, can_set_prev: bool = tr
 	add_separator()
 	add_item("Delete" if points.size() == 1 else "Delete %d Points" % points.size(), ID_DELETE)
 
-	popup(Rect2(global_position, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(self, global_position)
 
 
 func _on_id_pressed(id: int) -> void:
 	if points.is_empty():
 		return
 	var bound := points.duplicate()
-	hide()
+	ContextMenuPopup.close(self)
 	match id:
 		ID_LINEAR:
 			curve_requested.emit(bound, AutomationPoint.CurveType.LINEAR)

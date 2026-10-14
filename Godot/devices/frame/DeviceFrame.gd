@@ -481,35 +481,8 @@ func _show_context_menu(dev: DeviceInstance) -> void:
 	_menu.removes_drum_pad = false
 	_menu.targets = [dev]
 	_menu.bind_to_device(dev)
-	var menu_size := Vector2(_menu.get_contents_minimum_size())
-	var at: Vector2
-	var bounds: Rect2
-	if _menu.is_embedded():
-		at = get_global_mouse_position()
-		bounds = Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
-	else:
-		at = Vector2(DisplayServer.mouse_get_position())
-		var screen := DisplayServer.get_screen_from_rect(Rect2(at, Vector2.ONE))
-		bounds = Rect2(DisplayServer.screen_get_usable_rect(screen))
-	_menu.popup(Rect2(menu_rect_origin(at, menu_size, bounds), menu_size))
-
-
-## Top-left for a menu of `menu_size` opened at `at` inside `bounds`. A plugin's own window covers
-## whatever opens over the page below the title bar, so the menu opens upwards (its bottom edge at
-## the pointer). With no room above it opens downwards instead, on whichever side of the pointer
-## has more room horizontally (the left side when the right can't hold it).
-static func menu_rect_origin(at: Vector2, menu_size: Vector2, bounds: Rect2) -> Vector2:
-	var origin := at
-	if at.y - menu_size.y >= bounds.position.y:
-		origin.y = at.y - menu_size.y
-	else:
-		var right_room := bounds.end.x - at.x
-		var left_room := at.x - bounds.position.x
-		if right_room < menu_size.x and left_room > right_room:
-			origin.x = at.x - menu_size.x
-	origin.x = clampf(origin.x, bounds.position.x, maxf(bounds.position.x, bounds.end.x - menu_size.x))
-	origin.y = clampf(origin.y, bounds.position.y, maxf(bounds.position.y, bounds.end.y - menu_size.y))
-	return origin
+	# Upwards: a plugin's own window covers whatever opens over the page below the title bar.
+	ContextMenuPopup.popup_at_mouse(_menu, true)
 
 
 ## Mark `dev` as showing in another frame (torn off): its tab stays, selecting it raises the

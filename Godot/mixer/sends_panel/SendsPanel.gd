@@ -321,7 +321,7 @@ func _show_send_menu(target_channel_id: int) -> void:
 	_send_menu.set_item_tooltip(index, "" if send_config else "Turn the send up first")
 
 	_menu_target_channel_id = target_channel_id
-	_send_menu.popup(Rect2i(Vector2i(get_screen_position() + get_local_mouse_position()), Vector2i.ZERO))
+	ContextMenuPopup.popup_at_mouse(_send_menu)
 
 
 func _on_send_menu_id_pressed(id: int) -> void:

@@ -47,7 +47,7 @@ func open_for(p_track: Track, global_position: Vector2) -> void:
 	if get_item_count() == 0:
 		logger.info("Every automatable parameter on %s already has a lane" % track.name)
 		return
-	popup(Rect2(global_position, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(self, global_position)
 
 
 func _rebuild() -> void:
@@ -220,6 +220,6 @@ func _on_device_id_pressed(id: int, submenu: PopupMenu) -> void:
 
 
 func _emit(target: AutomationTarget) -> void:
-	hide()
+	ContextMenuPopup.close(self)
 	logger.info("Automate %s on track %s" % [str(target), track.name if track else "<null>"])
 	parameter_chosen.emit(track, target)

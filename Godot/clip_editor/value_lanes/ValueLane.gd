@@ -117,8 +117,7 @@ func _on_setting_changed(key: String, _value) -> void:
 
 func _on_context_requested(global_pos: Vector2) -> void:
 	var popup := menu_button.get_popup()
-	popup.position = Vector2i(global_pos)
-	popup.popup()
+	ContextMenuPopup.popup_at_point(popup, global_pos)
 
 
 func _on_menu_id(id: int) -> void:

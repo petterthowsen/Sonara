@@ -126,11 +126,11 @@ func _set_group(group_id: int, values: Dictionary) -> void:
 
 # --- group menu ------------------------------------------------------------
 
-func open_group_menu(group_id: int, screen_position: Vector2) -> void:
+func open_group_menu(group_id: int, at: Vector2) -> void:
 	if group_id == MultisampleEditor.ALL_GROUPS or model() == null:
 		return
 	fill_group_menu(group_id)
-	group_menu.popup(Rect2i(Vector2i(screen_position), Vector2i.ZERO))
+	ContextMenuPopup.popup_at_point(group_menu, at)
 
 
 func fill_group_menu(group_id: int) -> void:
@@ -170,8 +170,7 @@ func open_gain_popup(group_id: int) -> void:
 	gain_knob.text = model().get_group(group_id).display_name()
 	gain_knob.knob.set_value_no_signal(model().get_group(group_id).gain)
 	var chip := chip_for(group_id)
-	var at := chip.get_screen_position() + Vector2(0, chip.size.y) if chip else get_screen_position()
-	gain_popup.popup(Rect2i(Vector2i(at), Vector2i.ZERO))
+	ContextMenuPopup.popup_below_control(gain_popup, chip if chip else self)
 
 
 func _on_gain_changed(value: float) -> void:

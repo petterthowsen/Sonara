@@ -75,16 +75,16 @@ func _on_label_changed(new_name: Variant) -> void:
 func _on_add_pressed() -> void:
 	if marker:
 		add_marker_requested.emit(marker, tick)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_split_pressed() -> void:
 	if marker:
 		split_requested.emit(marker, tick)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_delete_pressed() -> void:
 	if marker:
 		delete_requested.emit(marker)
-	hide()
+	ContextMenuPopup.close(self)

@@ -79,7 +79,7 @@ func _ready():
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		context_menu.popup(Rect2(get_global_mouse_position() - Vector2.ONE * 10, Vector2.ZERO))
+		ContextMenuPopup.popup_at_mouse(context_menu)
 		# force grab focus to the context menu
 		context_menu.grab_focus()
 		accept_event()
@@ -433,7 +433,7 @@ func _on_track_item_right_clicked(track: Track, mouse_position: Vector2) -> void
 	track_item_context_menu.bind_tracks(selected_tracks, track, current_project)
 	
 	# Show the context menu at the mouse position
-	track_item_context_menu.popup(Rect2(mouse_position - Vector2.ONE * 10, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(track_item_context_menu, mouse_position)
 	track_item_context_menu.grab_focus()
 
 

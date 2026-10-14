@@ -25,7 +25,7 @@ func _ready() -> void:
 func open_for(p_track: Track, global_position: Vector2) -> void:
 	track = p_track
 	_rebuild()
-	popup(Rect2(global_position, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(self, global_position)
 
 
 func _rebuild() -> void:
@@ -53,7 +53,7 @@ func _rebuild() -> void:
 
 func _on_id_pressed(id: int) -> void:
 	if id == ADD_NEW_ID:
-		hide()
+		ContextMenuPopup.close(self)
 		add_lane_requested.emit(track)
 		return
 	if id < 0 or id >= _lanes.size():

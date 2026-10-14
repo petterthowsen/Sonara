@@ -201,10 +201,10 @@ func _test_menu_layout() -> void:
 	menu._on_name_changed("Renamed")
 	_assert(a.track.name == "A" and bare.name == "Bare", "renaming does nothing with several tracks")
 
-	# The empty-area menu offers no bare "New Track" (a track needs a channel).
+	# The empty-area menu shares the + button list: "Empty Track" is the explicit channel-less choice.
 	var list_menu: Object = track_list.context_menu
-	_assert(list_menu.get_item_count() == 4, "four create options: %d" % list_menu.get_item_count())
-	_assert(list_menu.get_item_text(0) == "New Instrument Track", "menu starts at New Instrument Track")
+	_assert(list_menu.get_item_count() == 5, "five create options: %d" % list_menu.get_item_count())
+	_assert(list_menu.get_item_text(0) == "Instrument Track", "menu starts at Instrument Track")
 	for i in range(list_menu.get_item_count()):
 		_assert(list_menu.get_item_text(i) != "New Track", "no bare New Track at %d" % i)
 	track_list.queue_free()

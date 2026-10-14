@@ -288,7 +288,7 @@ func _open_menu(global_pos: Vector2) -> void:
 		_menu.add_item("Delete", 1)
 	else:
 		_menu.add_item("Add Key Change", 2)
-	_menu.popup(Rect2(global_pos - Vector2.ONE * 10, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(_menu, global_pos)
 
 
 func _on_menu_id_pressed(id: int) -> void:
@@ -322,7 +322,7 @@ func open_dropdown(change_id: int, global_pos: Vector2) -> void:
 		var c: Dictionary = project.key_change_map.changes[index]
 		scale = MusicalScale.make(c["root"], c["type_id"])
 	_picker.set_scale_display(scale.root, scale.type_id)
-	_popup.popup(Rect2(global_pos - Vector2.ONE * 10, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(_popup, global_pos)
 
 
 func _on_picker_scale_picked(root: int, type_id: String) -> void:

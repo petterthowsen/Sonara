@@ -15,7 +15,7 @@ var pad: DeviceInstance = null
 
 func _enter_tree() -> void:
 	# Packed scene is visible for editor authoring; instances must start hidden.
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _ready() -> void:
@@ -123,4 +123,4 @@ func _on_remove_pressed() -> void:
 			HistoryUtil.execute(ChannelDeleteCommand.new(project, ret))
 		elif channel:
 			HistoryUtil.execute(DeviceRemoveCommand.new(channel, pad, pad.position))
-	hide()
+	ContextMenuPopup.close(self)

@@ -117,6 +117,22 @@ or styleboxes of their own:
 | `RecordButton`, `SoloButton`, `MuteButton` | Button | Toggles whose pressed state is the status colour |
 | `HeaderSmall`, `HeaderMedium`, `HeaderLarge` | Label | 20, 24 and 28 px headings (body text is 14) |
 
+### Opening context menus (`ContextMenuPopup`)
+
+Never call `popup()` on a context menu yourself. `components/ContextMenuPopup.gd` places, animates
+and closes every `Popup`: `popup_at_mouse(menu)` / `popup_at_point(menu, point)` for right-click
+menus, `popup_below_control(menu, button, prefer_up)` for menus hanging off a button, and
+`popup_anchored(menu, rect, prefer_up)` for the rest. It flips above/below, clamps into the window
+(or the screen for a `force_native` popup), slides and fades the menu in and out, and closes it
+after the pointer has stayed outside for 2 s (open child popups, a text field being edited and a
+held mouse button count as inside). Close a menu from its own buttons with
+`ContextMenuPopup.close(self)` instead of `hide()` so it animates out. Everything is instant in
+test mode (`Utils.is_test_mode()`).
+
+Limits: Godot hides a popup at once on an outside click or Esc, and a chosen item in a submenu
+closes the whole chain at once; those paths cannot animate. An embedded popup has no window alpha,
+so a `PopupPanel` fades its content only and a `PopupMenu` only slides.
+
 **Roles.** Every palette role is also a colour of the `Sonara` theme type. Read one from code with
 `UiColors.role(&"accent_primary")`, cache it, and refresh the cache on
 `NOTIFICATION_THEME_CHANGED`; never call it from a draw loop. Roles: `app_bg`, `section`,

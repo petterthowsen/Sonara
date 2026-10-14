@@ -520,7 +520,7 @@ func _open_menu(band: int, global_pos: Vector2) -> void:
 	_menu.add_submenu_node_item("Stereo", _stereo_menu)
 	_menu.add_separator()
 	_menu.add_item("Disable", 100)
-	_menu.popup(Rect2i(Vector2i(global_pos), Vector2i.ZERO))
+	ContextMenuPopup.popup_at_point(_menu, global_pos)
 
 
 # ============================================================================

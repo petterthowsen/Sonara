@@ -396,16 +396,22 @@ func _test_tab_reorder_and_light() -> void:
 func _test_menu_placement() -> void:
 	var win := Rect2(100, 50, 800, 600)
 	var m := Vector2(120, 140)
-	var o: Vector2 = _frame_script.menu_rect_origin(Vector2(400, 300), m, win)
-	_assert(o == Vector2(400, 160), "opens upwards when there is room (bottom at the pointer): %s" % o)
-	o = _frame_script.menu_rect_origin(Vector2(400, 100), m, win)
-	_assert(o == Vector2(400, 100), "no room above: opens downwards at the pointer: %s" % o)
-	o = _frame_script.menu_rect_origin(Vector2(850, 100), m, win)
-	_assert(o == Vector2(730, 100), "downwards near the right edge flips to the left side: %s" % o)
-	o = _frame_script.menu_rect_origin(Vector2(110, 100), m, win)
-	_assert(o == Vector2(110, 100), "downwards near the left edge stays on the right side: %s" % o)
-	o = _frame_script.menu_rect_origin(Vector2(890, 640), m, win)
-	_assert(o == Vector2(780, 500), "upwards near the right edge stays inside the window: %s" % o)
+	var o: Vector2 = _menu_origin(Vector2(400, 300), m, win)
+	_assert(o == Vector2(390, 170), "opens upwards when there is room (bottom at the pointer): %s" % o)
+	o = _menu_origin(Vector2(400, 100), m, win)
+	_assert(o == Vector2(390, 90), "no room above: opens downwards at the pointer: %s" % o)
+	o = _menu_origin(Vector2(850, 100), m, win)
+	_assert(o == Vector2(740, 90), "downwards near the right edge flips to the left side: %s" % o)
+	o = _menu_origin(Vector2(110, 100), m, win)
+	_assert(o == Vector2(100, 90), "downwards near the left edge stays on the right side: %s" % o)
+	o = _menu_origin(Vector2(890, 640), m, win)
+	_assert(o == Vector2(780, 510), "upwards near the right edge stays inside the window: %s" % o)
+
+
+## Where a menu of `m` opened upwards at pointer `at` lands inside `win`.
+func _menu_origin(at: Vector2, m: Vector2, win: Rect2) -> Vector2:
+	var anchor := Rect2(at - Vector2.ONE * ContextMenuPopup.MOUSE_OFFSET, Vector2.ONE * ContextMenuPopup.MOUSE_OFFSET * 2.0)
+	return ContextMenuPopup.place(m, anchor, win, true, true).position
 
 
 func _test_per_device() -> void:

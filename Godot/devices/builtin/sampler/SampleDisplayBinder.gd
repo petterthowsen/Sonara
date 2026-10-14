@@ -326,7 +326,8 @@ func open_focus_menu() -> void:
 		return
 	var menu := fill_focus_menu()
 	var rect := display.title_rect()
-	menu.popup(Rect2i(Vector2i(display.get_screen_position() + rect.position + Vector2(0, rect.size.y)), Vector2i.ZERO))
+	var anchor: Rect2 = display.get_global_transform_with_canvas() * rect
+	ContextMenuPopup.popup_anchored(menu, anchor)
 
 
 ## Fill the right-click menu: the mode conversion that applies.
@@ -345,7 +346,7 @@ func fill_mode_menu() -> PopupMenu:
 func open_mode_menu(at: Vector2) -> void:
 	if device == null or not _display_valid():
 		return
-	fill_mode_menu().popup(Rect2i(Vector2i(display.get_screen_position() + at), Vector2i.ZERO))
+	ContextMenuPopup.popup_at_point(fill_mode_menu(), display.get_global_transform_with_canvas() * at)
 
 
 func _on_mode_menu_id(id: int) -> void:

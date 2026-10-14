@@ -176,18 +176,18 @@ func _per_track_commands() -> Array[Command]:
 func _on_hidden_toggled(pressed: bool) -> void:
 	for t in current_tracks:
 		t.set_hidden(pressed)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_enabled_toggled(pressed: bool) -> void:
 	for t in current_tracks:
 		t.set_enabled(pressed)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_make_unique_pressed() -> void:
 	HistoryUtil.execute_many("Make Clips Unique Per Track", _per_track_commands())
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Disconnect from current track.
@@ -365,7 +365,7 @@ func _on_delete_pressed(with_channels: bool) -> void:
 	if current_track == null or current_project == null:
 		return
 	HistoryUtil.execute(delete_command(current_project, current_tracks, with_channels))
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Duplicate every duplicable bound track as one step, copying channels when `with_channels`.
@@ -375,7 +375,7 @@ func _on_duplicate_pressed(with_channels: bool) -> void:
 	var cmd := duplicate_command(current_project, current_tracks, with_channels)
 	if cmd:
 		HistoryUtil.execute(cmd)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## One undoable delete for `tracks` (nested tracks go with their selected parent).

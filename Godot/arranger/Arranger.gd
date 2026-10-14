@@ -29,8 +29,10 @@ var logger : Log = Log.make("Arranger")
 
 # ArrangeBottom: pinned below the vertical scroll, columns aligned to the panels above
 @onready var tracks_panel_footer: PanelContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter
-@onready var add_track_button: MenuButton = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddTrackButton
-@onready var add_folder_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddFolderButton
+## The + button's menu: one entry per `TrackCreateMenu.Item`.
+var add_track_menu: PopupMenu
+
+@onready var add_track_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddTrackButton
 @onready var automation_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationViewToggle
 @onready var routing_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/RoutingViewToggle
 @onready var automation_follows_clips_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationFollowsClipsToggle
@@ -149,11 +151,13 @@ func _ready():
 	Settings.setting_changed.connect(_on_setting_changed)
 
 	# Connect add track button
-	var add_track_popup := add_track_button.get_popup()
-	add_track_popup.add_item("Instrument Track", 0)
-	add_track_popup.add_item("Audio Track", 1)
-	add_track_popup.id_pressed.connect(_on_add_track_menu_id_pressed)
-	add_folder_button.pressed.connect(_on_add_folder_pressed)
+	add_track_menu = PopupMenu.new()
+	add_track_menu.name = "AddTrackMenu"
+	add_track_menu.theme_type_variation = &"ContextMenuList"
+	TrackCreateMenu.populate(add_track_menu)
+	add_track_menu.id_pressed.connect(_on_add_track_menu_id_pressed)
+	add_child(add_track_menu)
+	add_track_button.pressed.connect(_on_add_track_button_pressed)
 	automation_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation"))
 	routing_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("routing"))
 	automation_follows_clips_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation_follows_clips"))
@@ -793,46 +797,19 @@ func _on_timeline_scroll_bar_changed(value: float) -> void:
 # UI CALLBACKS
 # ============================================================================
 
+## Open the add-track menu upwards from the + button (it sits at the bottom of the arranger).
+func _on_add_track_button_pressed() -> void:
+	ContextMenuPopup.popup_below_control(add_track_menu, add_track_button, true)
+
+
+## Create the chosen kind of track (and its channel, if it has one) in the active project.
 func _on_add_track_menu_id_pressed(id: int) -> void:
-	"""Create and add a new track with corresponding channel to the project."""
 	if not current_project:
 		push_warning("[Arranger] Cannot add track: No project active")
 		return
-
-	var kind := "instrument" if id == 0 else "audio"
-
-	# Generate name based on track count
-	var track_num = current_project.tracks.size() + 1
-	var track_name = "Track %d" % track_num
-
-	var cmd := TrackCreateCommand.new(current_project, kind, track_name)
-	HistoryUtil.execute(cmd)
-	var new_track: Track = cmd.track
-	var new_channel: Channel = cmd.channel
-	if new_track and new_channel:
-		new_track.color = new_channel.color
-		logger.info("Added %s track '%s' (ID %d) with channel (ID %d)" % [kind, track_name, new_track.id, new_channel.id])
-
-
-func _on_add_folder_pressed() -> void:
-	"""Create a folder track (no mixer bus). Use Link to Bus to make a Folder Bus."""
-	if not current_project:
-		push_warning("[Arranger] Cannot add folder: No project active")
-		return
-
-	# Count existing folders for naming
-	var folder_count = 0
-	for track in current_project.tracks:
-		if track.type == Track.TrackType.FOLDER:
-			folder_count += 1
-	
-	var folder_name = "Folder %d" % (folder_count + 1)
-
-	var cmd := TrackCreateCommand.new(current_project, "folder", folder_name)
-	HistoryUtil.execute(cmd)
-	var new_folder: Track = cmd.track
-	if new_folder:
-		logger.info("Added folder '%s' (ID %d)" % [folder_name, new_folder.id])
+	var cmd := TrackCreateMenu.create(current_project, id)
+	if cmd and cmd.track:
+		logger.info("Added %s '%s' (ID %d)" % [cmd.kind, cmd.track.name, cmd.track.id])
 
 
 ## Show or hide the bar/beat ruler row from the metronome toggle.
@@ -1169,7 +1146,7 @@ func _on_ruler_context_menu_requested(global_pos: Vector2) -> void:
 	_ruler_menu.add_item("Loop Selected Region", RULER_MENU_LOOP_SELECTED)
 	var has_selection: bool = Sonara.editor.has_loop_selection()
 	_ruler_menu.set_item_disabled(_ruler_menu.get_item_index(RULER_MENU_LOOP_SELECTED), not has_selection)
-	_ruler_menu.popup(Rect2(global_pos, Vector2.ZERO))
+	ContextMenuPopup.popup_at_point(_ruler_menu, global_pos)
 
 
 func _on_ruler_menu_id_pressed(id: int) -> void:

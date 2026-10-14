@@ -123,7 +123,7 @@ func _on_item_clicked(row: int, at_position: Vector2, mouse_button: int) -> void
 	if mouse_button == MOUSE_BUTTON_RIGHT:
 		if not editor.is_selected(row_ids[row]):
 			editor.click_zone(row_ids[row])
-		editor.open_batch_menu(items.get_screen_position() + at_position)
+		editor.open_batch_menu(items.global_position + at_position)
 		return
 	if mouse_button == MOUSE_BUTTON_LEFT:
 		apply_list_selection(row)

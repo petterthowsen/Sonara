@@ -245,7 +245,7 @@ func _on_drag_ended() -> void:
 
 func _on_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		_mode_popup.popup(Rect2(global_position, Vector2.ZERO))
+		ContextMenuPopup.popup_at_mouse(_mode_popup)
 
 
 func _on_mode_selected(pan_mode_id: int) -> void:

@@ -662,15 +662,8 @@ func _on_mode_switch_toggled(pressed: bool) -> void:
 ## popup dropped downwards would fall off screen.
 func _on_note_map_button_pressed() -> void:
 	_rebuild_note_map_popup()
-	var rect := note_map_button.get_global_rect()
-	var popup_size := note_map_popup.get_contents_minimum_size()
-	var origin := note_map_button.get_screen_transform().origin
-	note_map_popup.popup(Rect2i(
-		Vector2i(origin),
-		Vector2i(int(maxf(rect.size.x, popup_size.x)), int(popup_size.y))
-	))
-	# popup() positions by the top-left corner, so lift it by its own height.
-	note_map_popup.position = Vector2i(int(origin.x), int(origin.y - note_map_popup.size.y))
+	note_map_popup.min_size.x = int(note_map_button.size.x)
+	ContextMenuPopup.popup_below_control(note_map_popup, note_map_button, true)
 
 
 func _rebuild_note_map_popup() -> void:
@@ -875,11 +868,9 @@ func _on_quantize_options_pressed() -> void:
 	_quantize_mode_check.set_pressed_no_signal(
 			NoteEditor.quantize_mode() == NoteTransforms.QuantizeMode.START_AND_END)
 	var button: Button = tools_group.find_child("QuantizeOptions", true, false)
-	var origin := button.get_screen_transform().origin
 	_quantize_popup.reset_size()
-	_quantize_popup.popup(Rect2i(Vector2i(origin), _quantize_popup.get_contents_minimum_size()))
-	# The toolbar is at the bottom of the window: lift the popup above the button.
-	_quantize_popup.position = Vector2i(int(origin.x), int(origin.y - _quantize_popup.size.y))
+	# The toolbar is at the bottom of the window: open the popup above the button.
+	ContextMenuPopup.popup_below_control(_quantize_popup, button, true)
 
 
 func _build_quantize_popup() -> void:
@@ -928,10 +919,8 @@ func _on_strum_options_pressed() -> void:
 	_strum_ramp_slider.set_value_no_signal(NoteEditor.strum_velocity_ramp() * 100.0)
 	_strum_ramp_label.text = "Velocity ramp %+d%%" % roundi(_strum_ramp_slider.value)
 	var button: Button = tools_group.find_child("StrumOptions", true, false)
-	var origin := button.get_screen_transform().origin
 	_strum_popup.reset_size()
-	_strum_popup.popup(Rect2i(Vector2i(origin), _strum_popup.get_contents_minimum_size()))
-	_strum_popup.position = Vector2i(int(origin.x), int(origin.y - _strum_popup.size.y))
+	ContextMenuPopup.popup_below_control(_strum_popup, button, true)
 
 
 func _build_strum_popup() -> void:

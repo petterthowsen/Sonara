@@ -93,19 +93,19 @@ func _on_label_changed(new_name : String):
 func _on_active_toggled(_active : bool):
 	if not channel: return
 	channel.set_enabled(_active)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_hidden_toggled(pressed: bool) -> void:
 	if not channel: return
 	channel.set_hidden(pressed)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_sends_hidden_toggled(pressed: bool) -> void:
 	if not channel: return
 	channel.set_sends_hidden(pressed)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 ## Un-nest this mixer child from its Group parent.
@@ -113,10 +113,10 @@ func _on_unnest_pressed() -> void:
 	if not channel:
 		return
 	unnest_requested.emit(channel)
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _on_delete_pressed():
 	if not channel: return
 	delete_requested.emit(channel)
-	hide()  # Close the context menu
+	ContextMenuPopup.close(self)  # Close the context menu

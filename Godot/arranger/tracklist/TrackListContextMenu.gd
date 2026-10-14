@@ -1,24 +1,9 @@
 # Right-click PopupMenu for empty area in Tracklist.
-# A track with no instrument/audio channel makes no sense, so there is no bare "New Track":
-# - + instrument track
-# - + audio track
-# - + folder track
-# - + group track (TrackType.GROUP + ChannelType.GROUP)
+# Offers the same track kinds as the arranger's + button (TrackCreateMenu).
 class_name TrackListContextMenu extends PopupMenu
 
-enum Item {
-	INSTRUMENT_TRACK,
-	AUDIO_TRACK,
-	FOLDER_TRACK,
-	GROUP_TRACK
-}
-
 func _init() -> void:
-	# add items to the popup menu
-	add_item("New Instrument Track", Item.INSTRUMENT_TRACK)
-	add_item("New Audio Track", Item.AUDIO_TRACK)
-	add_item("New Folder Track", Item.FOLDER_TRACK)
-	add_item("New Group Track", Item.GROUP_TRACK)
+	TrackCreateMenu.populate(self)
 
 func _ready() -> void:
 	id_pressed.connect(_on_item_pressed)
@@ -39,14 +24,4 @@ func _on_project_closed() -> void:
 
 
 func _on_item_pressed(id: int) -> void:
-	var project := Sonara.editor.project
-
-	match id:
-		Item.INSTRUMENT_TRACK:
-			HistoryUtil.execute(TrackCreateCommand.new(project, "instrument"))
-		Item.AUDIO_TRACK:
-			HistoryUtil.execute(TrackCreateCommand.new(project, "audio"))
-		Item.FOLDER_TRACK:
-			HistoryUtil.execute(TrackCreateCommand.new(project, "folder", "Folder"))
-		Item.GROUP_TRACK:
-			HistoryUtil.execute(TrackCreateCommand.new(project, "group", "Group"))
+	TrackCreateMenu.create(Sonara.editor.project, id)

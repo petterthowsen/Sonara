@@ -340,10 +340,7 @@ func _on_device_context_menu_requested(device_instance : DeviceInstance, in_slot
 	device_context_menu.removes_drum_pad = in_slot
 	device_context_menu.targets = selection_containing(device_instance)
 	device_context_menu.bind_to_device(device_instance)
-	var c_pos = get_global_mouse_position()
-	var c_size = device_context_menu.get_contents_minimum_size()
-	device_context_menu.popup(Rect2(c_pos, c_size))
-	device_context_menu.show()
+	ContextMenuPopup.popup_at_mouse(device_context_menu)
 
 ## Copy, paste and duplicate the selected devices while the pointer is over the lane.
 func _unhandled_input(event: InputEvent) -> void:

@@ -29,7 +29,7 @@ const ZONE_ID_BASE := 1000
 var editor: MultisampleEditor = null
 ## Zone ids listed at the top, by item order.
 var _zone_items: Array[int] = []
-var _screen_position := Vector2.ZERO
+var _position := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -74,10 +74,10 @@ func _fill_groups() -> void:
 		groups_menu.add_item(group.name, group.id)
 
 
-func open(screen_position: Vector2, zones_under: Array = []) -> void:
-	_screen_position = screen_position
+func open(at: Vector2, zones_under: Array = []) -> void:
+	_position = at
 	fill(zones_under)
-	popup(Rect2i(Vector2i(screen_position), Vector2i.ZERO))
+	ContextMenuPopup.popup_at_point(self, at)
 
 
 ## The operation texts in item order, without separators or zone items (for tests).
@@ -105,7 +105,7 @@ func run(op: String) -> void:
 	if ids.is_empty():
 		return
 	if op in DIALOG_OPS:
-		editor.batch_dialog.open_for(editor.device, op, ids, _screen_position)
+		editor.batch_dialog.open_for(editor.device, op, ids, _position)
 	elif op != "move_to_group":
 		SamplerActions.apply_batch(editor.device, op, ids)
 

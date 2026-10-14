@@ -403,8 +403,7 @@ func _open_menu() -> void:
 	_menu.add_item("Rename", MENU_RENAME)
 	_menu.add_item("Duplicate", MENU_DUPLICATE)
 	_menu.add_item("Delete", MENU_DELETE)
-	_menu.position = Vector2i(get_screen_position() + Vector2(0, size.y))
-	_menu.popup()
+	ContextMenuPopup.popup_below_control(_menu, self)
 
 
 func _on_menu_id(id: int) -> void:

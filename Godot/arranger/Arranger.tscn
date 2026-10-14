@@ -15,7 +15,6 @@
 [ext_resource type="Texture2D" uid="uid://b5v7q7i6kijk6" path="res://assets/icons/drum.svg" id="6_v5bje"]
 [ext_resource type="Texture2D" uid="uid://d78ym5jscua" path="res://assets/icons/music-2.svg" id="7_vddje"]
 [ext_resource type="Script" uid="uid://b1ka208d2k8vm" path="res://arranger/ruler/MarkerTrack.gd" id="8_8wvub"]
-[ext_resource type="Texture2D" uid="uid://687klfr8sj3d" path="res://assets/icons/folder-plus.svg" id="13_8wvub"]
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="14_autov"]
 [ext_resource type="Script" uid="uid://d2c70supsq5id" path="res://arranger/ruler/TempoTrack.gd" id="16_tempo"]
 [ext_resource type="Script" uid="uid://c0n38xarutc37" path="res://arranger/ruler/KeyChangeTrack.gd" id="17_key"]
@@ -281,18 +280,12 @@ layout_mode = 2
 [node name="Buttons" type="HBoxContainer" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter" unique_id=808890722]
 layout_mode = 2
 
-[node name="AddTrackButton" type="MenuButton" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1727724344]
+[node name="AddTrackButton" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1727724344]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 tooltip_text = "Add Track"
 icon = ExtResource("2_6tuub")
 icon_alignment = 1
-
-[node name="AddFolderButton" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=562461637]
-custom_minimum_size = Vector2(32, 32)
-layout_mode = 2
-tooltip_text = "Add Folder"
-icon = ExtResource("13_8wvub")
 
 [node name="Spacer" type="Control" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1952935357]
 layout_mode = 2

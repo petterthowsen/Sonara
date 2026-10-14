@@ -35,7 +35,7 @@ var _session := {}
 
 func _enter_tree() -> void:
 	# The packed scene is visible for editor authoring; instances start hidden.
-	hide()
+	ContextMenuPopup.close(self)
 
 
 func _ready() -> void:
@@ -94,12 +94,12 @@ func configure(inst: DeviceInstance, p_op: String, p_ids: Array) -> void:
 	_update_rows()
 
 
-func open_for(inst: DeviceInstance, p_op: String, p_ids: Array, screen_position: Vector2) -> void:
+func open_for(inst: DeviceInstance, p_op: String, p_ids: Array, at: Vector2) -> void:
 	_end_preview()
 	configure(inst, p_op, p_ids)
 	if device != null and device.multisample != null:
 		_session = SamplerActions.begin_edit(device)
-	popup(Rect2i(Vector2i(screen_position), Vector2i.ZERO))
+	ContextMenuPopup.popup_at_point(self, at)
 	_update_rows()
 
 
@@ -165,4 +165,4 @@ func apply() -> void:
 		SamplerActions.end_edit(device, SamplerActions.BATCH_LABELS.get(op, op), state)
 	elif device != null and not ids.is_empty():
 		SamplerActions.apply_batch(device, op, ids, options())
-	hide()
+	ContextMenuPopup.close(self)

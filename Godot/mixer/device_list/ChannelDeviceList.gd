@@ -216,10 +216,7 @@ func _on_device_moved(from_position: int, to_position: int):
 
 func _on_device_panel_request_context_menu(device_instance: DeviceInstance) -> void:
 	device_context_menu.bind_to_device(device_instance)
-	var c_pos = get_global_mouse_position()
-	var c_size = device_context_menu.get_contents_minimum_size()
-	device_context_menu.popup(Rect2(c_pos, c_size))
-	device_context_menu.show()
+	ContextMenuPopup.popup_at_mouse(device_context_menu)
 
 
 ## A click that lands on empty list space (not on a device panel) still selects the channel.

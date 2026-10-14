@@ -5,7 +5,7 @@ class_name ZoneGroupChip extends HBoxContainer
 
 ## Left click on the name. `additive` is true for Ctrl-click.
 signal clicked(additive: bool)
-signal context_requested(screen_position: Vector2)
+signal context_requested(at: Vector2)
 signal mute_toggled(on: bool)
 signal solo_toggled(on: bool)
 signal name_committed(new_name: String)
@@ -57,7 +57,7 @@ func _on_name_input(event: InputEvent) -> void:
 		clicked.emit(button.is_command_or_control_pressed())
 	elif button.button_index == MOUSE_BUTTON_RIGHT:
 		name_button.accept_event()
-		context_requested.emit(name_button.get_screen_position() + button.position)
+		context_requested.emit(name_button.global_position + button.position)
 
 
 func begin_rename() -> void:
