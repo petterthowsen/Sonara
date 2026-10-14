@@ -19,7 +19,7 @@ I don't build binaries yet, but will soon. If you'd like to try, download the re
 - **Automation**: volume, pan, send and device-parameter lanes with linear and step curves.
 - **Built-in devices**: polysynth, sampler, SFZ sampler (sfizz), drum machine, delay, spectrum
   analyzer, plus Chain and Layer containers for nesting devices.
-- **CLAP plugins**: hosted out of process, so a crashing plugin can't take the engine down. Crashed
+- **CLAP and VST3 plugins**: hosted out of process, so a crashing plugin can't take the engine down. Crashed
   plugins can be reloaded with their state. Plugins can share host processes (per plugin, per
   vendor or all together). Plugin GUIs are supported, and plugins without one get a generated
   panel.
@@ -31,8 +31,7 @@ I don't build binaries yet, but will soon. If you'd like to try, download the re
 - Simple, customizable theme system.
 ## Current limitations
 
-- Midi editor has limited power features such as mirror, stretch, chord-entry and the like.
-- The audio engine needs performance improvements, especailly for real-time recording.
+- Live Recording is not implemented yet.
 - There is no support for hardware midi controllers yet.
 - Only supports wav audio files.
 - Themeing only supports dark mode currently.
