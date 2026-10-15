@@ -48,7 +48,8 @@ Godot:
   `_on_connection_failed()` ("Is the engine running? Click to retry.").
 - `Godot/editor/MainMenu.gd` — `_help_menu` with `HELP_ITEMS { Perf_Capture }`.
 - `Godot/core/Utils.gd` — `expand_path()`, `is_test_mode()`, `reveal_in_file_manager()`.
-- `Godot/project.godot` — `config/version="0.1"`. There's no `export_presets.cfg`.
+- `Godot/project.godot` — `config/version="0.1"`.
+- `Godot/export_presets.cfg` — one `Linux Release` preset (embedded pck) added with the spec.
 - `scripts/gen_third_party_licenses.sh` — generates `THIRD_PARTY_LICENSES`.
 
 ## Approach
@@ -261,7 +262,7 @@ returns `AppPaths.presets_dir()`. A saved `presets/path` still wins.
 | `docs/subsystems/engine-debugging.md`, `AGENTS.md` (Debugging section) | New log locations. |
 | `docs/subsystems/godot-config-system.md` | New layout and `AppPaths`. |
 | `docs/releasing.md` | New: how to cut a release (bump VERSION, tag, push) and the itch secret. |
-| `docs/adr/0022-ui-owns-engine-process.md` | New ADR: the UI launches, attaches to and stops the engine. Parent-death signal instead of a heartbeat watchdog. |
+| [`docs/adr/0022-ui-owns-engine-process.md`](../../adr/0022-ui-owns-engine-process.md) | New ADR: the UI launches, attaches to and stops the engine. Parent-death signal instead of a heartbeat watchdog. |
 | `README.md` | Install section. |
 
 ## Migration and compatibility

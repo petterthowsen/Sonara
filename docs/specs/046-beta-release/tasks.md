@@ -10,7 +10,7 @@ forced quantum is system-wide, so ask before changing it.
 
 ## Phase 0 — de-risk the assumptions
 
-- [x?] **T-001** [REQ-007, REQ-008] Confirm the bind probe detects a running engine.
+- [x] **T-001** [REQ-007, REQ-008] Confirm the bind probe detects a running engine.
   - _Files_: a throwaway script in the scratchpad (not committed)
   - _Output_: a recorded result in this task: does `PacketPeerUDP.bind(7000, "127.0.0.1")` fail
     while `./run_engine.sh` holds the port, and succeed when the engine is stopped?
@@ -38,7 +38,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: —
   - Verified: `cargo test cli::` passes (6 tests). Also records unknown/malformed arguments so `main` can warn once logging is up.
 
-- [x?] **T-004** [REQ-004] Engine logs go to a configurable directory.
+- [x] **T-004** [REQ-004] Engine logs go to a configurable directory.
   - _Files_: `Engine/src/logging/mod.rs`, `Engine/src/logging/rotate.rs`,
     `Engine/src/audio/ipc/process/launch.rs`, `Engine/src/main.rs`
   - _Output_: `default_log_dir()`. `init(status_tx, dir)`. `LogWriters.dir`. Rotation and retention
@@ -49,7 +49,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-003
   - Verified: `cargo test logging::` passes (default dir from XDG/HOME, rotation and retention in a temp dir). **Pending live:** run `./run_release.sh` and check `~/.local/state/sonara/logs/engine/last_combined.log` exists and `Engine/logs/` stays untouched. Note: `cargo test` itself now writes a plugin-host log (`vst3-test-*.log`) under `~/.local/state/sonara/logs/engine/plugins/`, because `plugin_log_dir()` falls back to the default dir when `SONARA_LOG_DIR` is unset.
 
-- [x?] **T-005** [REQ-011] `--parent-pid` → `PR_SET_PDEATHSIG` plus the `getppid()` check, and
+- [x] **T-005** [REQ-011] `--parent-pid` → `PR_SET_PDEATHSIG` plus the `getppid()` check, and
   `--version`.
   - _Files_: `Engine/src/main.rs`
   - _Output_: the engine exits on SIGTERM when its parent dies. `engine --version` prints
@@ -60,7 +60,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-002, T-003
   - Verified: `target/release/engine --version` prints and exits in 25 ms before any logging, audio or OSC init. **Pending live:** the wrapper-shell kill -9 test (it starts a real engine on 7000).
 
-- [x?] **T-006** [REQ-010] `/engine/quit`.
+- [x] **T-006** [REQ-010] `/engine/quit`.
   - _Files_: `Engine/src/osc/server.rs`, `Engine/src/osc/routes/audio.rs`,
     `Engine/src/osc/routes/mod.rs` (test)
   - _Output_: `OscServer::request_quit()` and the `quit_requested` flag. `run()` returns, and `main`
@@ -70,7 +70,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: —
   - Verified: `cargo test osc::routes::tests::engine_quit` passes. **Pending live:** `oscsend localhost 7000 /engine/quit` and the PipeWire restore line in the log.
 
-- [x?] **T-007** [REQ-006] `/status/engine_info` after `/status/connected`.
+- [x] **T-007** [REQ-006] `/status/engine_info` after `/status/connected`.
   - _Files_: `Engine/src/osc/routes/project.rs`
   - _Output_: the message carries `s:version s:commit i:protocol`
   - _Verify_: `cargo test` passes. Live: `oscdump 7001` shows `/status/engine_info` after sending
@@ -107,7 +107,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-008
   - Verified: asset/media tests pass in the full run. **Pending live:** delete `~/.cache/sonara` and restart.
 
-- [x?] **T-011** [REQ-004] UI log under the state dir.
+- [x] **T-011** [REQ-004] UI log under the state dir.
   - _Files_: `Godot/support/Log.gd`
   - _Output_: `~/.local/state/sonara/logs/ui/last.log` outside test mode. Tests keep
     `res://logs/last.log`. `PerfRecorder` follows automatically.
@@ -125,7 +125,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-002
   - Verified: `test_build_info.gd` passes. `scripts/stamp_version.sh` run: `git status` shows no change (values already in sync) and `Godot/build_info.json` is ignored.
 
-- [x?] **T-013** [REQ-006] Godot receives `/status/engine_info`, and the Editor warns on a mismatch.
+- [x] **T-013** [REQ-006] Godot receives `/status/engine_info`, and the Editor warns on a mismatch.
   - _Files_: `Godot/core/AudioEngineOSC.gd`, `Godot/editor/Editor.gd`,
     `Godot/tests/test_engine_info.gd`
   - _Output_: `engine_version`, `engine_commit`, `engine_protocol` and `engine_info_received`. A
@@ -136,7 +136,7 @@ forced quantum is system-wide, so ask before changing it.
 
 ## Phase 3 — engine lifecycle in the UI
 
-- [x?] **T-014** [REQ-007, REQ-008, REQ-010] The `EngineProcess` autoload.
+- [x] **T-014** [REQ-007, REQ-008, REQ-010] The `EngineProcess` autoload.
   - _Files_: `Godot/core/EngineProcess.gd`, `Godot/project.godot`
   - _Output_: `ensure_running()` (probe, then attach or spawn with `--log-dir` and
     `--parent-pid`), `engine_binary_path()` (exported binary or dev path), `stop()` (quit, wait 3 s,
@@ -146,7 +146,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-001, T-005, T-006
   - Verified: the autoload is inert in the headless suite. Live in T-024.
 
-- [x?] **T-015** [REQ-007, REQ-009, REQ-010] Wire `EngineProcess` into the Editor and `EnginePanel`.
+- [x] **T-015** [REQ-007, REQ-009, REQ-010] Wire `EngineProcess` into the Editor and `EnginePanel`.
   - _Files_: `Godot/editor/Editor.gd`, `Godot/editor/EnginePanel.gd`
   - _Output_: `_connect_project_to_engine()` awaits `ensure_running()`. `quit()` calls `stop()`. When
     the engine is disconnected the panel shows "Start Engine", and pressing it launches the engine
@@ -155,7 +155,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-014
   - Implemented: `Editor._connect_project_to_engine` awaits `ensure_running()`, `quit()` awaits `EngineProcess.stop()`, `EnginePanel` shows "Start Engine" when the port is free and a binary exists. **Pending live (T-024).**
 
-- [x?] **T-016** [REQ-018] Single-instance PID file.
+- [x] **T-016** [REQ-018] Single-instance PID file.
   - _Files_: `Godot/Sonara.gd`, `Godot/core/EngineProcess.gd`
   - _Output_: `$XDG_RUNTIME_DIR/sonara/ui.pid`, `is_duplicate_instance`, the `OS.alert` and quit
     for a second launch, and the PID file removed on exit
@@ -175,7 +175,7 @@ forced quantum is system-wide, so ask before changing it.
 
 ## Phase 4 — Help menu and update check
 
-- [x?] **T-018** [REQ-012] About dialog.
+- [x] **T-018** [REQ-012] About dialog.
   - _Files_: `Godot/editor/AboutDialog.gd`, `Godot/editor/MainMenu.gd`,
     `Godot/tests/test_about_dialog.gd`
   - _Output_: Help > About Sonara shows the UI and engine versions and the commit, GitHub and
@@ -184,7 +184,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-012, T-013
   - Verified: `test_about_dialog.gd` passes. **Pending live:** the links.
 
-- [x?] **T-019** [REQ-013] Help > Open Logs Folder.
+- [x] **T-019** [REQ-013] Help > Open Logs Folder.
   - _Files_: `Godot/editor/MainMenu.gd`
   - _Output_: the menu item opens `AppPaths.log_dir()`
   - _Verify_: live: the file manager opens on `~/.local/state/sonara/logs/`
@@ -210,6 +210,7 @@ forced quantum is system-wide, so ask before changing it.
     binary that starts and connects to a running engine, and the AI system prompt loads (no "SHIPPED_PATH" error in the UI log)
   - _Depends on_: T-012
   - Divergence: `Godot/export_presets.cfg` already contains the filters; nothing to change. **Not run:** export templates are not installed (`~/.local/share/godot/export_templates/` is empty), and none were downloaded. Pending: run the export command from the Verify line once templates exist.
+  - Update 2026-10-15: the templates live in Godots' Flatpak data dir; `~/.local/share/godot/export_templates` is now a symlink to it. The export ran: the pack stores `ai/prompt/system_prompt.md` and `build_info.json`, no `tests/` and no `addons/godot_ai`. `addons/godot_ai/*` added to the exclude filter; the addon's own export plugin strips the `_mcp_game_helper` autoload, so the exclusion causes no autoload errors. Still pending: starting the exported binary (checked in T-025).
 
 - [x?] **T-022** [REQ-014, REQ-015, REQ-016] Install and uninstall scripts, desktop entry, MIME
   type.
@@ -230,7 +231,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-021, T-022
   - Verified with a stub in place of Godot (`--godot fakegodot.sh`; export templates are not installed): the engine builds into `dist/target` with a DT_RPATH `$ORIGIN/lib`, bundles libsndfile, FLAC, vorbis, vorbisenc, opus, ogg, mpg123 and mp3lame, every bundled library resolves from `lib/`, and the tarball and `.sha256` check out. Divergence: the rpath is DT_RPATH (`-Wl,--disable-new-dtags`), not the default DT_RUNPATH, because a RUNPATH on the engine does not apply to libsndfile's own dependencies. Divergence: the script builds into `dist/target` (not `Engine/target`) so dev builds aren't invalidated by the changed RUSTFLAGS. **Pending:** a run with the real Godot export (needs export templates).
 
-- [ ] **T-024** [REQ-007–REQ-011, REQ-013, REQ-018] Live check of the engine lifecycle on the dev
+- [x] **T-024** [REQ-007–REQ-011, REQ-013, REQ-018] Live check of the engine lifecycle on the dev
   machine.
   - _Files_: — (record results in this task)
   - _Output_: each step passes, or a gap is filed as a new task
@@ -244,6 +245,8 @@ forced quantum is system-wide, so ask before changing it.
     6. Open Logs Folder opens the right folder;
     7. a second launch shows the alert.
   - _Depends on_: T-015, T-016, T-019
+  - Verified 2026-10-15 on the dev machine (worktree build `0.1.0-beta.1 (218cdd2)`), all seven steps pass. Step 1: the UI spawned `engine --log-dir ~/.local/state/sonara/logs/engine --parent-pid <ui>` and connected; UI and engine logs landed in the state dir. Step 2: attached to `./run_engine.sh`, one engine. Step 3: Start Engine reconnected and resynced. Step 4: forced quantum/rate went 2048/48000 → 0/0 after quit. Step 5: engine gone after `kill -9` of the UI. Step 6: Open Logs Folder opened `~/.local/state/sonara/logs/`; Help > About links and Licenses also checked. Step 7: alert shown, second instance exited, one engine and one PID file. This also covers the live parts of T-001 (real engine, step 2), T-004, T-005, T-006, T-007 (About shows the engine version), T-011, T-013 (no warning on a match), T-014–T-016, T-018 and T-019.
+  - Note: the second instance still builds the editor scene before `quit()` takes effect (harmless; Editor skips its startup work).
 
 - [ ] **T-025** [REQ-014–REQ-017] Clean-machine install test.
   - _Files_: — (record results here and in `docs/releasing.md`)
@@ -283,7 +286,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-004, T-011
   - Verified: `grep -rn "Engine/logs\|Godot/logs" AGENTS.md docs/subsystems` shows only the intentional mentions that headless tests keep `Godot/logs`. `CONTEXT.md`, `README.md`, the run scripts' comments and `test_plugin_osc.sh` were updated too.
 
-- [x?] **T-029** [REQ-007–REQ-011] ADR 0022: the UI owns the engine process.
+- [x] **T-029** [REQ-007–REQ-011] ADR 0022: the UI owns the engine process.
   - _Files_: `docs/adr/0022-ui-owns-engine-process.md`
   - _Output_: context, decision, the rejected heartbeat watchdog, consequences
   - _Verify_: the file exists, follows the format of the existing ADRs, and is linked from the
