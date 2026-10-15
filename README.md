@@ -1,34 +1,33 @@
 ![Sonara](Godot/assets/sonara/logo_image.png)
 
-Sonara is a Linux-first DAW. It's a Rust audio engine and a Godot 4 UI.
+Sonara is a Digital Audio Workstation developed on and for Linux. It's a Rust audio engine and a Godot 4 UI.
 
-It is close to a beta release - most of the basic features are in, plus many quality of life features that other DAWS don't have, such as built-in support for SFZ, A powerful Drum Machine, Sampler with multisampling and automatic note mapping (keyswitches etc).
-
-The goal of sonara is to provide a seamless, frictionless UI that makes it fun to composer, arrange and mix music - whether you place notes using a mouse, the computer keyboard or by midi keyboard.
-
-I don't build binaries yet, but will soon. If you'd like to try, download the repo and follow the instructions to build it - it's fairly straight-forward. It's early though, so expect some bugs here and there.
+The goal of sonara is to provide a seamless, frictionless UI that makes it fun to compose, arrange and mix music, while allowing high user customizability.
 
 ![Sonara arranger with MIDI clips, an automation lane and a CLAP reverb in the device lane](screenshot_01.png)
 
+## At a Glance
+
+- UI Inspired by Bitwig
+- Midi editor inspired by FL Studio
+- Customizable and Themeable
+- Built-in support for SFZ
+- Support for instrument note mapping: SFZ Keyswitches, Drum Machine, Sampler(Multisampler mode), and Instrument Layer mapping.
+- VST3 + Clap plugins
+
 ## Features
 
-- **Arranger**: MIDI and audio clips, folder tracks, song markers, snapping and zoom.
-- **Clip editor**: piano-roll MIDI editing.
-- **Mixer**: instrument, audio and bus channels with sends, pan modes, metering and routing to
-  hardware outputs.
+- **Arranger**: MIDI and audio clips, folder tracks, group tracks, song markers, tempo changes, key changes.
+- **Clip editor**: Intuitive and powerful piano-roll inspired by FL Studio.
+- **Mixer**: instrument, audio and bus channels with sends, pan modes, metering and routing to hardware outputs.
 - **Automation**: volume, pan, send and device-parameter lanes with linear and step curves.
-- **Built-in devices**: polysynth, sampler, SFZ sampler (sfizz), drum machine, delay, spectrum
-  analyzer, plus Chain and Layer containers for nesting devices.
-- **CLAP and VST3 plugins**: hosted out of process, so a crashing plugin can't take the engine down. Crashed
-  plugins can be reloaded with their state. Plugins can share host processes (per plugin, per
-  vendor or all together). Plugin GUIs are supported, and plugins without one get a generated
-  panel.
-- **Audio settings**: pick the output device, sample rate and buffer size from the UI.
-- **Asset browser**: audio files, MIDI files, SFZ instruments and devices.
+- **Built-in devices**: PolySynth, a Sampler with Multisampler mode, a powerful Drum Machine (combined with Sampler Multisample mode, drum libraries can easily be set up), and a host of Note effects and audio effects like EQ, Reverb, Compressor, Delay etc.
+- **CLAP and VST3 plugins**: Hosted in their own process, or shared by vendor - depending on preference.
+- **Asset browser**: audio files, MIDI files, SFZ instruments and devices/plugins.
 - **Undo/redo** for editing.
 - **AI assistant** (optional): chat that can read and edit the project, via OpenRouter.
+- **Theme system** Simple, customizable theme system.
 
-- Simple, customizable theme system.
 ## Current limitations
 
 - Live Recording is not implemented yet.

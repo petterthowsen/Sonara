@@ -26,3 +26,7 @@ Godot/mono_crash.*.json
 
 # Machine-specific MCP config (local paths, API keys)
 .mcp.json
+# Release builds
+Godot Exports/
+dist/
+Godot/build_info.json
