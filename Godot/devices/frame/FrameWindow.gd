@@ -27,7 +27,9 @@ func _init() -> void:
 	# No always_on_top: X11 refuses to make popups transient to an on-top window.
 	handle_input_locally = false
 	wrap_controls = false
-	size = DEFAULT_SIZE
+	content_scale_factor = UiScale.factor()
+	size = UiScale.scaled(DEFAULT_SIZE)
+	UiScale.scale_changed.connect(_on_ui_scale_changed)
 	initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_MAIN_WINDOW_SCREEN
 	visibility_changed.connect(_on_visibility_changed)
 	_build_grips()
@@ -58,10 +60,12 @@ func _build_grips() -> void:
 
 ## Corners are GRIP square; edges span between them.
 func _layout_grips() -> void:
+	# Canvas units: the window's pixels divided by the UI scale
+	var canvas := Vector2(size) / content_scale_factor
 	for grip in _grips:
 		var edge: int = grip.get_meta("edge")
-		var w := float(size.x)
-		var h := float(size.y)
+		var w := canvas.x
+		var h := canvas.y
 		var r := Rect2()
 		match edge:
 			DisplayServer.WINDOW_EDGE_TOP_LEFT: r = Rect2(0, 0, GRIP, GRIP)
@@ -183,10 +187,21 @@ func _on_visibility_changed() -> void:
 func _update_min_size() -> void:
 	if frame == null:
 		return
-	var min_px := Vector2i(frame.get_combined_minimum_size().ceil())
+	var min_px := UiScale.scaled(Vector2i(frame.get_combined_minimum_size().ceil()))
 	min_size = min_px
 	if size.x < min_px.x or size.y < min_px.y:
 		size = Vector2i(maxi(size.x, min_px.x), maxi(size.y, min_px.y))
+
+
+## The UI scale setting changed: this window follows it (content scale and minimum size).
+func _on_ui_scale_changed(factor: float) -> void:
+	var ratio := factor / content_scale_factor
+	content_scale_factor = factor
+	size = Vector2i((Vector2(size) * ratio).round())
+	if last_rect.has_area():
+		last_rect.size = Vector2i((Vector2(last_rect.size) * ratio).round())
+	_layout_grips()
+	_update_min_size()
 
 
 func _on_active_device_changed(_dev: DeviceInstance) -> void:
@@ -198,7 +213,7 @@ func _on_active_device_changed(_dev: DeviceInstance) -> void:
 func _on_fit_requested(frame_size: Vector2) -> void:
 	if mode != Window.MODE_WINDOWED:
 		return
-	var want := Vector2i(frame_size.ceil())
+	var want := UiScale.scaled(Vector2i(frame_size.ceil()))
 	var screen := DisplayServer.screen_get_usable_rect(current_screen)
 	if screen.has_area():
 		want = want.min(screen.size)

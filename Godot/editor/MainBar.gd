@@ -1,8 +1,7 @@
 extends HBoxContainer
-
-var is_dragging: bool = false
-var drag_start_pos: Vector2i = Vector2i.ZERO
-var window_start_pos: Vector2i = Vector2i.ZERO
+# Title bar of the borderless main window. Dragging is handed to the window manager
+# (window_start_drag), like ResizeGrip does for resizing: Wayland forbids moving a window
+# by setting its position.
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -14,26 +13,5 @@ func _gui_input(event: InputEvent) -> void:
 				else:
 					DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
 			elif event.pressed:
-				_start_dragging()
-			else:
-				_stop_dragging()
+				DisplayServer.window_start_drag()
 			accept_event()
-
-
-func _start_dragging() -> void:
-	is_dragging = true
-	drag_start_pos = DisplayServer.mouse_get_position()
-	window_start_pos = DisplayServer.window_get_position()
-	set_process(true)
-
-
-func _stop_dragging() -> void:
-	is_dragging = false
-	set_process(false)
-
-
-func _process(_delta: float) -> void:
-	if is_dragging:
-		var mouse_pos = DisplayServer.mouse_get_position()
-		var delta = mouse_pos - drag_start_pos
-		DisplayServer.window_set_position(window_start_pos + delta)

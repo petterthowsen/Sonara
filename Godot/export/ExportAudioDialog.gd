@@ -25,6 +25,8 @@ const CONFIG_KEY := "export_audio"
 @onready var _cancel_button: Button = %CancelButton
 @onready var _file_dialog: FileDialog = %FileDialog
 
+## The job this dialog started (analysis jobs run through the same service and stay silent).
+var _export_job_id := ""
 var project: Project = null
 var service: RenderService = null
 ## Selection range supplied by the editor when the dialog opens: {"has", "start", "has_end", "end"}.
@@ -201,6 +203,7 @@ func _on_export_pressed() -> void:
 		return
 	var job_id := service.start(build_options())
 	if job_id != "":
+		_export_job_id = job_id
 		_set_status("Rendering…", 0.0)
 	_update_buttons()
 
@@ -234,14 +237,21 @@ func _on_progress(_job_id: String, fraction: float) -> void:
 	_set_status("Rendering… %d%%" % int(fraction * 100.0), fraction)
 
 
-func _on_finished(_job_id: String, paths: PackedStringArray) -> void:
+func _on_finished(job_id: String, paths: PackedStringArray) -> void:
 	_set_status("Done: %d file%s written" % [paths.size(), "" if paths.size() == 1 else "s"], 1.0)
+	if job_id != "" and job_id == _export_job_id:
+		_export_job_id = ""
+		Notifier.notify("Export finished", "%d file%s written" % [paths.size(), "" if paths.size() == 1 else "s"])
 	_cancel_button.disabled = false
 	_update_buttons()
 
 
-func _on_failed(_job_id: String, error: String) -> void:
+func _on_failed(job_id: String, error: String) -> void:
 	_set_status("Cancelled" if error == RenderService.CANCELLED else "Failed: " + error, 0.0)
+	if job_id != "" and job_id == _export_job_id:
+		_export_job_id = ""
+		if error != RenderService.CANCELLED:
+			Notifier.notify("Export failed", error)
 	_cancel_button.disabled = false
 	_update_buttons()
 

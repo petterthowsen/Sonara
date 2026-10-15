@@ -33,6 +33,14 @@
 - The `UiTheme` autoload listens to `setting_changed` for that prefix and rebuilds the theme once per frame, so everything (including device windows) updates live. `Settings.reset_theme()` restores all eight keys; the Appearance page has a "Reset theme" button for it.
 - Details: `godot-ui-components.md` §5 and `docs/adr/0018-theme-generated-from-settings.md`.
 
+## UI scale
+- `appearance/ui_scale` (CHOICE: `Auto`, `75%`, `100%`, `125%`, `150%`, `175%`, `200%`; default `Auto`). The `UiScale` autoload (`core/UiScale.gd`, registered after `Settings`) turns it into a factor (`Auto` = `DisplayServer.screen_get_scale()`, which is real only on Wayland and macOS and 1.0 on X11) and sets `Window.content_scale_factor` on the main window, on `FrameWindow`s, and on any other `force_native` window as it enters the tree. Embedded dialogs and popups scale with the main window. It re-applies on `setting_changed` and emits `scale_changed(factor)`. Headless test runs always use 1.0.
+- `Window.min_size` and native window sizes are in pixels, not content units: multiply a layout minimum with `UiScale.scaled(Vector2i)` and refresh it on `scale_changed` (`Editor` does this for `MIN_WINDOW_SIZE`, `FrameWindow` for its frame's minimum).
+
+## Window geometry
+- Internal state, not a registered setting: `window/main` in `config.json` = `{screen, mode: "windowed"|"maximized", position: [x, y], size: [w, h]}`. `position` and `size` are the last windowed rectangle in pixels. `WindowGeometry` (`core/WindowGeometry.gd`, a child of `Editor`) restores it in `_ready`, samples the window every second, writes only when it changed (every 10 s, for crash safety) and once in `Editor.quit()`. Restore clamps to a connected screen (the screen under the saved centre, else the saved screen, else the primary one, centred) and skips position on Wayland, where clients cannot place windows. Disabled in test mode and when embedded in the Godot editor.
+- Floating device frame windows remember their rect only in memory (`FrameWindow.last_rect`); it is not saved across launches.
+
 ## Config Access (unregistered internal state)
 - Use `Sonara.get_config("section/key", default_value)` to read settings. Slash notation walks nested dictionaries and falls back to the provided default on missing keys.
 - Use `Sonara.set_config("section/key", value)` to write settings. It auto-creates intermediate dictionaries; there is no need to pre-check for existence.

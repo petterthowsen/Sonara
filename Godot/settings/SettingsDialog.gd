@@ -87,7 +87,7 @@ func _connect_signals() -> void:
 
 func popup_centered_size(popup_size: Vector2 = Vector2(900, 600)) -> void:
 	_begin_session()
-	popup_centered(popup_size)
+	popup_centered(Vector2i(popup_size * UiScale.factor()))  # a native window: pixels
 	search_edit.grab_focus()
 
 

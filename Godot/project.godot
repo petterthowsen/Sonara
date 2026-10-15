@@ -19,6 +19,7 @@ config/description="Digital Audio Workstation"
 config/version="0.1.0-beta.1"
 run/main_scene="uid://ckggccuur2ds"
 config/features=PackedStringArray("4.7")
+run/low_processor_mode=true
 boot_splash/stretch_mode=0
 boot_splash/image="uid://cekx6p4gh0xlq"
 config/icon="uid://di1nxd4g8p8mj"
@@ -30,6 +31,7 @@ AudioEngineOSC="*res://core/AudioEngineOSC.gd"
 EngineProcess="*res://core/EngineProcess.gd"
 Settings="*res://settings/Settings.gd"
 UiTheme="*res://core/theme/UiTheme.gd"
+UiScale="*res://core/UiScale.gd"
 Hotkeys="*res://input/Hotkeys.gd"
 PerfRecorder="*res://components/PerfRecorder.gd"
 AudioConfig="*res://data/AudioConfig.gd"
@@ -135,6 +137,13 @@ ui_delete={
 ]
 }
 
+[physics]
+
+2d/physics_engine="Dummy"
+3d/physics_engine="Dummy"
+
 [rendering]
 
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.06745098, 0.06745098, 0.06745098, 1)

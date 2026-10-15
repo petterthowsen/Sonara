@@ -472,6 +472,14 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Tint each mixer strip's background with a hint of its channel color.",
 	)).sub("Mixer")
+	_register(Setting.new(
+		"appearance/ui_scale",
+		"UI Scale",
+		Type.CHOICE,
+		"Auto",
+		CATEGORY_APPEARANCE,
+		"Size of the whole interface, including floating device windows. Auto uses the scale your desktop reports, which is only available on Wayland; on X11 it is 100%, so pick a size here for a high-resolution display.",
+	)).sub("Editor").choices(["Auto", "75%", "100%", "125%", "150%", "175%", "200%"])
 	_register_theme_settings()
 	_register(Setting.new(
 		"appearance/automation_lane_height",

@@ -156,3 +156,8 @@ func _notification(what: int) -> void:
 - Never pass `callable.bind(x)` / `bindv` to `disconnect()` or `is_connected()` and rely on it matching. Keep the bound callable in a variable or dictionary (see `Mixer._channel_hierarchy_cbs`), or have the signal carry the object.
 
 - The `Hotkeys` autoload owns the shortcut registry (`input/HotkeyActions.gd`), the help context and interaction states, and the transient help-bar hint. `Settings` is the other autoload that handlers read. See "Help bar" in `godot-ui-components.md`.
+
+## Rendering and engine settings (project.godot)
+- `application/run/low_processor_mode=true`: Godot draws a frame only when something changed (input, a `queue_redraw()`, a property that changes appearance). `_process` still runs every iteration, but code that animates from `_process` or time must call `queue_redraw()` (or change a visible property) each step, or the control freezes until the next input. Benchmarks set `OS.low_processor_usage_mode_sleep_usec = 0`.
+- `rendering/renderer/rendering_method="gl_compatibility"`; `waveform.gdshader` is the only custom shader. Keep the default audio driver even though audio runs in the Rust engine: on Linux `OS.open_midi_inputs()` segfaults under the `Dummy` driver (MidiManager). There is no physics, so both physics engines are `Dummy`.
+

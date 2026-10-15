@@ -172,14 +172,27 @@ var _frame_view: View = View.ARRANGER
 # ============================================================================
 
 ## Smallest the main window can be resized to.
-const MIN_WINDOW_SIZE := Vector2i(1200, 700)
+const MIN_WINDOW_SIZE := Vector2i(1280, 700)
+
+
+## `Window.min_size` is in pixels, the layout in content units: multiply by the UI scale.
+func _update_min_window_size() -> void:
+	get_window().min_size = UiScale.scaled(MIN_WINDOW_SIZE)
+
+
+var _window_geometry: WindowGeometry
 
 
 func _ready():
 	# A second Sonara quits at once (Sonara.gd). It must not connect to the first one's engine.
 	if Sonara.is_duplicate_instance:
 		return
-	get_window().min_size = MIN_WINDOW_SIZE
+	# The bar drags and maximizes the borderless window (MainBar.gd is not attached in the scene).
+	main_bar.set_script(preload("res://editor/MainBar.gd"))
+	_update_min_window_size()
+	_window_geometry = WindowGeometry.new(get_window())
+	add_child(_window_geometry)  # restores the saved size and position
+	UiScale.scale_changed.connect(func(_f: float): _update_min_window_size())
 	# The window close button asks first when the project has unsaved changes (request_quit)
 	get_tree().auto_accept_quit = false
 	render_service = RenderService.new()
@@ -1543,6 +1556,8 @@ func _save_as_interactive() -> int:
 
 func quit() -> void:
 	"""Stop playback, close project, then quit the application."""
+	if _window_geometry:
+		_window_geometry.save_now()
 	# Ensure playback is stopped
 	if is_playing:
 		stop()
