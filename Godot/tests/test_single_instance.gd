@@ -37,7 +37,7 @@ func run_tests() -> void:
 	# .sonara arguments, in both forms the desktop can hand us.
 	var project := dir.path_join("demo.sonara")
 	FileAccess.open(project, FileAccess.WRITE).store_string("{}")
-	var find := func(args: Array) -> String: return Sonara.project_path_from_args(PackedStringArray(args))
+	var find := func(args: Array) -> String: return root.get_node("Sonara").project_path_from_args(PackedStringArray(args))
 	_assert(find.call([project]) == project, "positional path (sonara demo.sonara)")
 	_assert(find.call(["--fullscreen", project]) == project, "after other arguments")
 	_assert(find.call(["file://" + project.uri_encode().replace("%2F", "/")]) == project, "file:// URI")

@@ -4,12 +4,15 @@
 # Run: godot --headless --path Godot -s tests/test_engine_info.gd -- --test
 extends TestBase
 
+var _ed: GDScript
+
 
 func suite_name() -> String:
 	return "Engine info tests"
 
 
 func run_tests() -> void:
+	_ed = load("res://editor/Editor.gd")
 	var osc = root.get_node("AudioEngineOSC")
 	_assert(osc.engine_protocol == -1 and osc.engine_version == "", "unknown before the engine reports")
 	_assert(not osc.is_protocol_mismatch(), "unknown protocol is not a mismatch (pre-beta engine)")
@@ -20,11 +23,11 @@ func run_tests() -> void:
 	_assert(osc.engine_version == "0.1.0-beta.1" and osc.engine_commit == "abc1234", "version and commit stored")
 	_assert(osc.engine_protocol == BuildInfo.PROTOCOL and not osc.is_protocol_mismatch(), "matching protocol is fine")
 	_assert(seen == [["0.1.0-beta.1", "abc1234", BuildInfo.PROTOCOL]], "engine_info_received emitted once")
-	_assert(Editor.protocol_mismatch_text("0.1.0-beta.1", BuildInfo.PROTOCOL) == "", "no warning when matching")
+	_assert(_ed.protocol_mismatch_text("0.1.0-beta.1", BuildInfo.PROTOCOL) == "", "no warning when matching")
 
 	osc._on_osc_message_received("/status/engine_info", ["0.2.0", "def", BuildInfo.PROTOCOL + 1], 0)
 	_assert(osc.is_protocol_mismatch(), "a different protocol is a mismatch")
-	var text: String = Editor.protocol_mismatch_text(osc.engine_version, osc.engine_protocol)
+	var text: String = _ed.protocol_mismatch_text(osc.engine_version, osc.engine_protocol)
 	_assert("0.2.0" in text and BuildInfo.version() in text, "the warning names both versions")
 
 	osc._on_osc_message_received("/status/engine_info", ["only one"], 0)

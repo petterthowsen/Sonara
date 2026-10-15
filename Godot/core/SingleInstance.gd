@@ -15,7 +15,10 @@ static func exe_of(pid: int) -> String:
 	if pid <= 0:
 		return ""
 	# A binary replaced by an upgrade while running reads "<path> (deleted)".
-	return DirAccess.read_link("/proc/%d/exe" % pid).trim_suffix(" (deleted)")
+	var fs := DirAccess.open("/proc")
+	if fs == null:
+		return ""
+	return fs.read_link("/proc/%d/exe" % pid).trim_suffix(" (deleted)")
 
 
 ## True when `pid_file` names a live process running `exe`.
