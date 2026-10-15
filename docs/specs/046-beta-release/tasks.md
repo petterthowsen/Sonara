@@ -268,6 +268,7 @@ forced quantum is system-wide, so ask before changing it.
     passes T-025 step 1. The first tag `v0.1.0-beta.1` creates a Release with the tarball and
     checksum.
   - _Depends on_: T-023
+  - 2026-10-15: run 1 (`ubuntu:22.04`) failed: cpal enables pipewire-rs `v0_3_53`, and 22.04 has PipeWire 0.3.48. Switched to `debian:12`. Run 2 failed for lack of X11 headers (`libx11-dev`, `libxext-dev` added). Run 3 (`38709664042`) passed: the artifact's checksum is OK, it bundles the same 8 libraries, `engine --version` prints `0.1.0-beta.1 (dc60ecf)`, libsndfile resolves from `lib/`, and the highest glibc symbol needed is 2.35 (engine) / 2.28 (UI). **Pending:** the first tag `v0.1.0-beta.1` creating a Release.
 
 ## Phase 6 — docs
 
