@@ -36,7 +36,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config git curl ca-certificates unzip file \
             libasound2-dev libsndfile1-dev libpipewire-0.3-dev libspa-0.2-dev \
-            libdbus-1-dev libclang-dev clang libfontconfig1
+            libdbus-1-dev libclang-dev clang libx11-dev libxext-dev libfontconfig1
 
       # git is installed first so the checkout has a .git folder (build.rs and stamp_version.sh
       # read the commit from it).

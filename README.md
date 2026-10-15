@@ -75,6 +75,7 @@ Uninstalling leaves all of these in place.
 - PipeWire, D-Bus and libclang headers for the native PipeWire driver and realtime scheduling
   through rtkit: `sudo apt install libpipewire-0.3-dev libspa-0.2-dev libdbus-1-dev libclang-dev`
   (Arch: `pipewire dbus clang`)
+- X11 headers for plugin GUI windows: `sudo apt install libx11-dev libxext-dev` (Arch: `libx11 libxext`)
 - Godot 4.7
 
 Optional: `liblo-tools` (`oscsend`) for OSC debugging, and `libxml2-utils` (`xmllint`) to
