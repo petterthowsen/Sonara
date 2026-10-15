@@ -106,8 +106,10 @@ func _on_connection_state_changed(state: Project.ConnectionState) -> void:
 
 func _on_connection_failed(reason: String) -> void:
 	_update_ui_from_state(Project.ConnectionState.DISCONNECTED)
-	_set_status("Engine not responding", COLOR_ALERT,
-		reason + " Is the engine running? Click to retry.", true)
+	# When the UI can start the engine itself, "is it running?" is not the user's question.
+	var hint := " Click to retry." if EngineProcess.engine_binary_path() != "" \
+			else " Is the engine running? Click to retry."
+	_set_status("Engine not responding", COLOR_ALERT, reason + hint, true)
 
 
 ## The popup closes itself on a press outside it, which includes a press on this button, so by
@@ -290,8 +292,10 @@ func _on_connect_button_pressed() -> void:
 		# Disconnect (or cancel a connect that is still waiting for the engine)
 		project.disconnect_from_engine()
 	else:
-		# Connect
-		project.connect_to_engine()
+		# Start the engine if none answers (or attach to the one that does), then connect.
+		await EngineProcess.ensure_running()
+		if Sonara.editor.project == project:
+			project.connect_to_engine()
 
 
 func _update_ui_no_project() -> void:
@@ -310,7 +314,12 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 	"""Update UI based on connection state."""
 	match state:
 		Project.ConnectionState.DISCONNECTED:
-			_set_status("Disconnected", COLOR_ALERT, "Click to connect to the engine.", true)
+			# No engine on the port and one we could start: offer to start it (REQ-009).
+			if EngineProcess.engine_binary_path() != "" and EngineProcess.is_engine_port_free() \
+					and not Utils.is_test_mode():
+				_set_status("Start Engine", COLOR_ALERT, "The engine is not running. Click to start it and reconnect.", true)
+			else:
+				_set_status("Disconnected", COLOR_ALERT, "Click to connect to the engine.", true)
 			performance_button.disabled = true
 			performance_popup.hide()
 			_set_load_text("Load")

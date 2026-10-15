@@ -93,7 +93,7 @@ Godot/tests/run_all.sh         # Godot tests (headless, parallel; optional name 
 `Engine/test_osc.sh`, `test_plugin_osc.sh` and `test_sfizz.sh` are OSC smoke tests against a
 running engine. They make sound.
 
-Logs: `Engine/logs/last_{info,warn,combined}.log` (rotated per session) and `Godot/logs/last.log`.
+Logs: `~/.local/state/sonara/logs/engine/last_{info,warn,combined}.log` (rotated per session) and `~/.local/state/sonara/logs/ui/last.log`. In the app: Help > Open Logs Folder.
 
 ### Releasing
 

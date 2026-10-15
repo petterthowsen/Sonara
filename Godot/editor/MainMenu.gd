@@ -10,7 +10,7 @@ enum FILE { New, Open, Open_Recent, Close, Sep1, Save, Save_As, Save_Startup, Cl
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
 
-enum HELP_ITEMS { Perf_Capture }
+enum HELP_ITEMS { Perf_Capture, About, Open_Logs }
 
 enum DialogMode { OPEN, SAVE, SAVE_AS, IMPORT_DAWPROJECT, EXPORT_DAWPROJECT, IMPORT_AUDIO_DIR }
 
@@ -82,6 +82,9 @@ func _ready() -> void:
 	_help_menu.name = "Help"
 	add_child(_help_menu)
 	_help_menu.add_item("Start Performance Capture", HELP_ITEMS.Perf_Capture)
+	_help_menu.add_item("Open Logs Folder", HELP_ITEMS.Open_Logs)
+	_help_menu.add_separator()
+	_help_menu.add_item("About Sonara", HELP_ITEMS.About)
 	_help_menu.about_to_popup.connect(_update_help_menu)
 
 	# disable project-dependent items initially (no project open yet)
@@ -152,8 +155,13 @@ func _on_item_pressed(item_id : int, menu_id : int):
 			EDIT.Preferences:
 				_on_preferences()
 	elif menu_id == MENU.Help:
-		if item_id == HELP_ITEMS.Perf_Capture:
-			_toggle_perf_capture()
+		match item_id:
+			HELP_ITEMS.Perf_Capture:
+				_toggle_perf_capture()
+			HELP_ITEMS.About:
+				_show_about()
+			HELP_ITEMS.Open_Logs:
+				_open_logs_folder()
 	elif menu_id == MENU.AI:
 		match item_id:
 			AI_ITEMS.Toggle_Assistant:
@@ -237,6 +245,27 @@ func _rebuild_recent_menu() -> void:
 	file.set_item_disabled(file.get_item_index(FILE.Open_Recent), paths.is_empty())
 
 
+var _about_dialog: AboutDialog
+
+
+func _show_about() -> void:
+	if _about_dialog == null:
+		_about_dialog = AboutDialog.new()
+		add_child(_about_dialog)
+	_about_dialog.popup_centered()
+
+
+## Opens the logs folder itself (not a selection in its parent). Created first so the file
+## manager has something to open on a fresh install.
+func _open_logs_folder() -> void:
+	var dir := AppPaths.log_dir()
+	DirAccess.make_dir_recursive_absolute(dir)
+	var err := OS.shell_open(dir)
+	if err != OK:
+		logger.error("Could not open the logs folder %s (error %d)" % [dir, err])
+		Sonara.editor.show_error("Open Logs Folder", "Could not open %s." % dir)
+
+
 func _update_help_menu() -> void:
 	var text := "Stop Performance Capture" if PerfRecorder.is_recording() else "Start Performance Capture"
 	_help_menu.set_item_text(_help_menu.get_item_index(HELP_ITEMS.Perf_Capture), text)
@@ -248,7 +277,7 @@ func _toggle_perf_capture() -> void:
 		logger.info("Performance capture started")
 		return
 	var report: String = PerfRecorder.stop()
-	logger.info("Performance capture stopped (report copied to clipboard, saved in logs/)")
+	logger.info("Performance capture stopped (report copied to clipboard, saved in the UI log folder)")
 	Sonara.editor.show_error("Performance capture",
 		"Report copied to the clipboard and saved to the logs folder.\n\n" + report)
 

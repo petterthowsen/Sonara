@@ -1,16 +1,16 @@
 # Debugging
 
 ## Log File Layout
-- Runtime logs live in `Engine/logs/`.
+- Runtime logs live in `$XDG_STATE_HOME/sonara/logs/engine/` (default `~/.local/state/sonara/logs/engine/`), whoever started the engine. `--log-dir <path>` overrides it; the engine publishes the directory in `SONARA_LOG_DIR` so plugin hosts follow. Nothing is written to the working directory or the install folder. Help > Open Logs Folder in the UI opens the parent `logs/` folder.
 - The engine writes three live files per session: `last_info.log` (exactly INFO), `last_warn.log` (WARN+), and `last_combined.log` (INFO+).
-- When Godot sends `/project/init`, the server rotates the live files to timestamped `logs/session_<YYYYMMDD_HHMMSS>_{info|warn|combined}.log` and recreates the `last_*` trio.
+- When Godot sends `/project/init`, the server rotates the live files to timestamped `logs/session_<YYYYMMDD_HHMMSS>_{info|warn|combined}.log` and recreates the `last_*` trio (in the same directory).
 - Rotation keeps the newest five archives per severity and deletes older ones, so scrape logs before triggering many sessions in a row.
 
 ## Forwarding to Godot
 - `osc::server` relays log messages to Godot via `/log` with `[level, message]`; `AudioEngineOSC` emits `engine_log_message(level, message)` and prints WARN/ERROR to the editor console.
 
 ## Godot logs
-Godot also logs into `Godot/logs/last.log` (including engine warn and above via OSC). 
+The UI logs into `~/.local/state/sonara/logs/ui/last.log` (including engine warn and above via OSC), via `AppPaths.ui_log_dir()`. Headless tests (`-- --test`) keep `Godot/logs/last.log` so a test run never touches the real log; `tests/run_all.sh` also writes `Godot/logs/tests_last.log`.
 
 ## Practical Tips
 - Use `tail` and `grep` intelligently to find specific events.
@@ -31,7 +31,7 @@ Godot also logs into `Godot/logs/last.log` (including engine warn and above via 
 - Every message names its `instance_id`; the engine log line `Plugin <id> initialized as instance <n> (host pid <pid>)` maps it to a plugin and process.
 
 ## Plugin hosts (Phase 6)
-- **Logs.** Each `plugin_host` writes `Engine/logs/plugins/<host key>-<pid>.log` (DEBUG and up; e.g. `instance-3-12345.log`, `plugin_michaelwillis.dragonfly.room-12345.log`). Every line about an instance carries `instance{id=… plugin=…}`, so a shared host's file can be grepped per plugin. The engine log names the file when it spawns the host (`Plugin host <key> logs to …`), and a crash report ends with it. `SONARA_PLUGIN_LOG=trace ./run_release.sh` changes the file's filter (`EnvFilter` syntax). The newest 50 files are kept.
+- **Logs.** Each `plugin_host` writes `<engine log dir>/plugins/<host key>-<pid>.log` (DEBUG and up; e.g. `instance-3-12345.log`, `plugin_michaelwillis.dragonfly.room-12345.log`). Every line about an instance carries `instance{id=… plugin=…}`, so a shared host's file can be grepped per plugin. The engine log names the file when it spawns the host (`Plugin host <key> logs to …`), and a crash report ends with it. `SONARA_PLUGIN_LOG=trace ./run_release.sh` changes the file's filter (`EnvFilter` syntax). The newest 50 files are kept.
 - WARN and ERROR from a host also land in the engine's `last_warn.log` and Godot's `/log` as `Plugin <name> (instance <n>, host <key> (pid <pid>)): …`, capped at 20 per second per host.
 - **Stats.** The device header tooltip shows a plugin's process time (average and peak share of the block, µs) and its dropouts; `EnginePanel` lists the worst three (hover for ten). An amber ring on the device light means 8+ missed deadlines in a row. The numbers come from `<device addr>/stats`, once a second, timed inside the host (IPC excluded). A plugin whose peak share is low but which still drops out points at the handshake or scheduling, not the plugin's DSP.
 - **Load and RAM in the tooltip.** The device header tooltip also reads "Load 3.2% (peak 7.1%) · RAM 412 MB (shared by 2)" (`DeviceInstance.Usage`). Load is the engine-timed `(avg, peak)` from `/status/channel_perf` (IPC included, top-level devices only); RAM is `<device addr>/memory`. The engine reports them only while subscribed: `EnginePanel` subscribes while its popup is open and for 5 s after a device header is hovered (`request_device_stats`), so the first tooltip after a long pause can lack figures until the next 500 ms report. The popup also shows `RAM: engine · plugins · total`.

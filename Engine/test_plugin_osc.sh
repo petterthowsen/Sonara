@@ -121,5 +121,5 @@ echo "  ls -la /usr/lib/clap"
 echo "  ls -la ~/.clap"
 echo ""
 echo "Check engine logs for detailed output:"
-echo "  tail -f Engine/logs/engine.log | grep -i plugin"
+echo "  tail -f ~/.local/state/sonara/logs/engine/last_combined.log | grep -i plugin"
 

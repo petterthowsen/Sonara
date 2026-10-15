@@ -23,7 +23,7 @@ cargo fmt
 Godot UI:
 
 ```bash
-godot --path Godot                               # run the app; the engine must already be running
+godot --path Godot                               # run the app; it attaches to a running engine or starts Engine/target/release/engine itself
 godot --headless --path Godot -s path/to/script.gd -- --test  # script path relative to Godot/
 Godot/tests/run_all.sh                           # run every test_*.gd script (3 in parallel) and report a summary
 Godot/tests/run_all.sh clip_drag pan             # only scripts whose path contains one of these words
@@ -76,7 +76,8 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - Plugins load on a background thread behind an atomic `PluginLoad` state. While it is Loading, Failed or Crashed, the audio thread passes audio through. A crashed plugin can be reloaded with its last saved state.
 
 ### Godot UI (`Godot/`)
-- Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `AudioConfig` (output device, sample rate and buffer size: engine device list, running config, applies the settings live), `AssetService` (browser asset providers) `MidiManager` (MIDI input and virtual keyboard, routed to armed channels) and `Hotkeys` (action registry with rebindable chords, plus the help-bar context and interaction states) and `UiTheme` (builds the theme from the `appearance/theme/*` settings and merges it into the project theme; `Sonara_Theme.tres` is generated).
+- Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `EngineProcess` (the UI attaches to a running engine or starts one from its install folder, and stops the one it started on quit; ADR 0022), `AudioConfig` (output device, sample rate and buffer size: engine device list, running config, applies the settings live), `AssetService` (browser asset providers) `MidiManager` (MIDI input and virtual keyboard, routed to armed channels) and `Hotkeys` (action registry with rebindable chords, plus the help-bar context and interaction states) and `UiTheme` (builds the theme from the `appearance/theme/*` settings and merges it into the project theme; `Sonara_Theme.tres` is generated).
+- `core/AppPaths.gd` is the only place that knows where files live: user content in `<Documents>/Sonara/{projects,presets,note_maps}`, settings in `~/.config/sonara`, caches in `~/.cache/sonara`, logs in `~/.local/state/sonara/logs` (see `godot-config-system.md`). `core/BuildInfo.gd` holds the version (root `VERSION` file) and release channel.
 - `editor/Editor.gd` is the entry point. It wires up the self-contained systems: `arranger/`, `mixer/`, `clip_editor/`, `browser/` and `devices/`.
 - The `data/` models (`Project`, `Track`, `Channel`, `Clip`, `DeviceInstance`, …) sync themselves with the engine. The UI calls a setter such as `channel.set_volume()`. The model updates its state, sends OSC, and emits a signal, and the UI updates from that signal. To add a synced property, add the signal and setter and wire it into `sync_to_engine()`. UI code never sends OSC directly.
 - `components/GridHelper.gd` handles tempo, zoom, scroll and snapping, and converts between ticks and pixels. Views share one instance.
@@ -105,8 +106,8 @@ The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you
 
 ## Debugging
 
-- Engine logs are written to `logs/` relative to the working directory, normally `Engine/logs/`. The files are `last_info.log`, `last_warn.log` (WARN and above) and `last_combined.log`. `/project/init` rotates them into `session_<timestamp>_*.log` files and keeps the 5 newest.
-- WARN and ERROR messages are also forwarded to Godot over `/log`. Godot writes its own log to `Godot/logs/last.log`.
+- Engine logs are written to `~/.local/state/sonara/logs/engine/` (`$XDG_STATE_HOME/sonara/logs/engine/`), not to the working directory. Override with `engine --log-dir <path>`. The files are `last_info.log`, `last_warn.log` (WARN and above) and `last_combined.log`; plugin host logs are in `plugins/` beside them. `/project/init` rotates them into `session_<timestamp>_*.log` files and keeps the 5 newest.
+- WARN and ERROR messages are also forwarded to Godot over `/log`. The UI writes its own log to `~/.local/state/sonara/logs/ui/last.log` (headless tests keep `Godot/logs/last.log`). Help > Open Logs Folder opens `~/.local/state/sonara/logs/`.
 - When debugging, add plenty of logging and ask the user to reproduce the problem and report back.
 
 ## Domain docs and issues

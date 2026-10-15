@@ -88,7 +88,7 @@ func start() -> void:
 
 
 ## Stop recording and return the report. Outside test mode it is also copied to the
-## clipboard and written to logs/perf_<timestamp>.txt next to last.log.
+## clipboard and written to perf_<timestamp>.txt next to the UI's last.log.
 func stop() -> String:
 	if not _recording:
 		return ""

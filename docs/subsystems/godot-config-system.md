@@ -2,7 +2,7 @@
 
 ## Overview
 - `Godot/Sonara.gd` is the autoload that owns global settings, project directory setup, and access helpers for Sonara UI code.
-- Configuration is stored as JSON at `~/.config/sonara/config.json`; the autoload caches the parsed dictionary and exposes helper APIs.
+- Configuration is stored as JSON at `$XDG_CONFIG_HOME/sonara/config.json` (default `~/.config/sonara/config.json`); the autoload caches the parsed dictionary and exposes helper APIs.
 - `Godot/settings/Settings.gd` (autoload `Settings`) is a registry layered on top. Each layer calls only the one below it:
   1. **Config (storage):** `Sonara.get_config` / `set_config` / `save_config`. A plain JSON key-value store; knows nothing about defaults, types or meaning. It must never call into Settings.
   2. **Settings (registry):** every user-facing key is declared once in `_register_all_settings()` with its default, type and constraints. This is the only place defaults live.
@@ -17,7 +17,7 @@
 - Settings that the engine applies live have a model that listens to `Settings.setting_changed` and sends the OSC: `data/PluginHosting.gd` (`plugins/hosting_mode`) and the `AudioConfig` autoload (`audio/output_device`, `audio/sample_rate`, `audio/buffer_size`, with the custom control `settings/AudioSettingControl.tscn` filled from the engine's device list). `audio/processing_threads` (CHOICE `Auto`, `1`..cores; Audio › Performance) is also sent by `AudioConfig`, as `/engine/threads/set` (Auto = 0) on change and on `engine_connected`, never through `/audio/config/set`.
 
 ## Default folders
-- `presets/path` defaults to `~/Documents/Sonara/presets`, next to the projects folder. A saved config value always overrides the default. `Settings.migrate_presets_dir()` runs once at startup (`migrations/presets_dir`) for configs without a saved `presets/path`: it renames the old lowercase `~/Documents/sonara/presets` into place if the new folder is absent, otherwise pins `presets/path` to the old folder so no presets are hidden.
+- `presets/path` defaults to `Settings.default_presets_path()` = `AppPaths.presets_dir()` (`<Documents>/Sonara/presets`), next to the projects folder. A saved config value always overrides the default. `Settings.migrate_presets_dir()` runs once at startup (`migrations/presets_dir`) for configs without a saved `presets/path`: it renames the old lowercase `~/Documents/sonara/presets` into place if the new folder is absent, otherwise pins `presets/path` to the old folder so no presets are hidden.
 
 ## Shortcuts
 - Keyboard shortcuts are settings too: `Settings` registers one `shortcuts/<action id>` setting (type `SHORTCUT`, an array of at most two chord strings such as `["Ctrl+D"]`) for every row in `HotkeyActions.ACTIONS`. Defaults live only in that table, never in `project.godot`.
@@ -44,9 +44,20 @@
 - For read-heavy systems, pull config values during initialization and cache them locally rather than invoking `get_config` every frame.
 
 ## Directory Helpers
-- `Sonara.get_config_dir()` returns `~/.config/sonara`; `get_config_path()` resolves the `config.json` file. Both values are memoized—reuse them instead of rebuilding paths.
-- `Sonara.get_projects_dir()` defaults to `~/Documents/Sonara` and is created on startup. Callers should respect this default unless user-configurable paths are introduced.
+`AppPaths` (`Godot/core/AppPaths.gd`, spec 046) is the one place that knows the folder layout. It is a static class with no autoload dependency, because `Log._static_init()` runs before any autoload. Tests set `AppPaths.env_override` (`HOME`, `XDG_*`, and `DOCUMENTS`) instead of touching the real environment.
+
+| Kind | Location | Getter |
+|---|---|---|
+| User content | `<Documents>/Sonara/{projects,presets,note_maps}` (`<Documents>` = the desktop's XDG documents dir, fallback `~/Documents`) | `projects_dir()`, `presets_dir()`, `note_maps_dir()` |
+| Settings and internal state (`config.json`, `assets.json`, `plugins.json`, `device_layouts/`, `startup.sonara`, `aichat/`) | `$XDG_CONFIG_HOME/sonara` (default `~/.config/sonara`) | `config_dir()` |
+| Regenerable data (`*_cache.json` asset scans, `aichat/tmp`) | `$XDG_CACHE_HOME/sonara` (default `~/.cache/sonara`) | `cache_dir()` |
+| Logs | `$XDG_STATE_HOME/sonara/logs/{ui,engine}` (default `~/.local/state/sonara/logs`) | `log_dir()`, `ui_log_dir()`, `engine_log_dir()` |
+| Single-instance PID file | `$XDG_RUNTIME_DIR/sonara/ui.pid` | `runtime_dir()` |
+
+- `Sonara.get_config_dir()` and `Sonara.get_projects_dir()` are thin wrappers over `AppPaths.config_dir()` and `projects_dir()`; `get_config_path()` resolves `config.json`. Never hard-code `~/.config`, `~/Documents` or `logs/` elsewhere.
+- Old pre-beta files are moved by hand, there is no migration code (spec 046 design, "Migration").
 - The autoload’s `_ensure_config_dir()` and `_ensure_projects_dir()` already run during `_ready()`. Avoid duplicating directory-creation logic elsewhere.
+- `BuildInfo` (`core/BuildInfo.gd`) holds the version, commit, release channel and install folder; `EngineProcess` (autoload) starts, attaches to and stops the engine.
 
 ## Related Files
-- `Godot/browser/AssetService.gd` and `Godot/data/DeviceRegistry.gd` store auxiliary JSON caches (e.g., `assets.json`, `plugins.json`) under the same config directory. Use the autoload helpers to resolve paths for any additional caches to keep layout consistent.
+- `Godot/browser/AssetService.gd` and `Godot/data/DeviceRegistry.gd` store auxiliary JSON state (e.g., `assets.json`, `plugins.json`) under the same config directory; the rebuildable scan caches (`samples_cache.json`, `sfz_cache.json`, `preset_cache.json`) live in the cache directory. Use the autoload helpers to resolve paths for any additional caches to keep layout consistent.

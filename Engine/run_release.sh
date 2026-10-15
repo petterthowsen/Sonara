@@ -13,5 +13,5 @@ echo "🚀 Starting Sonara Audio Engine (Release)..."
 echo "   (Listening on OSC port 7000, sending to port 7001)"
 echo ""
 
-# Run from Engine/ so logs land in Engine/logs/
+# Logs land in ~/.local/state/sonara/logs/engine/ (override with --log-dir <path>)
 RUST_LOG=engine=info,warn exec ./target/release/engine "$@"

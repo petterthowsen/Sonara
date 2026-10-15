@@ -187,7 +187,7 @@
 
 ## Debuggability (Phase 6)
 
-- **Per-host log files.** Each host writes `Engine/logs/plugins/<host key>-<pid>.log` (key made
+- **Per-host log files.** Each host writes `<engine log dir>/plugins/<host key>-<pid>.log` (default `~/.local/state/sonara/logs/engine/plugins/`) (key made
   file-safe by `protocol::log_file_name`): DEBUG and up, unbuffered, so the lines before a crash
   are on disk. `SONARA_PLUGIN_LOG` (an `EnvFilter` directive) changes the file's filter. The engine
   logs `Plugin host <key> logs to <path>` on spawn, keeps the newest `PLUGIN_LOGS_KEPT` (50) files

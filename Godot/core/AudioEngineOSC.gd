@@ -10,6 +10,9 @@ extends Node
 
 signal engine_connected()
 signal engine_disconnected()
+## The engine told us who it is (`/status/engine_info`, after the project handshake). Pre-beta
+## engines never send it; their fields stay at "unknown" / -1.
+signal engine_info_received(version: String, commit: String, protocol: int)
 
 # Device data subscriptions (`osc_path` is `/channel/{id}/device/{n}` or nested `/child/{n}`)
 signal device_spectrum_received(osc_path: String, spectrum: PackedFloat32Array)
@@ -43,6 +46,12 @@ var _last_heartbeat_time: float = 0.0  # Time.get_ticks_msec() of last heartbeat
 var _last_process_msec: int = 0  # Time.get_ticks_msec() of the previous _process
 var _logged_idle_heartbeat: bool = false  # log the first un-handshaken heartbeat only
 var _is_ready: bool = false  # Whether OSC server/client are fully initialized
+
+## What the connected engine reported (spec 046). "" and -1 mean unknown (not connected yet, or
+## an engine that predates `/status/engine_info`).
+var engine_version: String = ""
+var engine_commit: String = ""
+var engine_protocol: int = -1
 ## Messages sent before the UDP client is bound; flushed from `_ready()`.
 var _pending_sends: Array[Dictionary] = []
 
@@ -63,7 +72,7 @@ var _device_data_regex: RegEx = null  # lazily compiled, cached across /data mes
 # ============================================================================
 
 func _ready() -> void:
-	if Utils.is_test_mode():
+	if Utils.is_test_mode() or Sonara.is_duplicate_instance:
 		return
 	# Create OSC client (sends to Rust)
 	osc_client = OSCClient.new()
@@ -103,6 +112,7 @@ func _process(_delta: float) -> void:
 		if time_since_heartbeat > HEARTBEAT_TIMEOUT_SEC:
 			logger.warn("Heartbeat timeout (%.1fs) - engine disconnected" % time_since_heartbeat)
 			_is_engine_connected = false
+			_clear_engine_info()
 			engine_disconnected.emit()
 
 
@@ -190,8 +200,20 @@ func reset_connection() -> void:
 	"""Reset connection state (called when project disconnects)."""
 	if _is_engine_connected:
 		_is_engine_connected = false
+		_clear_engine_info()
 		engine_disconnected.emit()
 		logger.info("Connection reset")
+
+
+## True when the engine reported a protocol number and it differs from ours.
+func is_protocol_mismatch() -> bool:
+	return engine_protocol >= 0 and engine_protocol != BuildInfo.PROTOCOL
+
+
+func _clear_engine_info() -> void:
+	engine_version = ""
+	engine_commit = ""
+	engine_protocol = -1
 
 
 # ============================================================================
@@ -229,6 +251,16 @@ func _route_osc_message(address: String, values, _time) -> void:
 			_last_heartbeat_time = Time.get_ticks_msec()
 			engine_connected.emit()
 			logger.info("Engine connected!")
+		routed = true
+	elif address == "/status/engine_info":
+		if values is Array and values.size() >= 3:
+			engine_version = str(values[0])
+			engine_commit = str(values[1])
+			engine_protocol = int(values[2])
+			logger.info("Engine %s (%s), protocol %d" % [engine_version, engine_commit, engine_protocol])
+			engine_info_received.emit(engine_version, engine_commit, engine_protocol)
+		else:
+			logger.warn("Ignoring malformed /status/engine_info: ", values)
 		routed = true
 	elif address == "/status/playing":
 		if not _is_engine_connected:

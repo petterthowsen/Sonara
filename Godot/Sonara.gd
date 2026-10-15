@@ -39,12 +39,55 @@ func get_projects_dir() -> String:
 	return AppPaths.projects_dir()
 
 
+## True when another Sonara UI already runs. The new instance then touches nothing: no engine,
+## no OSC sockets, no project connect. It shows a message and quits (spec 046 REQ-018).
+var is_duplicate_instance := false
+
+
 func _ready() -> void:
 	if Utils.is_test_mode():
+		return
+	if not SingleInstance.claim(SingleInstance.pid_file_path(), OS.get_process_id(), OS.get_executable_path()):
+		is_duplicate_instance = true
+		logger.warn("Another Sonara is already running; exiting")
+		OS.alert("Sonara is already running.", "Sonara")
+		get_tree().quit()
 		return
 	_ensure_config_dir()
 	_ensure_projects_dir()
 	load_config()
+
+
+func _exit_tree() -> void:
+	if not is_duplicate_instance and not Utils.is_test_mode():
+		SingleInstance.release(SingleInstance.pid_file_path(), OS.get_process_id())
+
+
+## First `.sonara` path among the command-line arguments, or "". Godot may treat a bare
+## positional argument as its own (`sonara demo.sonara`), so both the engine's list and the user
+## arguments after `--` (`sonara -- demo.sonara`, what the desktop entry uses) are searched.
+## A relative path is resolved against $PWD. The file must exist.
+func cli_project_path() -> String:
+	return project_path_from_args(OS.get_cmdline_args() + OS.get_cmdline_user_args())
+
+
+static func project_path_from_args(args: PackedStringArray) -> String:
+	for arg in args:
+		if not arg.to_lower().ends_with(".sonara"):
+			continue
+		var path := arg
+		if path.begins_with("file://"):
+			path = path.uri_file_decode().trim_prefix("file://")
+		if path.begins_with("~/"):
+			path = OS.get_environment("HOME").path_join(path.substr(2))
+		elif path.is_relative_path():
+			var pwd := OS.get_environment("PWD")
+			if not pwd.is_empty():
+				path = pwd.path_join(path)
+		path = path.simplify_path()
+		if FileAccess.file_exists(path):
+			return path
+	return ""
 
 
 ## Get a configuration value by key, optionally returning a default if not found

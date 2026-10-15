@@ -174,6 +174,17 @@ func migrate_presets_dir(old_path: String = LEGACY_PRESETS_PATH, new_path: Strin
 func _register_all_settings() -> void:
 	"""Populate the registry. Called once at init."""
 
+	# --- Behavior: Updates (spec 046) ---
+	_register(Setting.new(
+		"updates/check_enabled",
+		"Check for Updates",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"Check GitHub for a newer Sonara release at startup (at most once a day). "
+		+ "Only sends a request for the release list.",
+	)).sub("Updates")
+
 	# --- Behavior: MIDI virtual keyboard ---
 	_register(Setting.new(
 		"midi/virtual_keyboard/enabled",

@@ -108,5 +108,5 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 
 ## Conventions not covered elsewhere
 
-- Engine logs: `Engine/logs/last_{info,warn,combined}.log`, rotated by `/project/init` into `session_<timestamp>_*.log` keeping the 5 newest.
+- Engine logs: `~/.local/state/sonara/logs/engine/last_{info,warn,combined}.log`, rotated by `/project/init` into `session_<timestamp>_*.log` keeping the 5 newest.
 - Undo/redo: mutations go through `Sonara.editor.history` (`HistoryUtil.execute`/`record`); data-object setters never push history themselves.

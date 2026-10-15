@@ -38,6 +38,7 @@ channel root, or `{position}/child/{i}/child/{j}/...` for devices nested in cont
 | `/status/playhead` | `i:ticks` | Current playhead position (sent at ~20 Hz while playing) |
 | `/status/playing` | `i:0_or_1` | Playback state (0=stopped, 1=playing) |
 | `/status/connected` | `i:1` | Engine ready confirmation (sent after `/project/init`) |
+| `/status/engine_info` | `s:version, s:commit, i:protocol` | Who the engine is (spec 046), sent right after `/status/connected` in reply to `/project/init`. `protocol` is `build_info::PROTOCOL` (starts at 1; bump it on any incompatible OSC change). The UI compares it with `BuildInfo.PROTOCOL` and warns on a mismatch while staying connected. Engines from before the beta never send it; the UI treats that as an unknown version. |
 | `/status/heartbeat` | `i:1` | Periodic heartbeat (sent every 1 second to detect disconnection) |
 | `/status/engine_stats` | see below | Audio callback load and dropout counters (2 Hz) |
 
@@ -999,7 +1000,7 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])
 1. Godot starts and creates OSCClient + OSCServer
 2. Rust engine starts listening on port 7000
 3. Godot sends `/project/init` message
-4. Rust responds with `/status/connected 1` to confirm engine is ready
+4. Rust responds with `/status/connected 1` to confirm engine is ready, then `/status/engine_info <version> <commit> <protocol>` (spec 046)
 5. Godot syncs all project data (clips, channels, tracks) after receiving confirmation
 6. Engine sends `/status/heartbeat 1` every second to maintain connection
 7. If Godot doesn't receive a heartbeat for 3 seconds, connection is marked as lost
@@ -1011,6 +1012,17 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])
 - **Connected**: Engine confirmed and heartbeats received (UI shows "Connected")
 
 **Note:** Heartbeat system ensures UI accurately reflects engine status, detecting crashes or process termination.
+
+**Engine lifecycle (spec 046, ADR 0022):** before step 1 the UI probes UDP `127.0.0.1:7000` with a bind.
+A failed bind means an engine already runs and the UI attaches to it (and leaves it running on quit).
+A successful bind means no engine: the UI starts `engine --log-dir <dir> --parent-pid <ui pid>` from its
+install folder. On quit the UI sends `/engine/quit` and force-kills the engine after 3 s.
+
+### `/engine/quit` (Godot -> Rust)
+
+No arguments. Graceful shutdown (spec 046): the OSC server loop returns, `main` restores PipeWire's
+forced quantum and rate, and the process exits. It is not an `AudioCommand`; nothing goes to the
+command thread. The UI sends it only to an engine it started itself.
 
 ## Data Flow Example
 

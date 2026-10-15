@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sonara
+GenericName=Digital Audio Workstation
+Comment=Linux-first DAW with a real-time audio engine
+Exec=@EXEC@ -- %f
+TryExec=@EXEC@
+Icon=sonara
+Terminal=false
+Categories=AudioVideo;Audio;Midi;Sequencer;
+MimeType=application/x-sonara-project;
+StartupNotify=true

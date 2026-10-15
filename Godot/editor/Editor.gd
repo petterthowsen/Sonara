@@ -176,6 +176,9 @@ const MIN_WINDOW_SIZE := Vector2i(1200, 700)
 
 
 func _ready():
+	# A second Sonara quits at once (Sonara.gd). It must not connect to the first one's engine.
+	if Sonara.is_duplicate_instance:
+		return
 	get_window().min_size = MIN_WINDOW_SIZE
 	# The window close button asks first when the project has unsaved changes (request_quit)
 	get_tree().auto_accept_quit = false
@@ -208,19 +211,36 @@ func _ready():
 	new_project.created_date = Time.get_unix_time_from_system()
 	open_project(new_project)
 
-	if not Utils.is_test_mode() and Sonara.has_startup_project():
-		_load_startup_project()
+	if not Utils.is_test_mode():
+		# A .sonara path on the command line wins over the startup project (REQ-017).
+		var cli_path := Sonara.cli_project_path()
+		if not cli_path.is_empty() or Sonara.has_startup_project():
+			_load_initial_project(cli_path)
+		_start_update_check()
 
 
-## Built-in devices arrive from the engine after launch and project loading drops devices it
-## doesn't know yet, so wait for them (bounded, in case the engine isn't running).
-func _load_startup_project() -> void:
+## Open the project the app starts with: `path` (from the command line) when given, otherwise the
+## startup project. Built-in devices arrive from the engine after launch and project loading drops
+## devices it doesn't know yet, so wait for them (bounded, in case the engine isn't running).
+func _load_initial_project(path: String = "") -> void:
 	var registry: DeviceRegistry = AssetService.device_registry
 	var deadline := Time.get_ticks_msec() + STARTUP_DEVICES_TIMEOUT_MS
 	while not registry.builtins_complete and Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
-	if project_path.is_empty() and not is_modified and Sonara.has_startup_project():
+	if not project_path.is_empty() or is_modified:
+		return
+	if not path.is_empty():
+		load_project(path)
+	elif Sonara.has_startup_project():
 		load_project(Sonara.get_startup_project_path())
+
+
+## Check GitHub for a newer release in the background (release-channel builds only).
+func _start_update_check() -> void:
+	var checker := UpdateChecker.new()
+	checker.name = "UpdateChecker"
+	add_child(checker)
+	checker.check_if_due()
 
 
 ## Show an error/message in the shared PopupMessage window. `actions` entries are
@@ -380,9 +400,28 @@ func _connect_audio_engine_signals():
 		AudioEngineOSC.listen("/status/playhead", _on_playhead_received)
 		AudioEngineOSC.listen("/status/playing", _on_playing_received)
 		AudioEngineOSC.engine_connected.connect(_on_audio_engine_connected)
+		AudioEngineOSC.engine_info_received.connect(_on_engine_info_received)
 		logger.info("[Editor] Connected to audio engine OSC signals")
 	# The engine couldn't use the saved audio settings (device missing, rate unsupported).
 	AudioConfig.notice_raised.connect(_on_audio_notice)
+
+
+## Warn when the engine speaks another OSC protocol than this UI. Stays connected (REQ-006).
+func _on_engine_info_received(version: String, _commit: String, protocol: int) -> void:
+	var text := protocol_mismatch_text(version, protocol)
+	if text.is_empty():
+		return
+	logger.warn(text)
+	show_error("Engine version mismatch", text)
+
+
+## The warning for an engine on `engine_protocol`, or "" when it matches this UI's protocol.
+static func protocol_mismatch_text(engine_version: String, engine_protocol: int) -> String:
+	if engine_protocol == BuildInfo.PROTOCOL:
+		return ""
+	return ("This Sonara UI is version %s (protocol %d), but the engine is version %s (protocol %d). "
+			+ "They may not work together. Install matching versions of both.") % [
+			BuildInfo.version(), BuildInfo.PROTOCOL, engine_version, engine_protocol]
 
 
 func _on_audio_notice(text: String) -> void:
@@ -462,7 +501,12 @@ func _connect_project_to_engine() -> void:
 	# Wait for AudioEngineOSC to be fully initialized
 	while not AudioEngineOSC._is_ready:
 		await get_tree().process_frame
-	
+
+	# Attach to a running engine, or start one from the install folder (REQ-007, REQ-008).
+	await EngineProcess.ensure_running()
+	if project == null:
+		return
+
 	# Connect project to engine (Project handles clearing and initialization)
 	project.connect_to_engine()
 
@@ -1506,5 +1550,6 @@ func quit() -> void:
 	# Close any active project
 	close_project()
 
-	# Exit the application
+	# Stop the engine this UI started (a no-op for one it attached to), then exit.
+	await EngineProcess.stop()
 	get_tree().quit()

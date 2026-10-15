@@ -3,13 +3,24 @@ class_name Log extends RefCounted
 
 static var loggers: Dictionary[String, Log] = {}
 
-static var log_file_path := "res://logs/last.log"
+## Tests (`-- --test`) keep logging into the project's own logs/ folder so a test run never touches
+## the real log. Everything else goes to $XDG_STATE_HOME/sonara/logs/ui (see AppPaths).
+const TEST_LOG_PATH := "res://logs/last.log"
+static var log_file_path := _default_log_path()
 static var log_file: FileAccess
 
 static var _file_mutex := Mutex.new()
 static var _engine_logger: Logger
 static var _skip_capture := false
 static var _skip_capture_thread_id := 0
+
+
+## Where last.log lives. Runs during class load, before any autoload exists, so it may only use
+## static helpers (AppPaths and Utils have no autoload dependencies).
+static func _default_log_path() -> String:
+	if Utils.is_test_mode():
+		return TEST_LOG_PATH
+	return AppPaths.ui_log_dir().path_join("last.log")
 
 
 ## Open last.log and register the engine interceptor as soon as this class loads.
