@@ -77,7 +77,8 @@ func _emit_scale_changed() -> void:
 			changed.emit()
 
 ## Minimum on-screen gap in pixels between adjacent grid lines. Beat lines, then
-## 1/2, 1/4, 1/8 and 1/16 beat subdivisions (8th, 16th, 32nd and 64th notes),
+## 1/2, 1/4, 1/8 and 1/16 beat subdivisions (8th, 16th, 32nd and 64th notes, at
+## SUBDIVISION_SPACING_FACTOR times the gap),
 ## appear (and become snap targets) only once their spacing reaches this. Bar
 ## lines always show. At runtime this follows the instance's `spacing_setting`
 ## key (below).
@@ -104,11 +105,14 @@ const MIDI_EDITOR_SPACING_SETTING := "appearance/midi_editor_min_line_spacing"
 const SUBDIVISION_DIVS := [16, 8, 4, 2]
 ## Bar lines are 2 px wide and carry numbers, so they want this many times min_line_spacing.
 const BAR_SPACING_FACTOR := 2.0
+## Subdivision lines (1/2 to 1/16 beat) want this many times min_line_spacing, so the finest
+## lines come in later than beats while zooming in.
+const SUBDIVISION_SPACING_FACTOR := 1.5
 ## Bar numbers are drawn on bars at least this many pixels apart.
 const BAR_LABEL_MIN_SPACING := 48.0
-## A grid level is a snap target once its fade (0 at the spacing threshold, 1 at twice it)
-## reaches this, so snapping never lands on a line too faint to see.
-const SNAP_MIN_FADE := 0.5
+## Opacity a level is drawn with as it appears (fade 0); it reaches 1 at full fade. Every
+## drawn level is a snap target, so it must be plainly visible from the start.
+const LEVEL_MIN_ALPHA := 0.5
 ## Line strength steps from the finest visible level up to the strongest.
 const WEIGHT_STEPS := 3.0
 
@@ -212,33 +216,28 @@ func get_snap_interval_at(ticks: int) -> int:
 	return _snap_interval_for(seg["beat_ticks"], seg["bar_ticks"])
 
 func _snap_interval_for(beat: int, bar: int) -> int:
-	# Snap to the finest line that is actually visible: the same levels and thresholds
-	# _levels_for draws, and a level only counts once it has faded in past SNAP_MIN_FADE,
-	# so the step never drops to a line that is still (nearly) transparent.
-	if beat < bar:
-		var subdivision_interval := _subdivision_for(beat, SNAP_MIN_FADE)
-		if subdivision_interval > 0:
-			return subdivision_interval
-		var beat_px := ticks_to_pixels(beat)
-		if beat_px >= min_line_spacing and fade_of(beat_px, min_line_spacing) >= SNAP_MIN_FADE:
-			return beat
-	return bar
+	# Snap to the finest level _levels_for draws, so every drawn line is a snap target and
+	# nothing finer is (grouped bars included). A drawn level is never fainter than
+	# LEVEL_MIN_ALPHA, so the step never lands on a line that can't be seen.
+	var levels := _levels_for(beat, bar)
+	return levels[levels.size() - 1]["interval"]
 
 ## True when beats are at least min_line_spacing apart on screen.
 func beat_lines_visible() -> bool:
 	return ticks_to_pixels(get_ticks_per_beat()) >= min_line_spacing
 
-## Finest 1/2, 1/4, 1/8 or 1/16 beat subdivision that keeps lines min_line_spacing
-## apart, or 0 for none. Finest first, so `ppq / 16` (a 64th note) is the floor.
+## Finest 1/2, 1/4, 1/8 or 1/16 beat subdivision that keeps lines min_line_spacing *
+## SUBDIVISION_SPACING_FACTOR apart, or 0 for none. Finest first, so `ppq / 16` (a 64th
+## note) is the floor.
 func get_subdivision_interval() -> int:
 	return _subdivision_for(get_ticks_per_beat())
 
-func _subdivision_for(beat: int, min_fade: float = 0.0) -> int:
+func _subdivision_for(beat: int) -> int:
+	var sub_th := maxf(1.0, min_line_spacing) * SUBDIVISION_SPACING_FACTOR
 	for div in SUBDIVISION_DIVS:
 		@warning_ignore("integer_division")
 		var interval: int = maxi(1, ppq / div)
-		var px := ticks_to_pixels(interval)
-		if interval < beat and px >= min_line_spacing and fade_of(px, min_line_spacing) >= min_fade:
+		if interval < beat and ticks_to_pixels(interval) >= sub_th:
 			return interval
 	return 0
 
@@ -391,6 +390,7 @@ class GridLine:
 func _levels_for(beat: int, bar: int) -> Array[Dictionary]:
 	var th := maxf(1.0, min_line_spacing)
 	var bar_th := th * BAR_SPACING_FACTOR
+	var sub_th := th * SUBDIVISION_SPACING_FACTOR
 	var levels: Array[Dictionary] = []
 
 	var k := 1
@@ -407,8 +407,8 @@ func _levels_for(beat: int, bar: int) -> Array[Dictionary]:
 		for i in range(SUBDIVISION_DIVS.size() - 1, -1, -1):
 			@warning_ignore("integer_division")
 			var interval: int = maxi(1, ppq / int(SUBDIVISION_DIVS[i]))
-			if interval < beat and ticks_to_pixels(interval) >= th:
-				levels.append({"interval": interval, "type": GridLineType.SUBDIVISION, "bars": 0, "fade": fade_of(ticks_to_pixels(interval), th)})
+			if interval < beat and ticks_to_pixels(interval) >= sub_th:
+				levels.append({"interval": interval, "type": GridLineType.SUBDIVISION, "bars": 0, "fade": fade_of(ticks_to_pixels(interval), sub_th)})
 
 	# Weights count from the finest level. The finest sits at the bottom; the next one up
 	# rises with its fade, so nothing jumps when a level appears.
@@ -465,7 +465,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 		for level in levels:
 			var interval: int = level["interval"]
 			var level_type: GridLineType = level["type"]
-			var fade: float = level["fade"]
+			var alpha: float = lerpf(LEVEL_MIN_ALPHA, 1.0, level["fade"])
 			var weight: float = level["weight"]
 
 			if level_type == GridLineType.BAR:
@@ -480,7 +480,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 					if coarser_bars == 0 or (bar_number - 1) % coarser_bars != 0:
 						var line := GridLine.new(ticks_to_pixels(tick) - scroll_offset + offset_x, GridLineType.BAR, bar_number)
 						line.weight = weight
-						line.alpha = fade
+						line.alpha = alpha
 						line.labeled = (bar_number - 1) % maxi(label_every, every) == 0
 						lines.append(line)
 					idx += every
@@ -497,7 +497,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 					if not covered:
 						var line := GridLine.new(ticks_to_pixels(tick) - scroll_offset + offset_x, level_type)
 						line.weight = weight
-						line.alpha = fade
+						line.alpha = alpha
 						lines.append(line)
 					tick += interval
 				coarser_intervals.append(interval)

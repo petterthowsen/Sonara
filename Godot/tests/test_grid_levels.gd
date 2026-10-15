@@ -56,13 +56,14 @@ func _test_bars_thin_out() -> void:
 
 
 func _test_levels_fade_in() -> void:
-	# Beats appear at 10 px (alpha 0) and are at full strength by 20 px
+	# Beats appear at 10 px (at LEVEL_MIN_ALPHA, so they are visible snap targets at once)
+	# and are at full strength by 20 px
 	var lo: Array = _grid(10.0).get_visible_grid_lines(0.0, 400.0)
 	var beat_alpha := -1.0
 	for l in lo:
 		if l.type == _grid_script.GridLineType.BEAT:
 			beat_alpha = l.alpha
-	_assert(is_equal_approx(beat_alpha, 0.0), "a new beat level starts invisible (%f)" % beat_alpha)
+	_assert(is_equal_approx(beat_alpha, _grid_script.LEVEL_MIN_ALPHA), "a new beat level starts at the minimum alpha (%f)" % beat_alpha)
 	var hi: Array = _grid(20.0).get_visible_grid_lines(0.0, 400.0)
 	for l in hi:
 		if l.type == _grid_script.GridLineType.BEAT:
@@ -97,28 +98,31 @@ func _test_each_tick_once() -> void:
 		_assert(not dup, "no tick is drawn twice at %s px/beat" % ppb)
 
 
-## Issue #118: the snap step is the finest level drawn with real strength; a level just
-## fading in (alpha near 0) is not a snap target.
+## Issue #118: the snap step and the drawn lines agree at every zoom. Every drawn line is a
+## snap target, every snap target is a drawn line, including grouped bars far out.
 func _test_snap_matches_visible_lines() -> void:
-	# 1/2 beat lines reach the 10 px threshold at 20 px/beat; they are at full strength at 40.
-	var g := _grid(21.0)  # 1/2 beat at 10.5 px: fade 0.05, effectively invisible
-	_assert(g.get_snap_interval() == 960, "a barely-faded-in 1/2 beat is not a snap step (%d)" % g.get_snap_interval())
-	g = _grid(30.0)  # 1/2 beat at 15 px: fade 0.5
-	_assert(g.get_snap_interval() == 480, "a half-faded 1/2 beat is a snap step (%d)" % g.get_snap_interval())
-	# Whatever snap_ticks returns lies on a drawn line (alpha >= SNAP_MIN_FADE) or a bar.
-	for ppb in [12.0, 21.0, 30.0, 45.0, 90.0, 200.0, 400.0]:
+	# Beats come in at the base 10 px; subdivisions need SUBDIVISION_SPACING_FACTOR (15 px).
+	var g := _grid(10.0)
+	_assert(g.get_snap_interval() == 960, "beats are a snap step at the base threshold (%d)" % g.get_snap_interval())
+	g = _grid(31.0)  # 1/2 beat at 15.5 px: just drawn, so already a snap step
+	_assert(g.get_snap_interval() == 480, "a just-drawn 1/2 beat is a snap step (%d)" % g.get_snap_interval())
+	g = _grid(29.0)  # 1/2 beat at 14.5 px: past the base threshold but not drawn
+	_assert(g.get_snap_interval() == 960, "an undrawn 1/2 beat is not a snap step (%d)" % g.get_snap_interval())
+	for ppb in [0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 19.0, 21.0, 29.0, 31.0, 45.0, 90.0, 200.0, 400.0, 1000.0]:
 		var gg := _grid(ppb)
 		var snap: int = gg.get_snap_interval()
-		var lines: Array = gg.get_visible_grid_lines(0.0, 4000.0)
-		var finest := 0
-		for l in lines:
-			if l.alpha >= _grid_script.SNAP_MIN_FADE:
-				finest = maxi(finest, 1)
+		var end_x: float = maxf(4000.0, gg.ticks_to_pixels(snap * 6))
+		var lines: Array = gg.get_visible_grid_lines(0.0, end_x)
 		var snapped: int = gg.snap_ticks(int(snap * 2.6))
 		_assert(snapped == snap * 3, "rounds to nearest at %s px/beat (%d)" % [str(ppb), snapped])
-		var x: float = gg.ticks_to_pixels(snapped)
-		var on_line := false
+		var drawn := {}
+		var all_on_grid := true
 		for l in lines:
-			if absf(l.x - x) < 1.0 and l.alpha >= _grid_script.SNAP_MIN_FADE:
-				on_line = true
-		_assert(on_line or snapped % (960 * 4) == 0, "snap target is a drawn line at %s px/beat" % str(ppb))
+			var t: int = gg.pixels_to_ticks(l.x)
+			drawn[t] = true
+			all_on_grid = all_on_grid and t % snap == 0
+		_assert(all_on_grid, "every drawn line is a snap target at %s px/beat (step %d)" % [str(ppb), snap])
+		var all_drawn := true
+		for n in range(0, 6):
+			all_drawn = all_drawn and drawn.has(snap * n)
+		_assert(all_drawn, "every snap target is a drawn line at %s px/beat (step %d)" % [str(ppb), snap])
