@@ -259,6 +259,7 @@ forced quantum is system-wide, so ask before changing it.
     4. run `install.sh` again (upgrade) → still works;
     5. `uninstall.sh` → everything it added is gone and user data is intact.
   - _Depends on_: T-023, T-017
+  - 2026-10-15, user, CI build `dc60ecf`: the app runs, `install.sh` adds a working menu entry, and double-clicking a `.sonara` file opens it (so `Exec=… -- %f` works in the export). Gap: the menu icon was Godot's default because `package_linux.sh` copied `Godot/icon.svg`; it now copies `assets/sonara/icons/favicon.svg` (the project icon). Still to check: the icon after a reinstall, the upgrade (step 4), uninstall (step 5), and a run on a clean Debian 12 / Ubuntu 24.04 machine.
 
 - [x?] **T-026** [REQ-019, REQ-020] GitHub Actions release workflow.
   - _Files_: `.github/workflows/release.yml`

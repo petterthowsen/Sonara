@@ -108,7 +108,7 @@ install -m 755 "$ROOT/packaging/linux/install.sh" "$STAGE/install.sh"
 install -m 755 "$ROOT/packaging/linux/uninstall.sh" "$STAGE/uninstall.sh"
 install -m 644 "$ROOT/packaging/linux/sonara.desktop" "$STAGE/sonara.desktop"
 install -m 644 "$ROOT/packaging/linux/sonara-mime.xml" "$STAGE/sonara-mime.xml"
-install -m 644 "$ROOT/Godot/icon.svg" "$STAGE/sonara.svg"
+install -m 644 "$ROOT/Godot/assets/sonara/icons/favicon.svg" "$STAGE/sonara.svg"
 install -m 644 "$ROOT/LICENSE" "$STAGE/LICENSE"
 if [ -f "$ROOT/THIRD_PARTY_LICENSES" ]; then
     install -m 644 "$ROOT/THIRD_PARTY_LICENSES" "$STAGE/THIRD_PARTY_LICENSES"
