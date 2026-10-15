@@ -107,8 +107,6 @@ static func _image_mime(path: String) -> String:
 			return "image/png"
 
 
-## Config-dir temp folder for assembled chat media.
+## Cache-dir temp folder for assembled chat media (regenerable, so not in the config dir).
 static func _tmp_dir() -> String:
-	if Sonara:
-		return Sonara.get_config_dir().path_join(TMP_SUBDIR)
-	return OS.get_environment("HOME").path_join(".config/sonara").path_join(TMP_SUBDIR)
+	return AppPaths.cache_dir().path_join(TMP_SUBDIR)

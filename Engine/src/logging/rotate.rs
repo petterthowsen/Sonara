@@ -21,25 +21,26 @@ pub fn rotate_log_files(log_writers: &LogWriters) -> Result<()> {
 
     /// Rotate one writer from `last_*.log` to its archived session file.
     fn rotate_one(
-        current_path: &str,
-        archived_path: &str,
+        current_path: &Path,
+        archived_path: &Path,
         writer: &Arc<Mutex<File>>,
     ) -> Result<()> {
+        let tmp_path = current_path.with_extension("log.tmp");
+
         // Announce rotation before swapping handles so message goes to old file
-        info!("Rotating log file to {}", archived_path);
+        info!("Rotating log file to {}", archived_path.display());
 
         if let Ok(mut w) = writer.lock() {
             let _ = w.flush();
-            *w = File::create(format!("{}.tmp", current_path))?;
+            *w = File::create(&tmp_path)?;
         }
 
-        if Path::new(current_path).exists() {
+        if current_path.exists() {
             fs::rename(current_path, archived_path)?;
         }
 
         // Remove temp and recreate the current file
-        let tmp_path = format!("{}.tmp", current_path);
-        if Path::new(&tmp_path).exists() {
+        if tmp_path.exists() {
             fs::remove_file(&tmp_path)?;
         }
 
@@ -52,32 +53,41 @@ pub fn rotate_log_files(log_writers: &LogWriters) -> Result<()> {
     }
 
     // Compose archived names
-    let info_archived = format!("logs/session_{}_info.log", timestamp);
-    let warn_archived = format!("logs/session_{}_warn.log", timestamp);
-    let combined_archived = format!("logs/session_{}_combined.log", timestamp);
+    let dir = &log_writers.dir;
+    let info_archived = dir.join(format!("session_{}_info.log", timestamp));
+    let warn_archived = dir.join(format!("session_{}_warn.log", timestamp));
+    let combined_archived = dir.join(format!("session_{}_combined.log", timestamp));
 
     // Rotate each log
-    rotate_one("logs/last_info.log", &info_archived, &log_writers.info)?;
-    rotate_one("logs/last_warn.log", &warn_archived, &log_writers.warn)?;
     rotate_one(
-        "logs/last_combined.log",
+        &dir.join("last_info.log"),
+        &info_archived,
+        &log_writers.info,
+    )?;
+    rotate_one(
+        &dir.join("last_warn.log"),
+        &warn_archived,
+        &log_writers.warn,
+    )?;
+    rotate_one(
+        &dir.join("last_combined.log"),
         &combined_archived,
         &log_writers.combined,
     )?;
 
-    enforce_retention("session_", "_info.log")?;
-    enforce_retention("session_", "_warn.log")?;
-    enforce_retention("session_", "_combined.log")?;
+    enforce_retention(dir, "session_", "_info.log")?;
+    enforce_retention(dir, "session_", "_warn.log")?;
+    enforce_retention(dir, "session_", "_combined.log")?;
 
     info!("Log rotation complete - new session started");
 
     Ok(())
 }
 
-/// Delete the oldest `logs/<prefix>*<suffix>` files, keeping the newest `MAX_SESSIONS`. Filenames
-/// carry a timestamp, so sorting by name sorts by age.
-fn enforce_retention(prefix: &str, suffix: &str) -> Result<()> {
-    let mut files: Vec<_> = fs::read_dir("logs")?
+/// Delete the oldest `<dir>/<prefix>*<suffix>` files, keeping the newest `MAX_SESSIONS`.
+/// Filenames carry a timestamp, so sorting by name sorts by age.
+fn enforce_retention(dir: &Path, prefix: &str, suffix: &str) -> Result<()> {
+    let mut files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .map(|e| e.path())
@@ -98,4 +108,67 @@ fn enforce_retention(prefix: &str, suffix: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn writers(dir: &Path) -> LogWriters {
+        let open = |n: &str| Arc::new(Mutex::new(File::create(dir.join(n)).unwrap()));
+        LogWriters {
+            dir: dir.to_path_buf(),
+            info: open("last_info.log"),
+            warn: open("last_warn.log"),
+            combined: open("last_combined.log"),
+        }
+    }
+
+    #[test]
+    fn rotation_archives_into_the_given_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = writers(tmp.path());
+        rotate_log_files(&w).unwrap();
+        let names: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        for kind in ["info", "warn", "combined"] {
+            assert!(names.contains(&format!("last_{kind}.log")), "{names:?}");
+            assert!(
+                names
+                    .iter()
+                    .any(|n| n.starts_with("session_") && n.ends_with(&format!("_{kind}.log"))),
+                "{names:?}"
+            );
+        }
+        assert!(
+            !names.iter().any(|n| n.ends_with(".tmp")),
+            "temp file left behind: {names:?}"
+        );
+    }
+
+    #[test]
+    fn retention_keeps_the_newest_sessions_in_the_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..8 {
+            fs::write(
+                tmp.path()
+                    .join(format!("session_2024010{i}_000000_info.log")),
+                "",
+            )
+            .unwrap();
+        }
+        fs::write(tmp.path().join("last_info.log"), "").unwrap();
+        enforce_retention(tmp.path(), "session_", "_info.log").unwrap();
+        let mut left: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("session_"))
+            .collect();
+        left.sort();
+        assert_eq!(left.len(), MAX_SESSIONS);
+        assert!(left[0].starts_with("session_20240103"));
+        assert!(tmp.path().join("last_info.log").exists());
+    }
 }

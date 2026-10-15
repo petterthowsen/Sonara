@@ -1,5 +1,5 @@
 # The user's library of named note maps: one JSON file per map under
-# ~/.config/sonara/note_maps/.
+# <Documents>/Sonara/note_maps/ (see AppPaths).
 #
 # The library is only ever read and written on an explicit load or save, never on
 # a clip-editor frame path. A channel stores its own copy of an assigned map
@@ -20,7 +20,7 @@ static var _logger := Log.make("NoteMapLibrary")
 static func library_dir() -> String:
 	if not dir_override.is_empty():
 		return dir_override
-	return Sonara.get_config_dir().path_join(DIR_NAME)
+	return AppPaths.note_maps_dir()
 
 
 ## Filename-safe form of a map name. Two names that differ only in case or

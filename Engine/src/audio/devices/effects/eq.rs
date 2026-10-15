@@ -1243,7 +1243,10 @@ mod tests {
         set(&mut d, LISTEN_BAND, 5.0);
         let centre = measured_db(&mut d, 2_000.0);
         // Listens to the post-EQ signal, so the band's own +12 dB is audible.
-        assert!((centre - 12.0).abs() < 0.2, "post-EQ level at the band frequency: {centre}");
+        assert!(
+            (centre - 12.0).abs() < 0.2,
+            "post-EQ level at the band frequency: {centre}"
+        );
         let off = measured_db(&mut d, 200.0);
         assert!(off < -20.0, "{off}");
         set(&mut d, LISTEN_BAND, 0.0);

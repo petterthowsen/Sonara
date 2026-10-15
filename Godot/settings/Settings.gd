@@ -99,8 +99,10 @@ const CATEGORY_APPEARANCE = "Appearance"
 const CATEGORY_SHORTCUTS = "Shortcuts"
 const CATEGORY_AI = "AI"
 
-## Default device presets folder, next to the projects folder (`Sonara.PROJECTS_DIR_NAME`).
-const DEFAULT_PRESETS_PATH := "~/Documents/Sonara/presets"
+## Default device presets folder: <Documents>/Sonara/presets (see `AppPaths`).
+static func default_presets_path() -> String:
+	return AppPaths.presets_dir()
+
 ## Pre-#134 default (lowercase). Only used by `migrate_presets_dir`.
 const LEGACY_PRESETS_PATH := "~/Documents/sonara/presets"
 
@@ -151,7 +153,9 @@ func _migrate_renamed_keys() -> void:
 ## If the new folder does not exist yet, the old one is renamed into place (no copy, nothing
 ## overwritten). If both exist, `presets/path` is pinned to the old folder so nothing is hidden.
 ## Returns "moved", "pinned" or "" (nothing to do). Paths are parameters for tests.
-func migrate_presets_dir(old_path: String = LEGACY_PRESETS_PATH, new_path: String = DEFAULT_PRESETS_PATH) -> String:
+func migrate_presets_dir(old_path: String = LEGACY_PRESETS_PATH, new_path: String = "") -> String:
+	if new_path.is_empty():
+		new_path = default_presets_path()
 	if Sonara.get_config("presets/path") != null:
 		return ""
 	var old_dir := Utils.expand_path(old_path)
@@ -238,7 +242,7 @@ func _register_all_settings() -> void:
 		"presets/path",
 		"Device Presets Folder",
 		Type.PATH,
-		DEFAULT_PRESETS_PATH,
+		default_presets_path(),
 		CATEGORY_ASSETS,
 		"Folder holding saved device presets (.sonpreset), one subfolder per device. Created on first save.",
 	)).sub("Presets")

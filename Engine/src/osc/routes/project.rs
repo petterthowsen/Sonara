@@ -8,6 +8,7 @@ use super::RouteCtx;
 use crate::audio::types::Tick;
 use crate::audio::AudioCommand;
 use crate::audio::ProjectSettings;
+use crate::build_info;
 use crate::logging::rotate_log_files;
 use crate::osc::parse::Args;
 
@@ -47,6 +48,17 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             {
                 Ok(_) => info!("Sent /status/connected to Godot"),
                 Err(e) => warn!("Failed to send /status/connected: {}", e),
+            }
+            // Who we are, so the UI can compare versions (spec 046). Older engines never send it.
+            if let Err(e) = cx.server.send_message(
+                "/status/engine_info",
+                vec![
+                    OscType::String(build_info::VERSION.to_string()),
+                    OscType::String(build_info::COMMIT.to_string()),
+                    OscType::Int(build_info::PROTOCOL),
+                ],
+            ) {
+                warn!("Failed to send /status/engine_info: {}", e);
             }
         }
         ["project", "scale"] => {

@@ -33,13 +33,15 @@ pub const HOST_WAIT_ENV: &str = "SONARA_PLUGIN_HOST_WAIT";
 /// Plugin host logs kept in the log directory; older ones are deleted at engine start.
 pub const PLUGIN_LOGS_KEPT: usize = 50;
 
-/// Where plugin hosts write their logs: `logs/plugins` under the engine's working directory,
-/// next to the engine's own logs.
+/// Where plugin hosts write their logs: `plugins` inside the engine's log directory. The engine
+/// publishes that directory in `SONARA_LOG_DIR` at start so child processes agree; without it
+/// (tests, a bare host) the default log directory is used.
 pub fn plugin_log_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("logs")
-        .join("plugins")
+    let base = std::env::var_os(crate::logging::LOG_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(crate::logging::default_log_dir);
+    base.join("plugins")
 }
 
 /// Delete all but the newest `keep` `.log` files in `dir`. Missing directory is fine.

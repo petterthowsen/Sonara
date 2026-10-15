@@ -167,6 +167,7 @@ mod tests {
                 tx,
                 rx,
                 log_writers: LogWriters {
+                    dir: std::env::temp_dir(),
                     info: file(),
                     warn: file(),
                     combined: file(),
@@ -190,6 +191,14 @@ mod tests {
                 .expect("a malformed message is not an error");
             self.rx.try_iter().collect()
         }
+    }
+
+    #[test]
+    fn engine_quit_sets_the_flag_and_sends_no_command() {
+        let mut h = Harness::new();
+        assert!(!h.server.quit_requested());
+        assert!(h.send("/engine/quit", vec![]).is_empty());
+        assert!(h.server.quit_requested());
     }
 
     #[test]

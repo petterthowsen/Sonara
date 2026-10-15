@@ -11,18 +11,8 @@ const SHIPPED_PATH := "res://ai/prompt/system_prompt.md"
 
 ## User-editable prompt path under the Sonara config dir.
 static func user_path() -> String:
-	var sonara := _sonara()
-	if sonara:
-		return str(sonara.call("get_config_dir")).path_join(USER_RELATIVE)
-	return OS.get_environment("HOME").path_join(".config/sonara").path_join(USER_RELATIVE)
+	return AppPaths.config_dir().path_join(USER_RELATIVE)
 
-
-## Autoload if the tree is up; null in isolated script tests.
-static func _sonara() -> Node:
-	var tree := Engine.get_main_loop() as SceneTree
-	if tree == null or tree.root == null:
-		return null
-	return tree.root.get_node_or_null("Sonara")
 
 
 ## Copy the shipped default once, then return the current prompt text.

@@ -21,12 +21,7 @@ static var _unsafe_chars := RegEx.create_from_string("[^A-Za-z0-9._-]")
 static func base_dir() -> String:
 	if not base_dir_override.is_empty():
 		return base_dir_override
-	# Looked up at runtime so headless tests, which compile before autoloads exist, can load this.
-	var tree := Engine.get_main_loop() as SceneTree
-	var sonara := tree.root.get_node_or_null("Sonara") if tree != null else null
-	var config_dir: String = sonara.get_config_dir() if sonara != null \
-		else OS.get_environment("HOME").path_join(".config/sonara")
-	return config_dir.path_join(DIR_NAME)
+	return AppPaths.config_dir().path_join(DIR_NAME)
 
 
 ## File path for `device_id`: unsafe chars become `_`, plus a short hash of the raw id so

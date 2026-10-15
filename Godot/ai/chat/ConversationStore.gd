@@ -207,12 +207,7 @@ func is_scratch() -> bool:
 func _scratch_dir() -> String:
 	if not scratch_dir_override.is_empty():
 		return scratch_dir_override
-	var tree := Engine.get_main_loop() as SceneTree
-	if tree and tree.root:
-		var sonara := tree.root.get_node_or_null("Sonara")
-		if sonara:
-			return str(sonara.call("get_config_dir")).path_join(SCRATCH_REL)
-	return OS.get_environment("HOME").path_join(".config/sonara").path_join(SCRATCH_REL)
+	return AppPaths.config_dir().path_join(SCRATCH_REL)
 
 
 func _sidecar_dir(project_path: String) -> String:

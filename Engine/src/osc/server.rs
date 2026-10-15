@@ -4,6 +4,7 @@ use rosc::{OscMessage, OscPacket, OscType};
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -110,6 +111,8 @@ pub struct OscServer {
     pub(super) pending_device_loads: Arc<Mutex<HashMap<String, PendingDevice>>>,
     /// The browser preview decode in flight, and the file whose PCM the engine holds (spec 037).
     pub(super) preview: Arc<Mutex<PreviewTracker>>,
+    /// Set by `/engine/quit`; `run()` returns once it sees it (spec 046 REQ-010).
+    quit_requested: AtomicBool,
 }
 
 impl OscServer {
@@ -131,7 +134,19 @@ impl OscServer {
             pending_clip_loads: Arc::new(Mutex::new(HashMap::new())),
             pending_device_loads: Arc::new(Mutex::new(HashMap::new())),
             preview: Arc::new(Mutex::new(PreviewTracker::default())),
+            quit_requested: AtomicBool::new(false),
         })
+    }
+
+    /// Ask `run()` to return, so `main` takes its normal shutdown path.
+    pub(super) fn request_quit(&self) {
+        self.quit_requested.store(true, Ordering::Relaxed);
+    }
+
+    /// True once `/engine/quit` was handled.
+    #[cfg(test)]
+    pub(super) fn quit_requested(&self) -> bool {
+        self.quit_requested.load(Ordering::Relaxed)
     }
 
     /// Start the OSC server and process incoming messages
@@ -172,6 +187,11 @@ impl OscServer {
 
         // Main receive loop
         loop {
+            if self.quit_requested.load(Ordering::Relaxed) {
+                info!("Quit requested over OSC; shutting down");
+                return Ok(());
+            }
+
             // Check for GUI events
             while let Ok(event) = gui_event_rx.try_recv() {
                 event.apply(window_manager);

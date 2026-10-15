@@ -174,7 +174,7 @@ func _detect_changes(new_assets: Array[Asset]) -> bool:
 # ============================================================================
 
 func _cache_path() -> String:
-	var dir := cache_dir_override if not cache_dir_override.is_empty() else Sonara.get_config_dir()
+	var dir := cache_dir_override if not cache_dir_override.is_empty() else AppPaths.cache_dir()
 	return dir.path_join(_cache_file_name())
 
 

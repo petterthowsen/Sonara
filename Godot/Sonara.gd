@@ -3,9 +3,6 @@
 # Handles Init, Settings and Project creation & loading
 extends Node
 
-## Default projects directory path
-const PROJECTS_DIR_NAME = "Sonara"
-
 var logger := Log.make("Sonara")
 
 var editor : Editor:
@@ -15,9 +12,7 @@ var editor : Editor:
 		return editor
 
 
-var _config_dir : String = ""
 var _config_path : String = ""
-var _projects_dir : String = ""
 
 var config : Dictionary:
 	get:
@@ -26,11 +21,10 @@ var config : Dictionary:
 		return config
 
 
-## Get the configuration directory path (~/.config/sonara)
+## Get the configuration directory path ($XDG_CONFIG_HOME/sonara, normally ~/.config/sonara).
+## Thin wrapper: AppPaths owns the folder layout (spec 046).
 func get_config_dir() -> String:
-	if _config_dir.is_empty():
-		_config_dir = OS.get_environment("HOME") + "/.config/sonara"
-	return _config_dir
+	return AppPaths.config_dir()
 
 
 ## Get the main config file path
@@ -40,11 +34,9 @@ func get_config_path() -> String:
 	return _config_path
 
 
-## Get the projects directory path (~/Documents/Sonara)
+## Get the default projects directory (<Documents>/Sonara/projects).
 func get_projects_dir() -> String:
-	if _projects_dir.is_empty():
-		_projects_dir = OS.get_environment("HOME") + "/Documents/" + PROJECTS_DIR_NAME
-	return _projects_dir
+	return AppPaths.projects_dir()
 
 
 func _ready() -> void:
@@ -134,11 +126,6 @@ func clear_startup_project() -> void:
 
 ## Ensure the configuration directory exists
 func _ensure_config_dir() -> void:
-	var dir = DirAccess.open(OS.get_environment("HOME"))
-	if not dir:
-		logger.error("Failed to access HOME directory")
-		return
-	
 	var config_dir = get_config_dir()
 	if not DirAccess.dir_exists_absolute(config_dir):
 		var err = DirAccess.make_dir_recursive_absolute(config_dir)

@@ -26,6 +26,9 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             Ok(command) => cx.commands.send(command)?,
             Err(e) => warn!("Ignoring /audio/config/set: {}", e),
         },
+        // /engine/quit — graceful shutdown (spec 046): the server loop returns and `main` restores
+        // PipeWire's forced clock. Not an AudioCommand; nothing goes to the command thread.
+        ["engine", "quit"] => cx.server.request_quit(),
         // Counted: each subscribe needs its own unsubscribe (spec 042).
         ["engine", "perf", "subscribe"] => {
             cx.commands
