@@ -222,7 +222,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: —
   - Verified without `shellcheck` (not installed): `bash -n`, and a full install, in-place upgrade (a removed file disappears) and uninstall run in a scratch `HOME` with a stub archive; `~/Documents/Sonara` and `~/.config/sonara` stayed intact. `uninstall.sh` is installed into the app folder so it works without the archive, and it removes the `mimeapps.list` default line. Run `shellcheck` when available.
 
-- [x?] **T-023** [REQ-014] `scripts/package_linux.sh`.
+- [x] **T-023** [REQ-014] `scripts/package_linux.sh`.
   - _Files_: `scripts/package_linux.sh`, `.gitignore`
   - _Output_: `dist/sonara-<v>-linux-x86_64.tar.gz` and its `.sha256`. The engine and plugin host
     use rpath `$ORIGIN/lib`, the libraries are bundled, and the `channel` file is written.
@@ -230,6 +230,7 @@ forced quantum is system-wide, so ask before changing it.
     "not found" check passes.
   - _Depends on_: T-021, T-022
   - Verified with a stub in place of Godot (`--godot fakegodot.sh`; export templates are not installed): the engine builds into `dist/target` with a DT_RPATH `$ORIGIN/lib`, bundles libsndfile, FLAC, vorbis, vorbisenc, opus, ogg, mpg123 and mp3lame, every bundled library resolves from `lib/`, and the tarball and `.sha256` check out. Divergence: the rpath is DT_RPATH (`-Wl,--disable-new-dtags`), not the default DT_RUNPATH, because a RUNPATH on the engine does not apply to libsndfile's own dependencies. Divergence: the script builds into `dist/target` (not `Engine/target`) so dev builds aren't invalidated by the changed RUSTFLAGS. **Pending:** a run with the real Godot export (needs export templates).
+  - Update 2026-10-15: full run with the real export passed. The 41.7 MB tarball's checksum is OK, the engine and plugin host carry RPATH `$ORIGIN/lib`, `ldd engine` resolves libsndfile and all seven codec libraries from `lib/`, `./engine --version` works from the extracted folder, and `sonara.desktop` uses `Exec=… -- %f`.
 
 - [x] **T-024** [REQ-007–REQ-011, REQ-013, REQ-018] Live check of the engine lifecycle on the dev
   machine.
