@@ -40,8 +40,8 @@ The goal of sonara is to provide a seamless, frictionless UI that makes it fun t
 
 Download `sonara-<version>-linux-x86_64.tar.gz` from
 [GitHub Releases](https://github.com/petterthowsen/Sonara/releases) or
-[itch.io](https://thowsenmedia.itch.io/sonara). It runs on Ubuntu 22.04 or newer (or another
-x86_64 distribution of the same age) with PipeWire, JACK or ALSA.
+[itch.io](https://thowsenmedia.itch.io/sonara). It runs on Debian 12, Ubuntu 24.04, Fedora 37,
+Arch or newer (x86_64, glibc 2.36+) with PipeWire, JACK or ALSA.
 
 ```bash
 sha256sum -c sonara-*.tar.gz.sha256   # optional

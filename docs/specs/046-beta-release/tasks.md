@@ -251,7 +251,7 @@ forced quantum is system-wide, so ask before changing it.
 
 - [ ] **T-025** [REQ-014–REQ-017] Clean-machine install test.
   - _Files_: — (record results here and in `docs/releasing.md`)
-  - _Output_: the tarball works on Ubuntu 22.04 with no build packages
+  - _Output_: the tarball works on Debian 12 with no build packages
   - _Verify_: in a VM:
     1. extract and run → "Connected";
     2. `install.sh` → there's a menu entry and the `sonara` command works;
@@ -262,7 +262,7 @@ forced quantum is system-wide, so ask before changing it.
 
 - [x?] **T-026** [REQ-019, REQ-020] GitHub Actions release workflow.
   - _Files_: `.github/workflows/release.yml`
-  - _Output_: tag and manual triggers, an `ubuntu:22.04` container, a check that the tag matches
+  - _Output_: tag and manual triggers, a `debian:12` container, a check that the tag matches
     `VERSION`, a Release upload, and an optional butler push
   - _Verify_: a manual run (`gh workflow run release.yml`) produces a downloadable artifact that
     passes T-025 step 1. The first tag `v0.1.0-beta.1` creates a Release with the tarball and

@@ -151,7 +151,7 @@ Each release shall be published as one `sonara-<version>-linux-x86_64.tar.gz` ho
 engine, the plugin host, an install script, an uninstall script, the license files and a
 desktop entry with an icon. It shall come with a SHA-256 checksum file.
 
-- **Acceptance:** extract the archive on a clean Ubuntu 22.04 VM or container that has PipeWire
+- **Acceptance:** extract the archive on a clean Debian 12 VM or container that has PipeWire
   and none of the build-only packages, run the UI from the extracted folder, and it reaches
   "Connected".
 
@@ -253,6 +253,8 @@ channel. itch.io builds (updated by the itch app) and development runs never che
 - **Repo is public.** The update check uses the public GitHub Releases API.
 - **itch.io page:** `https://thowsenmedia.itch.io/sonara`. It's in draft mode for now, so the
   About link only works once it's published.
+- **Build base is Debian 12** (glibc 2.36), not Ubuntu 22.04: cpal's PipeWire backend needs
+  PipeWire ≥ 0.3.53 and 22.04 has 0.3.48 (found on the first CI run, 2026-10-15).
 - **The update check is on by default** in release-channel builds and can be turned off in
   Settings.
 

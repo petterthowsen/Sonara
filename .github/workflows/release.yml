@@ -21,8 +21,9 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    # Old LTS base so the binaries run on glibc 2.35 and newer.
-    container: ubuntu:22.04
+    # Oldest base that builds: cpal's PipeWire backend needs PipeWire >= 0.3.53 (Ubuntu 22.04 has
+    # 0.3.48). Debian 12 has 0.3.65 and glibc 2.36, the floor for users. See docs/releasing.md.
+    container: debian:12
     env:
       BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
       CARGO_TERM_COLOR: always
@@ -64,8 +65,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             dist/target
-          key: cargo-jammy-${{ hashFiles('Engine/Cargo.lock') }}
-          restore-keys: cargo-jammy-
+          key: cargo-bookworm-${{ hashFiles('Engine/Cargo.lock') }}
+          restore-keys: cargo-bookworm-
 
       - name: Install Godot and export templates
         run: |

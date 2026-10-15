@@ -147,7 +147,7 @@ project sync.
   safe. `uninstall.sh` removes exactly those files.
 
 **CI.** `.github/workflows/release.yml` runs on `push: tags: v*` and on `workflow_dispatch`:
-1. Uses an `ubuntu:22.04` container on `ubuntu-latest`. Installs the build prerequisites from
+1. Uses a `debian:12` container (originally `ubuntu:22.04`; see Risks) on `ubuntu-latest`. Installs the build prerequisites from
    AGENTS.md.
 2. Restores the cargo cache. Downloads Godot 4.7-stable and its export templates from
    `godotengine/godot-builds`.
@@ -301,7 +301,7 @@ Recent-project entries in `config.json` point at the old paths and show as missi
     is detected.
   - `test_about_dialog.gd` — builds and shows the version strings.
 - **Live:** the acceptance steps of REQ-007–011, 013 and 015–018, using the packaged tarball in
-  an Ubuntu 22.04 VM (REQ-014) and the dev machine. For REQ-010, check
+  a Debian 12 VM (REQ-014) and the dev machine. For REQ-010, check
   `pw-metadata -n settings | grep force-quantum` after quitting. Per the live-check memory, ask
   before touching the system-wide quantum.
 
@@ -311,7 +311,7 @@ Recent-project entries in `config.json` point at the old paths and show as missi
 |---|---|
 | `OS.kill` on Linux sends SIGKILL, which skips the quantum restore. | Graceful `/engine/quit` first, and kill only after 3 s. Even after a SIGKILL, the restore is what's lost, nothing else. |
 | `PacketPeerUDP.bind` on 7000 succeeds even though the engine holds it (`SO_REUSEADDR` on both sides). | The Rust socket doesn't set `SO_REUSEADDR`, so the bind should fail. A task verifies this live before anything builds on it. Fallback: wait up to 1.2 s for a heartbeat. |
-| Ubuntu 22.04's PipeWire (0.3.48) is too old for cpal's PipeWire backend. | First CI run shows it. Fallback: a 24.04 base (raises the glibc floor to 2.39). Record the choice in `releasing.md`. |
+| Ubuntu 22.04's PipeWire (0.3.48) is too old for cpal's PipeWire backend. | **Happened:** cpal enables pipewire-rs `v0_3_53`, so `libspa` fails to compile on 22.04. Chose `debian:12` (glibc 2.36, PipeWire 0.3.65) over the 24.04 fallback (glibc 2.39) for the lower floor. Record the choice in `releasing.md`. |
 | Godot treats the positional `.sonara` argument as something else. | Verify `OS.get_cmdline_args()` in an exported build early (task). If needed, use `Exec=sonara -- %f` in the desktop file, which makes it a user arg. |
 | Bundled codec libraries pull in more `.so` files. | `package_linux.sh` walks `ldd` for `libsndfile`, copies everything not on an allowlist of system libraries (glibc, X11, pipewire, alsa, dbus, systemd), and fails if `ldd` on the bundle reports anything "not found". |
 | An itch.io build updates through a draft page that can't be downloaded. | Butler upload only runs when the secret is set. Publishing the page is a manual step in `releasing.md`. |

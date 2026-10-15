@@ -61,18 +61,21 @@ The page is `https://thowsenmedia.itch.io/sonara` (draft until it's published).
 
 ## Build environment
 
-CI builds in an `ubuntu:22.04` container (glibc 2.35), so the binaries run on Ubuntu 22.04 and
-newer and on distributions of the same age. The engine and plugin host carry a DT_RPATH of
+CI builds in a `debian:12` container (glibc 2.36, PipeWire 0.3.65), so the binaries run on
+Debian 12, Ubuntu 24.04, Linux Mint 22, Fedora 37 and newer, and on Arch. Ubuntu 22.04 (glibc 2.35,
+PipeWire 0.3.48) can't be the base: cpal's PipeWire backend requires PipeWire 0.3.53 or newer at
+build time (it enables the pipewire-rs feature `v0_3_53`), and the first CI run failed to compile
+`libspa` there. The engine and plugin host carry a DT_RPATH of
 `$ORIGIN/lib`, and the archive bundles libsndfile and its codec libraries (FLAC, vorbis, vorbisenc,
 opus, ogg, mpg123, mp3lame). Everything else (glibc, ALSA, PipeWire, D-Bus, X11/Wayland) comes
 from the user's system.
 
-If 22.04's PipeWire (0.3.48) turns out too old for the engine's PipeWire backend, move the
-container to `ubuntu:24.04` (glibc 2.39) and update this section.
+Moving the base forward (e.g. to `ubuntu:24.04`, glibc 2.39) raises the floor for users, so
+only do it when a dependency needs it, and update this section and the README.
 
 ## Clean-machine check
 
-Before announcing a release, try the archive on a clean Ubuntu 22.04 VM with PipeWire and none of
+Before announcing a release, try the archive on a clean Debian 12 VM (or Ubuntu 24.04) with PipeWire and none of
 the build packages (spec 046 T-025):
 
 1. Extract it and run `./Sonara.x86_64`. The UI starts its engine and reaches "Connected".
