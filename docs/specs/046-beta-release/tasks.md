@@ -260,7 +260,7 @@ forced quantum is system-wide, so ask before changing it.
     5. `uninstall.sh` → everything it added is gone and user data is intact.
   - _Depends on_: T-023, T-017
 
-- [ ] **T-026** [REQ-019, REQ-020] GitHub Actions release workflow.
+- [x?] **T-026** [REQ-019, REQ-020] GitHub Actions release workflow.
   - _Files_: `.github/workflows/release.yml`
   - _Output_: tag and manual triggers, an `ubuntu:22.04` container, a check that the tag matches
     `VERSION`, a Release upload, and an optional butler push
@@ -295,7 +295,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-015
   - Verified: the ADR exists in the 0021 format. Linked from the design? Not yet: design.md was left untouched (one-line link to add when the spec is next edited).
 
-- [ ] **T-030** [REQ-014, REQ-015, REQ-019, REQ-020] `docs/releasing.md` and the README install
+- [x?] **T-030** [REQ-014, REQ-015, REQ-019, REQ-020] `docs/releasing.md` and the README install
   section.
   - _Files_: `docs/releasing.md`, `README.md`
   - _Output_: how to cut a release (bump `VERSION`, run `gen_third_party_licenses.sh`, tag, push),

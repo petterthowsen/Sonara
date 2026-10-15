@@ -36,6 +36,35 @@ The goal of sonara is to provide a seamless, frictionless UI that makes it fun t
 - Themeing only supports dark mode currently.
 - Linux only.
 
+## Install
+
+Download `sonara-<version>-linux-x86_64.tar.gz` from
+[GitHub Releases](https://github.com/petterthowsen/Sonara/releases) or
+[itch.io](https://thowsenmedia.itch.io/sonara). It runs on Ubuntu 22.04 or newer (or another
+x86_64 distribution of the same age) with PipeWire, JACK or ALSA.
+
+```bash
+sha256sum -c sonara-*.tar.gz.sha256   # optional
+tar xzf sonara-*-linux-x86_64.tar.gz
+cd sonara-*-linux-x86_64
+./Sonara.x86_64                       # run it in place, or:
+./install.sh                          # install for your user: app menu, .sonara files, `sonara` command
+```
+
+`install.sh` needs no root and installs into `~/.local`. Run it again from a newer archive to
+upgrade. `~/.local/share/sonara/uninstall.sh` removes it.
+
+Where Sonara keeps your files:
+
+| What | Where |
+|---|---|
+| Projects, presets, note maps | `~/Documents/Sonara/{projects,presets,note_maps}` |
+| Settings | `~/.config/sonara/` |
+| Caches (safe to delete) | `~/.cache/sonara/` |
+| Logs (Help > Open Logs Folder) | `~/.local/state/sonara/logs/` |
+
+Uninstalling leaves all of these in place.
+
 ## Prerequisites
 
 - Linux (Ubuntu/Debian/Arch/Fedora) with PipeWire, JACK or ALSA
@@ -51,18 +80,20 @@ The goal of sonara is to provide a seamless, frictionless UI that makes it fun t
 Optional: `liblo-tools` (`oscsend`) for OSC debugging, and `libxml2-utils` (`xmllint`) to
 check DAWproject exports against the schema in tests (Arch: `libxml2`).
 
-## Run
+## Run from source
 
 ```bash
-# Audio engine (release; debug is too slow for real-time audio)
-./run_engine.sh
+cd Engine && cargo build --release --bins && cd ..   # engine + plugin_host
 
 # UI: open Godot/ in the Godot editor, or:
 godot --path Godot
 ```
 
-Start the engine first. It opens the audio device, listens for OSC on UDP 7000 (replies on 7001)
-and waits for Godot. Choose the output device, sample rate and buffer size in the UI's settings.
+The UI starts `Engine/target/release/engine` itself when no engine is running, and stops it when
+you quit. To run the engine on its own (to watch its output, or debug it), start
+`./run_engine.sh` first; the UI then attaches to it and leaves it running. The engine opens the
+audio device and listens for OSC on UDP 7000 (replies on 7001). Choose the output device, sample
+rate and buffer size in the UI's settings.
 
 ## Layout
 
@@ -97,11 +128,9 @@ Logs: `~/.local/state/sonara/logs/engine/last_{info,warn,combined}.log` (rotated
 
 ### Releasing
 
-1. Run `scripts/gen_third_party_licenses.sh` (needs `cargo install cargo-about --locked --features cli`)
-   and commit the updated `THIRD_PARTY_LICENSES`.
-2. Tag the release commit (e.g. `v0.1.0-alpha`), so the source for every binary stays available.
-3. Ship `LICENSE` and `THIRD_PARTY_LICENSES` with the binaries, and link the source repository
-   from the download page.
+See [docs/releasing.md](docs/releasing.md): bump `VERSION`, tag `v<version>`, push. CI builds the
+archive and publishes the GitHub Release (and the itch.io build). Build the archive locally with
+`scripts/package_linux.sh`.
 
 See `AGENTS.md` for the architecture overview and `docs/subsystems/` for details.
 

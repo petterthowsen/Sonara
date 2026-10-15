@@ -1,0 +1,116 @@
+# Release build (spec 046, REQ-019/REQ-020). See docs/releasing.md.
+#
+# - Push a tag `v<VERSION>`: build, attach the archive and checksum to a GitHub Release, and push
+#   to itch.io when the BUTLER_API_KEY secret is set.
+# - Run by hand (Actions > Release > Run workflow): build only, and keep the archive as a workflow
+#   artifact. Nothing is published.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.7"
+  ITCH_TARGET: thowsenmedia/sonara:linux
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    # Old LTS base so the binaries run on glibc 2.35 and newer.
+    container: ubuntu:22.04
+    env:
+      BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Install build prerequisites
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config git curl ca-certificates unzip file \
+            libasound2-dev libsndfile1-dev libpipewire-0.3-dev libspa-0.2-dev \
+            libdbus-1-dev libclang-dev clang libfontconfig1
+
+      # git is installed first so the checkout has a .git folder (build.rs and stamp_version.sh
+      # read the commit from it).
+      - uses: actions/checkout@v4
+
+      - name: Mark the checkout safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Check the tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          expected="v$(tr -d '[:space:]' < VERSION)"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match VERSION ($expected)" >&2
+            exit 1
+          fi
+
+      - name: Install Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dist/target
+          key: cargo-jammy-${{ hashFiles('Engine/Cargo.lock') }}
+          restore-keys: cargo-jammy-
+
+      - name: Install Godot and export templates
+        run: |
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          curl -sSfL -o /tmp/godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -sSfL -o /tmp/templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          install -m 755 /tmp/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q /tmp/templates.tpz -d /tmp/tpl
+          cp /tmp/tpl/templates/linux_release.x86_64 /tmp/tpl/templates/linux_debug.x86_64 /tmp/tpl/templates/version.txt "$tpl/"
+          godot --headless --version
+
+      - name: Build the release archive
+        run: scripts/package_linux.sh --channel github
+
+      - name: Upload the archive (manual runs)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonara-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          retention-days: 14
+
+      - name: Create the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Sonara ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+
+      - name: Push to itch.io
+        if: startsWith(github.ref, 'refs/tags/') && env.BUTLER_API_KEY != ''
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          src="dist/sonara-$version-linux-x86_64"
+          cp -a "$src" dist/itch
+          echo itch > dist/itch/channel
+          curl -sSfL -o /tmp/butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q /tmp/butler.zip -d /tmp/butler
+          chmod +x /tmp/butler/butler
+          /tmp/butler/butler push dist/itch "$ITCH_TARGET" --userversion "$version"
