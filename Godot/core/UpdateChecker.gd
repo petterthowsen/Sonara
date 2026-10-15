@@ -69,7 +69,8 @@ func handle_response(result: int, code: int, text: String) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
 		logger.info("Update check failed (result %d, HTTP %d)" % [result, code])
 		return
-	var releases = JSON.parse_string(text) if not text.strip_edges().is_empty() else null
+	var json := JSON.new()  # parse(), not parse_string(): a bad body must not print an engine error
+	var releases = json.data if json.parse(text) == OK else null
 	if not (releases is Array):
 		logger.info("Update check: unexpected response")
 		return

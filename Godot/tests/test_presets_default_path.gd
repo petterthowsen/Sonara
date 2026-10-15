@@ -1,5 +1,5 @@
 # test_presets_default_path.gd
-# The presets folder defaults to ~/Documents/Sonara/presets (#134) and Settings.migrate_presets_dir
+# The presets folder defaults to <Documents>/Sonara/presets (#134) and Settings.migrate_presets_dir
 # moves or pins the old lowercase folder without losing presets. Uses temp directories only.
 # Run: godot --headless --path Godot -s tests/test_presets_default_path.gd -- --test
 extends TestBase
@@ -48,7 +48,7 @@ func run_tests() -> void:
 	var saved = sonara.get_config("presets/path")
 	_clear(sonara)
 
-	_assert(_settings.get_value("presets/path") == "~/Documents/Sonara/presets", "the default is under ~/Documents/Sonara")
+	_assert(_settings.get_value("presets/path") == AppPaths.presets_dir() and AppPaths.presets_dir().ends_with("/Sonara/presets"), "the default is <Documents>/Sonara/presets (AppPaths)")
 
 	# Old folder only: renamed into place.
 	var a := _fresh_root("move")

@@ -38,7 +38,7 @@ BIN_DIR="$TARGET_DIR/release"
 
 # System libraries that every desktop Linux has and that must not be bundled: glibc, the
 # toolchain runtime, X11/Wayland, PipeWire, ALSA, D-Bus and systemd.
-SYSTEM_LIB_REGEX='^(linux-vdso|ld-linux|libc|libm|libdl|libpthread|librt|libutil|libresolv|libnsl|libgcc_s|libstdc\+\+|libX|libxcb|libxkb|libwayland|libpipewire|libspa|libasound|libdbus|libsystemd|libcap|libGL|libEGL|libdrm|libfontconfig|libfreetype|libudev|libgbm)'
+SYSTEM_LIB_REGEX='^(linux-vdso|ld-linux[^ ]*|lib(c|m|dl|pthread|rt|util|resolv|nsl|gcc_s|mvec|stdc\+\+|asound|dbus-1|systemd|cap|udev|GL|EGL|drm|gbm|fontconfig|freetype|xkbcommon[a-z-]*|wayland[a-z-]*|pipewire-0\.3|spa-0\.2|xcb[a-z0-9-]*|X[A-Za-z0-9]*|bsd|md|gcrypt|gpg-error|lz4|lzma|zstd))\.so'
 
 rm -rf "$STAGE" "$DIST/$NAME.tar.gz" "$DIST/$NAME.tar.gz.sha256"
 mkdir -p "$STAGE/lib"
@@ -48,7 +48,9 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     (
         cd "$ROOT/Engine"
         export CARGO_TARGET_DIR="$TARGET_DIR"
-        export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-rpath,\$ORIGIN/lib"
+        # --disable-new-dtags makes it a DT_RPATH, which also applies to the libraries the engine
+        # loads (libsndfile finds its codecs in lib/ too); a DT_RUNPATH would not.
+        export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,--disable-new-dtags -C link-arg=-Wl,-rpath,\$ORIGIN/lib"
         cargo build --release --bins
     )
 fi
@@ -87,10 +89,14 @@ if [ -n "$MISSING" ]; then
     echo "$MISSING" >&2
     exit 1
 fi
-if ! ldd "$STAGE/engine" | grep -q "$STAGE/lib/libsndfile"; then
-    echo "libsndfile does not resolve from lib/ (rpath problem)" >&2
-    exit 1
-fi
+# Every bundled library must resolve from lib/, not from the build machine's system copy.
+for bundled in "$STAGE"/lib/*.so*; do
+    name="$(basename "$bundled")"
+    if ! ldd "$STAGE/engine" | grep -F "$name" | grep -q "$STAGE/lib/"; then
+        echo "$name does not resolve from lib/ (rpath problem)" >&2
+        exit 1
+    fi
+done
 
 echo "==> Exporting the Godot UI"
 "$GODOT" --headless --path "$ROOT/Godot" --import >/dev/null 2>&1 || true
