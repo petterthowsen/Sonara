@@ -249,7 +249,7 @@ forced quantum is system-wide, so ask before changing it.
   - Verified 2026-10-15 on the dev machine (worktree build `0.1.0-beta.1 (218cdd2)`), all seven steps pass. Step 1: the UI spawned `engine --log-dir ~/.local/state/sonara/logs/engine --parent-pid <ui>` and connected; UI and engine logs landed in the state dir. Step 2: attached to `./run_engine.sh`, one engine. Step 3: Start Engine reconnected and resynced. Step 4: forced quantum/rate went 2048/48000 → 0/0 after quit. Step 5: engine gone after `kill -9` of the UI. Step 6: Open Logs Folder opened `~/.local/state/sonara/logs/`; Help > About links and Licenses also checked. Step 7: alert shown, second instance exited, one engine and one PID file. This also covers the live parts of T-001 (real engine, step 2), T-004, T-005, T-006, T-007 (About shows the engine version), T-011, T-013 (no warning on a match), T-014–T-016, T-018 and T-019.
   - Note: the second instance still builds the editor scene before `quit()` takes effect (harmless; Editor skips its startup work).
 
-- [ ] **T-025** [REQ-014–REQ-017] Clean-machine install test.
+- [x] **T-025** [REQ-014–REQ-017] Clean-machine install test.
   - _Files_: — (record results here and in `docs/releasing.md`)
   - _Output_: the tarball works on Debian 12 with no build packages
   - _Verify_: in a VM:
