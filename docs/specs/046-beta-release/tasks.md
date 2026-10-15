@@ -261,7 +261,7 @@ forced quantum is system-wide, so ask before changing it.
   - _Depends on_: T-023, T-017
   - 2026-10-15, user, CI build `dc60ecf`: the app runs, `install.sh` adds a working menu entry, and double-clicking a `.sonara` file opens it (so `Exec=… -- %f` works in the export). Gap: the menu icon was Godot's default because `package_linux.sh` copied `Godot/icon.svg`; it now copies `assets/sonara/icons/favicon.svg` (the project icon). Still to check: the icon after a reinstall, the upgrade (step 4), uninstall (step 5), and a run on a clean Debian 12 / Ubuntu 24.04 machine.
 
-- [x?] **T-026** [REQ-019, REQ-020] GitHub Actions release workflow.
+- [x] **T-026** [REQ-019, REQ-020] GitHub Actions release workflow.
   - _Files_: `.github/workflows/release.yml`
   - _Output_: tag and manual triggers, a `debian:12` container, a check that the tag matches
     `VERSION`, a Release upload, and an optional butler push
@@ -269,7 +269,7 @@ forced quantum is system-wide, so ask before changing it.
     passes T-025 step 1. The first tag `v0.1.0-beta.1` creates a Release with the tarball and
     checksum.
   - _Depends on_: T-023
-  - 2026-10-15: run 1 (`ubuntu:22.04`) failed: cpal enables pipewire-rs `v0_3_53`, and 22.04 has PipeWire 0.3.48. Switched to `debian:12`. Run 2 failed for lack of X11 headers (`libx11-dev`, `libxext-dev` added). Run 3 (`38709664042`) passed: the artifact's checksum is OK, it bundles the same 8 libraries, `engine --version` prints `0.1.0-beta.1 (dc60ecf)`, libsndfile resolves from `lib/`, and the highest glibc symbol needed is 2.35 (engine) / 2.28 (UI). **Pending:** the first tag `v0.1.0-beta.1` creating a Release.
+  - 2026-10-15: run 1 (`ubuntu:22.04`) failed: cpal enables pipewire-rs `v0_3_53`, and 22.04 has PipeWire 0.3.48. Switched to `debian:12`. Run 2 failed for lack of X11 headers (`libx11-dev`, `libxext-dev` added). Run 3 (`38709664042`) passed: the artifact's checksum is OK, it bundles the same 8 libraries, `engine --version` prints `0.1.0-beta.1 (dc60ecf)`, libsndfile resolves from `lib/`, and the highest glibc symbol needed is 2.35 (engine) / 2.28 (UI). Tag `v0.1.0-beta.1` (run `38713450934`) created the GitHub Release with the tarball and checksum, and butler pushed the first build to `thowsenmedia/sonara:linux` (97.6 MiB, channel `itch`).
 
 ## Phase 6 — docs
 
