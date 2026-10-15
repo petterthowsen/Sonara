@@ -5,7 +5,7 @@
 #
 # Steps: stamp the version, build the engine and plugin host with rpath $ORIGIN/lib, bundle
 # libsndfile and the codec libraries it pulls in, export the Godot UI (pck embedded), add the
-# install scripts, desktop files, licenses and the `channel` file, then tar and checksum.
+# install scripts, desktop files, licenses, the changelog and the `channel` file, then tar and checksum.
 # CI runs this same script (.github/workflows/release.yml).
 #
 # Needs: cargo and the engine's build prerequisites (AGENTS.md), godot 4.7 with its export
@@ -115,6 +115,7 @@ if [ -f "$ROOT/THIRD_PARTY_LICENSES" ]; then
 else
     echo "WARNING: THIRD_PARTY_LICENSES is missing (run scripts/gen_third_party_licenses.sh)" >&2
 fi
+install -m 644 "$ROOT/CHANGELOG.md" "$STAGE/CHANGELOG.md"
 install -m 644 "$ROOT/VERSION" "$STAGE/VERSION"
 printf '%s\n' "$CHANNEL" > "$STAGE/channel"
 

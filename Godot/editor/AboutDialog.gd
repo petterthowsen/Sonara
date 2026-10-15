@@ -1,15 +1,18 @@
 # AboutDialog.gd
 # Help > About Sonara: icon, UI and engine versions, links and the license texts (spec 046
-# REQ-012). Built in code, like QuitPromptDialog.
+# REQ-012), plus the changelog. Built in code, like QuitPromptDialog.
 class_name AboutDialog extends AcceptDialog
 
 const GITHUB_URL := "https://github.com/petterthowsen/Sonara"
 const ITCH_URL := "https://thowsenmedia.itch.io/sonara"
+const ISSUES_URL := GITHUB_URL + "/issues/"
 const LICENSE_FILES := ["LICENSE", "THIRD_PARTY_LICENSES"]
+const CHANGELOG_FILE := "CHANGELOG.md"
 
 var ui_label: Label
 var engine_label: Label
 var _licenses_window: Window
+var _changelog_window: Window
 
 
 func _init() -> void:
@@ -58,6 +61,11 @@ func _init() -> void:
 	licenses.text = "Licenses"
 	licenses.pressed.connect(show_licenses)
 	links.add_child(licenses)
+	var whats_new := Button.new()
+	whats_new.name = "WhatsNewButton"
+	whats_new.text = "What's New"
+	whats_new.pressed.connect(show_changelog)
+	links.add_child(whats_new)
 
 	about_to_popup.connect(refresh)
 	refresh()
@@ -126,3 +134,57 @@ func show_licenses() -> void:
 		_licenses_window.add_child(edit)
 		add_child(_licenses_window)
 	_licenses_window.popup_centered()
+
+
+## The CHANGELOG.md in the install folder (repo root in dev runs), or a note pointing at itch.io.
+static func changelog_text() -> String:
+	var path: String = BuildInfo.install_dir().path_join(CHANGELOG_FILE)
+	if FileAccess.file_exists(path):
+		return FileAccess.get_file_as_string(path)
+	return "The changelog was not found in %s.\n\nSee %s for release notes." % [BuildInfo.install_dir(), ITCH_URL]
+
+
+## Light Markdown to BBCode for a RichTextLabel: #/##/### headings, "- " bullets, **bold**,
+## `code`, [text](url) links and #123 issue references (linked to GitHub). Literal brackets are
+## escaped, so other text shows as written.
+static func markdown_to_bbcode(markdown: String) -> String:
+	var bold := RegEx.create_from_string("\\*\\*(.+?)\\*\\*")
+	var code := RegEx.create_from_string("`([^`]+)`")
+	var link := RegEx.create_from_string("\uE000(.+?)\uE001\\((https?://[^)\\s]+)\\)")
+	var issue := RegEx.create_from_string("(?<![\\w&/])#(\\d+)\\b")
+	var heading_sizes := {1: 22, 2: 18, 3: 15}
+	var lines: PackedStringArray = []
+	for raw in markdown.replace("\r\n", "\n").split("\n"):
+		var line: String = raw.replace("[", "\uE000").replace("]", "\uE001")
+		line = bold.sub(line, "[b]$1[/b]", true)
+		line = code.sub(line, "[code]$1[/code]", true)
+		line = link.sub(line, "[url=$2]$1[/url]", true)
+		line = issue.sub(line, "[url=%s$1]#$1[/url]" % ISSUES_URL, true)
+		var level := 0
+		while level < line.length() and line[level] == "#":
+			level += 1
+		if level >= 1 and level <= 3 and line.substr(level).begins_with(" "):
+			line = "[font_size=%d][b]%s[/b][/font_size]" % [heading_sizes[level], line.substr(level + 1).strip_edges()]
+		elif line.begins_with("- "):
+			line = "  \u2022 " + line.substr(2)
+		lines.append(line.replace("\uE000", "[lb]").replace("\uE001", "[rb]"))
+	return "\n".join(lines)
+
+
+func show_changelog() -> void:
+	if _changelog_window == null:
+		_changelog_window = Window.new()
+		_changelog_window.title = "What's New in Sonara"
+		_changelog_window.size = Vector2i(640, 560)
+		_changelog_window.exclusive = false
+		_changelog_window.close_requested.connect(_changelog_window.hide)
+		var text := RichTextLabel.new()
+		text.name = "ChangelogText"
+		text.bbcode_enabled = true
+		text.selection_enabled = true
+		text.text = markdown_to_bbcode(changelog_text())
+		text.meta_clicked.connect(func(meta: Variant) -> void: OS.shell_open(str(meta)))
+		text.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_changelog_window.add_child(text)
+		add_child(_changelog_window)
+	_changelog_window.popup_centered()

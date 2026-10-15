@@ -54,6 +54,10 @@ jobs:
             exit 1
           fi
 
+      - name: Check CHANGELOG.md has an entry for VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: scripts/changelog_section.sh "$(tr -d '[:space:]' < VERSION)" > /dev/null
+
       - name: Install Rust
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
@@ -94,12 +98,16 @@ jobs:
             dist/*.tar.gz.sha256
           retention-days: 14
 
+      - name: Write the release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        run: scripts/changelog_section.sh "$(tr -d '[:space:]' < VERSION)" > dist/release_notes.md
+
       - name: Create the GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: Sonara ${{ github.ref_name }}
-          generate_release_notes: true
+          body_path: dist/release_notes.md
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256

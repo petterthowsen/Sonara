@@ -14,8 +14,12 @@ incompatible OSC change. The UI warns when they differ.
 
 ## Cut a release
 
-1. Update `VERSION`, then run `scripts/stamp_version.sh` and commit `VERSION`,
-   `Engine/Cargo.toml`, `Engine/Cargo.lock` and `Godot/project.godot`.
+1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [<version>] - <date>` and add a fresh empty
+   `## [Unreleased]` above it. Update `VERSION`, then run `scripts/stamp_version.sh` and commit
+   `CHANGELOG.md`, `VERSION`, `Engine/Cargo.toml`, `Engine/Cargo.lock` and `Godot/project.godot`.
+   The workflow fails early when the changelog has no entry for `VERSION`
+   (`scripts/changelog_section.sh <version>` checks it locally). The itch devlog is written from
+   the same section.
 2. If dependencies changed, run `scripts/gen_third_party_licenses.sh` (needs
    `cargo install cargo-about --locked --features cli`) and commit `THIRD_PARTY_LICENSES`.
 3. Optional: build locally first with `scripts/package_linux.sh` and try
@@ -27,8 +31,8 @@ incompatible OSC change. The UI warns when they differ.
    ```
 5. The **Release** workflow (`.github/workflows/release.yml`) checks that the tag matches `VERSION`,
    builds the archive, and creates a GitHub Release with
-   `sonara-<version>-linux-x86_64.tar.gz` and its `.sha256`. The release notes are generated from
-   the commits since the previous tag. Edit them on GitHub afterwards if you like.
+   `sonara-<version>-linux-x86_64.tar.gz` and its `.sha256`. The release notes are the
+   `CHANGELOG.md` section for `VERSION`. Edit them on GitHub afterwards if you like.
 
 To test the build without publishing anything, start the workflow by hand: Actions > Release > Run
 workflow, or `gh workflow run release.yml --ref <branch>`. The archive is kept as a workflow

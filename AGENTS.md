@@ -116,6 +116,11 @@ The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you
 - Issues live in GitHub Issues (petterthowsen/Sonara); use the `gh` CLI (`gh issue list/view/create/comment/edit/close`).
 - Triage labels: `needs-triage`, `needs-info`, `ready-for-agent` (fully specified, ready for an AFK agent), `ready-for-human`, `wontfix`. Area labels: `engine`, `godot`, `device`, `builtins`, `arranger`, `editor`, `midi-editor`, `mixer`, `ai`, `export`.
 
+## Releases and changelog
+
+- User-visible changes get a line under `## [Unreleased]` in `CHANGELOG.md` (with the issue number where there is one) in the same change that makes them. Internal refactors and spec bookkeeping don't.
+- The release procedure is in `docs/releasing.md`.
+
 ## Project tracking
 
 - `STATUS.md` is a scratchpad for the current complex investigation, with "Working" and "Not Working" sections.
