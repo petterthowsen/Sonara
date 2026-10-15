@@ -15,6 +15,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 ### Changed
 
 - Lower CPU use when idle: the UI only redraws when something changes.
+- MIDI editor: a note's pitch label is hidden when the note is too short to hold it, so zoomed-out dense passages are less cluttered (#151).
+- MIDI editor: notes narrower than 14 px have no resize handle, so clicking their right edge moves the note instead of resizing it.
 - The main window's minimum width is larger (1280 px) so the transport bar is no longer cut off at the smallest size.
 
 ### Fixed

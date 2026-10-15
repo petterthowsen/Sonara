@@ -29,6 +29,10 @@ var note_color: Color = Color(0.3, 0.6, 0.9)  # Base color (inherited from track
 # Resize handle size (pixels from right edge)
 const RESIZE_HANDLE_WIDTH: float = 8.0
 
+## Notes narrower than this (pixels) have no resize handle: the handle would cover most of
+## the note, and clicking such a note should move it instead.
+const MIN_RESIZABLE_WIDTH: float = 14.0
+
 ## Width of a Drum View hit marker. Fixed on purpose: vertical zoom changes how
 ## tall a row is, never how long a hit looks. NoteContainer.drum_marker_size()
 ## still shrinks it to fit the grid step and the note's own length.
@@ -72,6 +76,8 @@ var _own_style: StyleBoxFlat = null
 var _applied_style: StyleBoxFlat = null
 ## Row height update_label_visibility last applied, or -1 to force the next one.
 var _label_row_height: float = -1.0
+## Whether the row height alone leaves room for a label (set with _label_row_height).
+var _label_row_fits: bool = true
 var _label_text_color: Color = Color(-1, -1, -1)
 
 func _ready():
@@ -277,18 +283,29 @@ func update_label_visibility(target_height: float) -> void:
 		label.visible = false
 		return
 
-	if target_height == _label_row_height:
-		return
-	_label_row_height = target_height
-	var fs := label_font_size_for(target_height)
-	label.visible = fs > 0
-	if fs > 0 and label.label_settings and label.label_settings.font_size != fs:
-		label.label_settings.font_size = fs
+	if target_height != _label_row_height:
+		_label_row_height = target_height
+		var fs := label_font_size_for(target_height)
+		_label_row_fits = fs > 0
+		if fs > 0 and label.label_settings and label.label_settings.font_size != fs:
+			label.label_settings.font_size = fs
+	# Width is checked on every call: zoom and note length change it without the row height.
+	label.visible = _label_row_fits and label_fits_width(label.get_minimum_size().x, size.x)
+
+
+## Horizontal room a note's label needs around its text (the label's left and right offsets).
+const LABEL_PADDING: float = 4.0
+
+## True when a label of `text_width` pixels fits inside a note `note_width` pixels wide.
+static func label_fits_width(text_width: float, note_width: float) -> bool:
+	return note_width >= text_width + LABEL_PADDING
 
 
 func _is_over_resize_handle(pos: Vector2) -> bool:
 	"""Check if mouse is over the resize handle."""
 	if drum_mode:
 		# Hit markers have no length to drag (REQ-022).
+		return false
+	if size.x < MIN_RESIZABLE_WIDTH:
 		return false
 	return pos.x >= size.x - RESIZE_HANDLE_WIDTH
