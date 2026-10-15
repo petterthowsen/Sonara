@@ -187,8 +187,6 @@ func _ready():
 	# A second Sonara quits at once (Sonara.gd). It must not connect to the first one's engine.
 	if Sonara.is_duplicate_instance:
 		return
-	# The bar drags and maximizes the borderless window (MainBar.gd is not attached in the scene).
-	main_bar.set_script(preload("res://editor/MainBar.gd"))
 	_update_min_window_size()
 	_window_geometry = WindowGeometry.new(get_window())
 	add_child(_window_geometry)  # restores the saved size and position

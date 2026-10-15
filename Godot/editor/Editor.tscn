@@ -2,7 +2,6 @@
 
 [ext_resource type="Theme" uid="uid://c77m063o570pp" path="res://assets/Sonara_Theme.tres" id="1_10umj"]
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="2_ribbq"]
-[ext_resource type="PackedScene" path="res://editor/inspector/InspectorPanel.tscn" id="inspector_panel"]
 [ext_resource type="Texture2D" uid="uid://kev1as0j2s0c" path="res://assets/icons/play.svg" id="4_hi76l"]
 [ext_resource type="Script" uid="uid://cb24qblgyl84v" path="res://editor/MainMenu.gd" id="4_wmsa6"]
 [ext_resource type="Texture2D" uid="uid://r2a82ngldduk" path="res://assets/icons/circle-stop.svg" id="5_6l011"]
@@ -24,7 +23,9 @@
 [ext_resource type="PackedScene" uid="uid://wd107ykpmm32" path="res://export/ExportAudioDialog.tscn" id="20_flnwk"]
 [ext_resource type="Script" uid="uid://bg4ly5f4mmkcy" path="res://editor/ScalePicker.gd" id="21_scalepick"]
 [ext_resource type="Script" uid="uid://n6e4x2uxjs21" path="res://editor/HelpBar.gd" id="helpbar_gd"]
-[ext_resource type="Script" path="res://editor/ResizeGrip.gd" id="resize_grip_gd"]
+[ext_resource type="PackedScene" path="res://editor/inspector/InspectorPanel.tscn" id="inspector_panel"]
+[ext_resource type="Script" uid="uid://d3086mity0fgi" path="res://editor/ResizeGrip.gd" id="resize_grip_gd"]
+[ext_resource type="Script" uid="uid://ce6tt7vbxxjrp" path="res://editor/MainBar.gd" id="main_bar_gd"]
 [ext_resource type="Texture2D" uid="uid://sdwtbedbsin0" path="res://assets/icons/x.svg" id="win_close"]
 [ext_resource type="Texture2D" uid="uid://b4cmo7tg2llix" path="res://assets/icons/minus.svg" id="win_min"]
 
@@ -69,6 +70,7 @@ grow_vertical = 2
 theme = ExtResource("1_10umj")
 theme_type_variation = &"AppRoot"
 script = ExtResource("2_ribbq")
+metadata/_edit_lock_ = true
 
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1388963633]
 layout_mode = 2
@@ -80,6 +82,7 @@ theme_type_variation = &"SectionPanel"
 
 [node name="Top" type="HBoxContainer" parent="VBoxContainer/Header" unique_id=2065853292]
 layout_mode = 2
+script = ExtResource("main_bar_gd")
 theme_override_constants/separation = 8
 
 [node name="MainMenu" type="MenuBar" parent="VBoxContainer/Header/Top" unique_id=339831624]
@@ -251,7 +254,7 @@ vertical = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-theme_override_constants/separation = 12
+theme_override_constants/separation = 8
 split_offsets = PackedInt32Array(240)
 split_offset = 240
 script = ExtResource("7_dwy35")
@@ -260,7 +263,7 @@ script = ExtResource("7_dwy35")
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 2.0
-theme_override_constants/separation = 12
+theme_override_constants/separation = 8
 split_offsets = PackedInt32Array(-235)
 split_offset = -235
 
@@ -287,6 +290,7 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 2.0
+theme_override_constants/separation = 8
 
 [node name="Primary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter" unique_id=1543961896]
 layout_mode = 2
@@ -426,6 +430,7 @@ oversampling_override = 1.0
 [node name="ResizeOverlay" type="Control" parent="." unique_id=1900000001]
 layout_mode = 2
 mouse_filter = 2
+metadata/_edit_lock_ = true
 
 [node name="ResizeGrip" type="Control" parent="ResizeOverlay" unique_id=1900000002]
 layout_mode = 1

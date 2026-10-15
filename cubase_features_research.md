@@ -20,7 +20,7 @@ A selection of velocity points can be manipulated via 4 handles that show around
 
 Note color can be changed to show velocity, note, or track color.
 
-Sets of velocity and other lanes can be stored and recalled as presets. A Strings preset could contain Velocity and MIDI cc1 for example. A Piano preset might have velocity and sustain CC.
+Sets of velocity and other lanes can be stored and recalled as presets. A Strings preset could show Velocity and MIDI cc1 for example. A Piano preset might have velocity and sustain CC.
 
 We should also add features to show/hide stuff (tracks/channels/clips/notes) things based on the current playhead or region selection. Could be used in mixer, arranger and midi editor.
 
