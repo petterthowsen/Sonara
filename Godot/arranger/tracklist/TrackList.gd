@@ -930,6 +930,14 @@ func _find_track_item(track: Track) -> TrackItem:
 	return null
 
 
+## Scroll the arranger list so `track`'s header is on screen. Does nothing when the track isn't
+## listed (hidden or disabled with the matching "show" flag off).
+func reveal_track(track: Track) -> void:
+	if track == null or current_project == null or not ItemVisibility.track_listed(current_project, track):
+		return
+	_ensure_track_item_visible(_find_track_item(track))
+
+
 ## Scroll the arranger list so a track header stays on screen during rename-tab.
 func _ensure_track_item_visible(item: TrackItem) -> void:
 	if item == null:

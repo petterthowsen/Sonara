@@ -24,8 +24,9 @@
 [ext_resource type="Script" uid="uid://bg4ly5f4mmkcy" path="res://editor/ScalePicker.gd" id="21_scalepick"]
 [ext_resource type="Script" uid="uid://n6e4x2uxjs21" path="res://editor/HelpBar.gd" id="helpbar_gd"]
 [ext_resource type="PackedScene" path="res://editor/inspector/InspectorPanel.tscn" id="inspector_panel"]
-[ext_resource type="Script" uid="uid://d3086mity0fgi" path="res://editor/ResizeGrip.gd" id="resize_grip_gd"]
 [ext_resource type="Script" uid="uid://ce6tt7vbxxjrp" path="res://editor/MainBar.gd" id="main_bar_gd"]
+[ext_resource type="Script" uid="uid://d3086mity0fgi" path="res://editor/ResizeGrip.gd" id="resize_grip_gd"]
+[ext_resource type="PackedScene" path="res://editor/track_list/TrackListPanel.tscn" id="track_list_panel"]
 [ext_resource type="Texture2D" uid="uid://sdwtbedbsin0" path="res://assets/icons/x.svg" id="win_close"]
 [ext_resource type="Texture2D" uid="uid://b4cmo7tg2llix" path="res://assets/icons/minus.svg" id="win_min"]
 
@@ -82,8 +83,8 @@ theme_type_variation = &"SectionPanel"
 
 [node name="Top" type="HBoxContainer" parent="VBoxContainer/Header" unique_id=2065853292]
 layout_mode = 2
-script = ExtResource("main_bar_gd")
 theme_override_constants/separation = 8
+script = ExtResource("main_bar_gd")
 
 [node name="MainMenu" type="MenuBar" parent="VBoxContainer/Header/Top" unique_id=339831624]
 layout_mode = 2
@@ -272,6 +273,19 @@ custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
 size_flags_vertical = 3
 script = ExtResource("8_hi76l")
+
+[node name="TrackListPanel" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock" unique_id=1204230060]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+theme_type_variation = &"SectionPanel"
+
+[node name="TrackListView" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/TrackListPanel" unique_id=1055950961 instance=ExtResource("track_list_panel")]
+layout_mode = 2
 
 [node name="Inspector" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock" unique_id=938710415]
 layout_mode = 1

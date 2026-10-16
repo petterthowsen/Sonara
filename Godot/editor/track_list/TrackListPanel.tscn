@@ -1,0 +1,64 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://editor/track_list/TrackListPanel.gd" id="1_panel"]
+[ext_resource type="Texture2D" path="res://assets/icons/ellipsis.svg" id="2_more"]
+
+[node name="TrackListPanel" type="VBoxContainer"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+focus_mode = 2
+script = ExtResource("1_panel")
+
+[node name="Header" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="PresetSelector" type="OptionButton" parent="Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Visibility preset"
+clip_text = true
+fit_to_longest_item = false
+
+[node name="PresetMenu" type="MenuButton" parent="Header"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Preset actions"
+theme_type_variation = &"FlatMenuButton"
+icon = ExtResource("2_more")
+icon_alignment = 1
+
+[node name="SaveButton" type="Button" parent="Header"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Store the current visibility in the active preset"
+disabled = true
+text = "Save"
+
+[node name="ResetButton" type="Button" parent="Header"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Re-apply the active preset, discarding unsaved changes"
+disabled = true
+text = "Reset"
+
+[node name="FilterEdit" type="LineEdit" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Filter tracks"
+clear_button_enabled = true
+
+[node name="Scroll" type="ScrollContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="Rows" type="VBoxContainer" parent="Scroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 1

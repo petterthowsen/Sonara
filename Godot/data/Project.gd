@@ -99,6 +99,9 @@ var key_change_map: KeyChangeMap = KeyChangeMap.new():
 			key_change_map.changed.connect(_sync_key_change_map_to_engine)
 		_sync_key_change_map_to_engine()
 ## Tempo automation. Empty means the static `tempo` applies.
+## Spec 047: named visibility presets (which tracks are hidden). Saved with the project.
+var visibility_presets: VisibilityPresets = VisibilityPresets.new()
+
 var tempo_map: TempoMap = TempoMap.new():
 	set(map):
 		if tempo_map != null and tempo_map.changed.is_connected(_sync_tempo_map_to_engine):
@@ -178,6 +181,10 @@ static func handshake_step(attempts_sent: int, max_attempts: int = HANDSHAKE_MAX
 
 ## Depth of nested place_track / apply_track_layout batches (UI skips per-track rebuilds).
 var _track_layout_batch: int = 0
+
+## batch_visibility() nesting depth, and whether a notify was requested while it was above zero.
+var _visibility_batch_depth: int = 0
+var _visibility_notify_pending: bool = false
 
 ## True while nest_channel/unnest_channel is syncing the paired track (skip re-entrant nest).
 var _channel_nest_syncing: bool = false
@@ -1523,10 +1530,25 @@ func get_mixer_view(key: String) -> bool:
 ## Re-evaluate hidden/enabled after a track or channel changed: push each channel's effective
 ## enabled state to the engine, then tell the views. Cheap when nothing changed.
 func notify_item_visibility_changed() -> void:
+	if _visibility_batch_depth > 0:
+		_visibility_notify_pending = true
+		return
 	for ch in channels:
 		ch.apply_enabled_to_engine()
 	item_visibility_changed.emit()
 	tracks_layout_changed.emit()
+
+
+## Run `fn` with item-visibility notifications held back, then notify once if any were requested.
+## Batches nest: only the outermost one notifies. `fn` must not `await` (the depth is only lowered
+## when it returns).
+func batch_visibility(fn: Callable) -> void:
+	_visibility_batch_depth += 1
+	fn.call()
+	_visibility_batch_depth -= 1
+	if _visibility_batch_depth == 0 and _visibility_notify_pending:
+		_visibility_notify_pending = false
+		notify_item_visibility_changed()
 
 
 ## Set the project scale. An unknown type id becomes "none" and the root wraps into 0..11.
@@ -1950,6 +1972,14 @@ func refresh_plugin_states(timeout_sec: float = 3.0) -> void:
 	await DeviceInstance.refresh_plugin_states(roots, timeout_sec)
 
 
+## Track ID -> true for every track in the project.
+func _track_id_set() -> Dictionary:
+	var ids := {}
+	for track in tracks:
+		ids[track.id] = true
+	return ids
+
+
 func to_json() -> Dictionary:
 	# Serialize clip pool
 	var clips_array = []
@@ -1979,6 +2009,7 @@ func to_json() -> Dictionary:
 		"tempo_map": tempo_map.to_json(),
 		"time_signature_map": time_signature_map.to_json(),
 		"key_changes": key_change_map.to_json(),
+		"visibility_presets": visibility_presets.to_json(_track_id_set()),
 		"arranger_view": arranger_view.duplicate(),
 		"mixer_view": mixer_view.duplicate(),
 		"scale": {"root": scale_root, "type": scale_type},
@@ -2015,6 +2046,7 @@ static func from_json(data: Dictionary) -> Project:
 	project.tempo_map = TempoMap.from_json(data.get("tempo_map", []))
 	project.time_signature_map = TimeSignatureMap.from_json(data.get("time_signature_map", []))
 	project.key_change_map = KeyChangeMap.from_json(data.get("key_changes", []))
+	project.visibility_presets = VisibilityPresets.from_json(data.get("visibility_presets", {}))
 	var saved_view: Dictionary = data.get("arranger_view", {})
 	for key in project.arranger_view:
 		# Fall back to this build's default per key, so a project saved before a flag existed
@@ -2083,6 +2115,8 @@ static func from_json(data: Dictionary) -> Project:
 		# (signals will be connected when project is activated in Editor)
 		project.tracks.append(track)
 
+	# Stored IDs of tracks the file no longer has are dropped now that the tracks are loaded.
+	project.visibility_presets.prune(project._track_id_set())
 	_relink_folder_buses(project)
 	_migrate_slot_automation(project)
 	if migrate_scales:

@@ -639,6 +639,20 @@ func find_mixer_channel_ui_for_channel(channel : Channel) -> MixerChannel:
 	return null
 
 
+## Scroll the pane holding `channel`'s strip into view. Does nothing when the strip isn't listed
+## (hidden or disabled with the matching "show" flag off).
+func reveal_channel(channel: Channel) -> void:
+	if channel == null or current_project == null or not ItemVisibility.channel_listed(current_project, channel):
+		return
+	var mc := find_mixer_channel_ui_for_channel(channel)
+	if mc == null or not mc.is_visible_in_tree():
+		return
+	for pane: ScrollContainer in [left_pane, right_pane]:
+		if pane.is_ancestor_of(mc):
+			pane.ensure_control_visible(mc)
+			return
+
+
 ## Populate the left-pane + menu: channel-only instrument, or a Group track.
 func _setup_left_add_menu() -> void:
 	if left_add_button == null:

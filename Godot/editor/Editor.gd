@@ -476,6 +476,31 @@ func _unhandled_input(event: InputEvent) -> void:
 		toggle_device_frame()
 		accept_event()
 
+	if _handle_visibility_hotkey(event):
+		accept_event()
+
+
+## Visibility preset hotkeys (spec 047). They call TrackVisibility directly, so they work while
+## the Track List panel is hidden. Returns true when the event was consumed.
+func _handle_visibility_hotkey(event: InputEvent) -> bool:
+	if project == null or not event is InputEventKey:
+		return false
+	if Hotkeys.pressed(event, "visibility_show_all"):
+		TrackVisibility.show_all(project)
+		return true
+	if Hotkeys.pressed(event, "visibility_preset_next"):
+		TrackVisibility.step_preset(project, 1)
+		return true
+	if Hotkeys.pressed(event, "visibility_preset_previous"):
+		TrackVisibility.step_preset(project, -1)
+		return true
+	for i in range(1, 10):
+		if Hotkeys.pressed(event, "visibility_preset_%d" % i):
+			# An index past the last preset does nothing.
+			TrackVisibility.apply_preset(project, i - 1)
+			return true
+	return false
+
 
 # ============================================================================
 # PROJECT MANAGEMENT
@@ -1280,6 +1305,30 @@ func _select_track_externally(tracks: Array[Track], active: Track) -> void:
 	(arranger.track_list as TrackList).set_selection_silent(tracks, active)
 	set_track_selection(tracks, active, false)
 	_syncing_selection = false
+
+
+## Select `tracks` from outside the arranger (the Track List panel): updates the arranger headers,
+## the mixer strips and the editor's selection state, without record-arming the track.
+func select_tracks(tracks: Array[Track], active: Track) -> void:
+	if _syncing_selection:
+		return
+	_syncing_selection = true
+	(arranger.track_list as TrackList).set_selection_silent(tracks, active)
+	var mapped := SelectionSync.channels_for_tracks(project, tracks, active)
+	mixer.set_selection_silent(mapped["channels"], mapped["focused"])
+	set_track_selection(tracks, active, false)
+	_syncing_selection = false
+
+
+## Scroll `track` into view in the active view: its header in the arranger, its strip in the mixer.
+## Nothing scrolls when the track isn't listed there.
+func reveal_track(track: Track) -> void:
+	if track == null or project == null:
+		return
+	if current_view == View.ARRANGER:
+		(arranger.track_list as TrackList).reveal_track(track)
+	elif current_view == View.MIXER:
+		mixer.reveal_channel(project.get_track_mixer_channel(track))
 
 
 # ============================================================================

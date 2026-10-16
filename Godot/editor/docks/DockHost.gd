@@ -2,16 +2,18 @@
 class_name DockHost extends HSplitContainer
 
 const CONFIG_KEY := "ui/docks"
-const _DEFAULT_LEFT: Array[String] = ["inspector"]
+const _DEFAULT_LEFT: Array[String] = ["track_list", "inspector"]
 const _DEFAULT_RIGHT: Array[String] = ["browser", "assistant"]
 
 const _NODE_IDS := {
+	"TrackListPanel": "track_list",
 	"Inspector": "inspector",
 	"BrowserPanel": "browser",
 	"AssistantPanel": "assistant",
 }
 
 const _TITLES := {
+	"track_list": "Track List",
 	"inspector": "Inspector",
 	"browser": "Browser",
 	"assistant": "AI Chat",
@@ -222,14 +224,16 @@ func _place_entries(entries: Variant, dock: SideDock, by_id: Dictionary) -> void
 			dock.insert_panel(panel, -1)
 
 
-## Reveal a hidden panel on the right dock (appended below existing panels).
+## Reveal a hidden panel on its default side (left for ids in `_DEFAULT_LEFT`, otherwise right),
+## appended below existing panels.
 func _show_panel(panel: DockPanel) -> void:
 	if panel.get_parent_dock():
 		panel.visible = true
 		return
 	if panel.get_parent():
 		panel.get_parent().remove_child(panel)
-	right_dock.insert_panel(panel, -1)
+	var dock := left_dock if _DEFAULT_LEFT.has(panel.panel_id) else right_dock
+	dock.insert_panel(panel, -1)
 
 
 ## Remove a panel from its dock and park it in the hidden pool.

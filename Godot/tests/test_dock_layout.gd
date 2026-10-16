@@ -30,10 +30,12 @@ func run_tests() -> void:
 	await _test_mouse_drop_above_tab_group_stacks()
 	await _test_mouse_drop_at_dock_bottom_stacks()
 	await _test_new_stack_item_gets_even_share()
+	await _test_track_list_default_left()
+	await _test_track_list_shown_from_view_goes_left()
 
 
-## Build a DockHost with inspector on the left and browser + assistant on the right.
-func _make_host(saved: Variant = {}) -> Control:
+## Build a DockHost with (optionally the track list and) inspector on the left and browser + assistant on the right.
+func _make_host(saved: Variant = {}, with_track_list := false) -> Control:
 	_sonara().set_config(_host_script.CONFIG_KEY, saved)
 	var host: Control = _host_script.new()
 	host.name = "LeftRightSplit"
@@ -44,6 +46,8 @@ func _make_host(saved: Variant = {}) -> Control:
 	host.add_child(center_split)
 	var left: Control = _dock_script.new()
 	left.name = "LeftDock"
+	if with_track_list:
+		left.add_child(_content("TrackListPanel"))
 	left.add_child(_content("Inspector"))
 	center_split.add_child(left)
 	center_split.add_child(_content("Center"))
@@ -292,3 +296,31 @@ func _test_showing_panel_selects_its_tab() -> void:
 	host.set_dock_shown("right", false)
 	host.toggle_panel_visible("assistant")
 	_assert(tabs.current_tab == assistant.get_index(), "showing a tabbed panel switches to its tab")
+
+
+## A fresh layout keeps the scene order: the Track List sits first in the left dock, above the Inspector.
+func _test_track_list_default_left() -> void:
+	var host := await _make_host({}, true)
+	var ids: Array = []
+	for panel in host.left_dock.get_panels():
+		ids.append(panel.panel_id)
+	_assert(ids == ["track_list", "inspector"], "track_list is first in the left dock (got %s)" % [ids])
+	_assert(_panel(host, "track_list").get_title() == "Track List", "track_list is titled Track List")
+	_assert(host.get_panel_ids().has("track_list"), "track_list is listed for the View menu")
+	await _free_host(host)
+
+
+## A saved layout without the Track List parks it hidden; showing it from View puts it in the left
+## dock, while other hidden panels still go right.
+func _test_track_list_shown_from_view_goes_left() -> void:
+	var saved := {"left": ["inspector"], "right": ["browser", "assistant"]}
+	var host := await _make_host(saved, true)
+	_assert(not host.is_panel_visible("track_list"), "a saved layout without track_list leaves it hidden")
+	host.set_panel_visible("track_list", true)
+	var panel: Variant = _panel(host, "track_list")
+	_assert(panel != null and panel.get_parent_dock() == host.left_dock, "showing track_list places it in the left dock")
+	host.set_panel_visible("track_list", false)
+	host.set_panel_visible("assistant", false)
+	host.set_panel_visible("assistant", true)
+	_assert(_panel(host, "assistant").get_parent_dock() == host.right_dock, "assistant still returns to the right dock")
+	await _free_host(host)

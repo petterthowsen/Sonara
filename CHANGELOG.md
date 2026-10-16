@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Track List panel (View > Track List, docked left above the Inspector): every track in a tree with an eye toggle, color and name. Drag over the eyes to hide or show many tracks in one undo step, Shift-click to show only a track and its folders, click to select (synced with the arranger and mixer), double-click to rename, and a context menu for color, hide and enable. Visibility presets (saved with the project) store which tracks are hidden, with Add / Rename / Delete / Move, Save (also creates a preset from a Custom state) and Reset, and hotkeys Ctrl+1 to Ctrl+9 (apply preset), Ctrl+0 (show all) and rebindable Next / Previous preset actions.
 - Right-clicking a dock panel's title bar or tab opens a context menu with Close.
 - View > Show Left Dock / Show Right Dock check items hide or show a whole side dock, with rebindable hotkeys (default Alt+1 / Alt+2); the state is saved with the dock layout.
 - Arranger: new setting Appearance > Arranger > Color Clips by Track fills each clip with its track color and leaves the timeline background neutral.
