@@ -9,7 +9,7 @@ modular mix console, width is freely adjustable. should do that, width toggle ca
 
 the vertical sections of mixer channels are freely adjustable such as fader heights etc.
 
-we should also make track/channel tint amount adjustable in settings.
+we should also make channel's color tint amount adjustable in settings.
 
 ## Midi
 

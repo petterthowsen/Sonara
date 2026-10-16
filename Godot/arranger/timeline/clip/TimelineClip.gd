@@ -1,3 +1,4 @@
+@tool
 # TimelineClip.gd
 # Visual representation of a Clip on the timeline. The body, header band and name are drawn here
 # rather than built from container and Label nodes: every node under the scrolled timeline costs
@@ -5,7 +6,8 @@
 # is a child.
 class_name TimelineClip extends Control
 
-static var logger := Log.make("TimelineClip")
+# Not created in the editor: Log opens last.log and hooks the engine's error output.
+static var logger: Log = null if Engine.is_editor_hint() else Log.make("TimelineClip")
 
 # Signals
 signal select_requested(clip_ui: TimelineClip, add_to_selection: bool)  # Request to select this clip; add_to_selection = shift held
@@ -68,21 +70,49 @@ var resize_padding_added: int = 0  # Track total padding added during this resiz
 var _resize_group: Array[TimelineClip] = []
 @export var resize_edge_size: float = 8.0  # pixel width of resize edge zones
 
-# Exported StyleBoxes for different states
-@export var style_normal: StyleBoxFlat = null
-@export var style_hovered: StyleBoxFlat = null
-@export var style_selected: StyleBoxFlat = null
+# Exported StyleBoxes for different states. Editing one in the Inspector redraws the clip.
+@export var style_normal: StyleBoxFlat = null:
+	set(value):
+		style_normal = _watch_resource(style_normal, value, _update_style)
+@export var style_hovered: StyleBoxFlat = null:
+	set(value):
+		style_hovered = _watch_resource(style_hovered, value, _update_style)
+@export var style_selected: StyleBoxFlat = null:
+	set(value):
+		style_selected = _watch_resource(style_selected, value, _update_style)
 
 @export_group("Header")
 ## Band along the top holding the clip name. ClipRenderer's offset_top matches its height.
-@export var header_style: StyleBoxFlat = null
-@export var header_height: float = 24.0
+@export var header_style: StyleBoxFlat = null:
+	set(value):
+		header_style = _watch_resource(header_style, value, _shape_name)
+@export var header_height: float = 24.0:
+	set(value):
+		header_height = value
+		_update_style()
 ## Font size and color of the clip name (the font is the theme's Label font).
-@export var name_settings: LabelSettings = null
+@export var name_settings: LabelSettings = null:
+	set(value):
+		name_settings = _watch_resource(name_settings, value, _shape_name)
 @export_group("")
+
+
+## Swap `old` for `new`, calling `on_changed` whenever `new` is edited (e.g. in the Inspector).
+func _watch_resource(old: Resource, new: Resource, on_changed: Callable) -> Resource:
+	if old == new:
+		return new
+	if old and old.changed.is_connected(on_changed):
+		old.changed.disconnect(on_changed)
+	if new:
+		new.changed.connect(on_changed)
+	on_changed.call()
+	return new
+
 
 ## Help-bar interaction state: resizing an edge or dragging a loop divider.
 func _sync_resize_state() -> void:
+	if Engine.is_editor_hint():
+		return
 	if is_resizing or _loop_drag_pass > 0:
 		Hotkeys.begin_state(self, "clip_resize")
 	else:
@@ -107,6 +137,13 @@ var _loop_boundaries: PackedInt32Array = PackedInt32Array()
 ## Cap on waveform views per clip; passes beyond it show no waveform.
 const MAX_LOOP_WAVEFORMS := 64
 
+## Name shown in the scene editor, where no clip is bound. Ignored at runtime.
+@export var preview_name: String = "Clip name":
+	set(value):
+		preview_name = value
+		if Engine.is_editor_hint() and clip_instance == null:
+			_set_name_text(preview_name)
+
 ## The clip name, shaped once per rename and trimmed with an ellipsis to the header width.
 var _name_line := TextLine.new()
 var _name_text: String = ""
@@ -118,6 +155,8 @@ func _ready() -> void:
 	# unused events (middle-click pan) are not auto-handled by the Viewport.
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	_name_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	if Engine.is_editor_hint() and clip_instance == null:
+		_name_text = preview_name
 	_shape_name()
 	if clip_renderer:
 		clip_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -479,6 +518,9 @@ func _notification(what: int) -> void:
 
 
 func _draw() -> void:
+	if Engine.is_editor_hint():
+		_draw_body()
+		return
 	PerfRecorder.begin(&"TimelineClip._draw")
 	_draw_body()
 	PerfRecorder.end(&"TimelineClip._draw")

@@ -1,3 +1,4 @@
+@tool
 ## WaveformView.gd
 ## Draws a WaveformData with waveform.gdshader: one rect, all work per pixel on the GPU.
 ## Set `data`, `start_frame` (source frame at the left edge) and `frames_per_pixel`; each
@@ -148,18 +149,18 @@ func _ready() -> void:
 	resized.connect(_on_resized)
 	_on_resized()
 	set_process(is_data_ready())
-	if follow_settings:
+	if follow_settings and not Engine.is_editor_hint():
 		_read_settings()
 		Settings.setting_changed.connect(_on_setting_changed)
 
 
 func _exit_tree() -> void:
-	if follow_settings and Settings.setting_changed.is_connected(_on_setting_changed):
+	if follow_settings and not Engine.is_editor_hint() and Settings.setting_changed.is_connected(_on_setting_changed):
 		Settings.setting_changed.disconnect(_on_setting_changed)
 
 
 func _enter_tree() -> void:
-	if follow_settings and is_node_ready() and not Settings.setting_changed.is_connected(_on_setting_changed):
+	if follow_settings and not Engine.is_editor_hint() and is_node_ready() and not Settings.setting_changed.is_connected(_on_setting_changed):
 		_read_settings()
 		Settings.setting_changed.connect(_on_setting_changed)
 

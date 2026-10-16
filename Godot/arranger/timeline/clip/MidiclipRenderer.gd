@@ -1,3 +1,4 @@
+@tool
 # Draws the MIDI notes of a clip. Audio clips draw through the sibling WaveformView instead.
 #
 # With culling on (the Timeline turns it on for every clip it shows), only the notes inside
@@ -82,6 +83,9 @@ func _on_clip_modified():
 
 
 func _draw() -> void:
+	if Engine.is_editor_hint():
+		_draw_body()
+		return
 	PerfRecorder.begin(&"MidiclipRenderer._draw")
 	_draw_body()
 	PerfRecorder.end(&"MidiclipRenderer._draw")

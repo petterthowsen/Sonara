@@ -74,7 +74,9 @@ anchors_preset = 0
 offset_right = 214.0
 offset_bottom = 82.0
 size_flags_vertical = 3
+focus_mode = 1
 mouse_filter = 1
+mouse_default_cursor_shape = 2
 script = ExtResource("1_timeline_clip")
 style_normal = SubResource("StyleBoxFlat_hpdcv")
 style_hovered = SubResource("StyleBoxFlat_c74fi")
@@ -88,11 +90,15 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 1.0
 offset_top = 24.0
+offset_right = -1.0
+offset_bottom = -1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("2_c74fi")
+note_color = Color(1, 1, 1, 1)
 min_pitch_range = 6
 
 [node name="Waveform" type="Control" parent="ClipRenderer" unique_id=1418093527]
