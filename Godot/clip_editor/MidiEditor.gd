@@ -899,6 +899,9 @@ func _gui_input(event: InputEvent):
 		# Middle mouse button panning
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
 			if event.pressed:
+				var focus_editor := get_active_note_editor()
+				if focus_editor and not focus_editor.has_focus():
+					focus_editor.grab_focus()
 				# Start panning
 				is_panning = true
 				pan_start_mouse_pos = event.position
@@ -1020,6 +1023,11 @@ func _handle_note_editing_mouse_button(mevent: InputEventMouseButton) -> void:
 	var active_editor = get_active_note_editor()
 	if not active_editor:
 		return
+
+	# FOCUS_CLICK only reacts to the left button; a right click (erase) must focus the
+	# editor too, or Ctrl+A and the other shortcuts don't reach it.
+	if mevent.pressed and not active_editor.has_focus():
+		active_editor.grab_focus()
 
 	# Convert mouse position to active note_editor local space
 	var note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
@@ -1952,6 +1960,7 @@ func _start_preview_note(note: int, velocity: float) -> void:
 
 
 func _stop_preview_note() -> void:
+	_cancel_pending_audition()
 	if _preview_note < 0:
 		return
 	MidiManager.send_note_to_channel(_preview_channel_id, _preview_note, 0, false)
@@ -2120,19 +2129,54 @@ const AUDITION_THROTTLE_MSEC := 500
 var _last_throttled_audition_msec := -AUDITION_THROTTLE_MSEC
 
 
-## True, and starts a new interval, when a drag-driven audition may sound now. A refused
-## retrigger is not remembered, so the next mouse move tries again with the then-current value.
-func audition_throttle_ready() -> bool:
-	var now := Time.get_ticks_msec()
-	if now - _last_throttled_audition_msec < AUDITION_THROTTLE_MSEC:
-		return false
-	_last_throttled_audition_msec = now
-	return true
+var _pending_audition := Callable()
+var _audition_timer: SceneTreeTimer = null
+
+
+## Run `play` now if the throttle interval has passed; otherwise keep only the newest `play`
+## and run it when the interval ends, so a drag that stops always sounds its final position.
+## `play` must read the note's current state when it runs. Pending plays are dropped when the
+## preview stops (release).
+func audition_throttled(play: Callable) -> void:
+	var wait := AUDITION_THROTTLE_MSEC - (Time.get_ticks_msec() - _last_throttled_audition_msec)
+	if wait <= 0:
+		_cancel_pending_audition()
+		_last_throttled_audition_msec = Time.get_ticks_msec()
+		play.call()
+		return
+	var waiting := _audition_timer != null
+	_pending_audition = play
+	if not waiting:
+		_audition_timer = get_tree().create_timer(wait / 1000.0)
+		_audition_timer.timeout.connect(_fire_pending_audition)
+
+
+func _fire_pending_audition() -> void:
+	var play := _pending_audition
+	_cancel_pending_audition()
+	if not play.is_valid():
+		return
+	_last_throttled_audition_msec = Time.get_ticks_msec()
+	play.call()
+
+
+func _cancel_pending_audition() -> void:
+	if _audition_timer != null and _audition_timer.timeout.is_connected(_fire_pending_audition):
+		_audition_timer.timeout.disconnect(_fire_pending_audition)
+	_audition_timer = null
+	_pending_audition = Callable()
 
 
 ## While dragging with audition on, replay the note whenever its pitch changes (throttled).
 func _retrigger_audition_on_pitch_change(vn: VisualNote) -> void:
 	if not audition_enabled or _preview_note < 0 or vn == null or vn.midi_note_data == null:
 		return
-	if vn.midi_note_data.note != _preview_note and audition_throttle_ready():
+	if vn.midi_note_data.note != _preview_note:
+		audition_throttled(_replay_if_pitch_changed.bind(vn))
+
+
+func _replay_if_pitch_changed(vn: VisualNote) -> void:
+	if not audition_enabled or _preview_note < 0 or not is_instance_valid(vn) or vn.midi_note_data == null:
+		return
+	if vn.midi_note_data.note != _preview_note:
 		_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)

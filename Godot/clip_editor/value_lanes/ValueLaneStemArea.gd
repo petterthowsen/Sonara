@@ -10,7 +10,7 @@ signal note_touched(note: MidiNoteData)
 ## Right click: the lane shows its menu at `global_pos`.
 signal context_requested(global_pos: Vector2)
 
-enum Gesture { NONE, PAINT, OFFSET, SCALE, LINE }
+enum Gesture { NONE, PAINT, OFFSET, SCALE, LINE, TILT_LEFT, TILT_RIGHT, COMPRESS }
 
 ## Pixels either side of the pointer that count as "the same x" (a chord's stems).
 const CHORD_TOLERANCE := 3.0
@@ -18,6 +18,9 @@ const CHORD_TOLERANCE := 3.0
 const LINE_THRESHOLD := 3.0
 const STEM_WIDTH := 2.0
 const HEAD_SIZE := 5.0
+## Side of the square selection handles (tilt left / right, compress).
+const HANDLE_SIZE := 9.0
+const HANDLE_GAP := 7.0
 const HISTORY_NAME := "Edit %s"
 
 var midi_editor: MidiEditor = null
@@ -48,6 +51,10 @@ var _touched: Dictionary = {}  # MidiNoteData -> Clip
 ## crosses another stem, which takes over.
 var _grabbed: Array[MidiNoteData] = []
 var _before: Dictionary = {}
+## x of every note a handle gesture acts on (frozen at the press) and the readout it shows.
+var _note_x: Dictionary = {}  # MidiNoteData -> float
+var _handle_text := ""
+var _hover_handle := Gesture.NONE
 var _line_end := Vector2.ZERO
 var _moved := false
 var _hovered: MidiNoteData = null
@@ -107,6 +114,7 @@ func bind(editor: MidiEditor) -> void:
 		_connect_once(ne.notes_refreshed, queue_redraw)
 		if ne.selection_manager:
 			_connect_once(ne.selection_manager.selection_changed, _on_selection_changed)
+			_connect_once(ne.selection_manager.selection_set_changed, queue_redraw)
 	queue_redraw()
 
 
@@ -164,19 +172,111 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), midi_editor.note_lanes.note_lane_color_white)
 	_draw_grid()
 	# The hovered stem goes last, so the other stems of its chord don't cover it.
+	var stems := _current_stems()
+	var dim := _has_selection(stems)
 	var hovered: Array[Dictionary] = []
-	for stem in _current_stems():
-		if stem["note_data"] == midi_editor.hovered_note_data:
+	for stem in stems:
+		if _is_highlighted(stem["note_data"]):
 			hovered.append(stem)
 		else:
-			_draw_stem(stem, false)
+			_draw_stem(stem, false, dim)
 	for stem in hovered:
-		_draw_stem(stem, true)
+		_draw_stem(stem, true, dim)
+	_draw_handles(stems)
 	if _gesture == Gesture.LINE and _moved:
 		draw_line(_press_pos, _line_end, Color(1, 1, 1, 0.8), 1.5)
 
 
-func _draw_stem(stem: Dictionary, hovered: bool) -> void:
+## Hit rectangles of the selection handles by gesture: tilt left / right on the top corners
+## of the selected stems' bounds, compress fixed at the lane's bottom right. Empty unless two or more
+## notes are selected.
+func _handle_rects(stems: Array[Dictionary]) -> Dictionary:
+	var lo := INF
+	var hi := -INF
+	var top := INF
+	var count := 0
+	for stem in stems:
+		if not stem["selected"] or stem["ghost"]:
+			continue
+		count += 1
+		var x := stem_x(stem)
+		lo = minf(lo, x)
+		hi = maxf(hi, x)
+		top = minf(top, stem_top(descriptor.get_value(stem["note_data"])))
+	if count < 2:
+		return {}
+	var half := HANDLE_SIZE * 0.5
+	var y := clampf(top - HANDLE_GAP - half, half + 1.0, maxf(size.y - 3.0 * HANDLE_SIZE, half + 1.0))
+	var left_x := clampf(lo - HANDLE_GAP, half + 1.0, size.x - half - 1.0)
+	var right_x := clampf(hi + HANDLE_GAP, half + 1.0, size.x - half - 1.0)
+	var box := Vector2.ONE * HANDLE_SIZE
+	return {
+		Gesture.TILT_LEFT: Rect2(Vector2(left_x - half, y - half), box),
+		Gesture.TILT_RIGHT: Rect2(Vector2(right_x - half, y - half), box),
+		Gesture.COMPRESS: Rect2(Vector2(right_x - half, size.y - HANDLE_SIZE - 2.0), box),
+	}
+
+
+func _handle_at(pos: Vector2) -> Gesture:
+	var rects := _handle_rects(_current_stems())
+	for g in rects:
+		if (rects[g] as Rect2).grow(2.0).has_point(pos):
+			return g
+	return Gesture.NONE
+
+
+func _draw_handles(stems: Array[Dictionary]) -> void:
+	var active := _gesture if _gesture in [Gesture.TILT_LEFT, Gesture.TILT_RIGHT, Gesture.COMPRESS] else _hover_handle
+	var rects := _handle_rects(stems)
+	for g in rects:
+		var rect: Rect2 = rects[g]
+		var color := Color.WHITE if g == active else _primary_accent.lightened(0.35)
+		draw_rect(rect, color)
+		draw_rect(rect, Color(0, 0, 0, 0.6), false, 1.0)
+		# A little glyph: arrows for the tilts, a squeeze for the compressor.
+		var c := rect.get_center()
+		var ink := Color(0, 0, 0, 0.7)
+		if g == Gesture.COMPRESS:
+			draw_line(c + Vector2(-2.5, -1.5), c + Vector2(2.5, -1.5), ink, 1.0)
+			draw_line(c + Vector2(-2.5, 1.5), c + Vector2(2.5, 1.5), ink, 1.0)
+		else:
+			var dir := -1.0 if g == Gesture.TILT_LEFT else 1.0
+			draw_line(c + Vector2(-2.5 * dir, 2.0), c + Vector2(2.5 * dir, -2.0), ink, 1.0)
+
+
+## Whether any stem belongs to a selected note (then only those are editable).
+func _has_selection(stems: Array[Dictionary]) -> bool:
+	for stem in stems:
+		if stem["selected"]:
+			return true
+	return false
+
+
+## The stems a plain click / paint can reach: the selected ones when there is a selection.
+func _editable_stems() -> Array[Dictionary]:
+	var stems := _current_stems()
+	if not _has_selection(stems):
+		return stems
+	var out: Array[Dictionary] = []
+	for stem in stems:
+		if stem["selected"]:
+			out.append(stem)
+	return out
+
+
+## Stems shown highlighted: the ones a gesture is adjusting, else the hovered one.
+func _is_highlighted(nd: MidiNoteData) -> bool:
+	match _gesture:
+		Gesture.PAINT:
+			return nd in _grabbed
+		Gesture.OFFSET, Gesture.SCALE:
+			return _originals.has(nd)
+		Gesture.LINE, Gesture.TILT_LEFT, Gesture.TILT_RIGHT, Gesture.COMPRESS:
+			return false
+	return nd == midi_editor.hovered_note_data
+
+
+func _draw_stem(stem: Dictionary, hovered: bool, dim: bool = false) -> void:
 	var x := stem_x(stem)
 	if x < 0.0 or x > size.x:
 		return
@@ -193,6 +293,8 @@ func _draw_stem(stem: Dictionary, hovered: bool) -> void:
 	if stem["selected"]:
 		color = color.lightened(0.35)
 		width += 1.0
+	elif dim:
+		color.a *= 0.5
 	if hovered:
 		color = Color.WHITE
 	draw_line(Vector2(x, size.y), Vector2(x, top), color, width)
@@ -238,7 +340,7 @@ func _chord_at(x0: float, x1: float) -> Array[MidiNoteData]:
 	var lo := minf(x0, x1) - CHORD_TOLERANCE
 	var hi := maxf(x0, x1) + CHORD_TOLERANCE
 	var out: Array[MidiNoteData] = []
-	for stem in _current_stems():
+	for stem in _editable_stems():
 		var x := stem_x(stem)
 		if x >= lo and x <= hi and stem["note_data"] not in out:
 			out.append(stem["note_data"])
@@ -253,7 +355,7 @@ func _chord_at(x0: float, x1: float) -> Array[MidiNoteData]:
 func _nearest_stem_note(x: float) -> MidiNoteData:
 	var best: MidiNoteData = null
 	var best_d := INF
-	for stem in _current_stems():
+	for stem in _editable_stems():
 		var d := absf(stem_x(stem) - x)
 		if d < best_d:
 			best_d = d
@@ -264,7 +366,7 @@ func _nearest_stem_note(x: float) -> MidiNoteData:
 ## Note of the stem nearest `pos` x (so hovering anywhere highlights the closest stem), or
 ## null with no stems. Of a chord's stems (the same x), the one whose head is nearest `pos` y.
 func _note_near(pos: Vector2) -> MidiNoteData:
-	var stems := midi_editor.value_stems()
+	var stems := _editable_stems()
 	var best_d := CHORD_TOLERANCE + 0.001
 	for stem in stems:
 		best_d = minf(best_d, absf(stem_x(stem) - pos.x))
@@ -301,7 +403,8 @@ func _on_button(event: InputEventMouseButton) -> void:
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	if event.pressed:
-		if event.double_click and not event.ctrl_pressed and not event.alt_pressed:
+		if event.double_click and not event.ctrl_pressed and not event.alt_pressed \
+				and _handle_at(event.position) == Gesture.NONE:
 			_cancel_gesture()
 			_open_exact_editor(event.position)
 		else:
@@ -326,7 +429,10 @@ func _begin(event: InputEventMouseButton) -> void:
 	for stem in _stems:
 		_clip_by_note[stem["note_data"]] = stem["clip"]
 	_before = ClipNotesStateCommand.capture_many(_unique_clips())
-	if event.alt_pressed:
+	var handle := Gesture.NONE if event.alt_pressed or event.ctrl_pressed else _handle_at(event.position)
+	if handle != Gesture.NONE:
+		_begin_handle(handle)
+	elif event.alt_pressed:
 		_gesture = Gesture.SCALE if event.ctrl_pressed else Gesture.OFFSET
 		for nd in targets_at(event.position.x):
 			_originals[nd] = descriptor.get_value(nd)
@@ -338,6 +444,45 @@ func _begin(event: InputEventMouseButton) -> void:
 		_paint(event.position, event.position)
 	_update_tooltip(event.position)
 	_refresh()
+
+
+## A handle press: the gesture acts on every selected note, keeping where each one sits.
+func _begin_handle(handle: Gesture) -> void:
+	_gesture = handle
+	_handle_text = ""
+	_note_x.clear()
+	for stem in _stems:
+		if stem["selected"] and not stem["ghost"]:
+			_note_x[stem["note_data"]] = stem_x(stem)
+			_originals[stem["note_data"]] = descriptor.get_value(stem["note_data"])
+
+
+## Signed readout of a value delta in the display mode.
+func _delta_text(delta: float) -> String:
+	var span := descriptor.max_value - descriptor.min_value
+	if NoteValueDescriptors.display_mode() == NoteValueDescriptor.DISPLAY_PERCENT:
+		return "%+d%%" % roundi(delta / maxf(span, 0.0001) * 100.0)
+	return "%+d" % roundi(delta * 127.0)
+
+
+func _apply_tilt(dy: float, from_left: bool) -> void:
+	var delta := -dy / maxf(size.y, 1.0) * (descriptor.max_value - descriptor.min_value)
+	var res := ValueLaneEdits.tilt(_originals.values(), _note_x.values(), delta, from_left, descriptor)
+	_write_all(res)
+	_handle_text = _delta_text(delta)
+
+
+func _apply_compress(dy: float) -> void:
+	var factor := maxf(1.0 - dy / (maxf(size.y, 1.0) * 0.5), 0.0)
+	_write_all(ValueLaneEdits.compress(_originals.values(), factor, descriptor))
+	_handle_text = "%+d%%" % roundi((factor - 1.0) * 100.0)
+
+
+func _write_all(values: Array) -> void:
+	var i := 0
+	for nd in _originals.keys():
+		_write_value(nd, values[i])
+		i += 1
 
 
 func _on_motion(event: InputEventMouseMotion) -> void:
@@ -359,6 +504,12 @@ func _on_motion(event: InputEventMouseMotion) -> void:
 			_apply_scale(point.y - _press_pos.y)
 		Gesture.LINE:
 			_line_end = Vector2(event.position.x, point.y)
+		Gesture.TILT_LEFT:
+			_apply_tilt(point.y - _press_pos.y, true)
+		Gesture.TILT_RIGHT:
+			_apply_tilt(point.y - _press_pos.y, false)
+		Gesture.COMPRESS:
+			_apply_compress(point.y - _press_pos.y)
 	_update_tooltip(event.position)
 	_refresh()
 	accept_event()
@@ -376,6 +527,7 @@ func _finish() -> void:
 	_tooltip.visible = false
 	_stop_audition()
 	_commit()
+	_update_hover(get_local_mouse_position())
 
 
 func _cancel_gesture() -> void:
@@ -387,13 +539,22 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_THEME_CHANGED:
 		_refresh_theme_colors()
 	elif what == NOTIFICATION_MOUSE_EXIT and _gesture == Gesture.NONE and midi_editor != null:
+		if _hover_handle != Gesture.NONE:
+			_hover_handle = Gesture.NONE
+			mouse_default_cursor_shape = Control.CURSOR_ARROW
+			queue_redraw()
 		if _hovered != null:
 			_hovered = null
 			midi_editor.set_hovered_note(null)
 
 
 func _update_hover(pos: Vector2) -> void:
-	var nd := _note_near(pos)
+	var handle := _handle_at(pos)
+	if handle != _hover_handle:
+		_hover_handle = handle
+		mouse_default_cursor_shape = Control.CURSOR_VSIZE if handle != Gesture.NONE else Control.CURSOR_ARROW
+		queue_redraw()
+	var nd := _note_near(pos) if handle == Gesture.NONE else null
 	if nd != _hovered:
 		_hovered = nd
 		midi_editor.set_hovered_note(nd)
@@ -412,18 +573,6 @@ func _unique_clips() -> Array:
 
 
 func _paint(from: Vector2, to: Vector2) -> void:
-	var selected := midi_editor.selected_note_data()
-	if not selected.is_empty():
-		# Relative: every selected note moves by the value delta since the PRESS (not the last
-		# point — once the pointer leaves the lane, value_at_y clamps, and an incremental delta
-		# would fall to 0 and snap the notes back to their pre-drag values).
-		var delta := ValueLaneEdits.value_at_y(to.y, size.y, descriptor) \
-				- ValueLaneEdits.value_at_y(_press_pos.y, size.y, descriptor)
-		for nd in selected:
-			if not _originals.has(nd):
-				_originals[nd] = descriptor.get_value(nd)
-			_write_value(nd, ValueLaneEdits.offset_value(_originals[nd], delta, descriptor))
-		return
 	# Every stem the pointer passed between the last and this position gets the value on the
 	# line between the two points, so a fast drag doesn't skip stems.
 	var p0 := Vector2(from.x, ValueLaneEdits.value_at_y(from.y, size.y, descriptor))
@@ -431,7 +580,7 @@ func _paint(from: Vector2, to: Vector2) -> void:
 	var lo := minf(from.x, to.x) - CHORD_TOLERANCE
 	var hi := maxf(from.x, to.x) + CHORD_TOLERANCE
 	var last_x := NAN
-	for stem in _stems:
+	for stem in _editable_stems():
 		var x := stem_x(stem)
 		if x >= lo and x <= hi:
 			_write_value(stem["note_data"], ValueLaneEdits.line_value(p0, p1, x, descriptor))
@@ -448,6 +597,7 @@ func _paint(from: Vector2, to: Vector2) -> void:
 			_grabbed = [nearest]
 	for nd in _grabbed:
 		_write_value(nd, p1.y)
+	midi_editor.set_hovered_note(_grabbed[0] if not _grabbed.is_empty() else null)
 
 
 func _apply_offset(dy: float) -> void:
@@ -523,6 +673,7 @@ func _commit() -> void:
 	_clip_by_note.clear()
 	_touched.clear()
 	_originals.clear()
+	_note_x.clear()
 	if last != null:
 		note_touched.emit(last)
 
@@ -535,14 +686,20 @@ func _commit() -> void:
 func _audition(nd: MidiNoteData) -> void:
 	if descriptor.key != "vel" or not midi_editor.audition_enabled or _touched.size() != 1:
 		return
+	midi_editor.audition_throttled(_play_audition.bind(nd))
+
+
+## Plays `nd` at its current velocity unless that 7-bit velocity already sounded.
+func _play_audition(nd: MidiNoteData) -> void:
 	var v7 := MidiNoteData.to_midi_velocity(nd.velocity)
-	if v7 == _last_audition_velocity or not midi_editor.audition_throttle_ready():
+	if _gesture == Gesture.NONE or v7 == _last_audition_velocity:
 		return
 	_last_audition_velocity = v7
 	midi_editor._start_preview_note(nd.note, nd.velocity)
 
 
 func _stop_audition() -> void:
+	midi_editor._cancel_pending_audition()
 	if _last_audition_velocity >= 0:
 		midi_editor._stop_preview_note()
 	_last_audition_velocity = -1
@@ -551,6 +708,11 @@ func _stop_audition() -> void:
 func _update_tooltip(pos: Vector2) -> void:
 	var mode := NoteValueDescriptors.display_mode()
 	var v: float
+	if _gesture in [Gesture.TILT_LEFT, Gesture.TILT_RIGHT, Gesture.COMPRESS]:
+		_tooltip.set_text(_handle_text if _handle_text != "" else "0")
+		_tooltip.visible = true
+		_tooltip.place_right_of(get_global_transform() * pos)
+		return
 	if _gesture == Gesture.LINE:
 		v = ValueLaneEdits.value_at_y(_line_end.y, size.y, descriptor)
 	elif not _touched.is_empty():

@@ -23,6 +23,7 @@ func run_tests() -> void:
 	await _test_paint()
 	await _test_paint_closest()
 	await _test_paint_selection_and_updates()
+	await _test_handles()
 	await _test_offset_scale_line()
 	await _test_reset_and_exact()
 	await _test_transform_dialog()
@@ -161,29 +162,36 @@ func _test_paint_selection_and_updates() -> void:
 	rig.select([1, 3])
 	rig.clear_osc()
 	var a = rig.area()
-	var x: float = rig.stem_x_of(4)
+	# A press out by an unselected stem reaches the closest SELECTED stem, never the unselected one.
+	var x4: float = rig.stem_x_of(4)
+	rig.drag(a, Vector2(x4, _y_of(rig, 0.6)), [Vector2(x4, _y_of(rig, 0.7))])
+	_assert(_near(rig.note(4).velocity, 0.3) and _near(rig.note(1).velocity, 0.5) and _near(rig.note(3).velocity, 0.7),
+		"with a selection, painting never touches the unselected stems")
+	rig.clear_osc()
+	# Painting over a selected stem sets only that stem (like painting without a selection).
+	var x: float = rig.stem_x_of(1)
 	a._gui_input(rig.mouse(Vector2(x, _y_of(rig, 0.6)), true))
 	_assert(rig.osc_updates() == 0, "nothing is sent to the engine during the gesture")
-	a._gui_input(rig.motion(Vector2(x, _y_of(rig, 0.7))))
+	a._gui_input(rig.motion(Vector2(x, _y_of(rig, 0.4))))
 	_assert(rig.osc_updates() == 0, "still nothing while dragging")
-	a._gui_input(rig.mouse(Vector2(x, _y_of(rig, 0.7)), false))
-	_assert(_near(rig.note(1).velocity, 0.6) and _near(rig.note(3).velocity, 0.3),
-		"with a selection, paint moves the selected notes by the pointer's delta (0.5->0.6, 0.2->0.3): %s, %s"
+	_assert(a._grabbed == [rig.note(1)], "only the stem being adjusted is highlighted")
+	a._gui_input(rig.mouse(Vector2(x, _y_of(rig, 0.4)), false))
+	_assert(_near(rig.note(1).velocity, 0.4) and _near(rig.note(3).velocity, 0.7),
+		"painting sets the crossed selected stem, not the whole selection: %s, %s"
 			% [rig.note(1).velocity, rig.note(3).velocity])
-	_assert(_near(rig.note(0).velocity, 0.3) and _near(rig.note(4).velocity, 0.3),
-		"and only those, wherever the pointer is")
-	_assert(rig.osc_updates() == 2, "two update_note sends after the release (%d)" % rig.osc_updates())
+	_assert(_near(rig.note(0).velocity, 0.3) and _near(rig.note(4).velocity, 0.3), "unselected stems are untouched")
+	_assert(rig.osc_updates() == 1, "one update_note send after the release (%d)" % rig.osc_updates())
 	await rig.cleanup()
 
-	# Regression: the relative delta is measured from the PRESS. Dragging past the lane
+	# Regression (Alt-drag): the relative delta is measured from the PRESS. Dragging past the lane
 	# top saturates the values there; it must not snap them back to their pre-drag ones
 	# once value_at_y clamps the pointer into the lane (delta would fall to 0).
 	var sat = Rig.new(self)
 	await sat.build([0, 960, 1920], [0.3, 0.5, 0.3])
 	sat.select([1, 2])
 	sat.clear_osc()
-	sat.drag(sat.area(), Vector2(10, _y_of(sat, 0.4)), [Vector2(10, -40.0)])
-	_assert(sat.note(1).velocity == 1.0 and _near(sat.note(2).velocity, 0.9, 0.01),
+	sat.drag(sat.area(), Vector2(10, _y_of(sat, 0.4)), [Vector2(10, -40.0)], {"alt": true})
+	_assert(sat.note(1).velocity == 1.0 and sat.note(2).velocity >= 0.9,
 		"a drag past the lane top saturates at max instead of snapping back: %s, %s"
 			% [sat.note(1).velocity, sat.note(2).velocity])
 	_assert(sat.osc_updates() == 2, "and both changed notes are sent (%d)" % sat.osc_updates())
@@ -193,7 +201,7 @@ func _test_paint_selection_and_updates() -> void:
 	var click = Rig.new(self)
 	await click.build([0, 960], [0.3, 0.8])
 	click.select([0, 1])
-	click.drag(click.area(), Vector2(10, _y_of(click, 0.4)), [])
+	click.drag(click.area(), Vector2(10, _y_of(click, 0.4)), [], {"alt": true})
 	_assert(_near(click.note(0).velocity, 0.3) and _near(click.note(1).velocity, 0.8),
 		"a click with a selection changes nothing (zero delta): %s, %s" % [click.note(0).velocity, click.note(1).velocity])
 	await click.cleanup()
@@ -202,7 +210,7 @@ func _test_paint_selection_and_updates() -> void:
 	await five.build([0, 960, 1920, 2880, 3840], [0.3, 0.3, 0.3, 0.3, 0.3])
 	five.select([0, 1, 2, 3, 4])
 	five.clear_osc()
-	five.drag(five.area(), Vector2(10, _y_of(five, 0.4)), [Vector2(12, _y_of(five, 0.5))])
+	five.drag(five.area(), Vector2(10, _y_of(five, 0.4)), [Vector2(12, _y_of(five, 0.5))], {"alt": true})
 	_assert(five.osc_updates() == 5 and five.history.size() == 1, "five notes: five update_note sends, one history entry")
 	_assert(five.note(4).velocity > 0.3, "and each moved up")
 	await five.cleanup()
@@ -274,4 +282,47 @@ func _test_transform_dialog() -> void:
 	_assert(rig.history.size() == 1, "one undo step")
 	rig.history[0].undo()
 	_assert(_near(rig.note(0).velocity, 0.2) and _near(rig.note(2).velocity, 0.6), "undo restores them")
+	await rig.cleanup()
+
+
+func _test_handles() -> void:
+	var t := ValueLaneEdits.tilt([0.4, 0.4, 0.4], [0.0, 50.0, 100.0], 0.2, true, vel)
+	_assert(_near(t[0], 0.6) and _near(t[1], 0.5) and _near(t[2], 0.4), "tilt from the left: full delta at the left end, none at the right")
+	t = ValueLaneEdits.tilt([0.4, 0.4, 0.4], [0.0, 50.0, 100.0], 0.2, false, vel)
+	_assert(_near(t[0], 0.4) and _near(t[2], 0.6), "tilt from the right mirrors it")
+	var c := ValueLaneEdits.compress([0.2, 0.6], 0.5, vel)
+	_assert(_near(c[0], 0.3) and _near(c[1], 0.5), "compress halves the distance to the mean")
+	c = ValueLaneEdits.compress([0.2, 0.6], 2.0, vel)
+	_assert(_near(c[0], 0.0, 0.2) and c[1] >= 0.79, "expand doubles it (clamped)")
+
+	var rig = Rig.new(self)
+	await rig.build([0, 960, 1920, 2880], [0.4, 0.4, 0.4, 0.4])
+	var a = rig.area()
+	_assert(a._handle_rects(a._current_stems()).is_empty(), "no handles without a selection")
+	rig.select([0])
+	await process_frame
+	_assert(a._handle_rects(a._current_stems()).is_empty(), "no handles for a single selected note")
+	rig.select([0, 1, 2])
+	await process_frame
+	var rects: Dictionary = a._handle_rects(a._current_stems())
+	_assert(rects.size() == 3, "three handles with a selection")
+	var tl: Vector2 = (rects[a.Gesture.TILT_LEFT] as Rect2).get_center()
+	var tr: Vector2 = (rects[a.Gesture.TILT_RIGHT] as Rect2).get_center()
+	var br: Vector2 = (rects[a.Gesture.COMPRESS] as Rect2).get_center()
+	_assert(tl.x < tr.x and is_equal_approx(br.y, a.size.y - 2.0 - 4.5), "tilt handles span the selection, compress sits at the bottom")
+	rig.clear_osc()
+	rig.drag(a, tl, [tl + Vector2(0, -20.0)])
+	var n0: float = rig.note(0).velocity
+	_assert(n0 > 0.4 and _near(rig.note(1).velocity, 0.4 + (n0 - 0.4) * 0.5, 0.02) and _near(rig.note(2).velocity, 0.4),
+		"left handle tilts: %s %s %s" % [n0, rig.note(1).velocity, rig.note(2).velocity])
+	_assert(_near(rig.note(3).velocity, 0.4), "unselected notes are untouched")
+	_assert(rig.history.size() == 1 and rig.osc_updates() == 2, "one undo step; the unchanged right end is not sent (%d)" % rig.osc_updates())
+	rig.note(0).velocity = 0.2
+	rig.note(1).velocity = 0.4
+	rig.note(2).velocity = 0.6
+	rects = a._handle_rects(a._current_stems())
+	br = (rects[a.Gesture.COMPRESS] as Rect2).get_center()
+	rig.drag(a, br, [br + Vector2(0, 10.0)])
+	_assert(rig.note(0).velocity > 0.2 and rig.note(2).velocity < 0.6 and _near(rig.note(1).velocity, 0.4, 0.01),
+		"dragging the compress handle down compresses around the mean")
 	await rig.cleanup()

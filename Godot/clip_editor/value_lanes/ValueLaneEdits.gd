@@ -47,3 +47,38 @@ static func stems_at_x(xs: Array, x: float, tolerance: float) -> Array[int]:
 		if absf(float(xs[i]) - x) <= tolerance:
 			out.append(i)
 	return out
+
+
+## Every value shifted by `delta` weighted by its x: the end at `from_left` gets the whole
+## delta and the opposite end none, in between linearly (a tilt). `xs` holds each value's x.
+## A single x (no span) shifts everything by the whole delta.
+static func tilt(values: Array, xs: Array, delta: float, from_left: bool, d: NoteValueDescriptor) -> Array[float]:
+	var out: Array[float] = []
+	var lo := INF
+	var hi := -INF
+	for x in xs:
+		lo = minf(lo, float(x))
+		hi = maxf(hi, float(x))
+	var span := hi - lo
+	for i in values.size():
+		var w := 1.0
+		if span > 0.0:
+			var t := (float(xs[i]) - lo) / span
+			w = 1.0 - t if from_left else t
+		out.append(d.clamp_value(float(values[i]) + delta * w))
+	return out
+
+
+## Every value's distance from the mean of `values` multiplied by `factor` (below 1
+## compresses, above 1 expands), clamped.
+static func compress(values: Array, factor: float, d: NoteValueDescriptor) -> Array[float]:
+	var out: Array[float] = []
+	if values.is_empty():
+		return out
+	var mean := 0.0
+	for v in values:
+		mean += float(v)
+	mean /= values.size()
+	for v in values:
+		out.append(d.clamp_value(mean + (float(v) - mean) * maxf(factor, 0.0)))
+	return out
