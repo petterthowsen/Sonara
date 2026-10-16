@@ -39,19 +39,6 @@ var logger : Log = Log.make("MixerChannel")
 # sends panel; lives in MainPane/VSplit (Tall mode) or SidePane/VSplit (Compact mode)
 @onready var sends_panel: SendsPanel = $HBox/VBox/MainAndSideBox/MainPane/VSplit/SendsPanel
 
-# Resizing
-var is_resizing := false
-var resize_mouse_start := Vector2.ZERO
-var resize_width_start := 0
-
-# Property to control whether this channel can be resized
-@export var resizable: bool = true:
-	set(value):
-		resizable = value
-		# Update mouse cursor when resizable state changes
-		if not is_resizing:
-			mouse_default_cursor_shape = Control.CURSOR_ARROW
-
 var is_selected := false:
 	set(selected):
 		if is_selected == selected:
@@ -148,6 +135,10 @@ enum SizeMode {NARROW, MEDIUM, WIDE}
 const NARROW_WIDTH := 0
 const MEDIUM_BASE_WIDTH := 80
 const WIDE_WIDTH := 116
+## Manual (ctrl+scroll) width range. Narrow mode is represented by NARROW_REF_WIDTH when snapping.
+const MIN_MANUAL_WIDTH := 24
+const MAX_MANUAL_WIDTH := 400
+const NARROW_REF_WIDTH := 48
 
 ## Tall keeps DeviceList/Sends in the main column. Compact moves them into the SidePane,
 ## which only shows (and slides out) while this strip is selected.
@@ -167,6 +158,9 @@ const MIN_NESTED_HEADER_HEIGHT := 24.0
 
 ## Header height from the scene, before nesting shrinks it.
 var _base_header_height := 0.0
+
+## Ctrl+scroll width override in pixels; 0 means the size-mode preset applies.
+var manual_width := 0
 
 @export var size_mode: SizeMode = SizeMode.MEDIUM:
 	set = set_size_mode
@@ -235,13 +229,13 @@ func _ready():
 	bottom_small_meter.volume_changed.connect(func(v: float) -> void: _on_volume_changed(v, bottom_small_meter.last_edit_kind))
 	_setup_peak_readout()
 	
-	mouse_entered.connect(_on_mouse_entered)
-	mouse_exited.connect(_on_mouse_exited)
-
 	if title:
 		title.value_changed.connect(_on_title_value_changed)
 
 	_volume_max_height = volume.custom_maximum_size.y
+	_volume_min_height = volume.custom_minimum_size.y
+	_setup_volume_resize_grip()
+	_update_volume_max_height()
 	_volume_stretch_ratio = volume.size_flags_stretch_ratio
 	big_meter.visibility_changed.connect(_update_volume_max_height)
 	if device_list:
@@ -425,74 +419,10 @@ func _on_volume_changed(value: float, kind := ValueEditKind.Kind.DRAG) -> void:
 		ChannelMultiEdit.apply_volume(channel, old_volume, peers, kind)
 
 
-func _on_mouse_entered() -> void:
-	_update_hover_cursor(get_local_mouse_position())
-
-func _on_mouse_exited() -> void:
-	if not is_resizing:
-		mouse_default_cursor_shape = Control.CURSOR_ARROW
-
-## Update the resize-cursor hint from a known local mouse position, without polling every frame.
-func _update_hover_cursor(local_mouse: Vector2) -> void:
-	if is_resizing:
-		mouse_default_cursor_shape = Control.CURSOR_HSIZE
-	elif resizable and local_mouse.x >= size.x - 8:
-		mouse_default_cursor_shape = Control.CURSOR_HSIZE
-	else:
-		mouse_default_cursor_shape = Control.CURSOR_ARROW
-
 func _gui_input(event: InputEvent):
-	if event is InputEventMouseMotion:
-		if not is_resizing:
-			_update_hover_cursor(event.position)
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed and not is_resizing:
-			# start resize only if resizable is true and mouse is on the right edge
-			var mouse = get_local_mouse_position()
-			if resizable and mouse.x >= size.x - 8:
-				_start_resize()
-				accept_event()
-		elif event.is_released() and is_resizing:
-			_stop_resize()
-			accept_event()
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
-		if event.is_pressed() and not is_resizing:
-			request_show_context_menu.emit()
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.is_pressed():
+		request_show_context_menu.emit()
 
-func _input(event: InputEvent) -> void:
-	# stop resizing if mouse released anywhere
-	if is_resizing and event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
-			_stop_resize()
-			accept_event()
-
-func _start_resize():
-	var mouse = get_global_mouse_position()
-	resize_mouse_start = mouse
-	resize_width_start = int(size.x)
-	mouse_default_cursor_shape = Control.CURSOR_HSIZE
-	is_resizing = true
-	set_process(true)
-
-
-func _process(_delta : float):
-	if is_resizing:
-		var mouse = get_global_mouse_position()
-		var mouse_delta = resize_mouse_start.x - mouse.x
-
-		var new_width = resize_width_start - mouse_delta
-
-		new_width = max(new_width, _total_min_width())
-
-		custom_minimum_size.x = new_width
-	else:
-		# Not resizing: nothing to poll, stop ticking.
-		set_process(false)
-
-func _stop_resize():
-	is_resizing = false
-	mouse_default_cursor_shape = Control.CURSOR_ARROW
-	set_process(false)
 
 func _on_title_value_changed(new_name : String) -> void:
 	channel.set_name(new_name)
@@ -673,6 +603,8 @@ func _get_minimum_size() -> Vector2:
 
 ## Base width from the size mode: narrow has no floor, medium/wide are fixed floors.
 func _base_width() -> int:
+	if manual_width > 0:
+		return manual_width
 	match size_mode:
 		SizeMode.NARROW:
 			return NARROW_WIDTH
@@ -706,8 +638,34 @@ func _update_device_list_visibility() -> void:
 		device_list.visible = devices_visible and size_mode != SizeMode.NARROW
 
 
-## Cycle/apply the narrow-medium-wide base width.
+## Preset size mode closest to a manual width.
+static func nearest_size_mode(width: int) -> SizeMode:
+	var best := SizeMode.NARROW
+	var best_dist := absi(width - NARROW_REF_WIDTH)
+	for mode: SizeMode in [SizeMode.MEDIUM, SizeMode.WIDE]:
+		var ref := MEDIUM_BASE_WIDTH if mode == SizeMode.MEDIUM else WIDE_WIDTH
+		if absi(width - ref) < best_dist:
+			best = mode
+			best_dist = absi(width - ref)
+	return best
+
+
+## Manual strip width in pixels (0 = use the size-mode preset). The size mode follows to the
+## closest preset, so the device list hides at narrow widths.
+func set_manual_width(w: int) -> void:
+	var width := clampi(w, MIN_MANUAL_WIDTH, MAX_MANUAL_WIDTH) if w > 0 else 0
+	if width > 0:
+		# Assigning size_mode runs set_size_mode, which clears manual_width, so set it afterwards.
+		size_mode = nearest_size_mode(width)
+	manual_width = width
+	_update_device_list_visibility()
+	_update_size_for_mode()
+	_refresh_sends_pager()
+
+
+## Cycle/apply the narrow-medium-wide base width. A preset clears any manual width.
 func set_size_mode(m: SizeMode) -> void:
+	manual_width = 0
 	size_mode = m
 	_update_device_list_visibility()
 	_update_size_for_mode()
@@ -783,6 +741,7 @@ func _sends_vsplit() -> VSplitContainer:
 
 
 var _volume_max_height := 300.0
+var _volume_min_height := 100.0
 var _volume_stretch_ratio := 0.7
 
 const VSPLIT_SNAP_DURATION := 0.15
@@ -951,8 +910,51 @@ func _update_volume_max_height() -> void:
 	if volume == null or big_meter == null:
 		return
 	var fill := not main_vsplit.visible and not big_meter.visible
-	volume.custom_maximum_size.y = -1.0 if fill else _volume_max_height
+	if _shared_volume_height > 0.0:
+		volume.custom_minimum_size.y = _shared_volume_height
+		volume.custom_maximum_size.y = -1.0 if fill else _shared_volume_height
+	else:
+		volume.custom_minimum_size.y = _volume_min_height
+		volume.custom_maximum_size.y = -1.0 if fill else _volume_max_height
 	volume.size_flags_stretch_ratio = 1.0 if fill else _volume_stretch_ratio
+
+
+## Bottom fader/meter height shared by every strip (0 = scene default, flexible).
+static var _shared_volume_height := 0.0
+const MIN_VOLUME_HEIGHT := 60.0
+const MAX_VOLUME_HEIGHT := 700.0
+
+
+## Fix the bottom fader/meter height on every strip; 0 restores the flexible default.
+static func set_shared_volume_height(tree: SceneTree, h: float) -> void:
+	_shared_volume_height = clampf(h, MIN_VOLUME_HEIGHT, MAX_VOLUME_HEIGHT) if h > 0.0 else 0.0
+	tree.call_group("mixer_channel", "_update_volume_max_height")
+
+
+## Thin grip above the bottom fader: drag up to make the fader taller, down to shrink it.
+func _setup_volume_resize_grip() -> void:
+	var grip := Control.new()
+	grip.custom_minimum_size.y = 5
+	grip.mouse_default_cursor_shape = Control.CURSOR_VSIZE
+	grip.mouse_filter = Control.MOUSE_FILTER_STOP
+	grip.tooltip_text = "Drag to resize the fader (double-click to reset)"
+	var drag := {"y": 0.0, "h": 0.0, "on": false}
+	grip.gui_input.connect(func(event: InputEvent) -> void:
+		var button := event as InputEventMouseButton
+		if button and button.button_index == MOUSE_BUTTON_LEFT:
+			if button.double_click:
+				MixerChannel.set_shared_volume_height(get_tree(), 0.0)
+			else:
+				drag.on = button.pressed
+				drag.y = grip.get_global_mouse_position().y
+				drag.h = volume.size.y
+			grip.accept_event()
+		elif event is InputEventMouseMotion and drag.on:
+			var dy: float = drag.y - grip.get_global_mouse_position().y
+			MixerChannel.set_shared_volume_height(get_tree(), drag.h + dy)
+			grip.accept_event())
+	volume.get_parent().add_child(grip)
+	volume.get_parent().move_child(grip, volume.get_index())
 
 
 ## Move `node` under `new_parent`, preserving it (no-op if already there).
@@ -1033,11 +1035,6 @@ func _update_children_clip() -> void:
 	children_slide.offset_left = 0.0
 	children_slide.offset_right = full
 	children_clip.custom_minimum_size.x = full * _children_reveal
-
-
-func set_resizable(value: bool) -> void:
-	"""Set whether this channel can be resized."""
-	resizable = value
 
 
 func _update_container_sizing() -> void:
@@ -1184,7 +1181,7 @@ func _on_channel_device_removed(position: int, device_id: String) -> void:
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
 	"""Start a strip drag from the header. Nothing moves until the drop (see MixerChannelDropTarget)."""
-	if Engine.is_editor_hint() or is_resizing:
+	if Engine.is_editor_hint():
 		return null
 	if not MixerChannelDrag.can_drag(channel):
 		return null

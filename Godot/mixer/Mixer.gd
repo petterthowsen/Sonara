@@ -39,6 +39,9 @@ const MixerChannelScene = preload("res://mixer/MixerChannel.tscn")
 ## Narrow/medium/wide size-mode cycle button, in enum order.
 const SIZE_MODE_LABELS := ["Narrow", "Medium", "Wide"]
 var current_size_mode: MixerChannel.SizeMode = MixerChannel.SizeMode.MEDIUM
+## Ctrl+scroll strip width in pixels, 0 while a preset applies.
+var current_manual_width := 0
+const WIDTH_SCROLL_STEP := 4
 
 @onready var channel_ctx_menu : ChannelContextMenu = $ChannelContextMenu
 
@@ -50,7 +53,6 @@ var show_disabled_toggle: Button
 var _channel_hierarchy_cbs: Dictionary[Channel, Callable] = {}
 
 # Export property to control whether channels can be resized
-@export var resizable_channels: bool = true
 
 ## Color of the strip drag insert line and group header glow.
 @export var drop_indicator_color := DropIndicator.DEFAULT_COLOR
@@ -114,6 +116,7 @@ func _ready():
 
 	# Connect toolbar toggles
 	size_mode_button.text = SIZE_MODE_LABELS[current_size_mode]
+	_update_devices_toggle_enabled()
 	size_mode_button.pressed.connect(_on_size_mode_pressed)
 	compact_toggle.toggled.connect(_on_compact_toggled)
 	io_toggle.toggled.connect(_on_io_toggled)
@@ -528,6 +531,14 @@ func select_range(ch: Channel) -> void:
 ## Left/Right move the selection, Up/Down nudge the fader (1 dB, 0.1 dB with Shift), Enter renames.
 ## Only while the pointer is over the mixer and no text field has focus.
 func _input(event: InputEvent) -> void:
+	var wheel := event as InputEventMouseButton
+	if wheel and wheel.pressed and wheel.ctrl_pressed and current_project != null and is_visible_in_tree() \
+			and (wheel.button_index == MOUSE_BUTTON_WHEEL_UP or wheel.button_index == MOUSE_BUTTON_WHEEL_DOWN) \
+			and get_global_rect().has_point(get_global_mouse_position()) \
+			and not toolbar_contains_mouse():
+		_scroll_strip_width(1 if wheel.button_index == MOUSE_BUTTON_WHEEL_UP else -1)
+		get_viewport().set_input_as_handled()
+		return
 	var key := event as InputEventKey
 	if key == null or not key.pressed or current_project == null or not is_visible_in_tree():
 		return
@@ -672,10 +683,37 @@ func _clear_all_channels() -> void:
 # TOOLBAR TOGGLE CALLBACKS
 # ============================================================================
 
+## Strips hide the device list at narrow widths, so the toggle does nothing there.
+func _update_devices_toggle_enabled() -> void:
+	var too_narrow := current_size_mode == MixerChannel.SizeMode.NARROW
+	devices_toggle.disabled = too_narrow
+	devices_toggle.tooltip_text = "Show device list (unavailable at narrow width)" if too_narrow else "Show device list"
+
+
+func toolbar_contains_mouse() -> bool:
+	return $Toolbar.get_global_rect().has_point(get_global_mouse_position())
+
+
+## Ctrl+scroll: widen (up) or narrow (down) every strip; the size button follows the closest preset.
+func _scroll_strip_width(direction: int) -> void:
+	var from_width := current_manual_width
+	if from_width <= 0:
+		# Start from the width the strips actually have, so the first notch doesn't jump.
+		var ref := get_tree().get_first_node_in_group("mixer_channel") as MixerChannel
+		from_width = int(ref.main_pane.size.x) if ref and ref.main_pane else MixerChannel.MEDIUM_BASE_WIDTH
+	current_manual_width = clampi(from_width + direction * WIDTH_SCROLL_STEP, MixerChannel.MIN_MANUAL_WIDTH, MixerChannel.MAX_MANUAL_WIDTH)
+	current_size_mode = MixerChannel.nearest_size_mode(current_manual_width)
+	size_mode_button.text = SIZE_MODE_LABELS[current_size_mode]
+	_update_devices_toggle_enabled()
+	get_tree().call_group("mixer_channel", "set_manual_width", current_manual_width)
+
+
 ## Cycle the narrow/medium/wide base width for every strip.
 func _on_size_mode_pressed() -> void:
+	current_manual_width = 0
 	current_size_mode = ((current_size_mode + 1) % SIZE_MODE_LABELS.size()) as MixerChannel.SizeMode
 	size_mode_button.text = SIZE_MODE_LABELS[current_size_mode]
+	_update_devices_toggle_enabled()
 	get_tree().call_group("mixer_channel", "set_size_mode", current_size_mode)
 	logger.info("Size mode: ", SIZE_MODE_LABELS[current_size_mode])
 
@@ -748,9 +786,10 @@ func _on_big_meters_toggled(pressed: bool):
 func _apply_toggle_states_to_channel(channel_item: MixerChannel) -> void:
 	"""Apply current toggle states to a newly created mixer channel."""
 	channel_item.set_size_mode(current_size_mode)
+	if current_manual_width > 0:
+		channel_item.set_manual_width(current_manual_width)
 	var layout := MixerChannel.LayoutMode.COMPACT if compact_toggle.button_pressed else MixerChannel.LayoutMode.TALL
 	channel_item.set_strip_layout_mode(layout)
-	channel_item.set_resizable(resizable_channels)
 	channel_item.set_devices_visible(devices_toggle.button_pressed)
 
 	# Apply IO / Sends / meters from the toolbar so nested strips match roots.
