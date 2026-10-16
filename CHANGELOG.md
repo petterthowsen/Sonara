@@ -8,6 +8,10 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Key detection: a Detect button in the scale picker estimates the key of the notes in the span you are editing (from a pitch-class histogram) and shows it with a confidence; it never changes the scale by itself (#153).
+- MIDI editor chord inversion: Invert chords up / down (Ctrl+Shift+Up / Down) move the lowest note of each selected chord to the top, or the highest to the bottom, in octaves (#153).
+- MIDI editor Harmony menu in the tools bar: Select Voices (Top, Bottom or Voice N of every chord), Harmonize (add scale-step intervals such as a 3rd above, with a velocity offset), Insert Chords (a Roman numeral progression or preset, voiced in a range) and Insert Bassline (sustained, pulse or root-fifth pattern under the chords). They follow the scale in effect at each note, and each is one undo step (#153).
+- Transfer Notes moves the selected notes to another instrument track at the same positions, and Split Voices spreads the voices of chords over the selected instrument tracks, top voice first (#153).
 - Track List panel (View > Track List, docked left above the Inspector): every track in a tree with an eye toggle, color and name. Drag over the eyes to hide or show many tracks in one undo step, Shift-click to show only a track and its folders, click to select (synced with the arranger and mixer), double-click to rename, and a context menu for color, hide and enable. Visibility presets (saved with the project) store which tracks are hidden, with Add / Rename / Delete / Move, Save (also creates a preset from a Custom state) and Reset, and hotkeys Ctrl+1 to Ctrl+9 (apply preset), Ctrl+0 (show all) and rebindable Next / Previous preset actions.
 - Right-clicking a dock panel's title bar or tab opens a context menu with Close.
 - View > Show Left Dock / Show Right Dock check items hide or show a whole side dock, with rebindable hotkeys (default Alt+1 / Alt+2); the state is saved with the dock layout.

@@ -7,6 +7,10 @@ class_name NoteEditor extends NoteContainer
 ## positions, so MidiEditor (which owns the range overlays) can refresh them.
 signal key_input_handled
 
+## A harmony hotkey asked for one of the option dialogs: &"harmonize", &"chords", &"bassline" or
+## &"transfer". ClipEditor owns and opens the dialogs (spec 048).
+signal harmony_dialog_requested(tool: StringName)
+
 ## The user touched a note (selected it alone, started dragging or resizing it): its values
 ## become the starting values of the next note drawn.
 signal note_touched(note: MidiNoteData)
@@ -378,6 +382,46 @@ func handle_key_input(event: InputEventKey) -> void:
 
 	elif Hotkeys.pressed(event, "notes_strum"):
 		strum_selection()
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_invert_up"):
+		invert_selection(true)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_invert_down"):
+		invert_selection(false)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_select_voice_top"):
+		select_voice(NoteVoices.TOP)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_select_voice_bottom"):
+		select_voice(NoteVoices.BOTTOM)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_harmonize"):
+		if can_harmonize():
+			harmony_dialog_requested.emit(&"harmonize")
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_insert_chords"):
+		if can_insert_chords():
+			harmony_dialog_requested.emit(&"chords")
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_insert_bassline"):
+		if can_insert_bassline():
+			harmony_dialog_requested.emit(&"bassline")
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_transfer"):
+		if can_transfer():
+			harmony_dialog_requested.emit(&"transfer")
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_split_voices"):
+		split_voices()
 		accept_event()
 
 
@@ -1339,18 +1383,70 @@ func _edit_selection_data(history_name: String, mutate: Callable) -> void:
 ## the selected notes (an Array[MidiNoteData], each shared note once), then refreshes the
 ## visuals, cuts same-pitch overlaps, syncs the engine and records one undo/redo step
 ## (ClipNotesStateCommand plus the selection) under `history_name`.
-func _apply_selection_edit(history_name: String, edit: Callable) -> void:
-	if selection_manager.selected_notes.is_empty():
-		return
+##
+## Spec 048: `edit` may return a Dictionary { Clip: Array[MidiNoteData] } of NEW notes (id -1,
+## clip ticks) to add to those clips. They are added after the sync (same-pitch overlaps at their
+## place are cut first), join the selection, and are part of the same undo step. `extra_clips`
+## are clips that gain notes but own no selected note: they are snapshotted too, and the edit then
+## also runs with nothing selected. Returns the number of notes added.
+func _apply_selection_edit(history_name: String, edit: Callable, extra_clips: Array = []) -> int:
+	if selection_manager.selected_notes.is_empty() and extra_clips.is_empty():
+		return 0
 	_history_begin_selection()
+	for extra in extra_clips:
+		if extra is Clip and not _history_clip_snapshots.has(extra):
+			_history_clip_snapshots[extra] = ClipNotesStateCommand.capture_clip_notes(extra)
 	var edited := _selected_note_visuals()
 	var notes: Array[MidiNoteData] = []
 	for sel_note in edited:
 		notes.append(sel_note.midi_note_data)
-	edit.call(notes)
+	var result = edit.call(notes)
 	_refresh_notes(edited)
 	_sync_edited_notes(edited)
+	var added := 0
+	if result is Dictionary:
+		added = _add_generated_notes(result)
 	_history_commit(history_name)
+	return added
+
+
+## Add the generated notes of an edit (see _apply_selection_edit) to their clips and put them
+## into the selection. Returns how many were added.
+func _add_generated_notes(by_clip: Dictionary) -> int:
+	var added := 0
+	var new_visuals: Array[VisualNote] = []
+	for target_clip: Clip in by_clip.keys():
+		if target_clip == null:
+			continue
+		for generated: MidiNoteData in by_clip[target_clip]:
+			target_clip.cut_overlapping_notes_at_pitch(
+				generated.note, generated.start_tick,
+				generated.start_tick + generated.duration_ticks,
+				target_clip.allocate_note_id)
+			generated.id = target_clip.allocate_note_id()
+			var live := target_clip.add_midi_note_data(generated)
+			if live == null:
+				continue
+			added += 1
+			if multi_clip_mode:
+				new_visuals.append_array(_visuals_of(live, target_clip))
+			else:
+				var vn := get_visual_note(live.id)
+				if vn:
+					new_visuals.append(vn)
+	if added > 0:
+		var keep: Array[VisualNote] = []
+		for vn in selection_manager.selected_notes:
+			if is_instance_valid(vn):
+				keep.append(vn)
+		for vn in new_visuals:
+			if vn not in keep:
+				keep.append(vn)
+		selection_manager.select_visuals(keep)
+		selection_manager.selection_changed.emit(selection_manager.selected_notes)
+		update_container_width()
+		queue_redraw()
+	return added
 
 
 ## After an edit: cut same-pitch overlaps, sync the engine and fix the content width.
@@ -1502,6 +1598,525 @@ func strum_selection() -> void:
 			per_clip[clip].append(note_data)
 		for clip_notes: Array[MidiNoteData] in per_clip.values():
 			NoteTransforms.strum(clip_notes, spread, direction, ramp))
+
+
+# ============================================================================
+# MUSICAL NOTE TOOLS (spec 048)
+# ============================================================================
+
+const HARMONIZE_INTERVALS_KEY := "clip_editor/harmonize_intervals"
+const HARMONIZE_VELOCITY_KEY := "clip_editor/harmonize_velocity_offset"
+const CHORDS_PROGRESSION_KEY := "clip_editor/chords_progression"
+const CHORDS_LENGTH_KEY := "clip_editor/chords_length_ticks"
+const CHORDS_COUNT_KEY := "clip_editor/chords_count"
+const CHORDS_RANGE_KEY := "clip_editor/chords_range"
+const CHORDS_VOICING_KEY := "clip_editor/chords_voicing"
+const CHORDS_INVERSION_KEY := "clip_editor/chords_inversion"
+const CHORDS_SEVENTH_KEY := "clip_editor/chords_seventh_default"
+const BASSLINE_PATTERN_KEY := "clip_editor/bassline_pattern"
+const BASSLINE_RANGE_KEY := "clip_editor/bassline_range"
+const TRANSFER_TARGET_KEY := "clip_editor/transfer_last_target"
+
+## True after the last insert_chords() run had to move notes by octaves to fit the range
+## (the dialog shows a notice, REQ-034).
+var last_chords_clamped := false
+## The parse error of the last insert_chords() run ("" when there was none).
+var last_chords_error := ""
+
+
+## Remembered Harmonize intervals: signed scale-step counts (HarmonyGenerators.THIRD .. OCTAVE).
+static func harmonize_steps() -> Array[int]:
+	var out: Array[int] = []
+	var raw: Variant = _config_value(HARMONIZE_INTERVALS_KEY, [HarmonyGenerators.THIRD])
+	if raw is Array:
+		for v in raw:
+			out.append(int(v))
+	if out.is_empty():
+		out.append(HarmonyGenerators.THIRD)
+	return out
+
+
+## Remembered Harmonize velocity offset (normalized, -1..1).
+static func harmonize_velocity_offset() -> float:
+	return clampf(float(_config_value(HARMONIZE_VELOCITY_KEY, 0.0)), -1.0, 1.0)
+
+
+static func _config_range(key: String, default: Vector2i) -> Vector2i:
+	var raw: Variant = _config_value(key, [default.x, default.y])
+	if raw is Array and raw.size() >= 2:
+		var lo := clampi(int(raw[0]), 0, 127)
+		var hi := clampi(int(raw[1]), 0, 127)
+		return Vector2i(mini(lo, hi), maxi(lo, hi))
+	return default
+
+
+## Remembered Insert Chords options, in the form HarmonyGenerators.chords takes (plus
+## `seventh_default`, which the dialog uses when it fills in a progression).
+static func chords_options() -> Dictionary:
+	var voicing := ChordTheory.Voicing.SPREAD if str(_config_value(CHORDS_VOICING_KEY, "close")) == "spread" \
+			else ChordTheory.Voicing.CLOSE
+	return {
+		"progression": str(_config_value(CHORDS_PROGRESSION_KEY, "I V vi IV")),
+		"length_ticks": maxi(1, int(_config_value(CHORDS_LENGTH_KEY, 3840))),
+		"count": maxi(1, int(_config_value(CHORDS_COUNT_KEY, 4))),
+		"range": _config_range(CHORDS_RANGE_KEY, Vector2i(48, 72)),
+		"voicing": voicing,
+		"inversion": "smooth" if str(_config_value(CHORDS_INVERSION_KEY, "root")) == "smooth" else "root",
+		"seventh_default": bool(_config_value(CHORDS_SEVENTH_KEY, false)),
+	}
+
+
+static func bassline_pattern() -> HarmonyGenerators.Pattern:
+	match str(_config_value(BASSLINE_PATTERN_KEY, "sustained")):
+		"pulse":
+			return HarmonyGenerators.Pattern.PULSE
+		"root_fifth":
+			return HarmonyGenerators.Pattern.ROOT_FIFTH
+	return HarmonyGenerators.Pattern.SUSTAINED
+
+
+static func bassline_range() -> Vector2i:
+	return _config_range(BASSLINE_RANGE_KEY, Vector2i(36, 48))
+
+
+## Remember `value` under `key` and save the config (the harmony dialogs call this on OK).
+static func store_config(key: String, value: Variant) -> void:
+	var sonara := _sonara_node()
+	if sonara:
+		sonara.set_config(key, value)
+		sonara.save_config()
+
+
+## The Sonara autoload by node lookup (see _config_value).
+static func _sonara_node() -> Node:
+	return (Engine.get_main_loop() as SceneTree).root.get_node_or_null("Sonara")
+
+
+## The track whose notes this editor shows.
+func source_track() -> Track:
+	if multi_clip_mode:
+		return track
+	return clip_instance.track if clip_instance else null
+
+
+func _project_of_editor() -> Project:
+	var source := source_track()
+	var project: Project = source.get_project_ref() if source else null
+	if project == null:
+		var sonara := _sonara_node()
+		var editor: Object = sonara.get("editor") if sonara else null
+		project = editor.get("project") if editor else null
+	return project
+
+
+## The first shown instance of `c`, whose position maps its clip ticks to the song.
+func _instance_for_clip(c: Clip) -> ClipInstance:
+	if not multi_clip_mode:
+		return clip_instance if clip_instance and clip_instance.clip == c else null
+	var list := _instances_of_clip(c)
+	return list[0] if not list.is_empty() else null
+
+
+## The key in effect at clip tick `tick` of `c`: clip tick -> song tick -> Project key changes
+## (REQ-003). Falls back to the editor's scale context when no project is reachable.
+func _scale_at_clip_tick(c: Clip, tick: int) -> MusicalScale:
+	var project := _project_of_editor()
+	var ci := _instance_for_clip(c)
+	if project and ci:
+		return project.get_scale_at_tick(ci.clip_to_song_ticks(tick))
+	return scale_context.scale
+
+
+# --- Predicates for the toolbar (Phase 3) ---
+
+## True when Insert Chords will fill a selection range (the Count option is then unused).
+func chords_use_range() -> bool:
+	return not layout.is_drum() and selection_manager.has_range()
+
+
+func has_note_selection() -> bool:
+	return not _selected_note_visuals().is_empty()
+
+
+## A key is set for the edited clip (the scale tools need one, REQ-002). Always false in Drum View.
+func has_scale() -> bool:
+	return not layout.is_drum() and not scale_context.scale.is_none()
+
+
+func can_select_voices() -> bool:
+	return not layout.is_drum() and not get_all_visual_notes().is_empty()
+
+
+func can_invert() -> bool:
+	return not layout.is_drum() and has_note_selection()
+
+
+func can_harmonize() -> bool:
+	return has_scale() and has_note_selection()
+
+
+func can_insert_bassline() -> bool:
+	return has_scale() and has_note_selection()
+
+
+## Chords need a key and a clip to land in (in track mode the instance at the insert position).
+func can_insert_chords() -> bool:
+	return has_scale() and not _chords_target().is_empty()
+
+
+## Transfer Notes needs a selection and a track to move them off.
+func can_transfer() -> bool:
+	return not layout.is_drum() and has_note_selection() and source_track() != null
+
+
+## Split Voices needs notes (selected, or any in the edited clips) and a target track.
+func can_split_voices(selected_tracks: Array = []) -> bool:
+	return not layout.is_drum() and not get_all_visual_notes().is_empty() and has_split_targets(selected_tracks)
+
+
+## True when `candidate` can receive transferred notes: an instrument track other than the source.
+func is_transfer_target(candidate: Track) -> bool:
+	return candidate != null and candidate != source_track() and candidate.type == Track.TrackType.INSTRUMENT
+
+
+## Split targets: the selected instrument tracks in project track order. The source track is in
+## the list (keeping its place) when it is selected. `selected_tracks` empty means the app's
+## track selection (Editor.selected_tracks).
+func split_target_tracks(selected_tracks: Array = []) -> Array[Track]:
+	var picked: Array = selected_tracks
+	if picked.is_empty():
+		var sonara := _sonara_node()
+		var editor: Object = sonara.get("editor") if sonara else null
+		var from_app: Variant = editor.get("selected_tracks") if editor else null
+		picked = from_app if from_app is Array else []
+	var project := _project_of_editor()
+	var out: Array[Track] = []
+	if project:
+		for t in project.tracks:
+			if t in picked and t.type == Track.TrackType.INSTRUMENT:
+				out.append(t)
+	else:
+		for t in picked:
+			if t is Track and t.type == Track.TrackType.INSTRUMENT:
+				out.append(t)
+	return out
+
+
+## REQ-042: at least one selected instrument track that is not the source track.
+func has_split_targets(selected_tracks: Array = []) -> bool:
+	var source := source_track()
+	for t in split_target_tracks(selected_tracks):
+		if t != source:
+			return true
+	return false
+
+
+# --- Helpers ---
+
+## Selected notes per clip: { Clip: Array[MidiNoteData] }, each shared note once.
+func _selected_notes_by_clip() -> Dictionary:
+	return _notes_by_clip(_selected_note_visuals())
+
+
+func _notes_by_clip(visuals: Array[VisualNote]) -> Dictionary:
+	var out := {}
+	for vn in visuals:
+		var c := _clip_for_visual_note(vn)
+		if c == null:
+			continue
+		if not out.has(c):
+			var typed: Array[MidiNoteData] = []
+			out[c] = typed
+		out[c].append(vn.midi_note_data)
+	return out
+
+
+## One visual per note data among `visuals`: { MidiNoteData: VisualNote }.
+static func _first_visual_per_note(visuals: Array[VisualNote]) -> Dictionary:
+	var out := {}
+	for vn in visuals:
+		if vn.midi_note_data and not out.has(vn.midi_note_data):
+			out[vn.midi_note_data] = vn
+	return out
+
+
+## The notes a voice tool works on: the selected notes, or every shown note (one visual each)
+## when nothing is selected.
+func _voice_pool() -> Array[VisualNote]:
+	var pool := _selected_note_visuals()
+	if pool.is_empty():
+		pool.assign(_first_visual_per_note(get_all_visual_notes()).values())
+	return pool
+
+
+# --- Select Voices, Chord Inversion (REQ-020, REQ-021) ---
+
+## Replace the selection with one voice of the chords: NoteVoices.TOP, NoteVoices.BOTTOM or N >= 1
+## counted from the top. The candidates are the selected notes, or all notes of the edited
+## clip(s) when nothing is selected. A selection change only: no undo step. Returns the number of
+## notes selected.
+func select_voice(which: int) -> int:
+	if layout.is_drum():
+		return 0
+	var pool := _voice_pool()
+	var visual_of := _first_visual_per_note(pool)
+	var chosen: Array[VisualNote] = []
+	var per_clip := _notes_by_clip(pool)
+	for c in per_clip.keys():
+		for nd in NoteVoices.select(per_clip[c], which):
+			chosen.append(visual_of[nd])
+	selection_manager.select_visuals(chosen)
+	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	queue_redraw()
+	return chosen.size()
+
+
+## Invert every chord among the selected notes: up moves the lowest note up by octaves past the
+## chord's highest, down mirrors that. One undo step; chords are found per clip.
+func invert_selection(up: bool) -> void:
+	if layout.is_drum():
+		return
+	var clip_of := {}
+	for vn in _selected_note_visuals():
+		clip_of[vn.midi_note_data] = _clip_for_visual_note(vn)
+	_apply_selection_edit("Chord Inversion Up" if up else "Chord Inversion Down", func(notes: Array[MidiNoteData]):
+		var per_clip := {}
+		for note_data in notes:
+			var c: Clip = clip_of.get(note_data)
+			if not per_clip.has(c):
+				var typed: Array[MidiNoteData] = []
+				per_clip[c] = typed
+			per_clip[c].append(note_data)
+		for clip_notes: Array[MidiNoteData] in per_clip.values():
+			NoteVoices.invert(clip_notes, up))
+
+
+# --- Harmonize, Insert Chords, Insert Bassline (REQ-030..035) ---
+
+## Add scale-step copies of the selected notes. `steps` are signed scale-step counts
+## (HarmonyGenerators.THIRD .. OCTAVE; empty = the remembered ones), `velocity_offset` NAN = the
+## remembered one. Needs a scale (has_scale). One undo step; the copies join the selection.
+## Returns the number of notes added.
+func harmonize_selection(steps: Array = [], velocity_offset: float = NAN) -> int:
+	if not can_harmonize():
+		return 0
+	var use_steps: Array[int] = []
+	for s in steps:
+		use_steps.append(int(s))
+	if use_steps.is_empty():
+		use_steps = harmonize_steps()
+	var use_offset := harmonize_velocity_offset() if is_nan(velocity_offset) else velocity_offset
+	var groups := _selected_notes_by_clip()
+	return _apply_selection_edit("Harmonize", func(_notes: Array[MidiNoteData]):
+		var generated := {}
+		for c: Clip in groups.keys():
+			var picked: Array[MidiNoteData] = groups[c]
+			var in_picked := {}
+			for nd in picked:
+				in_picked[nd] = true
+			var others: Array[MidiNoteData] = []
+			for nd in c.midi_notes:
+				if not in_picked.has(nd):
+					others.append(nd)
+			var scale_at := func(tick: int) -> MusicalScale: return _scale_at_clip_tick(c, tick)
+			var made := HarmonyGenerators.harmonize(picked, use_steps, scale_at, use_offset, others)
+			if not made.is_empty():
+				generated[c] = made
+		return generated)
+
+
+## Where Insert Chords writes: { "instance": ClipInstance, "start": clip tick, "end": clip tick
+## or -1, "ranged": bool }, or {} when there is no clip to write into. With a selection range the
+## chords fill it; otherwise they start at get_paste_tick(). In track mode the instance playing
+## at the start is used (no clip is created) and a range is cut at its end.
+func _chords_target() -> Dictionary:
+	if layout.is_drum():
+		return {}
+	var ranged := selection_manager.has_range()
+	var start_tick := selection_manager.box_selection_start_tick if ranged else get_paste_tick()
+	var end_tick := selection_manager.box_selection_end_tick if ranged else -1
+	var ci: ClipInstance = get_clip_at_position(start_tick) if multi_clip_mode else clip_instance
+	if ci == null or ci.clip == null:
+		return {}
+	if multi_clip_mode:
+		# Editor ticks are song ticks here; the generators work in clip ticks.
+		if end_tick >= 0:
+			end_tick = mini(end_tick, ci.get_end_ticks())
+		var clip_start := ci.song_to_played_content_ticks(start_tick)
+		if end_tick >= 0:
+			end_tick = clip_start + (end_tick - start_tick)
+		start_tick = clip_start
+	if ranged and end_tick <= start_tick:
+		return {}
+	return {"instance": ci, "start": start_tick, "end": end_tick, "ranged": ranged}
+
+
+## Insert a chord progression: filling the selection range, or `opts.count` chords from the
+## paste position. `opts` overrides the remembered options (see chords_options). Needs a scale.
+## One undo step; the chords join the selection. Returns the number of notes added. A parse error
+## adds nothing and is left in `last_chords_error`; `last_chords_clamped` reports octave folding.
+func insert_chords(opts: Dictionary = {}) -> int:
+	last_chords_clamped = false
+	last_chords_error = ""
+	if not has_scale():
+		return 0
+	var target := _chords_target()
+	if target.is_empty():
+		return 0
+	var use := chords_options()
+	use.merge(opts, true)
+	var ci: ClipInstance = target.instance
+	var target_clip: Clip = ci.clip
+	var scale_at := func(tick: int) -> MusicalScale: return _scale_at_clip_tick(target_clip, tick)
+	var result := HarmonyGenerators.chords(use, scale_at, target.start, target.end)
+	last_chords_error = result.error
+	last_chords_clamped = result.clamped
+	if result.error != "" or result.notes.is_empty():
+		return 0
+	return _apply_selection_edit("Insert Chords", func(_notes: Array[MidiNoteData]):
+		return {target_clip: result.notes}, [target_clip])
+
+
+## Add a bass note pattern under every chord (2+ notes) of the selected notes. `pattern` is a
+## HarmonyGenerators.Pattern (-1 = the remembered one), `bass_range` Vector2i(lo, hi) (default =
+## the remembered one). Pulse and Root-Fifth step by the current grid value. Needs a scale. One
+## undo step; the bass notes join the selection. Returns the number of notes added.
+func insert_bassline(pattern: int = -1, bass_range: Vector2i = Vector2i(-1, -1)) -> int:
+	if not can_insert_bassline():
+		return 0
+	var use_pattern: HarmonyGenerators.Pattern = bassline_pattern() if pattern < 0 \
+			else pattern as HarmonyGenerators.Pattern
+	var use_range := bassline_range() if bass_range.x < 0 else bass_range
+	var grid_ticks := grid_helper.get_snap_interval() if grid_helper else 240
+	var groups := _selected_notes_by_clip()
+	return _apply_selection_edit("Insert Bassline", func(_notes: Array[MidiNoteData]):
+		var generated := {}
+		for c: Clip in groups.keys():
+			var scale_at := func(tick: int) -> MusicalScale: return _scale_at_clip_tick(c, tick)
+			var made := HarmonyGenerators.bassline(groups[c], use_pattern, use_range, grid_ticks, scale_at)
+			if not made.is_empty():
+				generated[c] = made
+		return generated)
+
+
+# --- Transfer Notes, Split Voices (REQ-040..043) ---
+
+## Copies of `candidates`' notes with SONG-tick starts:
+## { "moves": { Clip: [MidiNoteData originals] }, "notes": { original: song-tick copy } }.
+func _song_copies(candidates: Array[VisualNote]) -> Dictionary:
+	var moves := {}
+	var copies := {}
+	for vn in candidates:
+		var ci := _instance_for_visual_note(vn)
+		var c := _clip_for_visual_note(vn)
+		if ci == null or c == null or copies.has(vn.midi_note_data):
+			continue
+		var copy := vn.midi_note_data.duplicate_note()
+		copy.start_tick = ci.clip_to_song_ticks(vn.midi_note_data.start_tick)
+		copies[vn.midi_note_data] = copy
+		if not moves.has(c):
+			moves[c] = []
+		moves[c].append(vn.midi_note_data)
+	return {"moves": moves, "notes": copies}
+
+
+## The plan Transfer Notes would run for the selected notes (NoteTransfer.plan entries), so a
+## dialog can preview it. Empty when nothing can be transferred.
+func plan_transfer(target: Track) -> Array:
+	var project := _project_of_editor()
+	if project == null or not is_transfer_target(target) or layout.is_drum():
+		return []
+	var copies: Dictionary = _song_copies(_selected_note_visuals()).notes
+	return NoteTransfer.plan(project, target, copies.values())
+
+
+## Clips of `target` that the transfer would write into and that other instances share
+## (REQ-043: the notes show in every linked instance; the dialog warns about it).
+func transfer_linked_clips(target: Track) -> Array:
+	var project := _project_of_editor()
+	if project == null:
+		return []
+	return NoteTransfer.linked_targets(project, plan_transfer(target))
+
+
+## Move the selected notes to `target` (an instrument track other than the source) at the same
+## song positions, into existing clips (extending them to whole bars) or new ones (NoteTransfer).
+## One undo step. Returns the number of notes moved.
+func transfer_selection(target: Track) -> int:
+	if not can_transfer() or not is_transfer_target(target):
+		return 0
+	var copies := _song_copies(_selected_note_visuals())
+	return _run_transfer("Transfer Notes", copies.moves, {target: copies.notes.values()})
+
+
+## Spread the voices of the selected notes (or of all notes when nothing is selected) over the
+## split targets: voice k (counted from the top, per clip) goes to the k-th target; voices without
+## a target, or whose target is the source track, stay. One undo step. Returns the number of
+## notes moved to other tracks.
+func split_voices(selected_tracks: Array = []) -> int:
+	if layout.is_drum() or not has_split_targets(selected_tracks):
+		return 0
+	var targets := split_target_tracks(selected_tracks)
+	var source := source_track()
+	var pool := _voice_pool()
+	var visual_of := _first_visual_per_note(pool)
+	var per_clip := _notes_by_clip(pool)
+	var leaving: Dictionary = {}  # Track -> Array[VisualNote]
+	for c in per_clip.keys():
+		var ranks := NoteVoices.ranks(per_clip[c])
+		for nd: MidiNoteData in per_clip[c]:
+			var voice: int = ranks[nd].x
+			if voice > targets.size() or targets[voice - 1] == source:
+				continue
+			var dest: Track = targets[voice - 1]
+			if not leaving.has(dest):
+				var typed: Array[VisualNote] = []
+				leaving[dest] = typed
+			leaving[dest].append(visual_of[nd])
+	if leaving.is_empty():
+		return 0
+	var moves := {}
+	var per_target := {}
+	for dest: Track in leaving.keys():
+		var copies := _song_copies(leaving[dest])
+		for c in copies.moves.keys():
+			if not moves.has(c):
+				moves[c] = []
+			moves[c].append_array(copies.moves[c])
+		per_target[dest] = copies.notes.values()
+	return _run_transfer("Split Voices", moves, per_target)
+
+
+## Plan every target, apply it and record ONE undo step that also restores the selection.
+## `per_target`: { Track: Array of song-tick notes }. Returns the number of notes moved.
+func _run_transfer(label: String, source_moves: Dictionary, per_target: Dictionary) -> int:
+	var project := _project_of_editor()
+	if project == null:
+		return 0
+	var plans: Array = []
+	var count := 0
+	for dest: Track in per_target.keys():
+		var entries := NoteTransfer.plan(project, dest, per_target[dest])
+		if entries.is_empty():
+			continue
+		plans.append({"track": dest, "entries": entries})
+		count += per_target[dest].size()
+	if plans.is_empty():
+		return 0
+	var selection_before := capture_selection_state()
+	var cmds := NoteTransfer.apply(project, source_moves, plans, label, false)
+	var selection_after := capture_selection_state()
+	var all: Array[Command] = []
+	var last: Array[Command] = []
+	if not _same_selection(selection_before, selection_after):
+		all.append(SelectionStateCommand.new(label, self, selection_before, selection_after, true))
+		last.append(SelectionStateCommand.new(label, self, selection_before, selection_after, false))
+	all.append_array(cmds)
+	all.append_array(last)
+	HistoryUtil.record_many(label, all)
+	queue_redraw()
+	update_container_width()
+	return count
 
 
 func _adjust_selection_velocity(delta: float) -> void:

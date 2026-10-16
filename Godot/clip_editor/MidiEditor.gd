@@ -248,6 +248,8 @@ signal selection_changed
 
 ## The user clicked the empty-Drum-View hint (REQ-023).
 signal note_map_editor_requested
+## A note editor's harmony hotkey wants an option dialog (NoteEditor.harmony_dialog_requested).
+signal harmony_dialog_requested(tool: StringName)
 
 ## Width of the key column (piano keys or Drum View row names) changed. The value lanes below
 ## keep their header column the same width so stems line up with the notes.
@@ -1590,6 +1592,8 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 		editor.selection_range_restored.connect(_update_selection_overlays)
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
 		editor.key_input_handled.connect(_update_selection_overlays)
+	if not editor.harmony_dialog_requested.is_connected(harmony_dialog_requested.emit):
+		editor.harmony_dialog_requested.connect(harmony_dialog_requested.emit)
 	if editor.selection_manager and not editor.selection_manager.selection_changed.is_connected(_on_note_editor_selection_changed):
 		editor.selection_manager.selection_changed.connect(_on_note_editor_selection_changed)
 	editor.next_values = next_note_values

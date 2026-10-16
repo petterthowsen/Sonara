@@ -835,8 +835,14 @@ func _setup_selection_tools() -> void:
 			func(editor: NoteEditor): editor.strum_selection(), false)
 	_register_selection_tool(tools_group.find_child("ConformToScale", true, false) as Button,
 			func(editor: NoteEditor): editor.conform_selection_to_scale(), false, true)
+	_register_selection_tool(tools_group.find_child("InvertUp", true, false) as Button,
+			func(editor: NoteEditor): editor.invert_selection(true), false)
+	_register_selection_tool(tools_group.find_child("InvertDown", true, false) as Button,
+			func(editor: NoteEditor): editor.invert_selection(false), false)
 	tools_group.find_child("QuantizeOptions", true, false).pressed.connect(_on_quantize_options_pressed)
 	tools_group.find_child("StrumOptions", true, false).pressed.connect(_on_strum_options_pressed)
+	_setup_harmony_menu()
+	midi_editor.harmony_dialog_requested.connect(open_harmony_dialog)
 	_sync_selection_tools()
 
 
@@ -970,12 +976,185 @@ func _sync_selection_tools() -> void:
 			and not editor.selection_manager.selected_notes.is_empty()
 	var can_run: bool = has_selection or (editor != null and not midi_editor.track_mode)
 	for button: Button in tools_group.find_children("*", "Button", true, false):
-		if button.name == &"QuantizeOptions" or button.name == &"StrumOptions":
-			continue  # always usable: it only sets the remembered options
+		if button.name == &"QuantizeOptions" or button.name == &"StrumOptions" or button == harmony_button:
+			continue  # always usable: they only set the remembered options / open a menu
 		var entry: Dictionary = _selection_tools.get(button, {})
 		button.disabled = entry.is_empty() or not can_run \
 				or (midi_editor.drum_view and not entry["drum"]) \
 				or (entry["scale"] and midi_editor.scale_context.scale.is_none())
+	_sync_harmony_menu(editor, has_selection)
+
+
+# ============================================================================
+# HARMONY TOOLS (spec 048): the Harmony menu and its option dialogs
+# ============================================================================
+
+## Harmony popup item ids. The Select Voices submenu uses VOICE_ID_BASE + voice: Top and Bottom
+## are -1 and -2 offset from the base, Voice N is the base + N.
+const HARMONY_HARMONIZE := 10
+const HARMONY_CHORDS := 11
+const HARMONY_BASSLINE := 12
+const HARMONY_TRANSFER := 13
+const HARMONY_SPLIT := 14
+const HARMONY_VOICES := 20
+const VOICE_ID_BASE := 100
+const MAX_VOICE_MENU := 6
+const NEEDS_KEY_TIP := "Needs a key: set the project scale or a key change here."
+
+@onready var harmony_button: MenuButton = tools_group.find_child("Harmony", true, false) as MenuButton
+
+var _harmony_popup: PopupMenu = null
+var _voices_popup: PopupMenu = null
+var _harmonize_dialog: HarmonizeDialog = null
+var _chords_dialog: InsertChordsDialog = null
+var _bassline_dialog: InsertBasslineDialog = null
+var _transfer_dialog: TransferNotesDialog = null
+var _harmony_notice: AcceptDialog = null
+
+
+func _setup_harmony_menu() -> void:
+	if harmony_button == null:
+		return
+	_harmony_popup = harmony_button.get_popup()
+	_voices_popup = PopupMenu.new()
+	_voices_popup.name = "SelectVoices"
+	_harmony_popup.add_child(_voices_popup)
+	_voices_popup.add_item("Top", VOICE_ID_BASE + NoteVoices.TOP)
+	_voices_popup.add_item("Bottom", VOICE_ID_BASE + NoteVoices.BOTTOM)
+	for n in range(2, MAX_VOICE_MENU + 1):
+		_voices_popup.add_item("Voice %d" % n, VOICE_ID_BASE + n)
+	_voices_popup.id_pressed.connect(_on_voice_menu_pressed)
+	_harmony_popup.add_submenu_node_item("Select Voices", _voices_popup, HARMONY_VOICES)
+	_harmony_popup.add_item("Harmonize...", HARMONY_HARMONIZE)
+	_harmony_popup.add_item("Insert Chords...", HARMONY_CHORDS)
+	_harmony_popup.add_item("Insert Bassline...", HARMONY_BASSLINE)
+	_harmony_popup.add_separator()
+	_harmony_popup.add_item("Transfer Notes...", HARMONY_TRANSFER)
+	_harmony_popup.add_item("Split Voices", HARMONY_SPLIT)
+	_harmony_popup.id_pressed.connect(_on_harmony_menu_pressed)
+
+
+## Enable the Harmony menu items with the toolbar's rules: Insert Chords, Harmonize and Insert
+## Bassline need a key (REQ-002), Split Voices a selected instrument track besides the source
+## (REQ-042), and nothing works in Drum View. Without a selection, clip mode acts on all notes.
+func _sync_harmony_menu(editor: NoteEditor, has_selection: bool) -> void:
+	if _harmony_popup == null:
+		return
+	var live := editor != null and not midi_editor.drum_view
+	var has_notes := live and not editor.get_all_visual_notes().is_empty()
+	var can_run := live and (has_selection or (has_notes and not midi_editor.track_mode))
+	var keyed := live and editor.has_scale()
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_VOICES), live and editor.can_select_voices(), "")
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_HARMONIZE), can_run and keyed,
+			NEEDS_KEY_TIP if live and not keyed else "")
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_CHORDS), live and editor.can_insert_chords(),
+			NEEDS_KEY_TIP if live and not keyed else "")
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_BASSLINE), can_run and keyed,
+			NEEDS_KEY_TIP if live and not keyed else "")
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_TRANSFER), can_run and editor.source_track() != null, "")
+	var has_target := live and editor.has_split_targets()
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_SPLIT), has_notes and has_target,
+			"Select another instrument track in the arranger to split the voices onto." if live and not has_target else "")
+
+
+func _set_harmony_item(index: int, enabled: bool, tooltip: String) -> void:
+	if index < 0:
+		return
+	_harmony_popup.set_item_disabled(index, not enabled)
+	_harmony_popup.set_item_tooltip(index, tooltip)
+
+
+## Like the toolbar buttons: in clip mode, nothing selected means all notes.
+func _prepare_selection(editor: NoteEditor) -> void:
+	if editor.selection_manager.selected_notes.is_empty() and not midi_editor.track_mode:
+		editor.selection_manager.select_all(editor.get_all_visual_notes())
+
+
+func _on_voice_menu_pressed(id: int) -> void:
+	var editor := midi_editor.get_active_note_editor()
+	if editor:
+		editor.select_voice(id - VOICE_ID_BASE)
+
+
+func _on_harmony_menu_pressed(id: int) -> void:
+	var editor := midi_editor.get_active_note_editor()
+	if editor == null:
+		return
+	match id:
+		HARMONY_HARMONIZE:
+			_prepare_selection(editor)
+			open_harmony_dialog(&"harmonize")
+		HARMONY_CHORDS:
+			open_harmony_dialog(&"chords")
+		HARMONY_BASSLINE:
+			_prepare_selection(editor)
+			open_harmony_dialog(&"bassline")
+		HARMONY_TRANSFER:
+			_prepare_selection(editor)
+			open_harmony_dialog(&"transfer")
+		HARMONY_SPLIT:
+			editor.split_voices()
+
+
+## Open the option dialog of a harmony tool (&"harmonize", &"chords", &"bassline", &"transfer"),
+## filled with the remembered options. OK runs the tool on the active note editor.
+func open_harmony_dialog(tool: StringName) -> void:
+	var editor := midi_editor.get_active_note_editor()
+	if editor == null:
+		return
+	match tool:
+		&"harmonize":
+			if _harmonize_dialog == null:
+				_harmonize_dialog = HarmonizeDialog.new()
+				add_child(_harmonize_dialog)
+				_harmonize_dialog.applied.connect(func(steps: Array, offset: float):
+					var ed := midi_editor.get_active_note_editor()
+					if ed:
+						ed.harmonize_selection(steps, offset))
+			_harmonize_dialog.open()
+		&"chords":
+			if _chords_dialog == null:
+				_chords_dialog = InsertChordsDialog.new()
+				add_child(_chords_dialog)
+				_chords_dialog.applied.connect(_on_chords_applied)
+			_chords_dialog.open_for(editor)
+		&"bassline":
+			if _bassline_dialog == null:
+				_bassline_dialog = InsertBasslineDialog.new()
+				add_child(_bassline_dialog)
+				_bassline_dialog.applied.connect(func(pattern: int, bass_range: Vector2i):
+					var ed := midi_editor.get_active_note_editor()
+					if ed:
+						ed.insert_bassline(pattern, bass_range))
+			_bassline_dialog.open()
+		&"transfer":
+			if _transfer_dialog == null:
+				_transfer_dialog = TransferNotesDialog.new()
+				add_child(_transfer_dialog)
+				_transfer_dialog.applied.connect(func(target: Track):
+					var ed := midi_editor.get_active_note_editor()
+					if ed:
+						ed.transfer_selection(target))
+			_transfer_dialog.open_for(editor)
+
+
+func _on_chords_applied(options: Dictionary) -> void:
+	var editor := midi_editor.get_active_note_editor()
+	if editor == null:
+		return
+	editor.insert_chords(options)
+	if editor.last_chords_clamped:
+		_show_harmony_notice("Insert Chords",
+				"Some chords did not fit the note range, so their notes were moved by whole octaves into it.")
+
+
+func _show_harmony_notice(title_text: String, message: String) -> void:
+	if _harmony_notice == null:
+		_harmony_notice = AcceptDialog.new()
+		add_child(_harmony_notice)
+	_harmony_notice.title = title_text
+	_harmony_notice.dialog_text = message
+	_harmony_notice.popup_centered()
 
 
 func _on_grid_helper_changed():

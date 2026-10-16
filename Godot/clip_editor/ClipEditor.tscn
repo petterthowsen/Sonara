@@ -429,6 +429,23 @@ tooltip_text = "Conform selected notes to the project scale"
 disabled = true
 text = "Conform"
 
+[node name="InvertUp" type="Button" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000050]
+layout_mode = 2
+tooltip_text = "Invert the chords among the selected notes up (Ctrl+Shift+Up): the lowest note of each chord moves up by octaves until it is the highest. Not in Drum View."
+disabled = true
+text = "Inv Up"
+
+[node name="InvertDown" type="Button" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000051]
+layout_mode = 2
+tooltip_text = "Invert the chords among the selected notes down (Ctrl+Shift+Down): the highest note of each chord moves down by octaves until it is the lowest. Not in Drum View."
+disabled = true
+text = "Inv Down"
+
+[node name="Harmony" type="MenuButton" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000052]
+layout_mode = 2
+tooltip_text = "Harmony tools: select voices, harmonize, insert chords or a bassline, transfer notes, split voices."
+text = "Harmony"
+
 [node name="StrumPanel" type="PanelContainer" parent="BottomPanel/Toolbar/ToolsGroup" unique_id=1100000012]
 layout_mode = 2
 theme_type_variation = &"ButtonPanel"

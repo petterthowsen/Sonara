@@ -293,6 +293,7 @@ func _connect_ui_signals():
 	tempo_spinbox.value_changed.connect(_on_tempo_changed)
 	time_signature_edit.text_submitted.connect(_on_time_signature_changed)
 	scale_picker.scale_picked.connect(set_project_scale)
+	scale_picker.detect_source = _detect_project_key
 	
 	# Arranger selection changes
 	arranger.clips_selected.connect(_on_arranger_clips_selected)
@@ -987,6 +988,13 @@ func _apply_time_signature_silent(value: Array) -> void:
 
 
 ## Set the project scale (undoable). Goes to the engine as the base-key mask on /project/scale (spec 027); key changes ride /project/scale_map (spec 034).
+## Detect in the transport scale picker (REQ-010): the key of the notes before the first key change.
+func _detect_project_key() -> Dictionary:
+	if project == null:
+		return KeyDetector.detect_pairs([])
+	return KeyDetector.detect_for_change(project, 0)
+
+
 func set_project_scale(root: int, type_id: String) -> void:
 	if project == null:
 		return

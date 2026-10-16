@@ -322,6 +322,8 @@ func open_dropdown(change_id: int, global_pos: Vector2) -> void:
 		var c: Dictionary = project.key_change_map.changes[index]
 		scale = MusicalScale.make(c["root"], c["type_id"])
 	_picker.set_scale_display(scale.root, scale.type_id)
+	_picker.clear_detection()
+	_picker.detect_source = func() -> Dictionary: return KeyDetector.detect_for_change(project, change_id)
 	ContextMenuPopup.popup_at_point(_popup, global_pos)
 
 
