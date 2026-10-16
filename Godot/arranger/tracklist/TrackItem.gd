@@ -694,11 +694,11 @@ func _update_window_toggle() -> void:
 
 func _on_solo_toggled(pressed: bool) -> void:
 	if track:
-		track.set_solo(pressed)
+		HistoryUtil.execute_property("Solo", track, "set_solo", track.solo, pressed)
 
 func _on_mute_toggled(pressed: bool) -> void:
 	if track:
-		track.set_mute(pressed)
+		HistoryUtil.execute_property("Mute", track, "set_mute", track.muted, pressed)
 
 
 ## Mixer (or anything else) muted the strip: follow it without writing back.

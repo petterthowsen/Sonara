@@ -15,6 +15,7 @@ class_name DragToggleButton extends Button
 var _painting := false
 var _paint_value := false
 var _last_mouse := Vector2.ZERO
+var _macro_open := false
 
 
 func _init() -> void:
@@ -35,6 +36,10 @@ func _gui_input(event: InputEvent) -> void:
 	if disabled:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_begin_gesture()  # before the press toggles, so the whole drag is one undo step
+		else:
+			_end_gesture()
 		if event.pressed and event.shift_pressed and drag_group != &"":
 			_painting = false
 			_clear_others()
@@ -47,8 +52,40 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion and _painting:
 		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			_painting = false  # the release was lost (focus change)
+			_end_gesture()
 			return
 		_paint_to(get_global_mouse_position())
+
+
+## Groups every history command the press and the sweep produce into one undo step.
+func _begin_gesture() -> void:
+	var history := _history()
+	if history == null or _macro_open:
+		return
+	var label := String(drag_group).capitalize() if drag_group != &"" else "Toggle"
+	history.begin_macro(label)
+	_macro_open = true
+
+
+## Looked up at runtime: headless test scripts compile this class without the Sonara autoload.
+func _history() -> CommandHistory:
+	var sonara := get_tree().root.get_node_or_null("Sonara") if is_inside_tree() else null
+	if sonara and sonara.get("editor") and sonara.editor.get("history"):
+		return sonara.editor.history
+	return null
+
+
+func _end_gesture() -> void:
+	if not _macro_open:
+		return
+	_macro_open = false
+	var history := _history()
+	if history:
+		history.end_macro()
+
+
+func _exit_tree() -> void:
+	_end_gesture()
 
 
 ## Unlike painting this includes hidden buttons (e.g. the mixer's twin of a track),

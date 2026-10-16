@@ -34,6 +34,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Solo and mute in the arranger track list are now undoable, and drag-toggling them across several tracks or channels is one undo step instead of one per channel (#152).
 - Mixer: dragging the splitter no longer scrolls the right pane; its right edge (Master) stays put.
 - Audition while dragging (note pitch, value lane velocity): the throttle now plays the latest value when the interval ends, so the final position always sounds.
 - Value lanes: deselecting notes updates the stem highlight, and the highlight follows the stem being adjusted while you drag (#80).

@@ -13,11 +13,10 @@
 [ext_resource type="Texture2D" uid="uid://dnluriorqc0gn" path="res://assets/icons/move-horizontal.svg" id="icon_sizemode"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_64am7"]
-bg_color = Color(0.20703125, 0.20703125, 0.20703125, 1)
-expand_margin_left = 2.0
-expand_margin_right = 2.0
-shadow_size = 1
-shadow_offset = Vector2(-2, 0)
+bg_color = Color(0.2702219, 0.27022195, 0.27022177, 1)
+expand_margin_top = 3.0
+shadow_size = 4
+shadow_offset = Vector2(0, 3.825)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6eek7"]
 resource_local_to_scene = true
@@ -81,7 +80,7 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 22
 icon = ExtResource("3_wr7tj")
 
-[node name="EndSpacer" type="Control" parent="HSplit/LeftPane/HBox"]
+[node name="EndSpacer" type="Control" parent="HSplit/LeftPane/HBox" unique_id=97117864]
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 mouse_filter = 2
@@ -99,7 +98,7 @@ size_flags_horizontal = 10
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 
-[node name="StartSpacer" type="Control" parent="HSplit/RightPane/HBox"]
+[node name="StartSpacer" type="Control" parent="HSplit/RightPane/HBox" unique_id=1836756969]
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 mouse_filter = 2
