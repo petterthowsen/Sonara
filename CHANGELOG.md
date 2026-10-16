@@ -6,6 +6,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-10-16
+
 ### Added
 
 - Key detection: a Detect button in the scale picker estimates the key of the notes in the span you are editing (from a pitch-class histogram) and shows it with a confidence; it never changes the scale by itself (#153).

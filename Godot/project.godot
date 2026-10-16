@@ -16,7 +16,7 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="Sonara"
 config/description="Digital Audio Workstation"
-config/version="0.1.0-beta.1"
+config/version="0.1.0-beta.2"
 run/main_scene="uid://ckggccuur2ds"
 config/features=PackedStringArray("4.7")
 run/low_processor_mode=true
