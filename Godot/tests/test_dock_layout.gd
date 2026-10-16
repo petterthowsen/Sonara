@@ -20,6 +20,9 @@ func run_tests() -> void:
 	await _test_center_drop_creates_tab_group()
 	await _test_last_panel_out_dissolves_tab_group()
 	await _test_empty_dock_hidden_until_drag()
+	await _test_dock_toggle_persists()
+	await _test_showing_panel_selects_its_tab()
+	await _test_toggle_panel_in_hidden_dock_shows_dock()
 	await _test_tab_groups_round_trip_through_config()
 	await _test_hide_panel_from_tab_group()
 	await _test_mouse_drop_on_title_bar_tabs()
@@ -113,6 +116,17 @@ func _test_last_panel_out_dissolves_tab_group() -> void:
 	_assert(browser._title_bar.visible, "dissolved panel gets its title bar back")
 	_assert(host.left_dock.get_items().back() == assistant, "moved panel inserted after inspector")
 	await _free_host(host)
+
+
+func _test_dock_toggle_persists() -> void:
+	var host := await _make_host()
+	_assert(host.is_dock_shown("left") and host.left_dock.visible, "dock shown by default")
+	host.toggle_dock_shown("left")
+	_assert(not host.left_dock.visible and not host.is_dock_shown("left"), "toggle hides the left dock")
+	_assert(host.right_dock.visible, "right dock unaffected")
+	_assert(_sonara().get_config(_host_script.CONFIG_KEY)["left_shown"] == false, "hidden state saved")
+	host.toggle_dock_shown("left")
+	_assert(host.left_dock.visible, "toggle shows the dock again")
 
 
 func _test_empty_dock_hidden_until_drag() -> void:
@@ -256,3 +270,25 @@ func _test_new_stack_item_gets_even_share() -> void:
 		heights.append(item.size.y)
 	_assert(heights.size() == 3 and absf(heights[0] - heights[2]) < 2.0, "stacked items share height evenly (got %s)" % [heights])
 	await _free_host(host)
+
+
+func _test_toggle_panel_in_hidden_dock_shows_dock() -> void:
+	var host := await _make_host()
+	host.set_dock_shown("left", false)
+	_assert(not host.is_panel_visible("inspector"), "panel in a hidden dock reads as not visible")
+	host.toggle_panel_visible("inspector")
+	_assert(host.left_dock.visible and host.is_panel_visible("inspector"), "toggling a panel in a hidden dock shows the dock")
+	_assert(host.left_dock.get_panels().size() == 1, "panel stays docked")
+
+
+func _test_showing_panel_selects_its_tab() -> void:
+	var host := await _make_host()
+	var browser: Variant = _panel(host, "browser")
+	var assistant: Variant = _panel(host, "assistant")
+	host.drop_panel(assistant, host.right_dock, {"zone": Z.CENTER, "item": browser, "tab": -1})
+	var tabs: TabContainer = assistant.get_parent_tabs()
+	_assert(tabs != null, "panels are tabbed")
+	tabs.current_tab = browser.get_index()
+	host.set_dock_shown("right", false)
+	host.toggle_panel_visible("assistant")
+	_assert(tabs.current_tab == assistant.get_index(), "showing a tabbed panel switches to its tab")

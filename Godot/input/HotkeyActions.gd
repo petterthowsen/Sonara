@@ -209,6 +209,10 @@ const ACTIONS := [
 		"defaults": ["D"] },
 	{ "id": "toggle_device_frame", "label": "Toggle device frame", "group": "View", "context": "global",
 		"defaults": [] },
+	{ "id": "toggle_left_dock", "label": "Show left dock", "group": "View", "context": "global",
+		"defaults": ["Alt+1"] },
+	{ "id": "toggle_right_dock", "label": "Show right dock", "group": "View", "context": "global",
+		"defaults": ["Alt+2"] },
 	{ "id": "toggle_assistant", "label": "Toggle assistant", "group": "View", "context": "global",
 		"defaults": ["Ctrl+Shift+A"] },
 

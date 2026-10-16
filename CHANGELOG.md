@@ -8,6 +8,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Right-clicking a dock panel's title bar or tab opens a context menu with Close.
+- View > Show Left Dock / Show Right Dock check items hide or show a whole side dock, with rebindable hotkeys (default Alt+1 / Alt+2); the state is saved with the dock layout.
 - Arranger: new setting Appearance > Arranger > Color Clips by Track fills each clip with its track color and leaves the timeline background neutral.
 - Mixer: Ctrl+scroll sets the width of all strips freely (the Narrow/Medium/Wide button follows the closest preset, and the Devices toggle is disabled while strips are that narrow), and the bottom fader height can be dragged from a grip above it (double-click resets). The per-strip right-edge drag handle is removed, and the bottom meter no longer has a larger minimum width than the big meter.
 - View > Toggle Info Panel shows or hides the bottom bar with the Arrange / Mix / Edit buttons (#147).

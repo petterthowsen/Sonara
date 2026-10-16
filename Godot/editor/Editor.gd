@@ -466,6 +466,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif Hotkeys.pressed(event, "toggle_assistant"):
 		toggle_assistant()
 		accept_event()
+	elif Hotkeys.pressed(event, "toggle_left_dock"):
+		dock_host.toggle_dock_shown("left")
+		accept_event()
+	elif Hotkeys.pressed(event, "toggle_right_dock"):
+		dock_host.toggle_dock_shown("right")
+		accept_event()
 	elif Hotkeys.pressed(event, "toggle_device_frame"):
 		toggle_device_frame()
 		accept_event()

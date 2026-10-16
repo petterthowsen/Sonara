@@ -78,9 +78,20 @@ func set_panel_visible(id: String, is_shown: bool) -> void:
 		return
 	if is_shown:
 		_show_panel(panel)
+		var dock := panel.get_parent_dock()
+		if dock:
+			dock.dock_shown = true
+		_select_tab(panel)
 	else:
 		_hide_panel(panel)
 	_save_layout()
+
+
+## Bring `panel` to the front when it sits in a tab group.
+func _select_tab(panel: DockPanel) -> void:
+	var tabs := panel.get_parent_tabs()
+	if tabs:
+		tabs.current_tab = panel.get_index()
 
 
 ## Toggle a panel between its last dock slot and the hidden pool.
@@ -88,7 +99,13 @@ func toggle_panel_visible(id: String) -> void:
 	var panel := _panels.get(id) as DockPanel
 	if panel == null:
 		return
-	set_panel_visible(id, panel.get_parent_dock() == null)
+	var dock := panel.get_parent_dock()
+	if dock != null and not dock.dock_shown:
+		# Panel is docked but its dock is hidden: reveal the dock instead of closing the panel.
+		set_dock_shown("left" if dock == left_dock else "right", true)
+		_select_tab(panel)
+		return
+	set_panel_visible(id, dock == null)
 
 
 ## Registered panel ids in stable menu order (known panels first).
@@ -103,10 +120,35 @@ func get_panel_ids() -> Array[String]:
 	return ids
 
 
-## True when the panel is currently stacked in a side dock.
+## True when the panel is stacked in a side dock that is itself shown.
 func is_panel_visible(id: String) -> bool:
 	var panel := _panels.get(id) as DockPanel
-	return panel != null and panel.get_parent_dock() != null
+	if panel == null:
+		return false
+	var dock := panel.get_parent_dock()
+	return dock != null and dock.dock_shown
+
+
+## Show or hide a whole side dock ("left" or "right"), keeping its panels, and persist it.
+func set_dock_shown(side: String, is_shown: bool) -> void:
+	var dock := _dock_for_side(side)
+	if dock == null:
+		return
+	dock.dock_shown = is_shown
+	_save_layout()
+
+
+func toggle_dock_shown(side: String) -> void:
+	set_dock_shown(side, not is_dock_shown(side))
+
+
+func is_dock_shown(side: String) -> bool:
+	var dock := _dock_for_side(side)
+	return dock != null and dock.dock_shown
+
+
+func _dock_for_side(side: String) -> SideDock:
+	return left_dock if side == "left" else right_dock if side == "right" else null
 
 
 ## Persist split offsets after a user drags a splitter.
@@ -152,6 +194,8 @@ func _apply_saved_layout() -> void:
 		var leftover: DockPanel = by_id[id]
 		if leftover.get_parent() == null:
 			_hide_panel(leftover)
+	left_dock.dock_shown = bool(data.get("left_shown", true))
+	right_dock.dock_shown = bool(data.get("right_shown", true))
 	left_dock.apply_split_offsets(data.get("left_splits", []))
 	right_dock.apply_split_offsets(data.get("right_splits", []))
 	right_dock.set_parent_split_offsets(_to_packed(data.get("outer_offsets", [])))
@@ -211,6 +255,8 @@ func _save_layout() -> void:
 	var data := {
 		"left": left_dock.get_layout(),
 		"right": right_dock.get_layout(),
+		"left_shown": left_dock.dock_shown,
+		"right_shown": right_dock.dock_shown,
 		"left_splits": left_dock.get_split_offsets(),
 		"right_splits": right_dock.get_split_offsets(),
 		"outer_offsets": Array(right_dock.get_parent_split_offsets()),

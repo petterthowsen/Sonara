@@ -6,6 +6,8 @@ var logger : Log = Log.make("MainMenu")
 
 ## View menu id for the info panel item; dock panel items use their index (0..n).
 const VIEW_TOGGLE_INFO_PANEL := 1000
+const VIEW_TOGGLE_LEFT_DOCK := 1001
+const VIEW_TOGGLE_RIGHT_DOCK := 1002
 
 enum MENU { File, Edit, View, AI, Help }
 
@@ -305,11 +307,18 @@ func _rebuild_view_menu() -> void:
 	var dock_host := _get_dock_host()
 	if dock_host == null:
 		return
+	_view_menu.add_check_item("Show Left Dock", VIEW_TOGGLE_LEFT_DOCK)
+	_view_menu.set_item_checked(_view_menu.get_item_index(VIEW_TOGGLE_LEFT_DOCK), dock_host.is_dock_shown("left"))
+	_view_menu.add_check_item("Show Right Dock", VIEW_TOGGLE_RIGHT_DOCK)
+	_view_menu.set_item_checked(_view_menu.get_item_index(VIEW_TOGGLE_RIGHT_DOCK), dock_host.is_dock_shown("right"))
+	_view_menu.add_separator()
 	var ids := dock_host.get_panel_ids()
 	for i in ids.size():
 		_view_menu.add_check_item(DockHost.title_for_id(ids[i]), i)
-		_view_menu.set_item_metadata(i, ids[i])
-		_view_menu.set_item_checked(i, dock_host.is_panel_visible(ids[i]))
+		# Set by position (the dock items above shift it), not by id.
+		var index := _view_menu.item_count - 1
+		_view_menu.set_item_metadata(index, ids[i])
+		_view_menu.set_item_checked(index, dock_host.is_panel_visible(ids[i]))
 	_view_menu.add_separator()
 	_view_menu.add_check_item("Toggle Info Panel", VIEW_TOGGLE_INFO_PANEL)
 	_view_menu.set_item_checked(_view_menu.get_item_index(VIEW_TOGGLE_INFO_PANEL), Sonara.editor.bottom.visible)
@@ -320,14 +329,19 @@ func _on_view_item_pressed(item_id: int) -> void:
 	item_pressed.emit(MENU.View, item_id)
 	if item_id == VIEW_TOGGLE_INFO_PANEL:
 		Sonara.editor.toggle_info_panel()
+		_rebuild_view_menu()
 		return
 	var dock_host := _get_dock_host()
 	if dock_host == null:
 		return
+	if item_id == VIEW_TOGGLE_LEFT_DOCK or item_id == VIEW_TOGGLE_RIGHT_DOCK:
+		dock_host.toggle_dock_shown("left" if item_id == VIEW_TOGGLE_LEFT_DOCK else "right")
+		_rebuild_view_menu()
+		return
 	var index := _view_menu.get_item_index(item_id)
 	var panel_id := str(_view_menu.get_item_metadata(index))
 	dock_host.toggle_panel_visible(panel_id)
-	_view_menu.set_item_checked(index, dock_host.is_panel_visible(panel_id))
+	_rebuild_view_menu()
 
 
 func _get_dock_host() -> DockHost:

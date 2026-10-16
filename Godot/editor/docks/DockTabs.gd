@@ -12,6 +12,7 @@ func _init() -> void:
 	# Replaces TabContainer's own forwarding so one payload type drives every dock drop target.
 	get_tab_bar().set_drag_forwarding(_get_tab_drag_data, Callable(), Callable())
 	tab_changed.connect(_on_tab_changed)
+	get_tab_bar().tab_rmb_clicked.connect(_on_tab_rmb_clicked)
 
 
 ## DockPanels in tab order.
@@ -72,6 +73,13 @@ func _get_tab_drag_data(at_position: Vector2) -> Variant:
 		return null
 	var panel := get_tab_control(index) as DockPanel
 	return panel.create_drag() if panel else null
+
+
+## Right-click on a tab opens that panel's context menu.
+func _on_tab_rmb_clicked(tab: int) -> void:
+	var panel := get_tab_control(tab) as DockPanel
+	if panel:
+		panel.show_context_menu()
 
 
 ## Persist which tab is selected.

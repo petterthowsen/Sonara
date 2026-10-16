@@ -72,6 +72,33 @@ func get_parent_dock() -> SideDock:
 	return null
 
 
+## Hide this panel via its DockHost (it stays available in the View menu).
+func close() -> void:
+	var node: Node = get_parent()
+	while node and not node is DockHost:
+		node = node.get_parent()
+	if node:
+		(node as DockHost).set_panel_visible(panel_id, false)
+
+
+## Open the panel context menu (Close) at the cursor.
+func show_context_menu() -> void:
+	var menu := PopupMenu.new()
+	menu.add_item("Close %s" % get_title(), 0)
+	menu.id_pressed.connect(func(_id: int) -> void: close())
+	menu.popup_hide.connect(menu.queue_free)
+	add_child(menu)
+	menu.position = Vector2i(DisplayServer.mouse_get_position())
+	menu.popup()
+
+
+func _on_title_gui_input(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb and mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
+		show_context_menu()
+		_title_bar.accept_event()
+
+
 ## Create the title-bar control that initiates panel drags.
 func _build_title(title: String) -> void:
 	_title_bar = PanelContainer.new()
@@ -80,6 +107,7 @@ func _build_title(title: String) -> void:
 	_title_bar.theme_type_variation = "SectionHeader"
 	_title_bar.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	_title_bar.set_drag_forwarding(_get_drag_data, Callable(), Callable())
+	_title_bar.gui_input.connect(_on_title_gui_input)
 	_title_label = Label.new()
 	_title_label.text = title
 	_title_label.clip_text = true

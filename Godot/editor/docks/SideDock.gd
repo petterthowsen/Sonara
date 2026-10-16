@@ -20,6 +20,14 @@ const _EDGE_BAND_MAX := 64.0
 ## Thin stack-above band at the top edge of each item, above its title bar or tab strip.
 const _SLOT_BAND := 8.0
 
+## User toggle (View menu / hotkey): false hides the whole dock, panels stay docked in it.
+var dock_shown: bool = true:
+	set(value):
+		if value == dock_shown:
+			return
+		dock_shown = value
+		_sync_empty_state()
+
 var _split: VSplitContainer
 var _overlay: _DropOverlay
 var _hover: Dictionary = {}
@@ -369,7 +377,7 @@ func _sync_empty_state() -> void:
 		zeros.resize(maxi(count - 1, 0))
 		_split.split_offsets = zeros
 	_set_empty_layout(count == 0)
-	visible = count > 0 or _panel_drag_active
+	visible = dock_shown and (count > 0 or _panel_drag_active)
 	_overlay.visible = _panel_drag_active
 	_overlay.mouse_filter = Control.MOUSE_FILTER_STOP if _panel_drag_active else Control.MOUSE_FILTER_IGNORE
 	_overlay.queue_redraw()
