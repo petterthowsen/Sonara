@@ -81,6 +81,11 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 22
 icon = ExtResource("3_wr7tj")
 
+[node name="EndSpacer" type="Control" parent="HSplit/LeftPane/HBox"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+mouse_filter = 2
+
 [node name="RightPane" type="ScrollContainer" parent="HSplit" unique_id=2015465869]
 custom_minimum_size = Vector2(125, 0)
 layout_mode = 2
@@ -93,6 +98,11 @@ layout_mode = 2
 size_flags_horizontal = 10
 size_flags_vertical = 3
 theme_override_constants/separation = 0
+
+[node name="StartSpacer" type="Control" parent="HSplit/RightPane/HBox"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+mouse_filter = 2
 
 [node name="Options" type="CenterContainer" parent="HSplit/RightPane/HBox" unique_id=728906148]
 layout_mode = 2

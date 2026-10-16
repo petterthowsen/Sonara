@@ -100,6 +100,24 @@ func get_multi_edit_peers(channel: Channel) -> Array[Channel]:
 	return peers
 
 
+var _right_pane_width := 0.0
+
+
+## The right pane is right-aligned (Master at its right edge), so when the splitter or window
+## resizes it, keep its right edge fixed instead of letting content slide relative to the left.
+func _on_right_pane_resized() -> void:
+	var delta := _right_pane_width - right_pane.size.x
+	_right_pane_width = right_pane.size.x
+	if is_zero_approx(delta):
+		return
+	var target := right_pane.scroll_horizontal + int(round(delta))
+	_set_right_scroll.call_deferred(maxi(target, 0))
+
+
+func _set_right_scroll(value: int) -> void:
+	right_pane.scroll_horizontal = value
+
+
 func _ready():
 	Hotkeys.set_context(self, "mixer")
 	# clear
@@ -109,6 +127,9 @@ func _ready():
 	if Sonara and Sonara.editor:
 		Sonara.editor.project_opened.connect(_on_project_opened)
 		Sonara.editor.project_closed.connect(_on_project_closed)
+
+	_right_pane_width = right_pane.size.x
+	right_pane.resized.connect(_on_right_pane_resized)
 
 	# Connect add buttons
 	_setup_left_add_menu()
