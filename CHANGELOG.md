@@ -34,6 +34,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Startup with a startup or command-line project no longer initializes the engine twice (and rotates its logs twice); only the project that ends up open handshakes with the engine (#92).
 - Solo and mute in the arranger track list are now undoable, and drag-toggling them across several tracks or channels is one undo step instead of one per channel (#152).
 - Mixer: dragging the splitter no longer scrolls the right pane; its right edge (Master) stays put.
 - Audition while dragging (note pitch, value lane velocity): the throttle now plays the latest value when the interval ends, so the final position always sounds.

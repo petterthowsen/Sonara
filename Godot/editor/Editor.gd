@@ -216,34 +216,47 @@ func _ready():
 	device_lane.hide()
 	seconday_panel.hide()
 
-	# Blank project first; a startup project replaces it once the devices it uses are known
+	# Blank project first; a startup project replaces it once the devices it uses are known.
+	# A .sonara path on the command line wins over the startup project (REQ-017).
+	var cli_path := "" if Utils.is_test_mode() else Sonara.cli_project_path()
+	var load_initial := not Utils.is_test_mode() and (not cli_path.is_empty() or Sonara.has_startup_project())
 	var new_project = Project.new()
 	new_project.project_name = "Untitled"
 	new_project.created_date = Time.get_unix_time_from_system()
-	open_project(new_project)
+	# Only the project that ends up open handshakes with the engine: every handshake re-inits
+	# the engine and rotates its logs (#92).
+	open_project(new_project, "", not load_initial)
 
+	if load_initial:
+		_load_initial_project(cli_path)
 	if not Utils.is_test_mode():
-		# A .sonara path on the command line wins over the startup project (REQ-017).
-		var cli_path := Sonara.cli_project_path()
-		if not cli_path.is_empty() or Sonara.has_startup_project():
-			_load_initial_project(cli_path)
 		_start_update_check()
 
 
 ## Open the project the app starts with: `path` (from the command line) when given, otherwise the
 ## startup project. Built-in devices arrive from the engine after launch and project loading drops
 ## devices it doesn't know yet, so wait for them (bounded, in case the engine isn't running).
+## The blank project isn't connected to the engine meanwhile; it is connected here if it stays open.
 func _load_initial_project(path: String = "") -> void:
+	var blank := project
+	# The engine advertises its built-ins once it runs, so start it (or attach) first.
+	while not AudioEngineOSC._is_ready:
+		await get_tree().process_frame
+	await EngineProcess.ensure_running()
 	var registry: DeviceRegistry = AssetService.device_registry
 	var deadline := Time.get_ticks_msec() + STARTUP_DEVICES_TIMEOUT_MS
 	while not registry.builtins_complete and Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
-	if not project_path.is_empty() or is_modified:
-		return
-	if not path.is_empty():
-		load_project(path)
-	elif Sonara.has_startup_project():
-		load_project(Sonara.get_startup_project_path())
+	if project != blank:
+		return  # the user opened another project meanwhile; it connected itself
+	var loaded := false
+	if not is_modified:
+		if not path.is_empty():
+			loaded = load_project(path)
+		elif Sonara.has_startup_project():
+			loaded = load_project(Sonara.get_startup_project_path())
+	if not loaded and project == blank:
+		_connect_project_to_engine()
 
 
 ## Check GitHub for a newer release in the background (release-channel builds only).
@@ -505,8 +518,9 @@ func _handle_visibility_hotkey(event: InputEvent) -> bool:
 # ============================================================================
 # PROJECT MANAGEMENT
 # ============================================================================
-func open_project(p: Project, path: String = "") -> void:
-	"""Open a project and connect it to audio engine. `path` is the file it was loaded from."""
+func open_project(p: Project, path: String = "", connect_engine: bool = true) -> void:
+	"""Open a project and connect it to audio engine. `path` is the file it was loaded from.
+	`connect_engine` false leaves connecting to the caller."""
 	if project != null:
 		close_project()
 
@@ -533,7 +547,7 @@ func open_project(p: Project, path: String = "") -> void:
 	project_activated.emit(project)
 
 	# Connect to audio engine after ensuring AudioEngineOSC is ready
-	if AudioEngineOSC:
+	if AudioEngineOSC and connect_engine:
 		_connect_project_to_engine.call_deferred()
 
 	logger.info("[Editor] Project opened: ", project.project_name)
