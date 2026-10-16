@@ -50,14 +50,15 @@ static func is_valid_route_target(channel: Channel, target: Channel, project: Pr
 	return _is_route_candidate(channel, target, project) and not project.feeds_into(target.id, channel.id)
 
 
-## True when `channel` may start a send to `target`: a BUS other than itself whose routes and
-## sends don't lead back to `channel`. An existing send stays editable.
+## True when `channel` may turn a send to `target` up from -inf: a BUS other than itself whose
+## routes and sends don't lead back to `channel`. A send above -inf stays editable.
 static func is_valid_send_target(channel: Channel, target: Channel, project: Project) -> bool:
 	if target == null or channel == null or project == null:
 		return false
 	if target.id == channel.id or target.channel_type != Channel.ChannelType.BUS:
 		return false
-	if channel.get_send(target.id) != null:
+	var send := channel.get_send(target.id)
+	if send != null and send.is_live():
 		return true
 	return not project.feeds_into(target.id, channel.id)
 

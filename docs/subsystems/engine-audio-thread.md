@@ -84,7 +84,7 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
    - This establishes the "post-fader" buffer used for metering and for post-fader sends.
 
 3. **Routing in Dependency Order (routes and sends)**
-   - `MixBuffers::pending_inputs` counts each channel's incoming routes and sends. A channel finishes when it reaches 0, so every channel processes exactly once, after all its inputs.
+   - `MixBuffers::pending_inputs` counts each channel's incoming routes and sends above -inf (a send at -60 dB is no edge). A channel finishes when it reaches 0, so every channel processes exactly once, after all its inputs.
    - Route targets (buses, master) run `process_device_chain()` on finishing, even with no input, so reverb/delay tails ring after playback stops; then they apply their own pan.
    - The finished channel then mixes into its `output_channel_id` and send targets. Pre-fader sends tap `MixBuffers::pre_fader_*` (copied before the device pre-pass) and reapply pan; post-fader sends read the pass-2 buffer.
    - Routes and send returns are scaled by the destination gain (`get_gain()`). Never reapply pan while routing.

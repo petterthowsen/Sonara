@@ -88,9 +88,13 @@ pub(super) fn count_route_inputs(
         let sends = std::mem::take(&mut source.send_channels);
         let output = output_target(source);
 
-        let targets = output
-            .into_iter()
-            .chain(sends.iter().map(|send| send.target_channel_id));
+        // A send at -inf is no edge, so a route can close a loop through it.
+        let targets = output.into_iter().chain(
+            sends
+                .iter()
+                .filter(|send| send.is_live())
+                .map(|send| send.target_channel_id),
+        );
         for target_id in targets {
             if !is_valid_route(channel_map, id, target_id) {
                 continue;
@@ -160,7 +164,8 @@ pub(super) fn route_channel(
 
     for (send_index, send) in sends.iter().enumerate() {
         let delay = send_delays.get(send_index).copied().unwrap_or(0) as usize;
-        if !is_valid_route(channel_map, source_id, send.target_channel_id) {
+        // Not counted as an input (`count_route_inputs`), so nothing to release either.
+        if !send.is_live() || !is_valid_route(channel_map, source_id, send.target_channel_id) {
             continue;
         }
         let Some(target) = channel_map.get_mut(&send.target_channel_id) else {
@@ -172,9 +177,6 @@ pub(super) fn route_channel(
             continue;
         }
         let gain = fader_gain(send.amount_db);
-        if gain <= 0.0 {
-            continue;
-        }
 
         if !send.pre_fader {
             match post_ring.as_ref().filter(|_| delay > 0) {
@@ -618,6 +620,39 @@ mod tests {
         let expected = 0.5 * gain * gain * gain + 0.5 * gain * gain;
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert!((output[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn send_at_minus_inf_is_no_edge() {
+        // Track 5 → bus 4 → bus 2 → master, and bus 2 sends back to bus 4 at -inf. Counted as an
+        // edge that would be a cycle broken at 2 (lowest id), cutting the real 4 → 2 route.
+        let mut back = test_channel(2, Some(1), 0.0);
+        back.send_channels.push(Send {
+            target_channel_id: 4,
+            amount_db: -60.0,
+            pre_fader: false,
+            muted: false,
+        });
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            back,
+            test_channel(4, Some(2), 0.0),
+            source_track(5, 4),
+        ]);
+        let output = mix(&mut state);
+
+        assert!(
+            (output[0] - 0.5).abs() < 1e-4,
+            "route through 4 → 2 survives, got {}",
+            output[0]
+        );
+
+        // Turned up, the send is an edge again (the engine then breaks the cycle as before).
+        state.channels.get_mut(&2).unwrap().send_channels[0].amount_db = -59.0;
+        let mut ids: Vec<ChannelId> = state.channels.keys().copied().collect();
+        ids.sort_unstable();
+        count_route_inputs(&mut state.channels, &ids);
+        assert_eq!(state.channels[&4].mix.pending_inputs, 2);
     }
 
     #[test]

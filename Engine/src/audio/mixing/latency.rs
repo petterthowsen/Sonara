@@ -23,8 +23,8 @@ pub struct ChannelSignature {
     pub route: Option<ChannelId>,
     /// Hardware pair it writes to, as its output id (1000 and up).
     pub hardware: Option<ChannelId>,
-    /// Each send in `send_channels` order: the target (`None` when the send isn't valid) and
-    /// whether it's pre-fader.
+    /// Each send in `send_channels` order: the target (`None` when the send isn't valid or is at
+    /// -inf, matching the mixer's ordering) and whether it's pre-fader.
     pub sends: Vec<(Option<ChannelId>, bool)>,
     /// Latency of the top-level devices the mixer runs after its inputs have mixed in (from
     /// `chain_start`), summed.
@@ -84,7 +84,8 @@ impl LatencySignature {
                         .iter()
                         .map(|send| {
                             let target = send.target_channel_id;
-                            (valid(target).then_some(target), send.pre_fader)
+                            let live = send.is_live() && valid(target);
+                            (live.then_some(target), send.pre_fader)
                         })
                         .collect(),
                     device_frames: channel
@@ -559,6 +560,9 @@ mod tests {
         track.devices.push(Box::new(Latent(28)));
         track.send_channels.push(send_to(4, true));
         track.send_channels.push(send_to(99, false)); // no such channel
+        let mut silent = send_to(2, false);
+        silent.amount_db = -60.0; // at -inf: no edge, like in the mixer
+        track.send_channels.push(silent);
         let mut layer = test_channel(4, Some(MASTER), 0.0);
         layer.devices.push(Box::new(Latent(64)));
         layer.devices.push(Box::new(Latent(5)));
@@ -585,7 +589,10 @@ mod tests {
         let track = &signature.channels[2];
         assert_eq!(track.route, Some(2));
         assert_eq!(track.device_frames, 128);
-        assert_eq!(track.sends, vec![(Some(4), true), (None, false)]);
+        assert_eq!(
+            track.sends,
+            vec![(Some(4), true), (None, false), (None, false)]
+        );
         let layer = &signature.channels[3];
         assert_eq!((layer.aux_frames, layer.device_frames), (Some(64), 5));
         assert_eq!(layer.aux_targets, vec![5]);

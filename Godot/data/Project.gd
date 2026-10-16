@@ -1868,8 +1868,8 @@ func channel_is_in_subtree(maybe_descendant_id: int, root: Channel) -> bool:
 
 
 ## True when audio leaving channel `from_id` reaches channel `to_id` through output routes and
-## sends (any level: the engine orders every send as an edge). A new route or send from `to_id`
-## to `from_id` would then close a loop.
+## sends above -inf (a send at -inf is no edge, in the engine too). A new route or send from
+## `to_id` to `from_id` would then close a loop.
 func feeds_into(from_id: int, to_id: int) -> bool:
 	var visited: Dictionary = {}
 	var stack: Array[int] = [from_id]
@@ -1885,7 +1885,8 @@ func feeds_into(from_id: int, to_id: int) -> bool:
 			continue
 		stack.append(node.output_channel_id)
 		for send in node.send_channels:
-			stack.append(send.target_channel_id)
+			if send.is_live():
+				stack.append(send.target_channel_id)
 	return false
 
 

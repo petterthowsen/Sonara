@@ -294,8 +294,8 @@ func _on_send_knob_changed(value: float, target_channel_id: int, kind := ValueEd
 		control.bus_label.modulate.a = 0.5 if amount_db <= MIN_SEND_DB else 1.0
 
 	var send_config = channel.get_send(target_channel_id)
-	if not send_config and not ChannelOutputMenu.is_valid_send_target(channel, project.get_channel_by_id(target_channel_id), project):
-		# Routing changed since the knob was last refreshed: this send would close a loop.
+	if amount_db > MIN_SEND_DB and not ChannelOutputMenu.is_valid_send_target(channel, project.get_channel_by_id(target_channel_id), project):
+		# Routing changed since the knob was last refreshed: turning this send up would close a loop.
 		if control:
 			control.set_amount_display(MIN_SEND_DB, true)
 		_refresh_blocked()

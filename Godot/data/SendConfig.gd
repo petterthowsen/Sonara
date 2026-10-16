@@ -9,6 +9,15 @@ var amount: float = -12.0  # dB (send level)
 var pre_fader: bool = false  # Pre/post fader send
 var muted: bool = false
 
+## Send level at the bottom of the range, shown as -inf: the send carries nothing.
+const SILENT_DB := -60.0
+
+
+## False at -inf. The engine then leaves the send out of its routing order, so it's no edge in
+## a loop either (`Project.feeds_into`).
+func is_live() -> bool:
+	return amount > SILENT_DB
+
 # Serialize to JSON
 func to_json() -> Dictionary:
 	return {

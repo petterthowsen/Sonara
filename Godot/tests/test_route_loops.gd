@@ -1,7 +1,7 @@
 # test_route_loops.gd
 # Output routes and sends can't close a feedback loop (#117): the output menu disables a target
 # whose routes and sends lead back to the channel, a multi-selection skips the peers it would
-# loop, and the sends panel blocks a send that would loop.
+# loop, and the sends panel blocks a send that would loop. A send at -inf is no edge.
 # Run: godot --headless --path Godot -s tests/test_route_loops.gd -- --test
 extends TestBase
 
@@ -84,9 +84,11 @@ func _test_send_closes_route_loop() -> void:
 	_reset()
 	_a.add_send(_b.id, -12.0)
 	_assert(not _route_ok(_b, _a), "B -> A rejected while A sends to B")
+	_assert(_send_ok(_a, _b), "a live send stays editable")
 	_a.set_send_amount(_b.id, -60.0)
-	_assert(not _route_ok(_b, _a), "a send at -inf still counts")
-	_assert(_send_ok(_a, _b), "the existing send stays editable")
+	_assert(_route_ok(_b, _a), "a send at -inf is no edge: B -> A allowed")
+	_b.set_route(_a.id)
+	_assert(not _send_ok(_a, _b), "then the -inf send can't be turned back up")
 
 
 func _test_route_closes_send_loop() -> void:
@@ -135,6 +137,8 @@ func _test_multi_send_skips_looping_peer() -> void:
 	_edit.apply_send(_inst, _b.id, -60.0, -12.0, _peers([_a, _c]), _kind.Kind.TYPED, _project)
 	_assert(_a.get_send(_b.id) == null, "the peer whose send would loop gets none")
 	_assert(_c.get_send(_b.id) != null, "the other peer gets the send")
+	_edit.apply_send(_inst, _b.id, -12.0, -60.0, _peers([_c]), _kind.Kind.RESET, _project)
+	_assert(_c.get_send(_b.id).amount <= -60.0, "turning sends down is never skipped")
 
 
 func _test_sends_panel_blocks_loop() -> void:
@@ -157,5 +161,16 @@ func _test_sends_panel_blocks_loop() -> void:
 	_assert(blocked.knob.mouse_filter == Control.MOUSE_FILTER_STOP, "unblocked once the loop is gone")
 	blocked.knob.value = -6.0
 	_assert(_a.get_send(_b.id) != null, "then the send can be made")
+
+	# A send at -inf behaves like no send: B -> A is allowed again and the knob blocks.
+	blocked.knob.value = -60.0
+	_assert(_route_ok(_b, _a), "turned down to -inf, the send no longer blocks B -> A")
+	_b.set_route(_a.id)
+	panel._refresh_blocked()
+	_assert(blocked.knob.mouse_filter == Control.MOUSE_FILTER_IGNORE, "the -inf send's knob blocks once B -> A")
+	_a.set_send_amount(_b.id, -60.0)
+	blocked.knob.set_value_no_signal(-60.0)
+	panel._on_send_knob_changed(-6.0, _b.id)
+	_assert(_a.get_send(_b.id).amount <= -60.0, "turning it up is refused")
 	panel.queue_free()
 	await process_frame
