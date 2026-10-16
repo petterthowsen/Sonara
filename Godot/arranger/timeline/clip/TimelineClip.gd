@@ -30,11 +30,18 @@ var clip_instance: ClipInstance = null:  # The instance we're displaying
 var timeline = null
 var _bound_source_clip: Clip = null
 var _bound_grid_helper: GridHelper = null
+## When on, the clip body is filled with the track color and the lane background stays neutral.
+const SETTING_COLOR_BY_TRACK := "appearance/color_clips_by_track"
+const TRACK_FILL_BRIGHTNESS := 0.55
+const TRACK_FILL_SATURATION := 0.65
+const TRACK_FILL_ALPHA := 0.9
+var _track_fill_style: StyleBoxFlat
 var track_color: Color = Color.WHITE:
 	set(tc):
 		if track_color != tc:
 			track_color = tc
 			_apply_note_color()
+			queue_redraw()
 
 # Selection and hover state
 var is_selected: bool = false
@@ -160,6 +167,8 @@ func _ready() -> void:
 	_shape_name()
 	if clip_renderer:
 		clip_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if not Settings.setting_changed.is_connected(_on_setting_changed):
+		Settings.setting_changed.connect(_on_setting_changed)
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -204,10 +213,20 @@ func _exit_tree() -> void:
 func _apply_note_color() -> void:
 	if clip_renderer == null:
 		return
-	clip_renderer.note_color = Utils.display_color(track_color)
+	# On a track-colored body the notes and waveform switch to a light tone to stay visible.
+	var paint := Utils.display_color(track_color)
+	if Settings.get_value(SETTING_COLOR_BY_TRACK):
+		paint = Color(1.0, 1.0, 1.0, 0.85)
+	clip_renderer.note_color = paint
 	clip_renderer.queue_redraw()
 	if waveform_view:
-		waveform_view.color = Utils.display_color(track_color)
+		waveform_view.color = paint
+
+
+func _on_setting_changed(key: String, _value) -> void:
+	if key == SETTING_COLOR_BY_TRACK:
+		_apply_note_color()
+		queue_redraw()
 
 
 func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE) -> void:
@@ -530,6 +549,30 @@ func _draw_body() -> void:
 	"""Draw the body stylebox, the header band and the clip name."""
 	var style := _get_current_style()
 	if style:
+		if Settings.get_value(SETTING_COLOR_BY_TRACK):
+			# Draw from a private copy: editing the shared (watched) style would redraw every clip.
+			if _track_fill_style == null:
+				_track_fill_style = StyleBoxFlat.new()
+			_track_fill_style.bg_color = Color(0, 0, 0, 0)
+			_track_fill_style.border_color = style.border_color
+			_track_fill_style.set_border_width_all(0)
+			_track_fill_style.border_width_left = style.border_width_left
+			_track_fill_style.border_width_top = style.border_width_top
+			_track_fill_style.border_width_right = style.border_width_right
+			_track_fill_style.border_width_bottom = style.border_width_bottom
+			_track_fill_style.set_corner_radius_all(0)
+			_track_fill_style.corner_radius_top_left = style.corner_radius_top_left
+			_track_fill_style.corner_radius_top_right = style.corner_radius_top_right
+			_track_fill_style.corner_radius_bottom_left = style.corner_radius_bottom_left
+			_track_fill_style.corner_radius_bottom_right = style.corner_radius_bottom_right
+			var lift := 0.0
+			if style == style_selected:
+				lift = 0.2
+			elif style == style_hovered:
+				lift = 0.1
+			var fill := Utils.header_color(track_color, TRACK_FILL_BRIGHTNESS, TRACK_FILL_SATURATION)
+			_track_fill_style.bg_color = Color(fill.lightened(lift), TRACK_FILL_ALPHA)
+			style = _track_fill_style
 		style.draw(get_canvas_item(), Rect2(Vector2.ZERO, size))
 	if is_sibling_selected:
 		var border := get_theme_color(&"sibling_border", &"TimelineClip") \

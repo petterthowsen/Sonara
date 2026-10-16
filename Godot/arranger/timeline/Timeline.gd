@@ -106,6 +106,9 @@ func _ready():
 			remove_child(child)
 			child.queue_free()
 	
+	Settings.setting_changed.connect(func(key, _v):
+		if key == TimelineClip.SETTING_COLOR_BY_TRACK:
+			queue_redraw())
 	clip_selection_manager.set_context(self, grid_helper)
 	clip_selection_manager.selection_changed.connect(_on_clip_selection_changed)
 	clip_selection_manager.box_selection_changed.connect(func(_rect): queue_redraw())
@@ -240,6 +243,8 @@ func _visible_content_rect() -> Rect2:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_SORT_CHILDREN or what == NOTIFICATION_RESIZED:
 		queue_redraw()
+	elif what == NOTIFICATION_PREDELETE and _grid_canvas_item.is_valid():
+		RenderingServer.free_rid(_grid_canvas_item)
 
 
 func get_viewport_width() -> float:
@@ -1967,6 +1972,20 @@ func get_visible_x_range() -> Vector2:
 	return Vector2(start_x, clampf(start_x + get_viewport_width(), 0.0, size.x))
 
 
+## Canvas item for the grid lines: a child of this node's canvas item with a draw index past every
+## row's, so the grid draws above the clips and lanes while still sharing this node's transform,
+## clip and visibility. Rebuilt from _draw, so it redraws exactly when the row backgrounds do.
+var _grid_canvas_item: RID
+
+
+func _get_grid_canvas_item() -> RID:
+	if not _grid_canvas_item.is_valid():
+		_grid_canvas_item = RenderingServer.canvas_item_create()
+		RenderingServer.canvas_item_set_parent(_grid_canvas_item, get_canvas_item())
+		RenderingServer.canvas_item_set_draw_index(_grid_canvas_item, 1 << 30)
+	return _grid_canvas_item
+
+
 func _draw() -> void:
 	PerfRecorder.begin(&"Timeline._draw")
 	_draw_body()
@@ -1987,11 +2006,14 @@ func _draw_body() -> void:
 		draw_rect(rect, theme_stroke, false, 2.0)
 
 
-## Every row's fill, the grid, then every row's bottom border, in one pass beneath the rows.
-## Only the visible x range is drawn, so a horizontal scroll redraws this one canvas item; a
-## vertical scroll redraws nothing. Children draw on top: clips over track lanes, curves and
-## points over automation lanes.
+## Every row's fill and bottom border in one pass beneath the rows, and the grid in one pass above
+## them (see `_grid_canvas_item`), so the lines stay visible over clips filled with their track
+## color. Only the visible x range is drawn, so a horizontal scroll redraws these two canvas
+## items; a vertical scroll redraws nothing. Children draw between the two: clips over track
+## lanes, curves and points over automation lanes.
 func _draw_row_backgrounds() -> void:
+	var grid_ci := _get_grid_canvas_item()
+	RenderingServer.canvas_item_clear(grid_ci)
 	var visible_x := get_visible_x_range()
 	if visible_x.y <= visible_x.x:
 		return
@@ -2011,7 +2033,7 @@ func _draw_row_backgrounds() -> void:
 		rows_bottom = maxf(rows_bottom, row.position.y + row.size.y)
 
 	if grid_helper:
-		_draw_grid_lines(visible_x.x, visible_x.y, rows_bottom)
+		_draw_grid_lines(grid_ci, visible_x.x, visible_x.y, rows_bottom)
 
 	for child in get_children():
 		var row := child as Control
@@ -2026,9 +2048,10 @@ func _draw_row_backgrounds() -> void:
 			draw_line(Vector2(visible_x.x, y), Vector2(visible_x.y, y), row.border_color, 1.0)
 
 
-## Vertical grid lines between content x `start_x` and `end_x`, from the top down to `bottom`.
-## Content coordinates: the timeline scrolls inside a ScrollContainer, so no scroll offset applies.
-func _draw_grid_lines(start_x: float, end_x: float, bottom: float) -> void:
+## Vertical grid lines into canvas item `ci`, between content x `start_x` and `end_x`, from the top
+## down to `bottom`. Content coordinates: the timeline scrolls inside a ScrollContainer, so no
+## scroll offset applies.
+func _draw_grid_lines(ci: RID, start_x: float, end_x: float, bottom: float) -> void:
 	if end_x <= start_x or bottom <= 0.0:
 		return
 	for line in grid_helper.get_visible_grid_lines(start_x, end_x, 0.0, false):
@@ -2039,7 +2062,7 @@ func _draw_grid_lines(start_x: float, end_x: float, bottom: float) -> void:
 		# level has the same strength at any zoom or scroll.
 		var width: float = line.width()
 		var left := roundf(x) - floorf(width * 0.5)
-		draw_rect(Rect2(left, 0.0, width, bottom), line.color(grid_color_tick, grid_color_beat, grid_color_bar), true, -1.0, false)
+		RenderingServer.canvas_item_add_rect(ci, Rect2(left, 0.0, width, bottom), line.color(grid_color_tick, grid_color_beat, grid_color_bar))
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:

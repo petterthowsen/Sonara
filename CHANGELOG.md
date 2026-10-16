@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Arranger: new setting Appearance > Arranger > Color Clips by Track fills each clip with its track color and leaves the timeline background neutral.
 - Mixer: Ctrl+scroll sets the width of all strips freely (the Narrow/Medium/Wide button follows the closest preset, and the Devices toggle is disabled while strips are that narrow), and the bottom fader height can be dragged from a grip above it (double-click resets). The per-strip right-edge drag handle is removed, and the bottom meter no longer has a larger minimum width than the big meter.
 - View > Toggle Info Panel shows or hides the bottom bar with the Arrange / Mix / Edit buttons (#147).
 - Mixer channel strips show the max-peak dB readout above the bottom meter too, like the big meter (#140).
@@ -19,6 +20,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Changed
 
+- Arranger: the grid lines draw above the clips instead of behind them, so they stay visible over clips filled with their track color.
 - The active Arrange / Mix / Edit button is filled with the theme's primary color (#138).
 - Value lanes: with notes selected, unselected stems are dimmed to 50% and painting only edits the selected stems; Alt+drag adjusts all selected notes together (#80).
 - Lower CPU use when idle: the UI only redraws when something changes.

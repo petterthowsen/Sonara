@@ -208,7 +208,7 @@ func _update_clip_positions_body() -> void:
 ## The lane fill: the track's resting header color, so a lane always matches its TrackHeader.
 ## `bg_color` is only the fallback for a lane with no bound track (editor preview).
 func get_lane_color() -> Color:
-	if track == null:
+	if track == null or Settings.get_value(TimelineClip.SETTING_COLOR_BY_TRACK):
 		return bg_color
 	return Utils.header_color(
 		track.color, Utils.HEADER_RESTING_BRIGHTNESS, Utils.HEADER_RESTING_SATURATION)

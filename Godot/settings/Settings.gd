@@ -465,6 +465,14 @@ func _register_all_settings() -> void:
 		"Show the hotkeys and mouse gestures for whatever the pointer is over in the bar at the bottom of the window.",
 	)).sub("Editor")
 	_register(Setting.new(
+		"appearance/color_clips_by_track",
+		"Color Clips by Track",
+		Type.BOOL,
+		false,
+		CATEGORY_APPEARANCE,
+		"Fill each arranger clip with its track color and leave the timeline background neutral, instead of tinting the whole lane.",
+	)).sub("Arranger")
+	_register(Setting.new(
 		"appearance/colored_mixer_strips",
 		"Colored Mixer Strips",
 		Type.BOOL,
