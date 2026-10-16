@@ -34,6 +34,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Mixer: output routing and sends can no longer create a feedback loop through other channels (e.g. Bus 2 → Bus, then Bus → Bus 2). The output menu shows a looping target disabled with a tooltip, the send knob for such a bus is blocked, and a multi-selection route or send skips the channels it would loop (#117).
 - Startup with a startup or command-line project no longer initializes the engine twice (and rotates its logs twice); only the project that ends up open handshakes with the engine (#92).
 - Solo and mute in the arranger track list are now undoable, and drag-toggling them across several tracks or channels is one undo step instead of one per channel (#152).
 - Mixer: dragging the splitter no longer scrolls the right pane; its right edge (Master) stays put.

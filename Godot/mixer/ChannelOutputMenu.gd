@@ -23,6 +23,11 @@ static func populate(popup: PopupMenu, channel: Channel, project: Project) -> vo
 		if is_valid_route_target(channel, ch, project):
 			popup.add_check_item(ch.name, ch.id)
 			popup.set_item_checked(popup.item_count - 1, channel.output_channel_id == ch.id)
+		elif _closes_loop(channel, ch, project):
+			# Listed but disabled, so the missing choice explains itself.
+			popup.add_check_item(ch.name, ch.id)
+			popup.set_item_disabled(popup.item_count - 1, true)
+			popup.set_item_tooltip(popup.item_count - 1, LOOP_TOOLTIP % ch.name)
 	popup.add_separator()
 	_populate_device_outputs(popup, channel.output_channel_id)
 
@@ -35,17 +40,43 @@ static func apply(channel: Channel, item_id: int) -> void:
 		channel.set_route(item_id)
 
 
-## True when `channel` may route to `target` (BUS or GROUP, no cycles).
+## Tooltip for a route or send target whose audio already comes back to the channel.
+const LOOP_TOOLTIP := "Would create a feedback loop: %s already feeds this channel"
+
+
+## True when `channel` may route to `target`: a BUS or GROUP outside its own subtree whose
+## routes and sends don't lead back to `channel` (no loops).
 static func is_valid_route_target(channel: Channel, target: Channel, project: Project) -> bool:
+	return _is_route_candidate(channel, target, project) and not project.feeds_into(target.id, channel.id)
+
+
+## True when `channel` may start a send to `target`: a BUS other than itself whose routes and
+## sends don't lead back to `channel`. An existing send stays editable.
+static func is_valid_send_target(channel: Channel, target: Channel, project: Project) -> bool:
+	if target == null or channel == null or project == null:
+		return false
+	if target.id == channel.id or target.channel_type != Channel.ChannelType.BUS:
+		return false
+	if channel.get_send(target.id) != null:
+		return true
+	return not project.feeds_into(target.id, channel.id)
+
+
+## True when `target` would be a valid route but for a loop back to `channel`.
+static func _closes_loop(channel: Channel, target: Channel, project: Project) -> bool:
+	return _is_route_candidate(channel, target, project) and project.feeds_into(target.id, channel.id)
+
+
+## Structural route rules: a BUS or GROUP other than `channel`, not master, not in its subtree.
+static func _is_route_candidate(channel: Channel, target: Channel, project: Project) -> bool:
 	if target == null or channel == null or project == null:
 		return false
 	if target.id == channel.id or target.is_master:
 		return false
 	if target.channel_type != Channel.ChannelType.BUS and target.channel_type != Channel.ChannelType.GROUP:
 		return false
-	if project.channel_is_in_subtree(target.id, channel):
-		return false
-	return true
+	return not project.channel_is_in_subtree(target.id, channel)
+
 
 ## Name of `channel`'s current output: a device pair for master and for channels routed straight
 ## to hardware, else the target channel.

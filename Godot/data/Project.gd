@@ -1867,6 +1867,28 @@ func channel_is_in_subtree(maybe_descendant_id: int, root: Channel) -> bool:
 	)
 
 
+## True when audio leaving channel `from_id` reaches channel `to_id` through output routes and
+## sends (any level: the engine orders every send as an edge). A new route or send from `to_id`
+## to `from_id` would then close a loop.
+func feeds_into(from_id: int, to_id: int) -> bool:
+	var visited: Dictionary = {}
+	var stack: Array[int] = [from_id]
+	while not stack.is_empty():
+		var id: int = stack.pop_back()
+		if id == to_id:
+			return true
+		if visited.has(id):
+			continue
+		visited[id] = true
+		var node := get_channel_by_id(id)
+		if node == null or node.is_master:
+			continue
+		stack.append(node.output_channel_id)
+		for send in node.send_channels:
+			stack.append(send.target_channel_id)
+	return false
+
+
 ## Insert `child_id` into `parent.child_channel_ids` after `after_sibling` (null = first).
 func _insert_child_channel_id(parent: Channel, child_id: int, after_sibling: Channel) -> void:
 	parent.child_channel_ids.erase(child_id)

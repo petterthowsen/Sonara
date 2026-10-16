@@ -60,6 +60,14 @@ class SendControl extends LabeledKnob:
 			bus_label.modulate.a = 0.5 if dimmed else 1.0
 
 
+	## Block a send that would create a feedback loop: the knob ignores the mouse and fades,
+	## and hovering the slot says why.
+	func set_blocked(blocked: bool, bus_name: String) -> void:
+		knob.mouse_filter = Control.MOUSE_FILTER_IGNORE if blocked else Control.MOUSE_FILTER_STOP
+		modulate.a = 0.35 if blocked else 1.0
+		tooltip_text = ChannelOutputMenu.LOOP_TOOLTIP % bus_name if blocked else ""
+
+
 	## Color the knob arc by whether the send taps the signal before the fader.
 	func set_pre_fader_display(pre_fader: bool) -> void:
 		knob.value_arc_color = PRE_FADER_ARC_COLOR if pre_fader else _post_fader_arc_color
@@ -118,6 +126,7 @@ func needed_height(width: float) -> float:
 
 ## Strip scene placeholders, then build sends if this panel was bound early.
 func _ready() -> void:
+	mouse_entered.connect(_refresh_blocked)
 	_clear_send_controls()
 	if channel and project:
 		_rebuild_sends_ui()
@@ -227,7 +236,21 @@ func _rebuild_sends_ui() -> void:
 	for bus_ch in bus_channels:
 		var send_config = channel.get_send(bus_ch.id)
 		_create_send_control(bus_ch, send_config)
+	_refresh_blocked()
 	sends_rebuilt.emit()
+
+
+## Block the knobs whose send would create a loop. Any channel's route or send can change that,
+## so this also runs when the mouse enters the panel, before a knob can be grabbed.
+func _refresh_blocked() -> void:
+	if not channel or not project or not flow_container:
+		return
+	for child in flow_container.get_children():
+		var control := child as SendControl
+		if control == null:
+			continue
+		var bus := project.get_channel_by_id(control.target_channel_id)
+		control.set_blocked(bus != null and not ChannelOutputMenu.is_valid_send_target(channel, bus, project), bus.name if bus else "")
 
 
 ## Create a send control UI element for a BUS channel.
@@ -271,6 +294,12 @@ func _on_send_knob_changed(value: float, target_channel_id: int, kind := ValueEd
 		control.bus_label.modulate.a = 0.5 if amount_db <= MIN_SEND_DB else 1.0
 
 	var send_config = channel.get_send(target_channel_id)
+	if not send_config and not ChannelOutputMenu.is_valid_send_target(channel, project.get_channel_by_id(target_channel_id), project):
+		# Routing changed since the knob was last refreshed: this send would close a loop.
+		if control:
+			control.set_amount_display(MIN_SEND_DB, true)
+		_refresh_blocked()
+		return
 	if not send_config:
 		channel.add_send(target_channel_id, amount_db, false)
 	else:
@@ -278,7 +307,7 @@ func _on_send_knob_changed(value: float, target_channel_id: int, kind := ValueEd
 
 	var peers := ChannelMultiEdit.peers_of(channel, self)
 	if not peers.is_empty():
-		ChannelMultiEdit.apply_send(channel, target_channel_id, old_db, amount_db, peers, kind)
+		ChannelMultiEdit.apply_send(channel, target_channel_id, old_db, amount_db, peers, kind, project)
 
 
 ## Ctrl/Cmd-click on a send knob. With a multi-selection, every selected channel's send to this
@@ -292,7 +321,7 @@ func _on_send_knob_reset(target_channel_id: int) -> void:
 	var old_db := ChannelMultiEdit.send_db(channel, target_channel_id)
 	if channel.get_send(target_channel_id):
 		channel.set_send_amount(target_channel_id, MIN_SEND_DB)
-	ChannelMultiEdit.apply_send(channel, target_channel_id, old_db, MIN_SEND_DB, peers, ValueEditKind.Kind.RESET)
+	ChannelMultiEdit.apply_send(channel, target_channel_id, old_db, MIN_SEND_DB, peers, ValueEditKind.Kind.RESET, project)
 
 
 ## Right-click on a send knob opens its options menu.

@@ -95,12 +95,16 @@ static func _clamp_pan(value: float) -> float:
 # -- Sends ----------------------------------------------------------------------------------
 
 ## `primary`'s send to `bus_id` already holds `new_db` (from `old_db`; MIN_SEND_DB when it had no
-## send). Bring the peers' sends to the same bus along and record it all.
-static func apply_send(primary: Channel, bus_id: int, old_db: float, new_db: float, peers: Array[Channel], kind: ValueEditKind.Kind) -> void:
+## send). Bring the peers' sends to the same bus along and record it all. With `project`, a peer
+## is skipped when a new send would create a loop (the single-channel send check).
+static func apply_send(primary: Channel, bus_id: int, old_db: float, new_db: float, peers: Array[Channel], kind: ValueEditKind.Kind, project: Project = null) -> void:
 	var old_values := {primary: old_db}
 	var new_values := {primary: new_db}
+	var bus := project.get_channel_by_id(bus_id) if project else null
 	for peer in peers:
 		if peer.id == bus_id:
+			continue
+		if project and not ChannelOutputMenu.is_valid_send_target(peer, bus, project):
 			continue
 		var peer_db := send_db(peer, bus_id)
 		old_values[peer] = peer_db
