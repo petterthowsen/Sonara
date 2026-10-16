@@ -200,6 +200,7 @@ static var _shared_sends_scroll := 0
 static var _applying_sends_scroll := false
 
 var _peak_readout: Label
+var _bottom_peak_readout: Label
 
 func _ready():
 	_apply_border()
@@ -594,25 +595,47 @@ func _apply_header_color(new_color: Color) -> void:
 		title.set_font_color(Utils.contrasting_text_color(drawn))
 
 
-## Max-peak readout above the big meter. Clicking it or either meter's bars resets both meters.
+## Max-peak readouts above the big meter and the bottom meter. Clicking a readout or either
+## meter's bars resets both meters.
 func _setup_peak_readout() -> void:
-	_peak_readout = Label.new()
-	_peak_readout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_peak_readout.add_theme_font_size_override("font_size", 11)
-	_peak_readout.mouse_filter = Control.MOUSE_FILTER_STOP
-	_peak_readout.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_peak_readout.tooltip_text = "Max peak (click to reset)"
+	_peak_readout = _make_peak_label()
 	big_meter.add_sibling(_peak_readout)
 	big_meter.get_parent().move_child(_peak_readout, big_meter.get_index())
 	_peak_readout.visible = big_meter.visible
 	big_meter.visibility_changed.connect(func(): _peak_readout.visible = big_meter.visible)
-	_peak_readout.gui_input.connect(func(event: InputEvent):
-		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			_reset_peak_memory())
+
+	# The bottom meter sits alone in a PanelContainer, so stack the label over it in a VBox.
+	_bottom_peak_readout = _make_peak_label()
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 0)
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var holder := bottom_small_meter.get_parent()
+	var meter_index := bottom_small_meter.get_index()
+	holder.add_child(column)
+	holder.move_child(column, meter_index)
+	holder.remove_child(bottom_small_meter)
+	column.add_child(_bottom_peak_readout)
+	column.add_child(bottom_small_meter)
+	bottom_small_meter.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
 	big_meter.peak_memory_reset_requested.connect(_reset_peak_memory)
 	bottom_small_meter.peak_memory_reset_requested.connect(_reset_peak_memory)
 	big_meter.max_peak_changed.connect(_on_max_peak_changed)
 	_on_max_peak_changed(-INF)
+
+
+func _make_peak_label() -> Label:
+	var label := Label.new()
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 11)
+	label.clip_text = true
+	label.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	label.tooltip_text = "Max peak (click to reset)"
+	label.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_reset_peak_memory())
+	return label
 
 
 func _reset_peak_memory() -> void:
@@ -621,15 +644,16 @@ func _reset_peak_memory() -> void:
 
 
 func _on_max_peak_changed(db: float) -> void:
-	if db == -INF:
-		_peak_readout.text = "-inf"
-		_peak_readout.remove_theme_color_override("font_color")
-	else:
-		_peak_readout.text = "%.1f" % db
-		if db >= 0.0:
-			_peak_readout.add_theme_color_override("font_color", big_meter.bar_color_clip)
+	for label in [_peak_readout, _bottom_peak_readout]:
+		if db == -INF:
+			label.text = "-inf"
+			label.remove_theme_color_override("font_color")
 		else:
-			_peak_readout.remove_theme_color_override("font_color")
+			label.text = "%.1f" % db
+			if db >= 0.0:
+				label.add_theme_color_override("font_color", big_meter.bar_color_clip)
+			else:
+				label.remove_theme_color_override("font_color")
 
 
 func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:

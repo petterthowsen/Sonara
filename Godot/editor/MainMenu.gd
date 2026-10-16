@@ -4,6 +4,9 @@ class_name MainMenu extends MenuBar
 
 var logger : Log = Log.make("MainMenu")
 
+## View menu id for the info panel item; dock panel items use their index (0..n).
+const VIEW_TOGGLE_INFO_PANEL := 1000
+
 enum MENU { File, Edit, View, AI, Help }
 
 enum FILE { New, Open, Open_Recent, Close, Sep1, Save, Save_As, Save_Startup, Clear_Startup, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
@@ -307,11 +310,17 @@ func _rebuild_view_menu() -> void:
 		_view_menu.add_check_item(DockHost.title_for_id(ids[i]), i)
 		_view_menu.set_item_metadata(i, ids[i])
 		_view_menu.set_item_checked(i, dock_host.is_panel_visible(ids[i]))
+	_view_menu.add_separator()
+	_view_menu.add_check_item("Toggle Info Panel", VIEW_TOGGLE_INFO_PANEL)
+	_view_menu.set_item_checked(_view_menu.get_item_index(VIEW_TOGGLE_INFO_PANEL), Sonara.editor.bottom.visible)
 
 
 ## Toggle the dock panel behind the pressed View item.
 func _on_view_item_pressed(item_id: int) -> void:
 	item_pressed.emit(MENU.View, item_id)
+	if item_id == VIEW_TOGGLE_INFO_PANEL:
+		Sonara.editor.toggle_info_panel()
+		return
 	var dock_host := _get_dock_host()
 	if dock_host == null:
 		return

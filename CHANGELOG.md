@@ -8,6 +8,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- View > Toggle Info Panel shows or hides the bottom bar with the Arrange / Mix / Edit buttons (#147).
+- Mixer channel strips show the max-peak dB readout above the bottom meter too, like the big meter (#140).
 - Value lanes: selected notes get handles. The top-left and top-right handles tilt the start or end of the selection's values, and the bottom-right handle compresses or expands them around their mean, with a +/- readout while dragging (#80).
 - UI scale setting (Settings > Appearance > Editor): Auto or 75% to 200%, applied live to the main window and floating device windows. Auto follows the desktop scale on Wayland.
 - The main window remembers its screen, position, size and maximized state between launches (position is not restored on Wayland).
@@ -15,6 +17,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Changed
 
+- The active Arrange / Mix / Edit button is filled with the theme's primary color (#138).
 - Value lanes: with notes selected, unselected stems are dimmed to 50% and painting only edits the selected stems; Alt+drag adjusts all selected notes together (#80).
 - Lower CPU use when idle: the UI only redraws when something changes.
 - MIDI editor: a note's pitch label is hidden when the note is too short to hold it, so zoomed-out dense passages are less cluttered (#151).

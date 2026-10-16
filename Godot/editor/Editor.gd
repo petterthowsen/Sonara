@@ -274,6 +274,7 @@ func _connect_ui_signals():
 	arrange_button.pressed.connect(set_view.bind(View.ARRANGER))
 	mix_button.pressed.connect(set_view.bind(View.MIXER))
 	edit_button.pressed.connect(set_view.bind(View.EDITOR))
+	_style_view_buttons()
 
 	# Tempo/time signature
 	tempo_spinbox.value_changed.connect(_on_tempo_changed)
@@ -1506,6 +1507,32 @@ func _on_playing_received(values) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		request_quit()
+	elif what == NOTIFICATION_THEME_CHANGED and is_node_ready():
+		_style_view_buttons()
+
+
+## Fill the active Arrange / Mix / Edit button with the theme's primary accent.
+func _style_view_buttons() -> void:
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = UiColors.role(&"accent_primary")
+	fill.set_corner_radius_all(3)
+	fill.set_content_margin_all(4)
+	var none := StyleBoxEmpty.new()
+	none.set_content_margin_all(4)
+	for button in [arrange_button, mix_button, edit_button]:
+		# `flat` suppresses the background in every state, so draw the inactive look ourselves.
+		button.flat = false
+		for state in ["normal", "hover", "focus"]:
+			button.add_theme_stylebox_override(state, none)
+		for state in ["pressed", "hover_pressed"]:
+			button.add_theme_stylebox_override(state, fill)
+		for state in ["font_pressed_color", "font_hover_pressed_color"]:
+			button.add_theme_color_override(state, Color.WHITE)
+
+
+## Show or hide the bottom bar (view buttons + info text).
+func toggle_info_panel() -> void:
+	bottom.visible = not bottom.visible
 
 
 var _quit_requested := false
