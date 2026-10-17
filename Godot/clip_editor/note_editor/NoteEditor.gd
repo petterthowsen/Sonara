@@ -662,13 +662,15 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 	elif current_mode == DragMode.RESIZE:
 		# Length mode (Ctrl, or Alt dragged sideways): Control note length
+		# One snapped delta from the dragged note, applied to every selected note
+		var anchor_start = resize_start_durations.get(note.midi_note_data.id, note.midi_note_data.duration_ticks)
+		var snapped_delta: int = _snapped_duration(anchor_start + delta_ticks) - anchor_start
 		for sel_note in edited:
 			var start_duration = resize_start_durations.get(sel_note.midi_note_data.id)
 			if start_duration == null:
 				continue
 
-			var new_duration := _snapped_duration(start_duration + delta_ticks)
-			sel_note.midi_note_data.duration_ticks = new_duration
+			sel_note.midi_note_data.duration_ticks = maxi(1, start_duration + snapped_delta)
 	else:
 		# Normal mode: Control position
 		# Row-wise in Drum View, semitone-wise in the piano roll (REQ-020). The two
@@ -882,6 +884,8 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 	var new_duration := _snapped_duration(resize_start_duration + delta_ticks)
 
 	var same_length := Input.is_key_pressed(KEY_ALT if _alt_auto_mode() else KEY_CTRL)
+	# Same delta for every note, snapped once from the dragged note
+	var snapped_delta: int = new_duration - resize_start_duration
 
 	# Update all selected notes (each once; see _selected_note_visuals)
 	var edited := _selected_note_visuals()
@@ -894,7 +898,7 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		else:
 			# Default: Apply same delta to each note
 			var note_start_duration = resize_start_durations.get(sel_note.midi_note_data.id, sel_note.midi_note_data.duration_ticks)
-			note_new_duration = _snapped_duration(note_start_duration + delta_ticks)
+			note_new_duration = maxi(1, note_start_duration + snapped_delta)
 
 		sel_note.midi_note_data.duration_ticks = note_new_duration
 	_refresh_notes(edited)
