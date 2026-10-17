@@ -19,6 +19,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 ### Fixed
 
 - Resizing several selected notes now changes every note's length by the same grid-snapped amount as the dragged note, instead of staggering them off the grid (#162).
+- MIDI editor: the playhead is relative to the clip instance that is playing, so a duplicated clip shows the right position at each of its places, and it stays correct when the clip is moved, trimmed or looped while the editor is open (#163).
 - A Bipolar Knob modulator reads -1 to +1 with 0 in the middle of the sweep, and its value arc starts from the middle (#125).
 
 ## [0.1.0-beta.2] - 2026-10-16

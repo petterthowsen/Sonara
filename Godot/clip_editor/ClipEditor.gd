@@ -301,6 +301,14 @@ func _refresh_scale_context() -> void:
 ## The bound instance moved: the key in effect at its start may have changed (spec 034 D6).
 func _on_bound_instance_position_changed(_new_start_ticks: int) -> void:
 	_refresh_scale_context()
+	_refresh_playhead()
+
+
+## Re-derive the editor playhead from the transport; the mapping depends on the bound instance.
+func _refresh_playhead() -> void:
+	var editor = Sonara.editor
+	if editor != null:
+		_on_editor_playhead_moved(editor.playhead_ticks)
 
 
 ## The instance whose `position_changed` currently drives `_refresh_scale_context`.
@@ -314,9 +322,18 @@ func _watch_bound_instance_position() -> void:
 	if _position_watched != null and is_instance_valid(_position_watched) \
 			and _position_watched.position_changed.is_connected(_on_bound_instance_position_changed):
 		_position_watched.position_changed.disconnect(_on_bound_instance_position_changed)
+		_position_watched.instance_modified.disconnect(_refresh_playhead)
+		_position_watched.loop_changed.disconnect(_on_bound_instance_loop_changed)
 	_position_watched = bound_clip_instance
 	if _position_watched != null:
 		_position_watched.position_changed.connect(_on_bound_instance_position_changed)
+		_position_watched.instance_modified.connect(_refresh_playhead)
+		_position_watched.loop_changed.connect(_on_bound_instance_loop_changed)
+	_refresh_playhead()
+
+
+func _on_bound_instance_loop_changed(_enabled: bool) -> void:
+	_refresh_playhead()
 
 
 ## The scale toggles need a scale and the piano roll (not Drum View).
@@ -1347,11 +1364,27 @@ func _on_editor_playhead_moved(global_playhead_ticks: int):
 		playhead_ticks = global_playhead_ticks
 	elif bound_clip_instance:
 		# CLIP-MODE: clip-content ticks, where the bound instance plays that moment
-		playhead_ticks = bound_clip_instance.song_to_played_content_ticks(global_playhead_ticks)
+		playhead_ticks = _playing_instance_at(global_playhead_ticks).song_to_played_content_ticks(global_playhead_ticks)
 	
 	# Pass to MidiEditor
 	if midi_editor:
 		midi_editor.playhead_ticks = playhead_ticks
+
+
+## The instance of the bound clip that plays at `song_ticks`. A clip can have several
+## instances (duplicates); the playhead follows whichever one is playing, else the bound one.
+func _playing_instance_at(song_ticks: int) -> ClipInstance:
+	var project := _project()
+	if project == null or bound_clip_instance.clip == null:
+		return bound_clip_instance
+	if song_ticks >= bound_clip_instance.start_ticks and song_ticks < bound_clip_instance.get_end_ticks():
+		return bound_clip_instance
+	for t in project.tracks:
+		for inst in t.clip_instances:
+			if inst.clip == bound_clip_instance.clip and not inst.muted \
+					and song_ticks >= inst.start_ticks and song_ticks < inst.get_end_ticks():
+				return inst
+	return bound_clip_instance
 
 
 func _update_mode_ui():
