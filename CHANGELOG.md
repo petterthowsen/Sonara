@@ -6,6 +6,10 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Simple View: PascalCase parameter names (CloudReverb's "LateLineDecay") are split into words, so controls are grouped and labelled properly.
+
 ### Added
 
 - Layer: each layer's volume knob is a modulation target (#160).

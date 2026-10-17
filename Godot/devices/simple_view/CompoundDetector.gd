@@ -102,7 +102,7 @@ static func single_item(entry: Dictionary) -> Dictionary:
 		"kind": entry.kind,
 		"params": [entry.id],
 		"label": "",
-		"name": entry.param.name,
+		"name": ParamClassifier.humanize(entry.param.name),
 		"role": entry.role,
 		"importance": entry.importance,
 		"module": entry.module,
@@ -159,7 +159,7 @@ static func _compound_item(pattern: Dictionary, stem: String, members: Array[Dic
 		importance = maxf(importance, m.importance)
 		if m.index < first.index:
 			first = m
-	var label: String = pattern.label if stem.is_empty() else _original_stem(first.param.name, stem)
+	var label: String = pattern.label if stem.is_empty() else _original_stem(ParamClassifier.humanize(first.param.name), stem)
 	return {
 		"kind": pattern.kind,
 		"params": params,

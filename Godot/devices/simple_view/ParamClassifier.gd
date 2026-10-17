@@ -10,6 +10,8 @@ const ORDER_BONUS := 0.05
 const MAX_SEGMENTS := 5
 
 static var _non_alnum := RegEx.create_from_string("[^a-z0-9]+")
+## Word boundaries inside a PascalCase / camelCase name: "DecayTime", "LFORate" (before "Rate").
+static var _camel_boundary := RegEx.create_from_string("(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 ## True when the parameter belongs in a generated layout. Bypass is left out because the device
@@ -85,7 +87,13 @@ static func classify(params: Array, strategy: GenericStrategy) -> Array[Dictiona
 
 ## Lowercase alphanumeric words of `text` ("Band1_Freq (Hz)" → ["band1", "freq", "hz"]).
 static func name_tokens(text: String) -> PackedStringArray:
-	return _non_alnum.sub(text.to_lower(), " ", true).split(" ", false)
+	return _non_alnum.sub(humanize(text).to_lower(), " ", true).split(" ", false)
+
+
+## `text` with spaces at PascalCase word boundaries ("LateLineDecay" → "Late Line Decay"). Names
+## that already have spaces, underscores or are all one case come back unchanged.
+static func humanize(text: String) -> String:
+	return _camel_boundary.sub(text, " ", true)
 
 
 ## True when a keyword matches one of `tokens`. A keyword ending in `*` matches any token
