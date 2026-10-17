@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Layer: each layer's volume knob is a modulation target (#160).
 - Device preset menu has a Reset option that returns all sound parameters to their defaults as one undo step (#161).
 - Every modulator has an Amount knob (0–100 %, default 100 so existing projects sound the same) that scales its output, and another modulator can modulate it, so modulators can be chained (#156).
 - Pitch Shifter effect: transposes audio ±24 semitones without changing its length, with Fine (cents), Grain (Hz or tempo-synced), Jitter, Feedback (for shimmer and rising repeats), Spread (a micro-pitch stereo doubler) and Mix. It can sit in a channel chain, in the Delay's FB FX or in a Multiband FX band.
@@ -18,8 +19,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
-- Resizing several selected notes now changes every note's length by the same grid-snapped amount as the dragged note, instead of staggering them off the grid (#162).
 - MIDI editor: the playhead is relative to the clip instance that is playing, so a duplicated clip shows the right position at each of its places, and it stays correct when the clip is moved, trimmed or looped while the editor is open (#163).
+- Resizing several selected notes now changes every note's length by the same grid-snapped amount as the dragged note, instead of staggering them off the grid (#162).
 - A Bipolar Knob modulator reads -1 to +1 with 0 in the middle of the sweep, and its value arc starts from the middle (#125).
 
 ## [0.1.0-beta.2] - 2026-10-16

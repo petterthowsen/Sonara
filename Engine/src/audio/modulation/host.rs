@@ -1871,6 +1871,20 @@ mod tests {
     }
 
     #[test]
+    fn a_route_can_target_a_layer_slot_volume() {
+        let mut layer = LayerDevice::new(MAX_FRAMES);
+        layer.insert_child(0, delay());
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(layer)];
+        wrap(&mut devices);
+        let modulated = devices[0].as_modulated_mut().unwrap();
+        modulated.add_modulator(0, ModulatorKind::Lfo).unwrap();
+        modulated
+            .set_modulator_route(0, "param/1000", 0.5)
+            .expect("slot 0 volume is modulatable");
+        assert!(modulated.set_modulator_route(0, "param/1001", 0.5).is_err());
+    }
+
+    #[test]
     fn sub_block_midi_rebasing_is_sample_accurate() {
         let input = vec![0.0f32; 512 * 2];
         let mut plain = create_drum("sonara.builtin.kick", SR, MAX_FRAMES).expect("kick");

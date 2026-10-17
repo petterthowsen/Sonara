@@ -77,6 +77,7 @@ func _bind_return(ch: Channel) -> void:
 		_knob.unit = " dB"
 		_knob.value = _return.volume
 		_knob.tooltip_text = "%s channel volume" % _return.name
+		ModAssign.detach(_knob)
 	else:
 		_knob.min_value = 0.0
 		_knob.max_value = 1.0
@@ -85,6 +86,8 @@ func _bind_return(ch: Channel) -> void:
 		_knob.unit = ""
 		_knob.value = instance.slot_volume if instance else 0.5
 		_knob.tooltip_text = "Layer volume"
+		if container != null and instance != null:
+			ModAssign.retarget(_knob, container, DeviceInstance.LAYER_SLOT_VOLUME_PARAM_BASE + instance.position)
 	_knob.set_block_signals(false)
 
 

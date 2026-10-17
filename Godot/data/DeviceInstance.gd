@@ -460,6 +460,8 @@ func set_channel(channel: Channel) -> void:
 ## parameters (SFZ/CLAP) and falls back to the shared Device registry
 ## (built-ins with a static param list).
 func get_parameter(param_id: int) -> DeviceParameter:
+	if _is_layer(self) and param_id >= LAYER_SLOT_VOLUME_PARAM_BASE:
+		return _layer_slot_volume_parameter(param_id)
 	if not parameters.is_empty():
 		for param in parameters:
 			if param.id == param_id:
@@ -2540,6 +2542,25 @@ func _drum_pad_addr(action: String) -> String:
 	if parent.device.device_id != "sonara.builtin.drum_machine" or slot_note < 0:
 		return ""
 	return parent.osc_addr("slot/%d/%s" % [position, action])
+
+
+## Engine parameter id of Layer slot 0's volume; slot `i` is `base + i` (normalized, 0.5 = unity).
+## The engine advertises these as hidden modulation targets only, so the Layer builds the
+## metadata itself.
+const LAYER_SLOT_VOLUME_PARAM_BASE := 1000
+
+var _layer_volume_params: Dictionary = {}
+
+
+## The modulatable volume parameter for Layer slot `param_id - LAYER_SLOT_VOLUME_PARAM_BASE`.
+func _layer_slot_volume_parameter(param_id: int) -> DeviceParameter:
+	if not _layer_volume_params.has(param_id):
+		var p := DeviceParameter.new(param_id, "Layer %d Volume" % (param_id - LAYER_SLOT_VOLUME_PARAM_BASE + 1))
+		p.default_value = 0.5
+		p.is_hidden = true
+		p.is_modulatable = true
+		_layer_volume_params[param_id] = p
+	return _layer_volume_params[param_id]
 
 
 ## Layer slot controls, each sent as `slot/{position}/{action}`.

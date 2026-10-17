@@ -3,8 +3,10 @@
 use super::container::{
     apply_gain, insert_into_vec, move_in_vec, normalized_to_gain, remove_from_vec, DeviceContainer,
 };
+use super::container::gain_to_normalized;
 use crate::audio::devices::{
-    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
+    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
+    ParamValue, PortFlow,
 };
 use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::midi_types::{NoteEvent, SoundingNoteId, AUDITION_NOTE_ID};
@@ -16,9 +18,20 @@ pub const NOTE_NONE: u8 = 255;
 /// `held` entry for an input note with nothing sounding.
 const NOT_HELD: (u8, SoundingNoteId) = (NOTE_NONE, 0);
 
+/// Parameter id of slot 0's volume; slot `i` is `SLOT_VOLUME_PARAM_BASE + i` (normalized 0–1,
+/// 0.5 = unity). It is the modulation target for a slot's volume.
+pub const SLOT_VOLUME_PARAM_BASE: ParamId = 1000;
+
 /// Identity note map: every input note goes to the same output note.
 fn full_note_map() -> [u8; 128] {
     std::array::from_fn(|i| i as u8)
+}
+
+/// The slot a slot-volume parameter id belongs to.
+fn slot_of_param(param_id: ParamId) -> Option<usize> {
+    param_id
+        .checked_sub(SLOT_VOLUME_PARAM_BASE)
+        .map(|i| i as usize)
 }
 
 /// One Layer child plus its mix controls.
@@ -27,6 +40,9 @@ pub struct LayerSlot {
     pub device: Box<dyn AudioDevice>,
     /// Linear gain in `[0, 2]` (1.0 = unity).
     pub volume: f32,
+    /// Normalized modulation offset added on top of `volume` when rendering. Never written into
+    /// `volume`, so removing the modulator returns the slot to its base volume.
+    volume_mod: f32,
     /// When true this slot contributes no audio (MIDI is still forwarded).
     pub mute: bool,
     /// When any slot is soloed, only soloed slots contribute audio.
@@ -50,12 +66,23 @@ impl LayerSlot {
         Self {
             device,
             volume: 1.0,
+            volume_mod: 0.0,
             mute: false,
             solo: false,
             note_map: full_note_map(),
             held: [NOT_HELD; 128],
             separate_out: false,
             align: AlignDelay::default(),
+        }
+    }
+
+    /// Linear gain to render with: the base volume plus the modulation offset, clamped in
+    /// normalized space.
+    fn effective_gain(&self) -> f32 {
+        if self.volume_mod == 0.0 {
+            self.volume
+        } else {
+            normalized_to_gain(gain_to_normalized(self.volume) + self.volume_mod)
         }
     }
 
@@ -187,6 +214,7 @@ impl LayerDevice {
 
         for (i, slot) in self.slots.iter_mut().enumerate() {
             let audible = slot.is_audible(any_solo);
+            let gain = slot.effective_gain();
             slot.device
                 .process_block(inputs, &mut self.child_buffer, sample_count);
             // Every block, audible or not, so the delay's history stays continuous
@@ -200,7 +228,7 @@ impl LayerDevice {
                 Some(buf) => {
                     let n = interleaved.min(buf.len());
                     if audible {
-                        apply_gain(&mut self.child_buffer, sample_count, slot.volume);
+                        apply_gain(&mut self.child_buffer, sample_count, gain);
                         buf[..n].copy_from_slice(&self.child_buffer[..n]);
                     } else {
                         buf[..n].fill(0.0);
@@ -210,7 +238,7 @@ impl LayerDevice {
                     if !audible {
                         continue;
                     }
-                    apply_gain(&mut self.child_buffer, sample_count, slot.volume);
+                    apply_gain(&mut self.child_buffer, sample_count, gain);
                     for j in 0..interleaved {
                         self.mix_buffer[j] += self.child_buffer[j];
                     }
@@ -393,10 +421,21 @@ impl AudioDevice for LayerDevice {
         }
     }
 
-    fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+    fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
+        if let Some(i) = slot_of_param(param_id) {
+            self.set_slot_volume_normalized(i, value);
+        }
+    }
 
-    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-        None
+    fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
+        let slot = self.slots.get(slot_of_param(param_id)?)?;
+        Some(gain_to_normalized(slot.volume))
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        if let Some(slot) = slot_of_param(param_id).and_then(|i| self.slots.get_mut(i)) {
+            slot.volume_mod = if offset.is_finite() { offset } else { 0.0 };
+        }
     }
 
     fn device_id(&self) -> &str {
@@ -428,7 +467,29 @@ impl AudioDevice for LayerDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        Vec::new()
+        (0..self.slots.len())
+            .map(|i| ParamInfo {
+                id: SLOT_VOLUME_PARAM_BASE + i as ParamId,
+                name: format!("Layer {} Volume", i + 1),
+                unit: String::new(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: false,
+                enum_values: Vec::new(),
+                // The slot rows own the knobs; the generic parameter list must not show these.
+                is_hidden: true,
+                is_read_only: false,
+                is_bypass: false,
+                is_modulatable: true,
+                module: String::new(),
+                is_logarithmic: false,
+                skew: 1.0,
+                display: Vec::new(),
+            })
+            .collect()
     }
 
     fn reset(&mut self) {
@@ -896,6 +957,28 @@ mod tests {
         render(&mut layer, 0.0);
         assert_eq!(on_keys(&log_a), vec![72]);
         assert_eq!(on_keys(&log_b), vec![60]);
+    }
+
+    #[test]
+    fn slot_volume_modulation_is_an_offset_on_the_base() {
+        let mut layer = LayerDevice::new(8);
+        layer.insert_child(0, Box::new(GainDevice::new(1.0)));
+        // Base 0.5 normalized = unity.
+        assert!((render(&mut layer, 1.0) - 1.0).abs() < 1e-6);
+        let id = SLOT_VOLUME_PARAM_BASE;
+        layer.set_param_mod(id, 0.25);
+        assert!((render(&mut layer, 1.0) - 1.5).abs() < 1e-6);
+        // The base is untouched, and the effective value clamps in normalized space.
+        assert_eq!(layer.get_parameter(id), Some(0.5));
+        layer.set_param_mod(id, -1.0);
+        assert_eq!(render(&mut layer, 1.0), 0.0);
+        layer.set_param_mod(id, 0.0);
+        assert!((render(&mut layer, 1.0) - 1.0).abs() < 1e-6);
+        // Mute still wins over modulation.
+        layer.set_param_mod(id, 0.25);
+        layer.set_slot_mute(0, true);
+        assert_eq!(render(&mut layer, 1.0), 0.0);
+        assert!(layer.parameters().iter().all(|p| p.is_modulatable));
     }
 
     #[test]
