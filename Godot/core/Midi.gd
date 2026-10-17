@@ -185,3 +185,9 @@ static func cc_name(cc: int) -> String:
 static func cc_display_name(cc: int, device_supplied: String = "") -> String:
 	var label := device_supplied if device_supplied != "" else cc_name(cc)
 	return "CC%d %s" % [cc, label]
+
+
+## Dropdown label for controller `cc`: the number plus its standard name (`1 Mod Wheel`), or just
+## the number when the controller has no standard name.
+static func cc_option_label(cc: int) -> String:
+	return "%d %s" % [cc, CC_NAMES[cc]] if CC_NAMES.has(cc) else str(cc)

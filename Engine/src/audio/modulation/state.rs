@@ -15,8 +15,8 @@ use super::envelope::AdsrEnvelope;
 use super::kinds::{
     ModParams, ModulatorKind, CC_NUMBER, CC_SMOOTH, ENV_ATTACK, ENV_DECAY, ENV_RELEASE,
     ENV_SUSTAIN, KNOB_POLARITY, KNOB_VALUE, LFO_PHASE, LFO_RATE, LFO_RETRIGGER, LFO_SHAPE,
-    LFO_SYNC, MAX_KIND_PARAMS, SC_AMOUNT, SC_ATTACK, SC_GAIN, SC_HIGH_CUT, SC_LOW_CUT, SC_RELEASE,
-    XY_POS,
+    LFO_SYNC, MAX_KIND_PARAMS, MOD_AMOUNT, SC_AMOUNT, SC_ATTACK, SC_GAIN, SC_HIGH_CUT, SC_LOW_CUT,
+    SC_RELEASE, XY_POS,
 };
 use super::lfo::{Lfo, LfoShape};
 use crate::audio::devices::ParamId;
@@ -389,8 +389,23 @@ impl ModulatorState {
         self.lfo.set_held(held);
     }
 
-    /// Advance `frames` samples and return the value at the end of the step.
+    /// Advance `frames` samples and return the value at the end of the step, scaled by Amount.
     pub fn advance(&mut self, frames: usize, transport: &Transport) -> f32 {
+        let raw = self.advance_raw(frames, transport);
+        self.scaled(raw)
+    }
+
+    /// `raw` scaled by the Amount parameter. The sidechain applies its own Amount inside its
+    /// value (spec 044), so it passes through.
+    fn scaled(&self, raw: f32) -> f32 {
+        if self.kind == ModulatorKind::Sidechain {
+            return raw;
+        }
+        let amount = self.real_eff(MOD_AMOUNT).unwrap_or(100.0) / 100.0;
+        raw * amount.clamp(0.0, 1.0)
+    }
+
+    fn advance_raw(&mut self, frames: usize, transport: &Transport) -> f32 {
         match self.kind {
             ModulatorKind::Lfo => {
                 let shape = LfoShape::from_index(self.real_eff(LFO_SHAPE).unwrap_or(0.0) as usize);
@@ -464,8 +479,12 @@ impl ModulatorState {
         }
     }
 
-    /// The current value, without advancing.
+    /// The current value, without advancing, scaled by Amount.
     pub fn value(&self) -> f32 {
+        self.scaled(self.raw_value())
+    }
+
+    fn raw_value(&self) -> f32 {
         match self.kind {
             ModulatorKind::Lfo => {
                 let shape = LfoShape::from_index(self.real_eff(LFO_SHAPE).unwrap_or(0.0) as usize);
@@ -1202,6 +1221,35 @@ mod tests {
             let v = sc_peak_value(&mut sc, &sine);
             assert!((v - expected).abs() < 0.01, "gain {gain} dB reads {v}");
         }
+    }
+
+    #[test]
+    fn amount_scales_every_kind_and_defaults_to_full() {
+        for kind in ModulatorKind::ALL {
+            if kind == ModulatorKind::Sidechain {
+                continue;
+            }
+            let mut state = ModulatorState::new(kind, 48_000.0);
+            assert_eq!(state.real_eff(MOD_AMOUNT), Some(100.0), "{kind:?} default");
+        }
+        // A bipolar knob at 1.0 reads +1; Amount 50 % halves it, 0 % silences it.
+        let mut knob = ModulatorState::new(ModulatorKind::Knob, 48_000.0);
+        set_real(&mut knob, KNOB_VALUE, 1.0);
+        set_real(&mut knob, KNOB_POLARITY, 1.0);
+        assert!((knob.value() - 1.0).abs() < 1e-6);
+        set_real(&mut knob, MOD_AMOUNT, 50.0);
+        assert!((knob.value() - 0.5).abs() < 1e-6);
+        set_real(&mut knob, MOD_AMOUNT, 0.0);
+        assert_eq!(knob.value(), 0.0);
+    }
+
+    #[test]
+    fn another_modulator_can_offset_amount() {
+        let mut knob = ModulatorState::new(ModulatorKind::Knob, 48_000.0);
+        set_real(&mut knob, KNOB_VALUE, 1.0);
+        set_real(&mut knob, MOD_AMOUNT, 50.0);
+        knob.set_mod_offset(MOD_AMOUNT, 0.25);
+        assert!((knob.value() - 0.75).abs() < 1e-6);
     }
 
     #[test]

@@ -18,10 +18,11 @@ size_flags_horizontal = 4
 theme_override_constants/separation = 16
 
 [node name="Number" type="VBoxContainer" parent="HBox" unique_id=1299235817]
-custom_minimum_size = Vector2(68, 0)
+custom_minimum_size = Vector2(132, 0)
 layout_mode = 2
 theme_override_constants/separation = 4
 script = ExtResource("2_slot")
+midi_cc = true
 
 [node name="Caption" type="Label" parent="HBox/Number" unique_id=638239331]
 layout_mode = 2
@@ -29,12 +30,12 @@ theme_type_variation = &"Caption"
 text = "CC Number"
 horizontal_alignment = 1
 
-[node name="Knob" type="Control" parent="HBox/Number" unique_id=130165747]
-custom_minimum_size = Vector2(52, 52)
+[node name="Menu" type="OptionButton" parent="HBox/Number" unique_id=130165747]
+custom_minimum_size = Vector2(132, 0)
 layout_mode = 2
-size_flags_horizontal = 4
-mouse_default_cursor_shape = 2
-script = ExtResource("3_knob")
+size_flags_vertical = 4
+clip_text = true
+fit_to_longest_item = false
 
 [node name="Smooth" type="VBoxContainer" parent="HBox" unique_id=1518804983]
 custom_minimum_size = Vector2(68, 0)

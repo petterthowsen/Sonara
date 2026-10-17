@@ -110,6 +110,24 @@ func _build_knob() -> void:
 	_knob_slot.add_child(knob)
 	centre.add_child(_knob_slot)
 	_knob_slot.bind(mod)
+	_apply_knob_polarity()
+
+
+## A Bipolar knob reads -1..1 with 0 in the middle of the sweep (the stored value stays 0..1),
+## and its value arc starts from the middle.
+func _apply_knob_polarity() -> void:
+	var knob := _knob_slot.control as RotaryKnob if _knob_slot != null else null
+	var mod := _modulator()
+	if knob == null or mod == null:
+		return
+	var bipolar := mod.is_bipolar()
+	knob.bipolar = bipolar
+	var p := _knob_slot.param
+	if bipolar:
+		knob.value_text_callback = func(v: float) -> String: return "%+.2f" % (v * 2.0 - 1.0)
+	else:
+		knob.value_text_callback = func(v: float) -> String: return SimpleUnits.format(p, v, "")
+	knob.queue_redraw()
 
 
 func _unbind() -> void:
@@ -281,6 +299,7 @@ func _on_modulator_changed(changed_mod_id: int) -> void:
 	if changed_mod_id == mod_id:
 		if _knob_slot != null:
 			_knob_slot.refresh()
+			_apply_knob_polarity()
 		queue_redraw()
 
 

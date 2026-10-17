@@ -381,7 +381,7 @@ mod tests {
             } if id == "release" => Some((name.clone(), *bipolar, params.len())),
             _ => None,
         });
-        assert_eq!(release, Some(("Release".to_string(), false, 0)));
+        assert_eq!(release, Some(("Release".to_string(), false, 1)));
     }
 
     /// Channel 2 with one Filter effect, the modulatable target the tests route into.

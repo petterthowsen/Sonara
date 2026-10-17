@@ -6,6 +6,9 @@
 class_name ModParamSlot extends BoxContainer
 
 @export var param_id := 0
+## Shows a float parameter holding a MIDI controller number as a dropdown of `Midi.cc_option_label`
+## entries, one per whole number in the parameter's range.
+@export var midi_cc := false
 
 var modulator: Modulator = null
 var param: DeviceParameter = null
@@ -45,7 +48,7 @@ func refresh() -> void:
 	elif control is CompactSlider:
 		(control as CompactSlider).set_value_no_signal(value)
 	elif control is OptionButton:
-		var n := maxi(1, param.enum_values.size())
+		var n := _dropdown_count()
 		(control as OptionButton).select(clampi(int(round(value * float(n - 1))), 0, n - 1))
 	elif control is CheckButton:
 		(control as CheckButton).set_pressed_no_signal(value >= 0.5)
@@ -80,11 +83,17 @@ func _bind_dropdown(dropdown: OptionButton) -> void:
 	var p := param
 	var mod := modulator
 	dropdown.clear()
-	for i in p.enum_values.size():
-		dropdown.add_item(p.enum_values[i], i)
+	for i in _dropdown_count():
+		dropdown.add_item(Midi.cc_option_label(i) if midi_cc else p.enum_values[i], i)
 	dropdown.item_selected.connect(func(index: int):
-		var n := maxi(1, p.enum_values.size())
+		var n := _dropdown_count()
 		mod.set_param(p.id, 0.0 if n <= 1 else float(index) / float(n - 1)))
+
+
+func _dropdown_count() -> int:
+	if midi_cc:
+		return int(param.max_value - param.min_value) + 1
+	return maxi(1, param.enum_values.size())
 
 
 func _find_control() -> Control:

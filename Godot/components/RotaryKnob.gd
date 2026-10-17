@@ -55,6 +55,15 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
+## Draws the value arc from the middle of the sweep instead of the start, for a value that
+## reads -1..1 with 0 in the centre. Only the arc changes; the tooltip text comes from
+## `value_text_callback`.
+@export var bipolar := false:
+	set(b):
+		bipolar = b
+		if is_inside_tree():
+			queue_redraw()
+
 @export_category("Appearance")
 
 ## Knob radius in pixels, arc included. At 0 the knob fills its rect; above 0 it also sets the
@@ -366,7 +375,8 @@ func _draw() -> void:
 	var value_angle: float = lerpf(min_rotation_rad, max_rotation_rad, _value_to_normalized(_value))
 	# While modulation is moving the parameter the value arc follows the live (modulated)
 	# value; the knob line keeps marking the assigned value.
-	draw_arc(center, arc_radius, min_rotation_rad, _live_arc_angle(min_rotation_rad, max_rotation_rad),
+	var arc_from := lerpf(min_rotation_rad, max_rotation_rad, 0.5) if bipolar else min_rotation_rad
+	draw_arc(center, arc_radius, arc_from, _live_arc_angle(min_rotation_rad, max_rotation_rad),
 		32, value_arc_color, arc_width, true)
 	draw_circle(center, knob_radius + shadow_width, shadow_color, true, -1.0, true)
 	draw_circle(center, knob_radius, knob_color, true, -1.0, true)

@@ -16,6 +16,13 @@ use crate::audio::devices::param_table::{
 use crate::audio::devices::ParamId;
 use crate::audio::dsp::tempo_sync::SYNC_CHOICES;
 
+// === Shared parameter IDs ===
+
+/// Output amount, 0–100 %, scaling the modulator's value. Every kind but the sidechain has it at
+/// this ID (the sidechain predates it and keeps its own [`SC_AMOUNT`]; see
+/// [`ModulatorKind::amount_id`]). Being a real parameter, another modulator can route into it.
+pub const MOD_AMOUNT: ParamId = 90;
+
 // === LFO parameter IDs (block of ten each) ===
 
 pub const LFO_SHAPE: ParamId = 0;
@@ -77,10 +84,23 @@ pub const ENV_RELEASE: ParamId = 30;
 /// Envelope times run 0.5 ms to 10 s on a skew-4 curve (625 ms at mid-knob), as in PolySynth.
 const ENV_TIME: Kind = skewed(0.0005, 10.0, 4.0);
 
-/// Largest parameter table of any kind (the sidechain's seven).
+/// Largest parameter table of any kind (the sidechain's seven; the LFO's six with Amount).
 pub const MAX_KIND_PARAMS: usize = 7;
 
-const LFO_SPECS: [ParamSpec; 5] = [
+/// The Amount every kind but the sidechain carries; 100 % leaves the value untouched, which is
+/// what projects saved before the parameter existed load as.
+const AMOUNT_SPEC: ParamSpec = spec(
+    MOD_AMOUNT,
+    "Amount",
+    "Modulator",
+    "%",
+    linear(0.0, 100.0),
+    100.0,
+);
+/// Highest parameter ID of the kinds that carry `MOD_AMOUNT`, plus one.
+const AMOUNT_IDS: usize = MOD_AMOUNT as usize + 1;
+
+const LFO_SPECS: [ParamSpec; 6] = [
     spec(LFO_SHAPE, "Shape", "LFO", "", Kind::Enum(LFO_SHAPES), 0.0),
     spec(LFO_RATE, "Rate", "LFO", "Hz", log(0.02, 40.0), 2.0),
     spec(LFO_SYNC, "Sync", "LFO", "", Kind::Enum(SYNC_CHOICES), 0.0),
@@ -93,11 +113,12 @@ const LFO_SPECS: [ParamSpec; 5] = [
         0.0,
     ),
     spec(LFO_PHASE, "Phase", "LFO", "°", linear(0.0, 360.0), 0.0),
+    AMOUNT_SPEC,
 ];
-const LFO_SLOTS: [u8; 50] = slot_table(&LFO_SPECS);
+const LFO_SLOTS: [u8; AMOUNT_IDS] = slot_table(&LFO_SPECS);
 static LFO_TABLE: ParamTable = ParamTable::new(&LFO_SPECS, &LFO_SLOTS);
 
-const ADSR_SPECS: [ParamSpec; 4] = [
+const ADSR_SPECS: [ParamSpec; 5] = [
     spec(ENV_ATTACK, "Attack", "Envelope", "s", ENV_TIME, 0.005),
     spec(ENV_DECAY, "Decay", "Envelope", "s", ENV_TIME, 0.3),
     spec(
@@ -109,15 +130,17 @@ const ADSR_SPECS: [ParamSpec; 4] = [
         0.5,
     ),
     spec(ENV_RELEASE, "Release", "Envelope", "s", ENV_TIME, 0.3),
+    AMOUNT_SPEC,
 ];
-const ADSR_SLOTS: [u8; 40] = slot_table(&ADSR_SPECS);
+const ADSR_SLOTS: [u8; AMOUNT_IDS] = slot_table(&ADSR_SPECS);
 static ADSR_TABLE: ParamTable = ParamTable::new(&ADSR_SPECS, &ADSR_SLOTS);
 
-const AD_SPECS: [ParamSpec; 2] = [
+const AD_SPECS: [ParamSpec; 3] = [
     spec(ENV_ATTACK, "Attack", "Envelope", "s", ENV_TIME, 0.005),
     spec(ENV_DECAY, "Decay", "Envelope", "s", ENV_TIME, 0.3),
+    AMOUNT_SPEC,
 ];
-const AD_SLOTS: [u8; 20] = slot_table(&AD_SPECS);
+const AD_SLOTS: [u8; AMOUNT_IDS] = slot_table(&AD_SPECS);
 static AD_TABLE: ParamTable = ParamTable::new(&AD_SPECS, &AD_SLOTS);
 
 /// A controller number, linear 0–119. 120–127 are channel-mode messages and stay out of reach.
@@ -125,11 +148,12 @@ const CC_NUMBER_RANGE: Kind = linear(0.0, 119.0);
 /// One-pole lag: 0 (off) to 500 ms, skewed so small times get knob travel (it must reach 0).
 const CC_SMOOTH_TIME: Kind = skewed(0.0, 0.5, 4.0);
 
-const CC_SPECS: [ParamSpec; 2] = [
+const CC_SPECS: [ParamSpec; 3] = [
     spec(CC_NUMBER, "CC Number", "MIDI CC", "", CC_NUMBER_RANGE, 0.0),
     spec(CC_SMOOTH, "Smooth", "MIDI CC", "s", CC_SMOOTH_TIME, 0.0),
+    AMOUNT_SPEC,
 ];
-const CC_SLOTS: [u8; 20] = slot_table(&CC_SPECS);
+const CC_SLOTS: [u8; AMOUNT_IDS] = slot_table(&CC_SPECS);
 static CC_TABLE: ParamTable = ParamTable::new(&CC_SPECS, &CC_SLOTS);
 
 /// Follower times in milliseconds, skewed so short times get knob travel (both reach their
@@ -137,7 +161,7 @@ static CC_TABLE: ParamTable = ParamTable::new(&CC_SPECS, &CC_SLOTS);
 const SC_ATTACK_TIME: Kind = skewed(0.0, 500.0, 4.0);
 const SC_RELEASE_TIME: Kind = skewed(5.0, 2_000.0, 4.0);
 
-const KNOB_SPECS: [ParamSpec; 2] = [
+const KNOB_SPECS: [ParamSpec; 3] = [
     spec(KNOB_VALUE, "Value", "Knob", "", linear(0.0, 1.0), 0.0),
     spec(
         KNOB_POLARITY,
@@ -147,20 +171,17 @@ const KNOB_SPECS: [ParamSpec; 2] = [
         Kind::Enum(KNOB_POLARITIES),
         0.0,
     ),
+    AMOUNT_SPEC,
 ];
-const KNOB_SLOTS: [u8; 20] = slot_table(&KNOB_SPECS);
+const KNOB_SLOTS: [u8; AMOUNT_IDS] = slot_table(&KNOB_SPECS);
 static KNOB_TABLE: ParamTable = ParamTable::new(&KNOB_SPECS, &KNOB_SLOTS);
 
 /// One table for both XY axes: each slot is a plain position (spec 036 D7).
-const XY_SPECS: [ParamSpec; 1] = [spec(
-    XY_POS,
-    "Position",
-    "XY Pad",
-    "",
-    linear(0.0, 1.0),
-    0.5,
-)];
-const XY_SLOTS: [u8; 10] = slot_table(&XY_SPECS);
+const XY_SPECS: [ParamSpec; 2] = [
+    spec(XY_POS, "Position", "XY Pad", "", linear(0.0, 1.0), 0.5),
+    AMOUNT_SPEC,
+];
+const XY_SLOTS: [u8; AMOUNT_IDS] = slot_table(&XY_SPECS);
 static XY_TABLE: ParamTable = ParamTable::new(&XY_SPECS, &XY_SLOTS);
 
 const SC_SPECS: [ParamSpec; 7] = [
@@ -210,8 +231,10 @@ const SC_SPECS: [ParamSpec; 7] = [
 const SC_SLOTS: [u8; 70] = slot_table(&SC_SPECS);
 static SC_TABLE: ParamTable = ParamTable::new(&SC_SPECS, &SC_SLOTS);
 
-/// Velocity, release, keytrack and random have no settings.
-static EMPTY_TABLE: ParamTable = ParamTable::new(&[], &[]);
+/// Velocity, release, keytrack and random have no settings beyond Amount.
+const AMOUNT_ONLY_SPECS: [ParamSpec; 1] = [AMOUNT_SPEC];
+const AMOUNT_ONLY_SLOTS: [u8; AMOUNT_IDS] = slot_table(&AMOUNT_ONLY_SPECS);
+static AMOUNT_ONLY_TABLE: ParamTable = ParamTable::new(&AMOUNT_ONLY_SPECS, &AMOUNT_ONLY_SLOTS);
 
 /// The kinds a modulator can be. The polarity (bipolar vs unipolar) is fixed per kind, except
 /// `knob`, whose Polarity is a per-instance parameter (spec 036 D1).
@@ -322,11 +345,20 @@ impl ModulatorKind {
             ModulatorKind::Velocity
             | ModulatorKind::Keytrack
             | ModulatorKind::Random
-            | ModulatorKind::Release => &EMPTY_TABLE,
+            | ModulatorKind::Release => &AMOUNT_ONLY_TABLE,
             ModulatorKind::MidiCc => &CC_TABLE,
             ModulatorKind::Knob => &KNOB_TABLE,
             ModulatorKind::XyX | ModulatorKind::XyY => &XY_TABLE,
             ModulatorKind::Sidechain => &SC_TABLE,
+        }
+    }
+
+    /// The ID of the kind's Amount parameter: [`SC_AMOUNT`] for the sidechain, else
+    /// [`MOD_AMOUNT`].
+    pub fn amount_id(self) -> ParamId {
+        match self {
+            ModulatorKind::Sidechain => SC_AMOUNT,
+            _ => MOD_AMOUNT,
         }
     }
 
@@ -437,7 +469,7 @@ mod tests {
 
         let knob = ModParams::new(ModulatorKind::Knob);
         assert!(knob.table().len() <= MAX_KIND_PARAMS);
-        assert_eq!(knob.table().len(), 2);
+        assert_eq!(knob.table().len(), 3, "Value, Polarity, Amount");
         assert_eq!(knob.real(KNOB_VALUE), Some(0.0));
         assert_eq!(knob.real(KNOB_POLARITY), Some(0.0), "Unipolar");
         assert!(
@@ -450,7 +482,7 @@ mod tests {
         for kind in [ModulatorKind::XyX, ModulatorKind::XyY] {
             let xy = ModParams::new(kind);
             assert!(xy.table().len() <= MAX_KIND_PARAMS);
-            assert_eq!(xy.table().len(), 1);
+            assert_eq!(xy.table().len(), 2, "Position and Amount");
             assert_eq!(xy.real(XY_POS), Some(0.5), "centred pad (D7)");
             assert!(kind.bipolar(), "a centred pad applies no offset (D7)");
             assert!(!kind.is_mono_only());
@@ -493,7 +525,7 @@ mod tests {
         assert!(!ModulatorKind::Release.is_mono_only());
 
         let params = ModParams::new(cc);
-        assert_eq!(params.table().len(), 2);
+        assert_eq!(params.table().len(), 3, "Number, Smooth, Amount");
         assert_eq!(params.real(CC_NUMBER), Some(0.0));
         assert_eq!(params.real(CC_SMOOTH), Some(0.0));
         // Real range 0–119: norm 1.0 is controller 119, not 127.
@@ -508,7 +540,7 @@ mod tests {
     #[test]
     fn tables_fit_the_fixed_block_and_defaults_decode() {
         let lfo = ModParams::new(ModulatorKind::Lfo);
-        assert_eq!(lfo.table().len(), 5);
+        assert_eq!(lfo.table().len(), 6, "five settings and Amount");
         assert_eq!(lfo.get(LFO_SHAPE), Some(0.0));
         assert!((lfo.real(LFO_RATE).unwrap() - 2.0).abs() < 1e-6);
         assert_eq!(lfo.real(LFO_SYNC), Some(0.0), "Off");
@@ -516,12 +548,12 @@ mod tests {
         assert_eq!(lfo.real(LFO_PHASE), Some(0.0));
 
         let adsr = ModParams::new(ModulatorKind::Adsr);
-        assert_eq!(adsr.table().len(), 4);
+        assert_eq!(adsr.table().len(), 5);
         assert!((adsr.real(ENV_ATTACK).unwrap() - 0.005).abs() < 1e-6);
         assert!((adsr.real(ENV_SUSTAIN).unwrap() - 0.5).abs() < 1e-6);
 
         let ad = ModParams::new(ModulatorKind::Ad);
-        assert_eq!(ad.table().len(), 2);
+        assert_eq!(ad.table().len(), 3);
 
         for kind in [
             ModulatorKind::Velocity,
@@ -530,7 +562,7 @@ mod tests {
             ModulatorKind::Release,
         ] {
             let mut p = ModParams::new(kind);
-            assert!(p.table().is_empty());
+            assert_eq!(p.table().len(), 1, "Amount only");
             assert_eq!(p.set(ENV_ATTACK, 0.5), None);
         }
     }

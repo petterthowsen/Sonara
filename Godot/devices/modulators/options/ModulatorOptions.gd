@@ -14,6 +14,10 @@ class_name ModulatorOptions extends VBoxContainer
 ## the pane margins and the detail title. Checked by test_modulators_ui.gd for every scene.
 const MAX_HEIGHT := 240.0
 
+## Every kind but the sidechain (which has its own Amount slot) carries this parameter.
+const AMOUNT_PARAM_ID := 90
+const AMOUNT_KNOB_SIDE := 44
+
 var modulator: Modulator = null
 ## Slot controls by parameter id (knobs and dropdowns).
 var controls: Dictionary = {}
@@ -21,6 +25,7 @@ var controls: Dictionary = {}
 
 func setup(mod: Modulator) -> void:
 	modulator = mod
+	_ensure_amount_slot(mod)
 	_bind_slots(mod)
 	sync()
 
@@ -37,6 +42,35 @@ func slots() -> Array[ModParamSlot]:
 	var found: Array[ModParamSlot] = []
 	_collect_slots(self, found)
 	return found
+
+
+## Adds the Amount knob to a scene that doesn't lay it out itself, so every modulator offers it
+## without editing each kind's scene. It joins the scene's first row when there is one.
+func _ensure_amount_slot(mod: Modulator) -> void:
+	if mod.get_parameter(AMOUNT_PARAM_ID) == null:
+		return
+	for slot in slots():
+		if slot.param_id == AMOUNT_PARAM_ID:
+			return
+	var slot := ModParamSlot.new()
+	slot.vertical = true
+	slot.param_id = AMOUNT_PARAM_ID
+	slot.alignment = BoxContainer.ALIGNMENT_CENTER
+	slot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var caption := Label.new()
+	caption.theme_type_variation = &"Caption"
+	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	slot.add_child(caption)
+	var knob := RotaryKnob.new()
+	knob.custom_minimum_size = Vector2(AMOUNT_KNOB_SIDE, AMOUNT_KNOB_SIDE)
+	knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	slot.add_child(knob)
+	var row: Node = self
+	for child in get_children():
+		if child is HBoxContainer:
+			row = child
+			break
+	row.add_child(slot)
 
 
 func _bind_slots(mod: Modulator) -> void:

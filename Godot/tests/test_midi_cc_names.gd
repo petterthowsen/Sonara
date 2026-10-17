@@ -45,3 +45,8 @@ func _test_display_name_prefers_device_label() -> void:
 	_assert(standard == "CC1 Mod Wheel", "standard display name, got %s" % standard)
 	var device_label: String = Midi.cc_display_name(1, "Vibrato")
 	_assert(device_label.find("Vibrato") >= 0, "device-supplied label wins, got %s" % device_label)
+
+
+func _test_option_label_names_known_controllers_only() -> void:
+	_assert(Midi.cc_option_label(1) == "1 Mod Wheel", "named CC, got %s" % Midi.cc_option_label(1))
+	_assert(Midi.cc_option_label(3) == "3", "unnamed CC shows only its number, got %s" % Midi.cc_option_label(3))
