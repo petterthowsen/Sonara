@@ -249,7 +249,7 @@ fn lfo_value(shape: LfoShape, phase: f64) -> f32 {
 /// reduction and minimax polynomials instead. The error is ~2e-6, far below anything audible in
 /// a delay modulation.
 #[inline]
-fn sin_cos_cycles(phase: f64) -> (f32, f32) {
+pub(super) fn sin_cos_cycles(phase: f64) -> (f32, f32) {
     let fraction = phase.fract();
     let p = (if fraction < 0.0 {
         fraction + 1.0

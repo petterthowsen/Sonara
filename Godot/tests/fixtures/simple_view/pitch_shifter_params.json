@@ -1,0 +1,13 @@
+{
+  "device": {"id": "sonara.builtin.pitch_shifter", "name": "Pitch Shifter", "features": []},
+  "params": [
+    {"id":0,"name":"Pitch","module":"Pitch","unit":"st","type":"float","min":-24,"max":24,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":1,"name":"Fine","module":"Pitch","unit":"cents","type":"float","min":-100,"max":100,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":10,"name":"Grain","module":"Grain","unit":"Hz","type":"float","min":1,"max":100,"default":20,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":11,"name":"Sync","module":"Grain","unit":"","type":"enum","min":0,"max":1,"default":0,"stepped":true,"logarithmic":false,"enum_values":["Off","4/1","4/1.","4/1T","2/1","2/1.","2/1T","1/1","1/1.","1/1T","1/2","1/2.","1/2T","1/4","1/4.","1/4T","1/8","1/8.","1/8T","1/16","1/16.","1/16T","1/32","1/32.","1/32T"]},
+    {"id":12,"name":"Jitter","module":"Grain","unit":"%","type":"float","min":0,"max":100,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":20,"name":"Feedback","module":"Feedback","unit":"%","type":"float","min":0,"max":95,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":30,"name":"Spread","module":"Output","unit":"cents","type":"float","min":0,"max":50,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":31,"name":"Mix","module":"Output","unit":"%","type":"float","min":0,"max":100,"default":100,"stepped":false,"logarithmic":false,"enum_values":[]}
+  ]
+}

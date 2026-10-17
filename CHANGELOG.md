@@ -6,6 +6,10 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Pitch Shifter effect: transposes audio ±24 semitones without changing its length, with Fine (cents), Grain (Hz or tempo-synced), Jitter, Feedback (for shimmer and rising repeats), Spread (a micro-pitch stereo doubler) and Mix. It can sit in a channel chain, in the Delay's FB FX or in a Multiband FX band.
+
 ## [0.1.0-beta.2] - 2026-10-16
 
 ### Added

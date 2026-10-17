@@ -99,7 +99,7 @@ Engine/src/
                          # EFFECT_IDS + create_effect for the built-in effects (spec 012)
       param_table.rs     # Static parameter tables (ParamSpec, flatten, slot_table, ParamValues)
       effects/           # effect.rs (pass_through, TailSleep), chorus, compressor, delay, eq, filter, multiband,
-                         # phaser, reverb, utility (spec 017), spectrum_analyzer, effect_conformance.rs
+                         # phaser, pitch_shifter (spec 045), reverb, utility (spec 017), spectrum_analyzer, effect_conformance.rs
       instruments/       # polysynth/ (mod.rs device, voice.rs, params.rs), sampler/ (mod.rs device, params.rs,
                          # regions.rs, voice.rs, multisample.rs, playback.rs, zones.rs, tests.rs),
                          # sfizz_device.rs + sfizz_keys.rs, drums/ (DrumHost and the four voices), drum_conformance.rs

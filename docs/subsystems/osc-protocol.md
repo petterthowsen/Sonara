@@ -348,6 +348,18 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
   - `1`: Speed (enum: Freeze, Slow, Medium, Fast)
   - UI-only (not synced): Scale (enum: Log, Linear), Style (enum: Bars, Line)
 
+**Pitch Shifter (`sonara.builtin.pitch_shifter`)** (spec 045)
+- **Type:** Effect
+- A real-time granular pitch shifter (a delay line read at the pitch ratio, two overlapping
+  grains). No reported latency; the wet is the input delayed by 2 samples at zero shift.
+- **Params (typed):** IDs are grouped ten per module; the source of truth is
+  `audio/devices/effects/pitch_shifter.rs`. Real ranges travel in `/builtin/info`.
+  - `0` Pitch (−24…+24 st, whole semitones), `1` Fine (±100 cents)
+  - `10` Grain (1–100 Hz, log), `11` Sync (enum, same divisions as the Delay; not Off replaces
+    the Hz value, and divisions longer than 1 s play as 1 Hz grains), `12` Jitter (0–100 %)
+  - `20` Feedback (0–95 %; fixed 30 Hz low cut and 8 kHz high cut in the loop)
+  - `30` Spread (0–50 cents: left up, right down), `31` Mix (0–100 %, 0 % is bit-exact dry)
+
 **Saturator (`sonara.builtin.saturator`)** (spec 031)
 - **Type:** Effect
 - A four-character waveshaper (Soft / Tube / Tape / Hard) with oversampling, tone and a tape
