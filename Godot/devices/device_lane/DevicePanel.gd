@@ -11,7 +11,7 @@ const ICON_VIEW_CLOSED := preload("res://assets/icons/chevron-left.svg")
 ## Widest the device name gets while view tabs share the header with it.
 const NAME_MAX_WIDTH := 140.0
 
-## Seconds a pane (View, Parameters/CCs/Modulators/File) takes to slide open/closed and fade.
+## Seconds a pane (View, Parameters/CCs/Modulators) takes to slide open/closed and fade.
 const PANE_ANIM_DURATION := 0.15
 
 var logger : Log = Log.make("DevicePanel")
@@ -29,7 +29,7 @@ var logger : Log = Log.make("DevicePanel")
 ## Shown only while the bound device is crashed/failed; reloads the plugin host.
 @onready var reload_button: Button = $VBox/TopHeader/HBox/Reload
 
-# Left header: View and Window toggles, then the Parameters/CCs/File tabs (one ButtonGroup)
+# Left header: View and Window toggles, then the Parameters/CCs tabs (one ButtonGroup)
 ## Device name written vertically in the left header while the View is closed.
 @onready var left_header : PanelContainer = $VBox/HBox/LeftHeader
 @onready var vertical_name_label: Label = $VBox/HBox/LeftHeader/VBox/Name/Label
@@ -40,7 +40,6 @@ var logger : Log = Log.make("DevicePanel")
 ## Visible only for a device that has both.
 @onready var simple_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Simple
 @onready var params_button : Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Parameters
-@onready var file_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/File
 
 ## True while the DeviceLane selected this panel's device. Selection swaps the theme variation
 ## (`DeviceCard` / `DeviceCardSelected`), so every selectable item shares the neutral border.
@@ -64,20 +63,22 @@ var modulators: ModulatorsPane
 ## Small mark in the collapsed left header so modulation is never invisible.
 var _mod_dot: Label
 
-# Content row: [Parameters | CCs | File] [View]
+# Content row: [Parameters | CCs | Modulators] [View: file row above the view]
 @onready var content_hbox: HBoxContainer = $VBox/HBox/Content/HBox
 @onready var parameters_pane: Control = $VBox/HBox/Content/HBox/Parameters
 @onready var parameters_scroll : ScrollContainer = $VBox/HBox/Content/HBox/Parameters/Scroll
 @onready var parameters_box : VBoxContainer = $VBox/HBox/Content/HBox/Parameters/Scroll/VBox
-@onready var file_box: Control = $VBox/HBox/Content/HBox/File
 
 # Custom UI (Panel view, or Companion view while the device window is open)
 @onready var view_pane : Control = $VBox/HBox/Content/HBox/View
+## Where the views live inside the View pane, below the file row.
+@onready var view_host : Control = $VBox/HBox/Content/HBox/View/ViewVBox/ViewHost
 
-# For Opening files for devices that support file loading
+# File row at the top of the View pane, for devices that load a file (SFZ, audio sample)
+@onready var file_row: Control = $VBox/HBox/Content/HBox/View/ViewVBox/FileRow
 @onready var file_dialog: FileDialog = $FileDialog
-@onready var file_status_label: Label = $VBox/HBox/Content/HBox/File/VBox/StatusLabel
-@onready var file_load_button: Button = $VBox/HBox/Content/HBox/File/VBox/LoadButton
+@onready var file_status_label: Label = $VBox/HBox/Content/HBox/View/ViewVBox/FileRow/FileLabel
+@onready var file_load_button: Button = $VBox/HBox/Content/HBox/View/ViewVBox/FileRow/LoadButton
 
 # The device window popup (native GUI or Window view) is owned by the global
 # DeviceWindowManager so it survives track switches and panel rebuilds.
@@ -133,10 +134,10 @@ func _ready() -> void:
 	_create_mod_dot()
 	# Panes animate through clipped reveal wrappers, so their opening and closing slides the
 	# whole panel layout instead of only fading in place.
-	for pane in [parameters_pane, ccs_pane, modulators_pane, file_box, view_pane]:
+	for pane in [parameters_pane, ccs_pane, modulators_pane, view_pane]:
 		_wrap_pane(pane)
 
-	# Parameters/CCs/Modulators/File share a ButtonGroup; clicking the active tab collapses it.
+	# Parameters/CCs/Modulators share a ButtonGroup; clicking the active tab collapses it.
 	params_button.button_group.allow_unpress = true
 	params_button.toggled.connect(_on_tab_toggled.unbind(1))
 	cc_button.toggled.connect(_on_tab_toggled.unbind(1))
@@ -144,8 +145,7 @@ func _ready() -> void:
 	modulators_button.toggled.connect(func(pressed: bool):
 		if device != null and not _restoring_tab:
 			device.modulators_open = pressed)
-	file_button.toggled.connect(_on_tab_toggled.unbind(1))
-	for tab in [params_button, cc_button, modulators_button, file_button]:
+	for tab in [params_button, cc_button, modulators_button]:
 		tab.pressed.connect(func(): _params_auto_opened = false)
 	view_button.toggled.connect(_on_view_toggled)
 	window_button.toggled.connect(_on_window_toggled)
@@ -173,7 +173,7 @@ func _ready() -> void:
 	left_header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	parameters_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	ccs_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
-	file_box.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+	file_row.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 
 
@@ -187,13 +187,12 @@ func _create_cc_tab() -> void:
 	cc_button.button_pressed = false
 	cc_button.visible = false
 	tab_buttons.add_child(cc_button)
-	tab_buttons.move_child(cc_button, file_button.get_index())
 
 	ccs_pane = parameters_pane.duplicate()
 	ccs_pane.name = "CCs"
 	ccs_pane.visible = false
 	content_hbox.add_child(ccs_pane)
-	content_hbox.move_child(ccs_pane, file_box.get_index())
+	content_hbox.move_child(ccs_pane, view_pane.get_index())
 	ccs_scroll = ccs_pane.get_node("Scroll")
 	ccs_box = ccs_scroll.get_node("VBox")
 	for child in ccs_box.get_children():
@@ -221,7 +220,7 @@ func _create_modulators_tab() -> void:
 	modulators_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	modulators_pane.add_theme_stylebox_override("panel", parameters_pane.get_theme_stylebox("panel"))
 	content_hbox.add_child(modulators_pane)
-	content_hbox.move_child(modulators_pane, file_box.get_index())
+	content_hbox.move_child(modulators_pane, view_pane.get_index())
 
 	modulators = ModulatorsPane.new()
 	modulators_pane.add_child(modulators)
@@ -738,7 +737,7 @@ func _on_simple_toggled(pressed: bool) -> void:
 ## TAB SWITCHING
 ## ============================================================================
 
-## Any of Parameters/CCs/File changed (the ButtonGroup keeps at most one pressed).
+## Any of Parameters/CCs/Modulators changed (the ButtonGroup keeps at most one pressed).
 func _on_tab_toggled() -> void:
 	_update_tab_panes()
 
@@ -750,7 +749,6 @@ func _update_tab_panes() -> void:
 		_animate_pane(ccs_pane, cc_button.visible and cc_button.button_pressed)
 	if modulators_pane:
 		_animate_pane(modulators_pane, modulators_button.visible and modulators_button.button_pressed)
-	_animate_pane(file_box, file_button.visible and file_button.button_pressed)
 
 ## Show or hide `pane` through its reveal wrapper: `reveal` tweens between 0 and 1, so the
 ## wrapper's width (and so the whole panel layout) slides while the pane fades. The pane is
@@ -896,7 +894,7 @@ func _update_left_pane_visibility() -> void:
 	var pressed := params_button.button_group.get_pressed_button()
 	if pressed and not pressed.visible:
 		pressed.set_pressed_no_signal(false)
-		for tab in [params_button, cc_button, modulators_button, file_button]:
+		for tab in [params_button, cc_button, modulators_button]:
 			if tab.visible:
 				tab.set_pressed_no_signal(true)
 				break
@@ -912,9 +910,9 @@ func _configure_file_loading() -> void:
 	if not device:
 		return
 	
-	# Show/hide file tab based on device support
+	# The file row sits above the view and shows for devices that load a file
 	if device.device.supports_file_loading:
-		file_button.visible = true
+		file_row.visible = true
 		
 		# Configure file dialog
 		file_dialog.title = "Load %s" % device.device.file_type_description
@@ -934,7 +932,7 @@ func _configure_file_loading() -> void:
 			loaded_file_path = ""
 			file_status_label.text = "No File Loaded"
 	else:
-		file_button.visible = false
+		file_row.visible = false
 
 
 ## Handle load file button pressed
@@ -1016,7 +1014,7 @@ func _load_panel_view(dev: DeviceInstance) -> void:
 		# Bind first so view has device context before any show/subscription
 		_panel_view.bind_to_device(dev)
 		_panel_view.child_context_menu_requested.connect(request_child_context_menu.emit)
-		view_pane.add_child(_panel_view)
+		view_host.add_child(_panel_view)
 		_panel_view.visible = true
 		if not _panel_view.is_node_ready():
 			await _panel_view.ready
@@ -1036,7 +1034,7 @@ func _load_companion_view(dev: DeviceInstance) -> void:
 	if _companion_view:
 		# Bind first so view has device context before any show/subscription
 		_companion_view.bind_to_device(dev)
-		view_pane.add_child(_companion_view)
+		view_host.add_child(_companion_view)
 		_companion_view.visible = false
 		if not _companion_view.is_node_ready():
 			await _companion_view.ready

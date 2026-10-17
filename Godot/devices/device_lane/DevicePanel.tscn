@@ -4,7 +4,6 @@
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
 [ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="5_d6wny"]
 [ext_resource type="Texture2D" uid="uid://df4gh0kqrb8va" path="res://assets/icons/sliders-horizontal.svg" id="5_n5ici"]
-[ext_resource type="Texture2D" uid="uid://d1puoqnbbabs5" path="res://assets/icons/file.svg" id="5_ohvca"]
 [ext_resource type="Texture2D" uid="uid://cpre341cdgoij" path="res://assets/icons/gauge.svg" id="7_d6wny"]
 [ext_resource type="Texture2D" uid="uid://dgly7yhcs5bw4" path="res://assets/icons/square-arrow-out-up-right.svg" id="7_ohvca"]
 [ext_resource type="Texture2D" uid="uid://dutkm4ba5qf0r" path="res://assets/icons/bookmark.svg" id="9_preset"]
@@ -263,16 +262,6 @@ toggle_mode = true
 button_group = SubResource("ButtonGroup_1cidk")
 icon = ExtResource("5_n5ici")
 
-[node name="File" type="Button" parent="VBox/HBox/LeftHeader/VBox/TabButtons" unique_id=1192976894]
-custom_minimum_size = Vector2(28, 0)
-layout_mode = 2
-size_flags_vertical = 4
-tooltip_text = "File"
-theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
-toggle_mode = true
-button_group = SubResource("ButtonGroup_1cidk")
-icon = ExtResource("5_ohvca")
-
 [node name="Content" type="PanelContainer" parent="VBox/HBox" unique_id=106644029]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -302,33 +291,35 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 4
 
-[node name="File" type="PanelContainer" parent="VBox/HBox/Content/HBox" unique_id=45017796]
-visible = false
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_n5ici")
-
-[node name="VBox" type="VBoxContainer" parent="VBox/HBox/Content/HBox/File" unique_id=613901230]
-layout_mode = 2
-alignment = 1
-
-[node name="StatusLabel" type="Label" parent="VBox/HBox/Content/HBox/File/VBox" unique_id=525961453]
-custom_minimum_size = Vector2(100, 0)
-layout_mode = 2
-text = "No File Loaded"
-horizontal_alignment = 1
-vertical_alignment = 1
-autowrap_mode = 3
-
-[node name="LoadButton" type="Button" parent="VBox/HBox/Content/HBox/File/VBox" unique_id=1309556089]
-layout_mode = 2
-size_flags_vertical = 4
-text = "Load File"
-
 [node name="View" type="PanelContainer" parent="VBox/HBox/Content/HBox" unique_id=214953315]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
+
+[node name="ViewVBox" type="VBoxContainer" parent="VBox/HBox/Content/HBox/View"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="FileRow" type="HBoxContainer" parent="VBox/HBox/Content/HBox/View/ViewVBox"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="FileLabel" type="Label" parent="VBox/HBox/Content/HBox/View/ViewVBox/FileRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "No File Loaded"
+vertical_alignment = 1
+text_overrun_behavior = 3
+
+[node name="LoadButton" type="Button" parent="VBox/HBox/Content/HBox/View/ViewVBox/FileRow"]
+layout_mode = 2
+text = "Load File"
+
+[node name="ViewHost" type="MarginContainer" parent="VBox/HBox/Content/HBox/View/ViewVBox"]
+layout_mode = 2
+size_flags_vertical = 3
 
 [node name="FileDialog" type="FileDialog" parent="." unique_id=1757953003]
 oversampling_override = 1.0

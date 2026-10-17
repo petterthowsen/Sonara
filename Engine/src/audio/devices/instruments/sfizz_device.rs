@@ -137,6 +137,9 @@ pub struct SfizzDevice {
 
     // Sfizz synth (wrapped in LoadingState for background loading)
     loading_state: Arc<Mutex<LoadingState>>,
+    /// Bumped by every load request and by `deactivate`. A background load that finds it changed
+    /// is stale (superseded, or the device was deactivated meanwhile) and drops its synth.
+    load_generation: Arc<AtomicU64>,
 
     // Current SFZ file path (for reporting)
     sfz_path: Arc<Mutex<Option<PathBuf>>>,
@@ -283,6 +286,7 @@ impl SfizzDevice {
             sample_rate,
             max_buffer_size,
             loading_state: Arc::new(Mutex::new(LoadingState::Idle)),
+            load_generation: Arc::new(AtomicU64::new(0)),
             sfz_path: Arc::new(Mutex::new(None)),
             cc_params: Arc::new(Mutex::new(Vec::new())),
             cc_values: Arc::new(Mutex::new(HashMap::new())),
@@ -397,7 +401,15 @@ impl SfizzDevice {
 
     /// Load an SFZ file asynchronously (non-blocking)
     pub fn load_sfz_async(&mut self, path: PathBuf) {
+        self.load_sfz_inner(path, false);
+    }
+
+    /// `keep_cc_values`: a re-activation restores the CC values from before the unload instead of
+    /// resetting them to the SFZ's defaults.
+    fn load_sfz_inner(&mut self, path: PathBuf, keep_cc_values: bool) {
         info!("📂 Loading SFZ file asynchronously: {:?}", path);
+        let generation = self.load_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let load_generation = Arc::clone(&self.load_generation);
 
         // Update state to Loading
         {
@@ -498,10 +510,17 @@ impl SfizzDevice {
                             }
                             {
                                 let mut cc_values_guard = cc_values.lock().unwrap();
-                                cc_values_guard.clear();
+                                let previous = if keep_cc_values {
+                                    std::mem::take(&mut *cc_values_guard)
+                                } else {
+                                    cc_values_guard.clear();
+                                    HashMap::new()
+                                };
                                 for label in &labels {
-                                    cc_values_guard.insert(label.cc_number, label.default);
-                                    send_normalized_cc(&synth, label.cc_number, label.default);
+                                    let value =
+                                        previous.get(&label.cc_number).copied().unwrap_or(label.default);
+                                    cc_values_guard.insert(label.cc_number, value);
+                                    send_normalized_cc(&synth, label.cc_number, value);
                                 }
                             }
 
@@ -526,8 +545,12 @@ impl SfizzDevice {
 
                             // Update state to Ready
                             let allocated = unsafe { sfizz::sfizz_get_num_bytes(synth.as_raw()) };
-                            loaded_bytes.store(allocated.max(0) as u64, Ordering::Relaxed);
                             let mut state = loading_state.lock().unwrap();
+                            if load_generation.load(Ordering::SeqCst) != generation {
+                                info!("SFZ load superseded or device deactivated, dropping synth");
+                                return;
+                            }
+                            loaded_bytes.store(allocated.max(0) as u64, Ordering::Relaxed);
                             *state = LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
 
                             // Send ready state
@@ -965,33 +988,33 @@ impl AudioDevice for SfizzDevice {
         self.is_active
     }
 
+    /// Reload the SFZ that `deactivate` unloaded, keeping the CC values. The load runs on a
+    /// background thread; the device is silent until it reports ready.
     fn activate(&mut self) -> Result<(), String> {
         self.is_active = true;
+        let path = self.sfz_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            self.load_sfz_inner(path, true);
+        }
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<(), String> {
         self.is_active = false;
 
-        // Clear loading state to free memory
-        {
+        // Unload the synth to free its samples. The SFZ path, the CC parameter list and the CC
+        // values stay so `activate` restores the device as it was. A load still in flight is
+        // made stale so it can't bring the synth back.
+        self.load_generation.fetch_add(1, Ordering::SeqCst);
+        let old = {
             let mut state = self.loading_state.lock().unwrap();
-            *state = LoadingState::Idle;
-        }
-
-        // Clear CC parameters
-        {
-            let mut cc_params = self.cc_params.lock().unwrap();
-            cc_params.clear();
-        }
-        {
-            let mut cc_values = self.cc_values.lock().unwrap();
-            cc_values.clear();
-        }
-        {
-            let mut changed = self.parameters_changed.lock().unwrap();
-            *changed = false;
-        }
+            std::mem::replace(&mut *state, LoadingState::Idle)
+        };
+        self.loaded_bytes.store(0, Ordering::Relaxed);
+        self.queued_midi.clear();
+        self.pending_param_changes.clear();
+        // Freeing a big sample set is slow: not under the engine state lock.
+        std::thread::spawn(move || drop(old));
 
         Ok(())
     }
@@ -1221,6 +1244,27 @@ mod tests {
         assert_eq!(device.cc_value(1), Some(8192));
         device.cc_values.lock().unwrap().insert(7, 1.0);
         assert_eq!(device.cc_value(7), Some(16383));
+    }
+
+    #[test]
+    fn reactivating_reloads_the_sfz_and_keeps_cc_values() {
+        let (mut device, dir) = sine_device("reactivate", "<region> sample=*sine\n");
+        *device.sfz_path.lock().unwrap() = Some(dir.join("cc_test.sfz"));
+        device.cc_values.lock().unwrap().insert(1, 0.25);
+
+        device.deactivate().unwrap();
+        assert!(matches!(*device.loading_state.lock().unwrap(), LoadingState::Idle));
+        assert_eq!(device.get_parameter(1), Some(0.25), "deactivate keeps CC values");
+
+        device.activate().unwrap();
+        for _ in 0..200 {
+            if matches!(*device.loading_state.lock().unwrap(), LoadingState::Ready(_)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(matches!(*device.loading_state.lock().unwrap(), LoadingState::Ready(_)));
+        assert_eq!(device.get_parameter(1), Some(0.25), "activate restores CC values");
     }
 
     #[test]
