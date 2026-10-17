@@ -21,6 +21,7 @@ func run_tests() -> void:
 	_merge_script = load("res://history/ClipMergeActions.gd")
 	_test_single_loop_is_baked()
 	_test_merge_across_untouched_middle()
+	_test_merged_names_are_unique()
 	_test_audio_is_not_mergeable()
 
 
@@ -85,6 +86,18 @@ func _test_merge_across_untouched_middle() -> void:
 	_assert(_starts(m.clip) == [0, 2000], "notes placed at their song position: %s" % str(_starts(m.clip)))
 	_assert(other.clip_instances.size() == 1 and other.clip_instances[0].clip.midi_notes.size() == 1,
 		"other track consolidated alone")
+
+
+func _test_merged_names_are_unique() -> void:
+	var project: Object = _project()
+	var t1: Object = _track_script.new(1)
+	var t2: Object = _track_script.new(2)
+	var a: Object = t1.create_clip_instance(_midi_clip(project, "Bass", [[60, 0, 100]], 960), 0, 960)
+	var b: Object = t2.create_clip_instance(_midi_clip(project, "Bass", [[60, 0, 100]], 960), 0, 960)
+	var merged: Array = _merge_script.merge(project, [a, b])
+	_assert(merged.size() == 2, "one per track")
+	_assert(merged[0].clip.name != merged[1].clip.name,
+		"merged clips differ: %s / %s" % [merged[0].clip.name, merged[1].clip.name])
 
 
 func _test_audio_is_not_mergeable() -> void:

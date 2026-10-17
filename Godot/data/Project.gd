@@ -1089,8 +1089,9 @@ func create_clip(clip_name: String = "Clip", clip_type: Clip.ClipType = Clip.Cli
 
 
 ## Next unused display name among pooled clips (`Bass`, `Bass 2`, `Bass 3`, …).
-func unique_clip_name(desired: String) -> String:
-	var existing: PackedStringArray = PackedStringArray()
+## `also_taken` lists names reserved by clips not yet in the pool (a batch being built).
+func unique_clip_name(desired: String, also_taken: PackedStringArray = PackedStringArray()) -> String:
+	var existing: PackedStringArray = also_taken.duplicate()
 	for c in clips.values():
 		if c is Clip:
 			existing.append(c.name)

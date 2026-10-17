@@ -46,10 +46,12 @@ static func merge(project: Project, instances: Array) -> Array[ClipInstance]:
 	if project == null:
 		return created
 	var cmds: Array[Command] = []
+	var reserved := PackedStringArray()
 	for group in plan(instances):
 		var track: Track = group["track"]
 		var sources: Array = group["instances"]
-		var merged := _bake(project, track, sources)
+		var merged := _bake(project, track, sources, reserved)
+		reserved.append(merged.clip.name)
 		cmds.append(ClipInstanceCreateCommand.new(
 			track, merged.clip, merged.start_ticks, merged.duration_ticks, project, true, merged))
 		for inst in sources:
@@ -62,14 +64,14 @@ static func merge(project: Project, instances: Array) -> Array[ClipInstance]:
 
 
 ## Build the unplaced merged instance (and its new clip) for `sources`, sorted by start.
-static func _bake(project: Project, track: Track, sources: Array) -> ClipInstance:
+static func _bake(project: Project, track: Track, sources: Array, reserved: PackedStringArray) -> ClipInstance:
 	var first: ClipInstance = sources[0]
 	var start: int = first.start_ticks
 	var end: int = start
 	for inst in sources:
 		end = maxi(end, inst.get_end_ticks())
 
-	var clip := project.create_clip(project.unique_clip_name(first.clip.name), Clip.ClipType.MIDI)
+	var clip := project.create_clip(project.unique_clip_name(first.clip.name, reserved), Clip.ClipType.MIDI)
 	clip.color = first.clip.color
 	clip.content_length_ticks = end - start
 	for inst in sources:
