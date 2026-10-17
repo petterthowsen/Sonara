@@ -27,6 +27,7 @@ func run_tests() -> void:
 	_test_multi_param_gesture_is_one_step()
 	_test_undo_redo_go_through_model_setter()
 	_test_engine_echo_records_nothing()
+	_test_reset_all_is_one_step()
 	_test_real_values_and_reset()
 	_test_plugin_edit_and_drag()
 	_test_plugin_undo_redo_use_normal_path()
@@ -58,6 +59,22 @@ func _test_edit_records_one_step() -> void:
 	_assert(_history.undo_name() == "Set Parameter", "step has a label")
 	_actions.set_normalized(inst, 0, 0.6)
 	_assert(_history.undo_count() == 2, "discrete edits never merge")
+
+
+func _test_reset_all_is_one_step() -> void:
+	var inst: Object = _fresh()
+	_actions.set_normalized(inst, 0, 0.4)
+	_actions.set_normalized(inst, 1, 0.8)
+	_history.clear()
+	_assert(_actions.reset_all(inst) == 2, "reset_all changes both parameters")
+	_assert(_history.undo_count() == 1, "reset_all is one step")
+	_assert(is_equal_approx(inst.get_parameter_normalized(0), 0.0), "parameter 0 back to default")
+	_history.undo()
+	_assert(is_equal_approx(inst.get_parameter_normalized(1), 0.8), "undo restores parameter 1")
+	_assert(is_equal_approx(inst.get_parameter_normalized(0), 0.4), "undo restores parameter 0")
+	_history.clear()
+	_assert(_actions.reset_all(inst) == 2 and _actions.reset_all(inst) == 0, "second reset changes nothing")
+	_assert(_history.undo_count() == 1, "no-op reset records nothing")
 
 
 func _test_unchanged_value_records_nothing() -> void:

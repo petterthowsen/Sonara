@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Device preset menu has a Reset option that returns all sound parameters to their defaults as one undo step (#161).
 - Every modulator has an Amount knob (0–100 %, default 100 so existing projects sound the same) that scales its output, and another modulator can modulate it, so modulators can be chained (#156).
 - Pitch Shifter effect: transposes audio ±24 semitones without changing its length, with Fine (cents), Grain (Hz or tempo-synced), Jitter, Feedback (for shimmer and rising repeats), Spread (a micro-pitch stereo doubler) and Mix. It can sit in a channel chain, in the Delay's FB FX or in a Multiband FX band.
 

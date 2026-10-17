@@ -69,6 +69,24 @@ static func reset(inst: Object, param_id: int) -> bool:
 	return set_real(inst, param_id, param.default_value, "Reset Parameter")
 
 
+## Reset every sound parameter of `inst` to its default as one undo step. Returns how many changed.
+## MIDI controller parameters (CC tab, SFZ) are left alone.
+static func reset_all(inst: Object) -> int:
+	if inst == null:
+		return 0
+	var cmds: Array[Command] = []
+	for param in inst.get_parameters():
+		if inst.is_controller_parameter(param):
+			continue
+		var old_value: float = inst.get_parameter_normalized(param.id)
+		inst.set_parameter_normalized(param.id, param.value_to_normalized(param.default_value))
+		var new_value: float = inst.get_parameter_normalized(param.id)
+		if absf(new_value - old_value) > EPSILON:
+			cmds.append(_command_script().new("Reset Device", inst, param.id, old_value, new_value, 0))
+	_history_util().record_many("Reset Device", cmds)
+	return cmds.size()
+
+
 ## Start an explicit gesture (nestable). Edits until the matching end_gesture() merge per parameter.
 static func begin_gesture() -> void:
 	if _explicit_depth == 0:

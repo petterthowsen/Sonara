@@ -440,6 +440,7 @@ const PRESET_SUBMENU_THRESHOLD := 15
 const PRESET_SAVE := 100001
 const PRESET_SAVE_NEW := 100002
 const PRESET_BROWSER := 100003
+const PRESET_RESET := 100004
 
 const SaveDialogScene := preload("res://devices/DevicePresetSaveDialog.tscn")
 
@@ -473,6 +474,7 @@ func _build_preset_menu() -> void:
 	_preset_menu_paths = PackedStringArray()
 	_preset_menu.add_item("Save Preset…", PRESET_SAVE)
 	_preset_menu.add_item("Save as New Preset…", PRESET_SAVE_NEW)
+	_preset_menu.add_item("Reset", PRESET_RESET)
 	_preset_menu.add_separator()
 	var presets := PresetLibrary.list_for_device(device.device.id, device.device.name)
 	if presets.is_empty():
@@ -510,6 +512,8 @@ func _on_preset_menu_id(id: int) -> void:
 			_open_preset_save_dialog(true)
 		PRESET_SAVE_NEW:
 			_open_preset_save_dialog(false)
+		PRESET_RESET:
+			ParameterActions.reset_all(device)
 		PRESET_BROWSER:
 			var browser := get_tree().get_first_node_in_group(Browser.GROUP) as Browser
 			if browser:
