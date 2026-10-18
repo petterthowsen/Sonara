@@ -65,6 +65,36 @@ static func apply_preset(project: Project, index: int) -> bool:
 	return true
 
 
+## Ctrl-held group toggling. `shown` is the caller's list of preset indices currently combined (empty
+## when no combination is under way). The first toggle starts a combination with just that preset;
+## later ones add or remove it. The visible tracks are those visible in any combined preset; an
+## empty combination shows all. Returns false (and does nothing) when no preset has that index.
+static func toggle_group(project: Project, index: int, shown: Array[int]) -> bool:
+	var presets := project.visibility_presets
+	if index < 0 or index >= presets.count():
+		return false
+	if shown.has(index):
+		shown.erase(index)
+	else:
+		shown.append(index)
+	if shown.is_empty():
+		show_all(project)
+		return true
+	if shown.size() == 1:
+		return apply_preset(project, shown[0])
+	var hidden_ids: Array[int] = []
+	for track in project.tracks:
+		var visible := false
+		for i in shown:
+			if not presets.get_preset(i)["hidden_track_ids"].has(track.id):
+				visible = true
+				break
+		if not visible:
+			hidden_ids.append(track.id)
+	_execute(project, "Toggle Visibility Groups", hidden_changes(project, hidden_ids), -1)
+	return true
+
+
 ## Re-apply the active preset, discarding unsaved changes. False when there is none.
 static func reset_preset(project: Project) -> bool:
 	return apply_preset(project, project.visibility_presets.active_index)

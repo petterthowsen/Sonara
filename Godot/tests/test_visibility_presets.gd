@@ -545,3 +545,15 @@ func _test_hotkeys() -> void:
 	_assert(_hidden_names(f) == ["d"] and project.visibility_presets.active_index == 1, "...and changes nothing")
 	_tv.show_all(project)
 	_assert(_hidden_names(f).is_empty(), "Ctrl+0 shows every track")
+
+	# Ctrl-held group toggling: groups combine, and pressing one again removes it.
+	project.visibility_presets.active_index = -1
+	var shown: Array[int] = []
+	_tv.toggle_group(project, 0, shown)
+	_assert(_hidden_names(f) == ["a"] and shown == [0], "toggle 1 starts with group 1 alone")
+	_tv.toggle_group(project, 1, shown)
+	_assert(_hidden_names(f).is_empty(), "toggle 2 adds group 2")
+	_tv.toggle_group(project, 1, shown)
+	_assert(_hidden_names(f) == ["a"], "toggling 2 again removes group 2")
+	_tv.toggle_group(project, 0, shown)
+	_assert(_hidden_names(f).is_empty() and shown.is_empty(), "removing the last group shows all")

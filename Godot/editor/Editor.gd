@@ -494,10 +494,33 @@ func _unhandled_input(event: InputEvent) -> void:
 		accept_event()
 
 
+## Preset indices combined by the modifier-held group toggle; cleared when the chord's modifier is released.
+var _vis_groups_shown: Array[int] = []
+## Keycodes of the modifiers held when the combination started (Ctrl, Shift, Alt, Meta).
+var _vis_group_modifiers: Array[int] = []
+
+
+func _held_modifier_keys(key: InputEventKey) -> Array[int]:
+	var out: Array[int] = []
+	if key.ctrl_pressed:
+		out.append(KEY_CTRL)
+	if key.shift_pressed:
+		out.append(KEY_SHIFT)
+	if key.alt_pressed:
+		out.append(KEY_ALT)
+	if key.meta_pressed:
+		out.append(KEY_META)
+	return out
+
+
 ## Visibility preset hotkeys (spec 047). They call TrackVisibility directly, so they work while
 ## the Track List panel is hidden. Returns true when the event was consumed.
 func _handle_visibility_hotkey(event: InputEvent) -> bool:
 	if project == null or not event is InputEventKey:
+		return false
+	var key := event as InputEventKey
+	if not key.pressed and _vis_groups_shown.size() > 0 and _vis_group_modifiers.has(key.keycode):
+		_vis_groups_shown.clear()
 		return false
 	if Hotkeys.pressed(event, "visibility_show_all"):
 		TrackVisibility.show_all(project)
@@ -511,7 +534,13 @@ func _handle_visibility_hotkey(event: InputEvent) -> bool:
 	for i in range(1, 10):
 		if Hotkeys.pressed(event, "visibility_preset_%d" % i):
 			# An index past the last preset does nothing.
-			TrackVisibility.apply_preset(project, i - 1)
+			var modifiers := _held_modifier_keys(key)
+			if Settings.get_value("behavior/visibility_group_toggle") and not modifiers.is_empty():
+				if _vis_groups_shown.is_empty():
+					_vis_group_modifiers = modifiers
+				TrackVisibility.toggle_group(project, i - 1, _vis_groups_shown)
+			else:
+				TrackVisibility.apply_preset(project, i - 1)
 			return true
 	return false
 

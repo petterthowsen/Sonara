@@ -426,6 +426,15 @@ func _register_all_settings() -> void:
 	)).sub("Arranger")
 
 	_register(Setting.new(
+		"behavior/visibility_group_toggle",
+		"Toggle Visibility Groups While Modifier Is Held",
+		Type.BOOL,
+		false,
+		CATEGORY_BEHAVIOR,
+		"When enabled, the visibility group hotkeys (Ctrl+1 to Ctrl+9) toggle each group individually while the hotkey's modifier (Ctrl by default, or Shift, Alt, Meta if you rebind them) is held: Ctrl+1 shows only group 1, then pressing 2 adds group 2 and pressing 2 again removes it. Releasing the modifier ends the combination. Hotkeys with no modifier always switch to one group. When disabled, each hotkey switches to that group alone.",
+	)).sub("Track List")
+
+	_register(Setting.new(
 		"behavior/scroll_zoom_sensitivity",
 		"Scroll Zoom Sensitivity",
 		Type.CHOICE,
