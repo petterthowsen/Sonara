@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_1v486"]
 [ext_resource type="Texture2D" uid="uid://bcmn5jer86wdt" path="res://assets/icons/trash.svg" id="3_3ycxx"]
 [ext_resource type="Texture2D" uid="uid://uekq5j7whsde" path="res://assets/icons/copy.svg" id="3_4iljr"]
+[ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="5_layers"]
 [ext_resource type="Texture2D" uid="uid://dhxxueey2a8jy" path="res://assets/icons/copy-plus.svg" id="4_r6nx2"]
 
 [node name="TrackItemContextMenu" type="PopupPanel" unique_id=1719893711]
@@ -36,11 +37,32 @@ size_flags_horizontal = 3
 value_type = 1
 fit_text_width = true
 
+[node name="Toggles" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Visible" type="CheckBox" parent="VBoxContainer/Toggles"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Off leaves it out of the track list (visual only). Show Hidden brings it back"
+button_pressed = true
+text = "Visible"
+
+[node name="Enabled" type="CheckBox" parent="VBoxContainer/Toggles"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Off deactivates the channel's devices (and its children's) to save CPU"
+button_pressed = true
+text = "Enabled"
+
 [node name="MakeUniquePerTrack" type="Button" parent="VBoxContainer"]
 layout_mode = 2
 theme_override_constants/h_separation = 8
+theme_override_constants/icon_max_width = 18
 text = "Make Clips Unique"
+icon = ExtResource("5_layers")
 alignment = 0
+expand_icon = true
 
 [node name="BusLink" type="OptionButton" parent="VBoxContainer" unique_id=2048545925]
 layout_mode = 2
@@ -62,7 +84,7 @@ theme_override_constants/separation = 2
 layout_mode = 2
 theme_override_constants/h_separation = 8
 theme_override_constants/icon_max_width = 18
-text = "Duplicate"
+text = "Duplicate Track"
 icon = ExtResource("3_4iljr")
 alignment = 0
 expand_icon = true
@@ -71,7 +93,7 @@ expand_icon = true
 layout_mode = 2
 theme_override_constants/h_separation = 8
 theme_override_constants/icon_max_width = 18
-text = "Duplicate Linked"
+text = "Duplicate Track & Channel"
 icon = ExtResource("4_r6nx2")
 alignment = 0
 expand_icon = true
@@ -80,7 +102,7 @@ expand_icon = true
 layout_mode = 2
 theme_override_constants/h_separation = 8
 theme_override_constants/icon_max_width = 18
-text = "Delete"
+text = "Delete Track"
 icon = ExtResource("3_3ycxx")
 alignment = 0
 expand_icon = true
@@ -89,7 +111,7 @@ expand_icon = true
 layout_mode = 2
 theme_override_constants/h_separation = 8
 theme_override_constants/icon_max_width = 18
-text = "Delete Linked"
+text = "Delete Track & Channel"
 icon = ExtResource("3_3ycxx")
 alignment = 0
 expand_icon = true

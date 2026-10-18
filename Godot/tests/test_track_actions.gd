@@ -196,7 +196,7 @@ func _test_menu_layout() -> void:
 	menu.bind_tracks(_typed_tracks([a.track, bare]), bare, project)
 	_assert(menu.is_multi(), "multi-track layout")
 	_assert(menu.name_label.get_value() == "2 tracks" and menu.name_label.disabled, "title is read-only N tracks")
-	_assert(menu.delete_button.text == "Delete Tracks" and menu.duplicate_button.text == "Duplicate Tracks", "plural labels")
+	_assert(menu.delete_button.text == "Delete Track" and menu.duplicate_button.text == "Duplicate Track", "labels stay as set in the scene")
 	_assert(not menu.channel_route_option.visible, "routing dropdown hidden for several tracks")
 	menu._on_name_changed("Renamed")
 	_assert(a.track.name == "A" and bare.name == "Bare", "renaming does nothing with several tracks")

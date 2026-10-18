@@ -11,6 +11,10 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - New behavior setting "Toggle Visibility Groups While Modifier Is Held": Ctrl+1, then 2, 3… combines visibility groups, and pressing a number again removes that group, until the modifier (Ctrl, or Shift/Alt/Meta if rebound) is released.
 
 ### Fixed
+### Changed
+
+- Track context menu: "Visible" and "Enabled" toggles sit side by side at the top (Visible replaces Hidden, inverted), every action has an icon of the same size, Delete is last, and the button labels are set in the scene.
+
 
 - The MIDI editor track list no longer shows hidden tracks (#166).
 - Merging clips across several tracks gives each merged clip its own unique name (#164).
