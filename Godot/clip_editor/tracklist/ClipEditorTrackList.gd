@@ -139,13 +139,18 @@ func _rebuild() -> void:
 	clear()
 	if project:
 		for t in project.get_visual_track_list():
-			if t.type == Track.TrackType.INSTRUMENT:
+			if t.type == Track.TrackType.INSTRUMENT and _is_listed(t):
 				tracks.append(t)
 				t.order_changed.connect(_on_track_order_changed)
 	selected_track = kept if tracks.has(kept) else null
 	for t in tracks:
 		_create_track_item(t)
 	tracks_changed.emit()
+
+
+## Hidden tracks (own or through a folder) are skipped unless the arranger shows hidden tracks.
+func _is_listed(t: Track) -> bool:
+	return ItemVisibility.is_listed(project.arranger_view, ItemVisibility.track_hidden(project, t), false)
 
 
 func _refresh_toggles() -> void:

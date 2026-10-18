@@ -30,6 +30,7 @@ func run_tests() -> void:
 	_test_toggle_state_editable()
 	await _test_item_style()
 	await _test_list_all_instrument_tracks()
+	await _test_hidden_tracks_not_listed()
 	await _test_drag_paint()
 	await _test_hidden_track_not_drawn()
 	await _test_cross_track_note_press()
@@ -264,6 +265,28 @@ func _test_list_all_instrument_tracks() -> void:
 	await process_frame
 	_assert(not list.listed_tracks().has(b), "follows a track remove")
 	_assert(list.selected_track == null, "selection dropped when its track is removed")
+	list.queue_free()
+
+
+func _test_hidden_tracks_not_listed() -> void:
+	var project := _make_project(3)
+	var list := await _make_list(project, _state_script.new())
+	var b: Object = project.tracks[1]
+	b.set_hidden(true)
+	project.notify_item_visibility_changed()
+	await process_frame
+	await process_frame
+	_assert(list.listed_tracks().size() == 2 and not list.listed_tracks().has(b), "hidden track is not listed")
+	project.set_arranger_view("show_hidden", true)
+	await process_frame
+	await process_frame
+	_assert(list.listed_tracks().has(b), "listed again when the arranger shows hidden tracks")
+	project.set_arranger_view("show_hidden", false)
+	b.set_hidden(false)
+	project.notify_item_visibility_changed()
+	await process_frame
+	await process_frame
+	_assert(list.listed_tracks().has(b), "listed again when unhidden")
 	list.queue_free()
 
 

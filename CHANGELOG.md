@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- The MIDI editor track list no longer shows hidden tracks (#166).
 - Merging clips across several tracks gives each merged clip its own unique name (#164).
 - Simple View: PascalCase parameter names (CloudReverb's "LateLineDecay") are split into words, so controls are grouped and labelled properly.
 - SFZ Sampler: turning the device off and on again reloads its SFZ and keeps the CC values; before, it stayed silent after being re-enabled.
