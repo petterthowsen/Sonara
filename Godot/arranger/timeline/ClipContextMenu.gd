@@ -190,7 +190,7 @@ func _on_name_changed(new_value) -> void:
 	var new_name := str(new_value).strip_edges()
 	if new_name.is_empty() or new_name == clip_instance.clip.name:
 		return
-	HistoryUtil.execute_property("Rename Clip", clip_instance.clip, "set_name", clip_instance.clip.name, new_name)
+	HistoryUtil.execute(ClipRenameCommand.new(clip_instance.clip, new_name))
 
 
 ## Switch looping on or off for the bound instances as one undo step. Switching on loops the

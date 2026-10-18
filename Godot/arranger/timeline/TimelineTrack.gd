@@ -273,7 +273,6 @@ func _on_double_click(pos: Vector2) -> void:
 
 	# Create a 4-beat clip in the pool plus its instance (undoable)
 	var clip_type = Clip.ClipType.MIDI if track.type == Track.TrackType.INSTRUMENT else Clip.ClipType.AUDIO
-	var clip_name = track.name + " %d" % (project.clips.size() + 1)
 	# One bar at the signature in effect at the insertion point, shortened when a following
 	# clip leaves less room.
 	var bar_ticks: int = project.ppq * 4
@@ -286,7 +285,7 @@ func _on_double_click(pos: Vector2) -> void:
 		var space: int = inst.start_ticks - snapped_ticks
 		if space < length_ticks:
 			length_ticks = space
-	var instance := ClipActions.create_clip(project, track, snapped_ticks, length_ticks, clip_name, clip_type)
+	var instance := ClipActions.create_clip(project, track, snapped_ticks, length_ticks, "", clip_type)
 	# The button is still down from the double-click: keep holding to drag the new clip into place.
 	if instance and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		timeline.begin_placement_drag(instance)

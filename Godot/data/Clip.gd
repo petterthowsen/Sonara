@@ -36,6 +36,9 @@ var id: String = ""  # Generated via UUID or similar
 
 # Basic properties
 var name: String = "Clip"
+## Track name the automatic name was built from (see `ClipNaming`). Empty when the user typed the
+## name, or the clip predates automatic names: either way the name is left alone.
+var auto_name_track: String = ""
 var type: ClipType = ClipType.MIDI
 var color: Color = Color.from_string("#4A90E2", Color.BLUE)
 
@@ -511,6 +514,16 @@ func set_name(new_name: String) -> void:
 	clip_modified.emit()
 
 
+## Set the name together with the track it was automatically built from ("" for a custom name).
+func set_naming(new_name: String, new_auto_track: String) -> void:
+	if name == new_name and auto_name_track == new_auto_track:
+		return
+	name = new_name
+	auto_name_track = new_auto_track
+	modified_date = Time.get_unix_time_from_system()
+	clip_modified.emit()
+
+
 ## Set the clip colour and notify listeners (inspector, timeline).
 func set_color(new_color: Color) -> void:
 	if color == new_color:
@@ -624,7 +637,7 @@ func to_json() -> Dictionary:
 ## ignored on read, which drops `waveform_cache_key` from older project files: the engine
 ## recomputes the key when the clip loads.
 const JSON_FIELDS: Array[String] = [
-	"name", "content_length_ticks", "audio_file_path", "audio_sample_rate", "audio_channels",
+	"name", "auto_name_track", "content_length_ticks", "audio_file_path", "audio_sample_rate", "audio_channels",
 	"audio_frames", "audio_duration_seconds", "recorded_bpm",
 	"created_date", "modified_date",
 ]

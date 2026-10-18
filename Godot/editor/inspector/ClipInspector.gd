@@ -255,7 +255,7 @@ func _commit_name(text: String) -> void:
 	var cmds: Array[Command] = []
 	for clip in _clips():
 		if clip.name != new_name:
-			cmds.append(PropertyCommand.new("Rename Clip", clip, "set_name", clip.name, new_name))
+			cmds.append(ClipRenameCommand.new(clip, new_name))
 	HistoryUtil.execute_many("Rename Clips", cmds)
 
 

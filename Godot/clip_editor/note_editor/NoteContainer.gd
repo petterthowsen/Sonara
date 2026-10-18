@@ -1055,7 +1055,7 @@ func get_or_create_clip_at_position(tick: int, min_end_tick: int = -1) -> ClipIn
 
 	# Undoable, like creating a clip on the timeline
 	var new_clip_instance := ClipActions.create_clip(
-		project, track, clip_start_ticks, clip_length_ticks, "Clip %d" % project.clips.size()
+		project, track, clip_start_ticks, clip_length_ticks
 	)
 	if new_clip_instance == null:
 		logger.error("Cannot create clip: track rejected the instance")

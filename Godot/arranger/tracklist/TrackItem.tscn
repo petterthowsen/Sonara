@@ -3,9 +3,9 @@
 [ext_resource type="Script" uid="uid://cjjiuujvntxw0" path="res://arranger/tracklist/TrackItem.gd" id="1_q68hb"]
 [ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="2_shsim"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_vc4i6"]
-[ext_resource type="Texture2D" uid="uid://pcrbk3wdxtd4" path="res://assets/icons/folder.svg" id="4_v1xsl"]
+[ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="4_v1xsl"]
 [ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="5_mscrg"]
-[ext_resource type="Texture2D" uid="uid://damamek5tek7h" path="res://assets/icons/folder-open.svg" id="6_ru4rj"]
+[ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="6_ru4rj"]
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="9_yavxh"]
 [ext_resource type="Script" uid="uid://3jmrbwrbnxpg" path="res://components/CollapsingBoxContainer.gd" id="10_xkg54"]
 [ext_resource type="Script" uid="uid://cghgduhqvbyfn" path="res://components/CollapsingFlowContainer.gd" id="11_yavxh"]
@@ -89,10 +89,11 @@ alignment = 2
 min_visible_children = 3
 
 [node name="FoldoutToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1603561735]
-custom_minimum_size = Vector2(24, 24)
+custom_minimum_size = Vector2(22, 22)
 layout_mode = 2
 size_flags_vertical = 4
 theme_override_constants/h_separation = 0
+theme_override_constants/icon_max_width = 18
 theme_override_font_sizes/font_size = 24
 toggle_mode = true
 icon = ExtResource("4_v1xsl")

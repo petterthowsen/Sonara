@@ -34,14 +34,46 @@ func _init(
 	new_start = p_new_start
 
 
-## Move to destination track at new_start.
+## The clip's name and automatic-name track before this move renamed it (`_renamed` is false when it did not).
+var _renamed: bool = false
+var _old_name: String = ""
+var _old_auto_track: String = ""
+
+
+## Move to destination track at new_start. A clip with an automatic name that now lives on the
+## destination track alone takes that track's name.
 func do() -> void:
 	_move(from_track, to_track, new_start)
+	_rename_for_destination()
 
 
-## Move back to source track at old_start.
+## Move back to source track at old_start, restoring the name.
 func undo() -> void:
+	if _renamed and instance != null and instance.clip != null:
+		instance.clip.set_naming(_old_name, _old_auto_track)
+	_renamed = false
 	_move(to_track, from_track, old_start)
+
+
+func _rename_for_destination() -> void:
+	_renamed = false
+	var clip: Clip = instance.clip if instance != null else null
+	var project: Project = to_track.get_project_ref() if to_track != null else null
+	if clip == null or project == null:
+		return
+	for other in project.tracks:
+		if other == to_track:
+			continue
+		for inst in other.clip_instances:
+			if inst.clip == clip:
+				return
+	var new_name := ClipNaming.name_after_track_change(project, clip, to_track)
+	if new_name.is_empty():
+		return
+	_old_name = clip.name
+	_old_auto_track = clip.auto_name_track
+	_renamed = true
+	clip.set_naming(new_name, to_track.name)
 
 
 ## Remove from one track and add to another, then set position.

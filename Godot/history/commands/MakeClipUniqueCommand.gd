@@ -49,8 +49,11 @@ func undo() -> void:
 
 ## Deep-copy clip content into a new Clip with fresh note IDs.
 func _duplicate_clip(source: Clip) -> Clip:
-	var new_name := project.unique_clip_name(source.name)
+	var auto_name := ClipNaming.name_for_copy(project, source, instance.track)
+	var new_name := auto_name if not auto_name.is_empty() else project.unique_clip_name(source.name)
 	var new_clip: Clip = project.create_clip(new_name, source.type)
+	if not auto_name.is_empty():
+		new_clip.auto_name_track = instance.track.name
 	new_clip.color = source.color
 	new_clip.content_length_ticks = source.content_length_ticks
 	if source.type == Clip.ClipType.MIDI:
