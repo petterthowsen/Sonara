@@ -21,6 +21,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Soloing a track inside a soloed group now plays only that track; before, the group's solo kept every other track in the group playing.
 - The MIDI editor track list no longer shows hidden tracks (#166).
 - Merging clips across several tracks gives each merged clip its own unique name (#164).
+- SFZ instruments no longer sometimes miss their keyswitches and mapped key ranges: Godot now re-requests them from the engine when the first message is dropped while a project loads.
 - Simple View: PascalCase parameter names (CloudReverb's "LateLineDecay") are split into words, so controls are grouped and labelled properly.
 - SFZ Sampler: turning the device off and on again reloads its SFZ and keeps the CC values; before, it stayed silent after being re-enabled.
 - The file name and Load File button of SFZ and sample devices sit above the device view instead of on a separate File tab.

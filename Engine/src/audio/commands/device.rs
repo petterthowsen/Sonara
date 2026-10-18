@@ -281,6 +281,10 @@ pub(super) fn get_device_state(
     if let Some(sampler) = device.as_any_mut().downcast_mut::<SamplerDevice>() {
         effects.statuses.extend(sampler.zone_state_statuses());
     }
+    // The SFZ key labels and ranges go out on the next device tick.
+    if let Some(sfizz) = device.as_any_mut().downcast_mut::<SfizzDevice>() {
+        sfizz.resend_key_info();
+    }
     // Modulators live in the wrapper, not in the parameters: resend them as clear + adds.
     resend_modulators(effects, channel_id, &device_path, device);
 

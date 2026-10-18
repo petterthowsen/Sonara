@@ -332,6 +332,14 @@ impl SfizzDevice {
         std::mem::take(&mut *changed)
     }
 
+    /// Flag the loaded SFZ's key info to be sent again (Godot missed the first send). No-op
+    /// unless an SFZ is ready: a load in progress flags it itself when it finishes.
+    pub fn resend_key_info(&self) {
+        if matches!(&*self.loading_state.lock().unwrap(), LoadingState::Ready(_)) {
+            *self.key_info_changed.lock().unwrap() = true;
+        }
+    }
+
     /// Key labels and keyswitches of the loaded SFZ. Empty when it declares none.
     /// Inclusive `(lo, hi)` key ranges the loaded SFZ's regions play, sorted and merged.
     pub fn playable_ranges(&self) -> Vec<(u8, u8)> {

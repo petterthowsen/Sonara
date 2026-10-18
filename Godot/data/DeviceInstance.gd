@@ -198,6 +198,10 @@ var loading_state: String = "idle"
 ## Seconds between state/get retries while the device is "loading" (see request_state()).
 const LOADING_RECHECK_SEC := 2.0
 
+## How many times a ready SFZ re-asks for a missing `keys/info` before giving up.
+const KEY_INFO_MAX_RECHECKS := 5
+var _key_info_rechecks: int = 0
+
 ## A loading re-check timer is running (at most one per instance).
 var _loading_recheck_pending: bool = false
 
@@ -1866,14 +1870,33 @@ func _schedule_loading_recheck() -> void:
 
 func _on_loading_recheck() -> void:
 	_loading_recheck_pending = false
-	if not _is_connected or loading_state != "loading":
+	if not _is_connected:
 		return
-	request_state()
-	_schedule_loading_recheck()
+	if loading_state == "loading":
+		request_state()
+		_schedule_loading_recheck()
+	elif _awaiting_key_info() and _key_info_rechecks < KEY_INFO_MAX_RECHECKS:
+		_key_info_rechecks += 1
+		request_state()
+		_schedule_loading_recheck()
+
+
+## An SFZ is loaded but its `keys/info` never arrived (a dropped UDP packet).
+func _awaiting_key_info() -> bool:
+	return loading_state == "ready" and loaded_file_path != "" and not key_info_received \
+		and device != null and device.device_id == "sonara.builtin.sfizz"
+
+
+func _awaiting_key_info_for_ready() -> bool:
+	return loaded_file_path != "" and not key_info_received \
+		and device != null and device.device_id == "sonara.builtin.sfizz"
 
 
 func _set_loading_state(new_state: String) -> void:
 	if new_state == "loading":
+		_key_info_rechecks = 0
+		_schedule_loading_recheck()
+	elif new_state == "ready" and _awaiting_key_info_for_ready():
 		_schedule_loading_recheck()
 	if loading_state == new_state:
 		return
