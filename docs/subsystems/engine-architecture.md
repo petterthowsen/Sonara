@@ -475,7 +475,7 @@ What each audio-callback stage reads and writes. `EngineState` fields: `channels
 | Stage | Reads | Writes |
 |---|---|---|
 | route counting (`routing::count_route_inputs`) | `channels[*].output_channel_id`, `send_channels` (ids), `id` | `mix.pending_inputs`, `mix.done`, `mix.is_route_target` |
-| solo roles (`solo::assign_solo_roles`) | `mute`, `solo`, `output_channel_id`, `send_channels` (target, muted), `mix.solo_*` | `mix.solo_up`, `mix.solo_down`, `mix.solo_role` |
+| solo roles (`solo::assign_solo_roles`) | `mute`, `solo`, `output_channel_id`, `send_channels` (target, muted), `mix.solo_*` | `mix.solo_anchor`, `mix.solo_up`, `mix.solo_down`, `mix.solo_role` |
 | aux source marking (`routing::mark_aux_sources`) | `extra_out_targets` | `mix.has_aux_source` |
 | aux source pass (`routing::process_aux_sources`) | `mix.has_aux_source`, `extra_out_buffers` | the source channel's device chain, buffers, `sleep_changes` (drained), `extra_out_targets`/`extra_out_buffers` (taken and put back); the child channels' `buffer_left/right` (overwritten); statuses via `try_send` |
 | device pre-pass (`device_prepass`) | `mix.is_route_target`, `mix.has_aux_source` | non-target channels' device chains and `mix.cursor`/`chain_start`, buffers, `sleep_changes`; `render_scratch.parked`; statuses via `try_send` |

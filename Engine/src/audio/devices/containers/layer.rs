@@ -1,9 +1,9 @@
 //! Parallel device container: children share input, outputs mix with per-slot volume/mute/solo.
 
+use super::container::gain_to_normalized;
 use super::container::{
     apply_gain, insert_into_vec, move_in_vec, normalized_to_gain, remove_from_vec, DeviceContainer,
 };
-use super::container::gain_to_normalized;
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
     ParamValue, PortFlow,

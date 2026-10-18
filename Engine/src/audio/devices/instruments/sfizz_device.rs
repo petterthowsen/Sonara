@@ -517,8 +517,10 @@ impl SfizzDevice {
                                     HashMap::new()
                                 };
                                 for label in &labels {
-                                    let value =
-                                        previous.get(&label.cc_number).copied().unwrap_or(label.default);
+                                    let value = previous
+                                        .get(&label.cc_number)
+                                        .copied()
+                                        .unwrap_or(label.default);
                                     cc_values_guard.insert(label.cc_number, value);
                                     send_normalized_cc(&synth, label.cc_number, value);
                                 }
@@ -1253,18 +1255,35 @@ mod tests {
         device.cc_values.lock().unwrap().insert(1, 0.25);
 
         device.deactivate().unwrap();
-        assert!(matches!(*device.loading_state.lock().unwrap(), LoadingState::Idle));
-        assert_eq!(device.get_parameter(1), Some(0.25), "deactivate keeps CC values");
+        assert!(matches!(
+            *device.loading_state.lock().unwrap(),
+            LoadingState::Idle
+        ));
+        assert_eq!(
+            device.get_parameter(1),
+            Some(0.25),
+            "deactivate keeps CC values"
+        );
 
         device.activate().unwrap();
         for _ in 0..200 {
-            if matches!(*device.loading_state.lock().unwrap(), LoadingState::Ready(_)) {
+            if matches!(
+                *device.loading_state.lock().unwrap(),
+                LoadingState::Ready(_)
+            ) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        assert!(matches!(*device.loading_state.lock().unwrap(), LoadingState::Ready(_)));
-        assert_eq!(device.get_parameter(1), Some(0.25), "activate restores CC values");
+        assert!(matches!(
+            *device.loading_state.lock().unwrap(),
+            LoadingState::Ready(_)
+        ));
+        assert_eq!(
+            device.get_parameter(1),
+            Some(0.25),
+            "activate restores CC values"
+        );
     }
 
     #[test]

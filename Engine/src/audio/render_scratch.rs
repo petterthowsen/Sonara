@@ -106,6 +106,10 @@ pub struct MixBuffers {
     pub solo_up: bool,
     /// This channel leads to a soloed channel by routes or sends, so what feeds it stays.
     pub solo_down: bool,
+    /// Soloed, and no unmuted soloed channel routes into it (directly or through nested
+    /// groups). Only these keep their whole group: soloing a member of a soloed group plays
+    /// just that member.
+    pub solo_anchor: bool,
     /// First device writes extra buses into child channels this buffer.
     pub has_aux_source: bool,
     /// Where this channel's device chain stopped when it parked at a plugin.

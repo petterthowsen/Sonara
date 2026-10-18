@@ -17,6 +17,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Soloing a track inside a soloed group now plays only that track; before, the group's solo kept every other track in the group playing.
 - The MIDI editor track list no longer shows hidden tracks (#166).
 - Merging clips across several tracks gives each merged clip its own unique name (#164).
 - Simple View: PascalCase parameter names (CloudReverb's "LateLineDecay") are split into words, so controls are grouped and labelled properly.

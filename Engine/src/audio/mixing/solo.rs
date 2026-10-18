@@ -23,7 +23,7 @@ pub(super) fn is_direct_output(channel: &Channel) -> bool {
         .is_some_and(|id| id >= HARDWARE_OUTPUT_BASE)
 }
 
-/// True if this channel or anything it routes into is soloed.
+/// True if this channel or anything it routes into is a solo anchor.
 pub(super) fn output_reaches_soloed(
     channel_map: &HashMap<ChannelId, Channel>,
     mut id: ChannelId,
@@ -32,7 +32,7 @@ pub(super) fn output_reaches_soloed(
         let Some(channel) = channel_map.get(&id) else {
             return false;
         };
-        if channel.solo {
+        if channel.mix.solo_anchor {
             return true;
         }
         let Some(next) = output_target(channel) else {
@@ -99,6 +99,35 @@ pub(super) fn spread_solo_up(
     changed
 }
 
+/// Mark each soloed channel as a solo anchor unless an unmuted soloed channel routes into it,
+/// so a soloed member of a soloed group overrides the group's solo.
+fn assign_solo_anchors(channel_map: &mut HashMap<ChannelId, Channel>, channel_ids: &[ChannelId]) {
+    for &id in channel_ids {
+        if let Some(channel) = channel_map.get_mut(&id) {
+            channel.mix.solo_anchor = channel.solo;
+        }
+    }
+    for &id in channel_ids {
+        let Some(channel) = channel_map.get(&id) else {
+            continue;
+        };
+        if !channel.solo || channel.mute {
+            continue;
+        }
+        let mut next = output_target(channel);
+        for _ in 0..SOLO_WALK_LIMIT {
+            let Some(target_id) = next.filter(|&t| t != id) else {
+                break;
+            };
+            let Some(target) = channel_map.get_mut(&target_id) else {
+                break;
+            };
+            target.mix.solo_anchor = false;
+            next = output_target(target).filter(|&t| t != target_id);
+        }
+    }
+}
+
 /// Set each channel's solo flags and role for this buffer.
 ///
 /// A route or send stays in the mix when its source carries soloed audio (`solo_up`) or its
@@ -110,6 +139,9 @@ pub(super) fn assign_solo_roles(
     channel_ids: &[ChannelId],
     has_solo: bool,
 ) {
+    if has_solo {
+        assign_solo_anchors(channel_map, channel_ids);
+    }
     for &id in channel_ids {
         let up = has_solo
             && channel_map
@@ -117,7 +149,7 @@ pub(super) fn assign_solo_roles(
                 .is_some_and(|c| !c.mute && output_reaches_soloed(channel_map, id));
         if let Some(channel) = channel_map.get_mut(&id) {
             channel.mix.solo_up = up;
-            channel.mix.solo_down = has_solo && !channel.mute && channel.solo;
+            channel.mix.solo_down = has_solo && !channel.mute && channel.mix.solo_anchor;
         }
     }
 
@@ -237,6 +269,77 @@ mod tests {
 
         let expected = 0.5 * fader_gain(-6.0) * fader_gain(-6.0) * fader_gain(-6.0);
         assert!((output[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn soloed_member_of_soloed_group_plays_alone() {
+        // Group bus 2 holds tracks 3 and 4. Soloing the group and then track 3 plays only
+        // track 3: the more specific solo wins over the group's
+        let mut member = test_channel(3, Some(2), 0.0);
+        member.buffer_left.fill(0.5);
+        member.buffer_right.fill(0.5);
+        member.solo = true;
+        let mut sibling = test_channel(4, Some(2), 0.0);
+        sibling.buffer_left.fill(0.9);
+        sibling.buffer_right.fill(0.9);
+        let mut group = test_channel(2, Some(1), 0.0);
+        group.solo = true;
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            group,
+            member,
+            sibling,
+        ]);
+        let output = mix(&mut state);
+
+        assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
+        assert!((output[0] - 0.5).abs() < 1e-4, "{output:?}");
+    }
+
+    #[test]
+    fn soloed_member_of_soloed_parent_group_plays_alone() {
+        // Track 3 → subgroup 4 → group 2, sibling 5 → group 2. Group 2 and track 3 soloed
+        let mut member = test_channel(3, Some(4), 0.0);
+        member.buffer_left.fill(0.5);
+        member.buffer_right.fill(0.5);
+        member.solo = true;
+        let mut sibling = test_channel(5, Some(2), 0.0);
+        sibling.buffer_left.fill(0.9);
+        sibling.buffer_right.fill(0.9);
+        let mut group = test_channel(2, Some(1), 0.0);
+        group.solo = true;
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            group,
+            member,
+            test_channel(4, Some(2), 0.0),
+            sibling,
+        ]);
+        let output = mix(&mut state);
+
+        assert!(state.channels[&5].buffer_left[0].abs() < 1e-6);
+        assert!((output[0] - 0.5).abs() < 1e-4, "{output:?}");
+    }
+
+    #[test]
+    fn muted_soloed_member_leaves_group_solo_in_place() {
+        let mut member = test_channel(3, Some(2), 0.0);
+        member.solo = true;
+        member.mute = true;
+        let mut sibling = test_channel(4, Some(2), 0.0);
+        sibling.buffer_left.fill(0.5);
+        sibling.buffer_right.fill(0.5);
+        let mut group = test_channel(2, Some(1), 0.0);
+        group.solo = true;
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            group,
+            member,
+            sibling,
+        ]);
+        let output = mix(&mut state);
+
+        assert!((output[0] - 0.5).abs() < 1e-4, "{output:?}");
     }
 
     #[test]
