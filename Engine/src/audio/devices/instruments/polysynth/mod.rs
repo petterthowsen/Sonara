@@ -1645,6 +1645,22 @@ mod tests {
     }
 
     #[test]
+    fn noise_color_moves_the_spectrum() {
+        let mut centroids = Vec::new();
+        for color in [0.0, 50.0, 100.0] {
+            let mut dev = synth();
+            set_real(&mut dev, OSC1 + LEVEL, 0.0);
+            set_real(&mut dev, NOISE_LEVEL, 1.0);
+            set_real(&mut dev, NOISE_COLOR, color);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+            let out = render(&mut dev, 8);
+            let mono: Vec<f32> = out.iter().step_by(2).copied().take(2048).collect();
+            centroids.push(centroid(&mono));
+        }
+        assert!(centroids[0] < centroids[1] && centroids[1] < centroids[2], "{centroids:?}");
+    }
+
+    #[test]
     fn mode_change_silences_held_notes() {
         let mut dev = synth();
         dev.send_note_event(&NoteEvent::test_on(60, 100), 0);

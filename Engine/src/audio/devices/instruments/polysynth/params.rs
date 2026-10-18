@@ -515,6 +515,7 @@ impl SynthParams {
             FM_RATIO => self.fm_ratio = FM_RATIO_VALUES[real as usize],
             FM_INDEX => self.fm_index = real,
             NOISE_LEVEL => self.noise_level = real,
+            NOISE_COLOR => self.noise_color = real / 100.0,
             FILTER_TYPE => self.filter_mode = FILTER_MODES[real as usize],
             CUTOFF => self.cutoff_hz = real,
             RESONANCE => self.resonance = real,
