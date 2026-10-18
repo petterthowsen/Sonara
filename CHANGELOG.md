@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Device windows of a channel show the channel name with Solo/Mute toggles in the title bar, beside the device tabs. In a narrow window they wrap onto a second line within the title bar.
 - Clip names follow their track: new clips are named "Track name N", numbered among that track's own clips. Moving a clip to another track, or making it unique per track, swaps the track name in the name. Names you type yourself are never changed automatically.
 - New behavior setting "Toggle Visibility Groups While Modifier Is Held": Ctrl+1, then 2, 3… combines visibility groups, and pressing a number again removes that group, until the modifier (Ctrl, or Shift/Alt/Meta if rebound) is released.
 

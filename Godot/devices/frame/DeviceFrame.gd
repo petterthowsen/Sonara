@@ -78,11 +78,14 @@ static var _dot_textures: Dictionary = {}
 
 var title_bar: PanelContainer
 var _title_label: Label
+var _title := ""
 ## Enabled/active light of the selected device (click bypasses it, ctrl-click sleeps it)
 var _light: DeviceLightButton
 var _reorder_marker: ColorRect
 var _menu: DeviceContextMenu
 var _tabs: TabBar
+var _header_flow: HFlowContainer
+var _channel_header: ChannelHeader
 var _attach_button: Button
 var _minimize_button: Button
 var _maximize_button: Button
@@ -127,19 +130,33 @@ func _build_title_bar() -> void:
 	_title_label.add_theme_font_size_override("font_size", 12)
 	_title_label.custom_minimum_size.x = 60
 	_title_label.mouse_filter = Control.MOUSE_FILTER_PASS
-	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(_title_label)
+	_title_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_title_label.custom_minimum_size.y = TITLE_HEIGHT
 
 	_tabs = TabBar.new()
+	_tabs.name = "Tabs"
 	_tabs.clip_tabs = true
 	_tabs.drag_to_rearrange_enabled = false  # reordering goes through the chain (_on_tabs_input)
 	_tabs.focus_mode = Control.FOCUS_NONE
 	_tabs.tab_changed.connect(_on_tab_changed)
 	_tabs.gui_input.connect(_on_tabs_input)
-	# Fills the title bar (a narrow one would scroll its tabs out of reach); a press on its empty
-	# part drags the window like the rest of the title bar.
+	# Fills what is left of its flow line; a press on its empty part drags the window like the
+	# title bar. Its minimum width is its tabs' (see _update_tabs_min_width), so a narrow frame
+	# wraps the strip under the channel header instead of scrolling tabs out of reach.
 	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(_tabs)
+	_header_flow = HFlowContainer.new()
+	_header_flow.name = "HeaderFlow"
+	_header_flow.mouse_filter = Control.MOUSE_FILTER_PASS
+	_header_flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_header_flow.add_theme_constant_override("h_separation", 8)
+	_header_flow.add_theme_constant_override("v_separation", 0)
+	_channel_header = ChannelHeader.new()
+	_channel_header.custom_minimum_size.y = TITLE_HEIGHT
+	_channel_header.visible = false
+	_header_flow.add_child(_channel_header)
+	_header_flow.add_child(_title_label)
+	_header_flow.add_child(_tabs)
+	row.add_child(_header_flow)
 
 	_reorder_marker = ColorRect.new()
 	_reorder_marker.color = REORDER_MARKER_COLOR
@@ -167,7 +184,8 @@ func _make_button(icon: Texture2D, on_pressed: Callable, tooltip: String = "") -
 	button.flat = true
 	button.focus_mode = Control.FOCUS_NONE
 	button.tooltip_text = tooltip
-	button.custom_minimum_size = Vector2(TITLE_HEIGHT, 0)
+	button.custom_minimum_size = Vector2(TITLE_HEIGHT, TITLE_HEIGHT)
+	button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN  # stays put when the flow wraps
 	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	button.add_theme_constant_override("icon_max_width", 14)
 	button.pressed.connect(on_pressed)
@@ -195,8 +213,9 @@ func set_maximized(maximized: bool) -> void:
 
 
 func set_title(text: String) -> void:
-	_title_label.text = text
+	_title = text
 	_title_label.tooltip_text = text
+	_refresh_title_label()
 
 
 ## Replace the title tooltip (e.g. to name a plugin's format). The next `set_title` resets it.
@@ -205,7 +224,7 @@ func set_title_tooltip(text: String) -> void:
 
 
 func get_title() -> String:
-	return _title_label.text
+	return _title
 
 
 ## A plugin in this frame runs in its own window, so the frame can't attach it.
@@ -325,7 +344,36 @@ func _rebuild_tabs() -> void:
 	_bind_light()
 	# One device needs no tab strip (REQ-014); the title says what it is and takes its place.
 	_tabs.visible = _devices.size() > 1
-	_title_label.size_flags_horizontal = Control.SIZE_FILL if _tabs.visible else Control.SIZE_EXPAND_FILL
+	_update_tabs_min_width()
+	_update_tabs_min_width.call_deferred()  # tab widths settle after the theme is applied
+	_update_header_flow()
+
+
+## Wrapping needs the tab strip to ask for the width of its tabs, not the arrows of a clipped one.
+func _update_tabs_min_width() -> void:
+	_tabs.custom_minimum_size.x = 0.0
+	if _tabs.tab_count > 0:
+		_tabs.custom_minimum_size.x = _tabs.get_tab_rect(_tabs.tab_count - 1).end.x
+
+
+## The channel header, title and tab strip flow inside the title bar, wrapping onto more lines
+## when it is narrow. The channel header carries the channel name, so the title drops it; with
+## tabs the title is not needed at all.
+func _update_header_flow() -> void:
+	_channel_header.bind(channel)
+	_refresh_title_label()
+
+
+func _refresh_title_label() -> void:
+	var text := _title
+	if channel != null:
+		var prefix := channel.name + " — "
+		if text.begins_with(prefix):
+			text = text.substr(prefix.length())
+		elif text == channel.name:
+			text = ""
+	_title_label.text = text
+	_title_label.visible = not _tabs.visible and text != ""
 
 
 ## Point the title bar light at the selected device.
@@ -428,9 +476,8 @@ func _on_tabs_input(event: InputEvent) -> void:
 	if target >= 0:
 		tab_reorder_requested.emit(_devices[tab], _devices[target])
 		return
-	# Tab bar -> row -> title bar -> frame coordinates
-	var row := _tabs.get_parent() as Control
-	var release := title_bar.get_transform() * row.get_transform() * _tabs.get_transform() * mb.position
+	# Tab bar -> frame coordinates
+	var release := get_global_transform().affine_inverse() * (_tabs.get_global_transform() * mb.position)
 	var outside := Rect2(Vector2.ZERO, size).grow(TEAR_OFF_DISTANCE)
 	if not outside.has_point(release):
 		tab_torn_off.emit(_devices[tab], DisplayServer.mouse_get_position())

@@ -197,6 +197,28 @@ func _test_frame_chrome() -> void:
 	await process_frame
 
 
+func _test_channel_header() -> void:
+	var c := _channel_with_chain()
+	var frame: Object = _frame_script.new()
+	root.add_child(frame)
+	frame.set_devices([c.eq, c.spectrum])
+	_assert(not frame._channel_header.visible, "no channel: no header")
+	frame.channel = c.ch
+	frame.set_devices([c.eq, c.spectrum])
+	var header: Object = frame._channel_header
+	_assert(header.visible and header.get_channel_name() == c.ch.name, "channel frame: header shows the channel name")
+	_assert(header.get_parent() == frame._header_flow and frame._tabs.get_parent() == frame._header_flow, "header and tabs share the flow")
+	_assert(frame._header_flow.get_parent().get_parent() == frame.title_bar, "the flow is part of the title bar")
+	c.ch.set_solo(true)
+	c.ch.set_mute(true)
+	_assert(header._solo.button_pressed and header._mute.button_pressed, "channel solo/mute show on the toggles")
+	header._mute.button_pressed = false
+	_assert(not c.ch.mute, "the mute toggle drives the channel")
+	frame.close_all()
+	frame.queue_free()
+	await process_frame
+
+
 func _test_frame_pages() -> void:
 	var c := _channel_with_chain()
 	var frame: Object = _frame_script.new()
