@@ -653,6 +653,12 @@ impl ModulatorState {
         self.sc_fed = 0;
     }
 
+    /// Mix `seed` into the noise generator, so per-voice copies of one kind (which are built
+    /// with the same default seed) draw different sequences. Never leaves the state at 0.
+    pub fn reseed(&mut self, seed: u32) {
+        self.rng = (self.rng ^ seed.wrapping_mul(0x85EB_CA6B)).wrapping_mul(0x9E37_79B9) | 1;
+    }
+
     #[inline]
     fn next_random(&mut self) -> u32 {
         let mut x = self.rng;
@@ -887,6 +893,15 @@ mod tests {
         assert!((-1.0..=1.0).contains(&first));
         random.note_on(62, 100.0 / 127.0, 0);
         assert_ne!(random.advance(64, &t), first, "new value per note-on");
+
+        // Two per-voice copies reseeded differently draw different values for the same note.
+        let mut a = ModulatorState::new(ModulatorKind::Random, SR);
+        let mut b = ModulatorState::new(ModulatorKind::Random, SR);
+        a.reseed(1);
+        b.reseed(2);
+        a.gate_voice_on(60, 0.8);
+        b.gate_voice_on(60, 0.8);
+        assert_ne!(a.value(), b.value(), "voices must not share a random sequence");
     }
 
     #[test]

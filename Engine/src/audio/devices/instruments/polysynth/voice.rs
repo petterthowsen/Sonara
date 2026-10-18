@@ -282,7 +282,12 @@ impl Voice {
                     let params = spec.params[slot];
                     match &mut self.mods[slot] {
                         Some(state) if state.kind() == kind => apply_params(state, &params),
-                        other => *other = Some(build_state(kind, &params, sample_rate)),
+                        other => {
+                            let mut state = build_state(kind, &params, sample_rate);
+                            // Voices share the kind's default seed; give each its own stream.
+                            state.reseed(self.rng.wrapping_add(slot as u32));
+                            *other = Some(state);
+                        }
                     }
                 }
                 None => self.mods[slot] = None,
