@@ -164,7 +164,7 @@ static func insert_line_rect(box: ChannelsBox, after: Channel) -> Rect2:
 	var x := box_rect.position.x
 	var found_after := after == null
 	for child in box.get_children():
-		if not child is MixerChannel or child.is_queued_for_deletion():
+		if not child is MixerChannel or not child.visible or child.is_queued_for_deletion():
 			continue
 		var mc := child as MixerChannel
 		if found_after:

@@ -490,6 +490,14 @@ func _register_all_settings() -> void:
 		"Tint each mixer strip's background with a hint of its channel color.",
 	)).sub("Mixer")
 	_register(Setting.new(
+		"appearance/mixer_strip_tint",
+		"Mixer Strip Tint",
+		Type.FLOAT,
+		0.8,
+		CATEGORY_APPEARANCE,
+		"How strongly Colored Mixer Strips take on the channel color, from 0 (neutral) to 1 (full color saturation).",
+	)).sub("Mixer").range(0.0, 1.0, 0.05)
+	_register(Setting.new(
 		"appearance/ui_scale",
 		"UI Scale",
 		Type.CHOICE,

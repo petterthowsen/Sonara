@@ -10,6 +10,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 - Device windows of a channel show the channel name with Solo/Mute toggles in the title bar, beside the device tabs. In a narrow window they wrap onto a second line within the title bar.
 - Clip names follow their track: new clips are named "Track name N", numbered among that track's own clips. Moving a clip to another track, or making it unique per track, swaps the track name in the name. Names you type yourself are never changed automatically.
+- New appearance setting "Mixer Strip Tint" sets how strongly Colored Mixer Strips take on the channel color (0–1, default 0.8).
 - New behavior setting "Toggle Visibility Groups While Modifier Is Held": Ctrl+1, then 2, 3… combines visibility groups, and pressing a number again removes that group, until the modifier (Ctrl, or Shift/Alt/Meta if rebound) is released.
 
 ### Changed
@@ -18,6 +19,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Reordering tracks in the arranger now reorders the mixer strips to match, and reordering strips in the mixer reorders the arranger tracks.
 - Soloing a track inside a soloed group now plays only that track; before, the group's solo kept every other track in the group playing.
 - The MIDI editor track list no longer shows hidden tracks (#166).
 - Merging clips across several tracks gives each merged clip its own unique name (#164).

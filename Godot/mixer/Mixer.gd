@@ -178,6 +178,8 @@ func _on_project_opened(project: Project) -> void:
 	project.channel_removed.connect(_on_channel_removed)
 	project.item_visibility_changed.connect(_apply_item_states)
 	project.mixer_view_changed.connect(_on_mixer_view_changed)
+	if not project.channel_order_synced.is_connected(_apply_root_channel_order):
+		project.channel_order_synced.connect(_apply_root_channel_order)
 	show_hidden_toggle.set_pressed_no_signal(project.get_mixer_view("show_hidden"))
 	show_disabled_toggle.set_pressed_no_signal(project.get_mixer_view("show_disabled"))
 
@@ -195,6 +197,20 @@ func _on_project_opened(project: Project) -> void:
 	for ch in roots:
 		_spawn_root_channel_ui(ch)
 	_apply_item_states()
+
+
+## Re-sort the root strips of both panes by `Channel.order` (after the arranger reordered tracks).
+func _apply_root_channel_order() -> void:
+	for box in [left_channels, right_channels]:
+		if box == null:
+			continue
+		var strips: Array[MixerChannel] = []
+		for child in box.get_children():
+			if child is MixerChannel and child.channel:
+				strips.append(child)
+		strips.sort_custom(func(a, b): return a.channel.order < b.channel.order)
+		for i in strips.size():
+			box.move_child(strips[i], i)
 
 
 func _on_project_closed() -> void:
@@ -915,6 +931,7 @@ func place_root_strip(ch: Channel, after: Channel) -> bool:
 		return false
 	box.move_child(mc, index)
 	box.sync_channel_order()
+	current_project.sync_root_track_order_from_channels()
 	return true
 
 

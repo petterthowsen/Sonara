@@ -35,6 +35,8 @@ signal connection_state_changed(state: ConnectionState)
 signal connection_failed(reason: String)
 ## Fired once after a batched parent/order change so TrackList and Timeline can rebuild together.
 signal tracks_layout_changed
+## Root channel `order` values were reassigned to follow the arranger's track order.
+signal channel_order_synced
 ## An arranger_view flag changed (see set_arranger_view).
 signal arranger_view_changed(key: String, value: bool)
 ## A track or channel changed its hidden/enabled state (issue 70); views re-filter.
@@ -1674,6 +1676,8 @@ func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) 
 		sync_subtree_hierarchy_routing(track)
 	elif not _track_nest_syncing:
 		_sync_channel_order_for_track(track, new_parent_id, after_sibling)
+	if not _track_nest_syncing and (new_parent_id < 0 or old_parent_id < 0):
+		sync_root_channel_order_from_tracks()
 
 	end_track_layout_batch()
 	return true
@@ -1718,6 +1722,7 @@ func apply_track_layout(layout: Dictionary) -> void:
 	if not restored_channel_fields:
 		for track in tracks:
 			sync_track_hierarchy_routing(track)
+	sync_root_channel_order_from_tracks()
 	end_track_layout_batch()
 
 
@@ -1939,6 +1944,51 @@ func _nested_channel_before(track: Track, parent_ch: Channel) -> Channel:
 		if sib_ch and sib_ch != own and sib_ch.parent_channel_id == parent_ch.id:
 			previous = sib_ch
 	return previous
+
+
+## Reassign root channels' mixer `order` so they follow the arranger order of their root tracks.
+## Channels without a root track keep their slots; only the tracked channels are permuted.
+func sync_root_channel_order_from_tracks() -> void:
+	var chans: Array[Channel] = []
+	for track in _sorted_track_siblings(-1):
+		var ch := get_track_mixer_channel(track)
+		if ch and ch.parent_channel_id < 0 and not ch.is_master and not chans.has(ch):
+			chans.append(ch)
+	var slots: Array[int] = []
+	for ch in chans:
+		slots.append(ch.order)
+	slots.sort()
+	var changed := false
+	for i in chans.size():
+		if chans[i].order != slots[i]:
+			chans[i].order = slots[i]
+			changed = true
+	if changed:
+		channel_order_synced.emit()
+
+
+## Reassign root tracks' `order` so they follow the mixer order of their root channels (the
+## reverse of sync_root_channel_order_from_tracks). Tracks without a root channel keep their slots.
+func sync_root_track_order_from_channels() -> void:
+	var pairs: Array = []
+	for track in _sorted_track_siblings(-1):
+		var ch := get_track_mixer_channel(track)
+		if ch and ch.parent_channel_id < 0 and not ch.is_master:
+			pairs.append([track, ch])
+	var by_channel := pairs.duplicate()
+	by_channel.sort_custom(func(a, b): return a[1].order < b[1].order if a[1].order != b[1].order else a[1].id < b[1].id)
+	var slots: Array[int] = []
+	for pair in pairs:
+		slots.append(pair[0].order)
+	slots.sort()
+	var changed := false
+	for i in by_channel.size():
+		var t: Track = by_channel[i][0]
+		if t.order != slots[i]:
+			t.order = slots[i]
+			changed = true
+	if changed:
+		tracks_layout_changed.emit()
 
 
 ## Keep mixer sibling order in sync when reordering under the same mix parent.

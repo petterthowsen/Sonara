@@ -61,7 +61,7 @@ func _apply_border() -> void:
 
 var _applying_border := false
 const SETTING_COLORED_STRIPS := "appearance/colored_mixer_strips"
-const STRIP_TINT_AMOUNT := 0.8
+const SETTING_STRIP_TINT := "appearance/mixer_strip_tint"
 var _base_bg := Color.BLACK
 var _has_base_bg := false
 
@@ -84,7 +84,7 @@ func _apply_border_unguarded() -> void:
 
 
 ## Strip background: the scene's neutral fill, or with "Colored Mixer Strips" on, that fill
-## with the channel color's hue and STRIP_TINT_AMOUNT of its saturation. The fill keeps its
+## with the channel color's hue and the "Mixer Strip Tint" share of its saturation. The fill keeps its
 ## own value, so a bright channel color never lightens the strip.
 func _strip_bg_color(current: Color) -> Color:
 	if not _has_base_bg:
@@ -94,11 +94,11 @@ func _strip_bg_color(current: Color) -> Color:
 		return _base_bg
 	var tint := Utils.display_color(channel.color)
 	# One from_hsv call: setting .h on the grey base is a no-op, so a later .s would saturate red.
-	return Color.from_hsv(tint.h, lerpf(_base_bg.s, tint.s, STRIP_TINT_AMOUNT), _base_bg.v, _base_bg.a)
+	return Color.from_hsv(tint.h, lerpf(_base_bg.s, tint.s, float(Settings.get_value(SETTING_STRIP_TINT))), _base_bg.v, _base_bg.a)
 
 
 func _on_setting_changed(key: String, _value) -> void:
-	if key == SETTING_COLORED_STRIPS and is_node_ready():
+	if (key == SETTING_COLORED_STRIPS or key == SETTING_STRIP_TINT) and is_node_ready():
 		_apply_border()
 
 
