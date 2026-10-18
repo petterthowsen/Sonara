@@ -27,6 +27,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Simple View: PascalCase parameter names (CloudReverb's "LateLineDecay") are split into words, so controls are grouped and labelled properly.
 - SFZ Sampler: turning the device off and on again reloads its SFZ and keeps the CC values; before, it stayed silent after being re-enabled.
 - The file name and Load File button of SFZ and sample devices sit above the device view instead of on a separate File tab.
+- Improved drag and drop of tracks in the Arranger's TrackList.
 
 ### Added
 

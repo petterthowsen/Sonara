@@ -854,7 +854,12 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 func _forward_track_drops_from(node: Node) -> void:
 	for child in node.get_children():
 		if child is Control:
-			(child as Control).set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
+			# Godot walks up from the pressed control and stops at the first STOP filter, so
+			# passive children (name label, containers) must start the drag themselves. Buttons,
+			# text editing and the volume meter keep their own press/drag behaviour.
+			var starts_drag := not (child is BaseButton or child is LineEdit or child == volumeter)
+			var drag_source := _get_drag_data if starts_drag else Callable()
+			(child as Control).set_drag_forwarding(drag_source, _can_drop_data, _drop_data)
 		_forward_track_drops_from(child)
 
 

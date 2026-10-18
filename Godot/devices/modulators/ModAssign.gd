@@ -197,9 +197,9 @@ static func amount_for(device, mod_id: int, param_id: int) -> float:
 	return mod.get_route(target) if mod != null else 0.0
 
 
-## Assign tooltip for `amount`: octaves for a logarithmic (Hz) parameter — of the device
-## parameter, or of the target modulator's parameter (so a Rate shows octaves) — else the signed
-## change in the parameter's own unit ("+6.0 dB"), else percent when it has no unit.
+## Assign tooltip for `amount`: octaves for a frequency (Hz) parameter, else the signed change
+## in the parameter's own unit ("+6.0 dB", "-50 ms", or a bare "+0.25" without a unit); an enum
+## or bool shows the option it moves to ("Off → On"). Unknown targets show percent.
 static func amount_text(device, mod_id: int, param_id: int, amount: float) -> String:
 	var param = null
 	var base := 0.5
@@ -212,13 +212,18 @@ static func amount_text(device, mod_id: int, param_id: int, amount: float) -> St
 		else:
 			param = device.get_parameter(param_id)
 			base = device.get_parameter_normalized(param_id)
-	if param != null and param.is_logarithmic:
+	if param != null and param.unit == "Hz":
 		var low: float = param.normalized_to_value(base)
 		var high: float = param.normalized_to_value(clampf(base + amount, 0.0, 1.0))
 		if low > 0.0 and high > 0.0:
 			return "%+.1f oct" % (log(high / low) / log(2.0))
-	if param != null and not param.unit.is_empty() \
-			and param.param_type != "enum" and param.param_type != "bool":
+	if param != null and (param.param_type == "enum" or param.param_type == "bool"):
+		var from_text: String = param.format_value(param.normalized_to_value(base))
+		var to_text: String = param.format_value(
+				param.normalized_to_value(clampf(base + amount, 0.0, 1.0)))
+		if not from_text.is_empty() and not to_text.is_empty():
+			return from_text if from_text == to_text else "%s → %s" % [from_text, to_text]
+	if param != null:
 		var from_value: float = param.normalized_to_value(base)
 		var to_value: float = param.normalized_to_value(clampf(base + amount, 0.0, 1.0))
 		var delta: float = param.display_value(to_value) - param.display_value(from_value)
