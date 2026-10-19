@@ -14,9 +14,18 @@ use super::encode::encode_status;
 use super::gui::GuiEvent;
 use crate::audio::EngineStatus;
 
+/// Datagrams the status thread sends back to back before it pauses for `BURST_PAUSE`.
+const BURST_DATAGRAMS: u32 = 64;
+/// The pause between bursts. Godot's receiver thread drains its socket about once a
+/// millisecond, and the kernel buffer only holds about 275 small datagrams, so an unpaced
+/// burst (a plugin advertising 900+ `param/info` messages) lost everything past that.
+const BURST_PAUSE: Duration = Duration::from_millis(2);
+
 /// Encode one status and send it to Godot's port. Parameter changes also log how many bytes went out.
-pub(super) fn send_status(socket: &UdpSocket, client_port: u16, status: EngineStatus) {
+/// Returns how many datagrams went out.
+pub(super) fn send_status(socket: &UdpSocket, client_port: u16, status: EngineStatus) -> u32 {
     let is_param_change = status.is_param_change();
+    let mut sent = 0;
     for msg in encode_status(status) {
         let packet = OscPacket::Message(msg);
         if let Ok(buf) = rosc::encoder::encode(&packet) {
@@ -24,6 +33,7 @@ pub(super) fn send_status(socket: &UdpSocket, client_port: u16, status: EngineSt
             if let Ok(addr) = client_addr.parse::<SocketAddr>() {
                 match socket.send_to(&buf, addr) {
                     Ok(bytes) => {
+                        sent += 1;
                         // Only log param changes for debugging
                         if is_param_change {
                             info!("📡 OSC sent: {} bytes to {}", bytes, addr);
@@ -34,6 +44,7 @@ pub(super) fn send_status(socket: &UdpSocket, client_port: u16, status: EngineSt
             }
         }
     }
+    sent
 }
 
 /// Spawn the status sender thread. It forwards plugin GUI events to the main loop through
@@ -51,8 +62,13 @@ pub(super) fn spawn(
         let mut last_heartbeat = Instant::now();
         let heartbeat_interval = Duration::from_secs(1);
         let mut stats_summary = EngineStatsSummary::default();
+        // Datagrams sent since the queue last ran dry or the thread last paused.
+        let mut burst: u32 = 0;
 
         loop {
+            if status_rx.is_empty() {
+                burst = 0;
+            }
             if let Ok(status) = status_rx.recv_timeout(Duration::from_millis(10)) {
                 // Forward GUI events to main loop
                 match &status {
@@ -122,7 +138,11 @@ pub(super) fn spawn(
                     _ => {}
                 }
 
-                send_status(&socket_clone, client_port, status);
+                burst += send_status(&socket_clone, client_port, status);
+                if burst >= BURST_DATAGRAMS {
+                    thread::sleep(BURST_PAUSE);
+                    burst = 0;
+                }
             }
 
             // Send periodic heartbeat

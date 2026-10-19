@@ -7,8 +7,9 @@
 //! Uses a dedicated thread running winit's event_loop.run() for proper
 //! X11 event handling. Plugins create their own child windows and GL contexts.
 //!
-//! A host window is either a floating toplevel or embedded: reparented into a window of another
-//! process (a Godot window), clipped to a viewport inside it (ADR 0016). The plugin's own window
+//! A host window is either a floating toplevel or embedded: reparented into a clip window that
+//! covers a window of another process (a Godot window) and is clipped to a viewport inside it
+//! (ADR 0016). The plugin's own window
 //! stays a child of the host window throughout, so embedding, moving between Godot windows and
 //! returning to floating never close the plugin GUI.
 
@@ -89,7 +90,7 @@ impl WindowCommand {
 }
 
 /// Viewport of an embedded host window, in the parent window's coordinates.
-/// `scroll_x`/`scroll_y` shift the plugin's own window inside it.
+/// `scroll_x`/`scroll_y` shift the host window (and the plugin's window in it) inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EmbedRect {
     pub x: i32,
@@ -329,6 +330,10 @@ impl WindowManager {
 struct Embed {
     parent: u64,
     rect: EmbedRect,
+    /// The clip window between the parent and the host window (see `x11_embed::embed`)
+    clip: u64,
+    /// winit's Xlib display, for mapping the clip window along with the host window
+    dpy: x11_embed::Display,
 }
 
 /// A plugin's host window (the plugin creates its own child window and GL context in it)
@@ -349,33 +354,46 @@ struct HostWindow {
 impl HostWindow {
     /// Map or unmap the window to match `visible && shown`. Mapping goes through winit so its
     /// own visibility state stays right; the X11 embedding calls leave the mapped state as is.
+    /// The clip window of an embedded host is mapped with it: a mapped, empty clip window would
+    /// cover its viewport of the Godot window.
     fn update_mapping(&mut self) {
         let want = self.visible && self.shown;
         if want != self.mapped {
             self.window.set_visible(want);
             self.mapped = want;
+            if let Some(e) = self.embed {
+                unsafe { x11_embed::set_clip_mapped(e.dpy, e.clip as _, want) };
+            }
         }
     }
 
     unsafe fn embed(&mut self, dpy: x11_embed::Display, parent: u64, rect: EmbedRect) {
-        match self.embed {
+        let clip = match self.embed {
             // Same parent: only the viewport changes (a reparent would unmap and remap it)
-            Some(e) if e.parent == parent => x11_embed::apply_bounds(dpy, self.xid as _, rect),
+            Some(e) if e.parent == parent => {
+                x11_embed::apply_bounds(dpy, e.clip as _, self.xid as _, rect);
+                e.clip
+            }
             current => x11_embed::embed(
                 dpy,
                 self.xid as _,
+                current.map(|e| e.clip as _),
                 parent as _,
                 rect,
-                current.is_none(),
                 self.mapped,
-            ),
-        }
-        self.embed = Some(Embed { parent, rect });
+            ) as u64,
+        };
+        self.embed = Some(Embed {
+            parent,
+            rect,
+            clip,
+            dpy,
+        });
     }
 
     unsafe fn unembed(&mut self, dpy: x11_embed::Display) {
-        if self.embed.take().is_some() {
-            x11_embed::unembed(dpy, self.xid as _, self.mapped);
+        if let Some(e) = self.embed.take() {
+            x11_embed::unembed(dpy, self.xid as _, e.clip as _, self.mapped);
         }
     }
 }
@@ -477,15 +495,6 @@ mod x11_embed {
             op: c_int,
             ordering: c_int,
         );
-        fn XShapeCombineMask(
-            dpy: Display,
-            dest: c_ulong,
-            dest_kind: c_int,
-            x_off: c_int,
-            y_off: c_int,
-            src: c_ulong,
-            op: c_int,
-        );
     }
 
     unsafe fn size_of(dpy: Display, win: c_ulong) -> (u32, u32) {
@@ -496,56 +505,73 @@ mod x11_embed {
         (w, h)
     }
 
-    /// Reparent `win` into `parent` (a window of another process) and clip it to `rect`.
-    /// `from_toplevel`: it is a floating window now (otherwise it moves from another embedder).
+    /// Reparent the host window `win` into `parent` (a window of another process), clipped to
+    /// `rect`, and return the clip window. `clip` is the clip window when it moves from another
+    /// embedder; None when it is a floating window now.
     ///
     /// Godot (4.7) selects SubstructureNotify on its windows and takes a ConfigureNotify from
-    /// any direct child as a resize of the window itself. So the host window always covers the
-    /// whole parent at (0,0): its ConfigureNotify then carries Godot's real size and is ignored.
-    /// The viewport is a bounding shape (clips drawing and input), and the plugin's own window
-    /// (a grandchild, invisible to Godot) moves inside it for position and scrolling.
+    /// any direct child as a resize of the window itself. So the direct child is a clip window
+    /// of ours that always covers the whole parent at (0,0): its ConfigureNotify carries Godot's
+    /// real size and is ignored. The viewport is a bounding shape on it (clips drawing and
+    /// input). The host window moves inside it for position and scrolling, sized to the plugin's
+    /// window, which stays at (0,0) in the host window: JUCE plugins (Vital) add their window's
+    /// offset in its parent to its screen position a second time, so clicks landed offset by it.
     pub unsafe fn embed(
         dpy: Display,
         win: c_ulong,
+        clip: Option<c_ulong>,
         parent: c_ulong,
         rect: EmbedRect,
-        from_toplevel: bool,
         mapped: bool,
-    ) {
-        if from_toplevel {
-            withdraw(dpy, win, mapped);
-        }
-        // Godot holds SubstructureRedirect on its windows and drops the redirected map and
-        // configure requests. Override-redirect windows bypass the redirect.
-        set_override_redirect(dpy, win, true);
-        set_black_background(dpy, win);
-        // Resize only while the window is not a child of some other Godot window: Godot would
-        // take that ConfigureNotify as its own resize. A floating window is sized before the
-        // reparent (Godot never sees a wrong size); an embedded one after (its new parent sees
-        // its own size and ignores it).
-        apply_shape(dpy, win, rect);
+    ) -> c_ulong {
         let (pw, ph) = size_of(dpy, parent);
-        if from_toplevel {
-            xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
-        }
-        // Reparenting a mapped child unmaps and remaps it by itself.
-        xlib::XReparentWindow(dpy, win, parent, 0, 0);
-        if !from_toplevel {
-            xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
-        }
-        // A withdrawn toplevel has to be mapped again, now as a child.
-        if from_toplevel && mapped {
-            xlib::XMapRaised(dpy, win);
-        }
+        let clip = match clip {
+            Some(clip) => {
+                // Reparenting a mapped child unmaps and remaps it by itself. Resize after the
+                // reparent: the new parent then sees its own size and ignores it.
+                xlib::XReparentWindow(dpy, clip, parent, 0, 0);
+                xlib::XResizeWindow(dpy, clip, pw.max(1), ph.max(1));
+                clip
+            }
+            None => {
+                withdraw(dpy, win, mapped);
+                let clip =
+                    xlib::XCreateSimpleWindow(dpy, parent, 0, 0, pw.max(1), ph.max(1), 0, 0, 0);
+                // Godot holds SubstructureRedirect on its windows and drops the redirected map
+                // and configure requests. Override-redirect windows bypass the redirect.
+                set_override_redirect(dpy, clip, true);
+                set_black_background(dpy, clip);
+                shape_viewport(dpy, clip, rect);
+                // The host window stays override-redirect too, so it never goes back to the WM
+                // while it lives in the clip window.
+                set_override_redirect(dpy, win, true);
+                xlib::XReparentWindow(
+                    dpy,
+                    win,
+                    clip,
+                    rect.x - rect.scroll_x,
+                    rect.y - rect.scroll_y,
+                );
+                // A withdrawn toplevel has to be mapped again, now as a child.
+                if mapped {
+                    xlib::XMapWindow(dpy, win);
+                    xlib::XMapWindow(dpy, clip);
+                }
+                clip
+            }
+        };
+        apply_bounds(dpy, clip, win, rect);
         xlib::XSync(dpy, 0);
         info!(
-            "embedded 0x{:x} into 0x{:x} ({}x{}, now parent {:?})",
+            "embedded 0x{:x} into 0x{:x} via clip 0x{:x} ({}x{}, now parent {:?})",
             win,
             parent,
+            clip,
             pw,
             ph,
-            parent_of(dpy, win).map(|p| p.1)
+            parent_of(dpy, clip).map(|p| p.1)
         );
+        clip
     }
 
     /// winit leaves the background unset, so viewport pixels the plugin's window doesn't cover
@@ -565,8 +591,8 @@ mod x11_embed {
         xlib::XChangeWindowAttributes(dpy, win, xlib::CWOverrideRedirect, &mut attrs);
     }
 
-    /// Clip to the viewport and place the plugin's window in it, offset by the scroll.
-    unsafe fn apply_shape(dpy: Display, win: c_ulong, rect: EmbedRect) {
+    /// Clip the clip window to the viewport.
+    unsafe fn shape_viewport(dpy: Display, clip: c_ulong, rect: EmbedRect) {
         let mut r = xlib::XRectangle {
             x: rect.x as i16,
             y: rect.y as i16,
@@ -575,7 +601,7 @@ mod x11_embed {
         };
         XShapeCombineRectangles(
             dpy,
-            win,
+            clip,
             SHAPE_BOUNDING,
             0,
             0,
@@ -584,30 +610,88 @@ mod x11_embed {
             SHAPE_SET,
             UNSORTED,
         );
-        if let Some((_, _, kids)) = parent_of(dpy, win) {
-            for kid in kids {
-                xlib::XMoveWindow(dpy, kid, rect.x - rect.scroll_x, rect.y - rect.scroll_y);
-            }
-        }
     }
 
-    pub unsafe fn apply_bounds(dpy: Display, win: c_ulong, rect: EmbedRect) {
-        apply_shape(dpy, win, rect);
+    /// Show or hide the clip window along with its host window.
+    pub unsafe fn set_clip_mapped(dpy: Display, clip: c_ulong, mapped: bool) {
+        if mapped {
+            xlib::XMapWindow(dpy, clip);
+        } else {
+            xlib::XUnmapWindow(dpy, clip);
+        }
+        xlib::XFlush(dpy);
+    }
+
+    pub unsafe fn destroy_clip(dpy: Display, clip: c_ulong) {
+        xlib::XDestroyWindow(dpy, clip);
+        xlib::XFlush(dpy);
+    }
+
+    /// Clip to the viewport, place the host window in it (offset by the scroll) sized to the
+    /// plugin's window, and keep the plugin's window at (0,0) in it.
+    pub unsafe fn apply_bounds(dpy: Display, clip: c_ulong, win: c_ulong, rect: EmbedRect) {
+        shape_viewport(dpy, clip, rect);
         // Track the parent's size (Godot sends bounds after every layout change). Only resize
         // when it differs: the ConfigureNotify then reports the parent's actual size.
-        if let Some((_, parent, _)) = parent_of(dpy, win) {
+        if let Some((_, parent, _)) = parent_of(dpy, clip) {
             let (pw, ph) = size_of(dpy, parent);
-            if size_of(dpy, win) != (pw, ph) {
-                xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
+            if size_of(dpy, clip) != (pw, ph) {
+                xlib::XResizeWindow(dpy, clip, pw.max(1), ph.max(1));
+            }
+        }
+        let (x, y) = (rect.x - rect.scroll_x, rect.y - rect.scroll_y);
+        let kids = parent_of(dpy, win).map(|p| (p.0, p.2));
+        match kids.as_ref().and_then(|(_, kids)| kids.first()) {
+            Some(&kid) => {
+                let (w, h) = size_of(dpy, kid);
+                xlib::XMoveResizeWindow(dpy, win, x, y, w.max(1), h.max(1));
+            }
+            None => {
+                xlib::XMoveWindow(dpy, win, x, y);
+            }
+        }
+        if let Some((root, kids)) = kids {
+            for kid in kids {
+                xlib::XMoveWindow(dpy, kid, 0, 0);
+                notify_root_position(dpy, kid, root);
             }
         }
         xlib::XFlush(dpy);
     }
 
-    /// Reparent `win` back to the root as a WM-managed toplevel, unshaped and sized to the
-    /// plugin's window. A `mapped` window is mapped again (the WM decorates it); an unmapped
-    /// one stays unmapped.
-    pub unsafe fn unembed(dpy: Display, win: c_ulong, mapped: bool) {
+    /// Tell the plugin's window where it now is on screen with a synthetic ConfigureNotify in
+    /// root coordinates (ICCCM 4.1.5). A child window gets no real ConfigureNotify when an
+    /// ancestor moves (the host window scrolled, the Godot window dragged), and JUCE plugins
+    /// cache their screen position from the last ConfigureNotify.
+    unsafe fn notify_root_position(dpy: Display, win: c_ulong, root: c_ulong) {
+        let (mut x, mut y, mut child) = (0, 0, 0);
+        if xlib::XTranslateCoordinates(dpy, win, root, 0, 0, &mut x, &mut y, &mut child) == 0 {
+            return;
+        }
+        let (width, height) = size_of(dpy, win);
+        let mut event: xlib::XEvent = std::mem::zeroed();
+        event.configure = xlib::XConfigureEvent {
+            type_: xlib::ConfigureNotify,
+            serial: 0,
+            send_event: 1,
+            display: dpy,
+            event: win,
+            window: win,
+            x,
+            y,
+            width: width as c_int,
+            height: height as c_int,
+            border_width: 0,
+            above: 0,
+            override_redirect: 0,
+        };
+        xlib::XSendEvent(dpy, win, 0, xlib::StructureNotifyMask, &mut event);
+    }
+
+    /// Reparent the host window `win` back to the root as a WM-managed toplevel, sized to the
+    /// plugin's window, and destroy its clip window. A `mapped` window is mapped again (the WM
+    /// decorates it); an unmapped one stays unmapped.
+    pub unsafe fn unembed(dpy: Display, win: c_ulong, clip: c_ulong, mapped: bool) {
         let root = xlib::XDefaultRootWindow(dpy);
         if mapped {
             xlib::XUnmapWindow(dpy, win);
@@ -615,8 +699,6 @@ mod x11_embed {
         // Back under the WM: it must manage (and decorate) the window again.
         set_override_redirect(dpy, win, false);
         xlib::XReparentWindow(dpy, win, root, 100, 100);
-        // Unshaped, sized to the plugin's window again.
-        XShapeCombineMask(dpy, win, SHAPE_BOUNDING, 0, 0, 0, SHAPE_SET);
         if let Some((_, _, kids)) = parent_of(dpy, win) {
             if let Some(&kid) = kids.first() {
                 let (w, h) = size_of(dpy, kid);
@@ -626,6 +708,7 @@ mod x11_embed {
                 xlib::XMoveWindow(dpy, kid, 0, 0);
             }
         }
+        xlib::XDestroyWindow(dpy, clip);
         if mapped {
             // Not override-redirect, so the WM picks it up (MapRequest) and decorates it again.
             xlib::XMapRaised(dpy, win);
@@ -720,7 +803,14 @@ fn apply_command(
 
     let key = cmd.process_key().to_string();
     if let WindowCommand::Destroy { .. } = cmd {
-        if windows.remove(&key).is_some() {
+        if let Some(host) = windows.remove(&key) {
+            // Normally `Release` unembedded it already. Destroy the host window before its clip
+            // window, which would otherwise take the host window down with it behind winit's back.
+            let embed = host.embed;
+            drop(host);
+            if let Some(e) = embed {
+                unsafe { x11_embed::destroy_clip(e.dpy, e.clip as _) };
+            }
             info!("🗑️  Destroyed window: {}", key);
         }
         return;
@@ -738,9 +828,12 @@ fn apply_command(
                     "🔄 Plugin {} wants {}x{}; embedded, host viewport unchanged",
                     key, width, height
                 );
-                // A plugin may replace its window when it resizes
+                // A plugin may replace its window when it resizes, and the host window follows
+                // the plugin's size
                 if let Some(dpy) = xlib_display(event_loop_target) {
-                    unsafe { x11_embed::apply_bounds(dpy, host.xid as _, embed.rect) };
+                    unsafe {
+                        x11_embed::apply_bounds(dpy, embed.clip as _, host.xid as _, embed.rect)
+                    };
                 }
             } else {
                 info!("🔄 Resizing window: {} to {}x{}", key, width, height);
@@ -750,10 +843,10 @@ fn apply_command(
             }
         }
         WindowCommand::Show { .. } => {
-            // Embedded before the GUI opened: the plugin's window didn't exist yet, so it sits
-            // at (0,0) instead of in the viewport
+            // Embedded before the GUI opened: the plugin's window didn't exist yet, so the
+            // host window isn't sized to it
             if let (Some(embed), Some(dpy)) = (host.embed, xlib_display(event_loop_target)) {
-                unsafe { x11_embed::apply_bounds(dpy, host.xid as _, embed.rect) };
+                unsafe { x11_embed::apply_bounds(dpy, embed.clip as _, host.xid as _, embed.rect) };
             }
             host.shown = true;
             host.update_mapping();
@@ -778,7 +871,7 @@ fn apply_command(
             if let (Some(embed), Some(dpy)) = (host.embed.as_mut(), xlib_display(event_loop_target))
             {
                 embed.rect = rect;
-                unsafe { x11_embed::apply_bounds(dpy, host.xid as _, rect) };
+                unsafe { x11_embed::apply_bounds(dpy, embed.clip as _, host.xid as _, rect) };
             }
         }
         WindowCommand::Unembed { done, .. } => {

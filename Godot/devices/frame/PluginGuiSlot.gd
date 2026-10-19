@@ -41,6 +41,9 @@ var _sent_xid := 0
 var _sent_rect := Rect2i()
 var _sent_scroll := Vector2i.ZERO
 var _sent_visible := true
+## Screen position of the window when bounds were last sent. A move is resent as bounds so the
+## engine can tell the plugin where its window now is (JUCE plugins otherwise click offset).
+var _sent_window_pos := Vector2i.ZERO
 ## Shown on the previous frame: a closed GUI opens when its tab becomes shown, not while it stays
 ## shown (the user closed the plugin's own window), unless _open_now asks for it.
 var _was_visible := false
@@ -243,10 +246,11 @@ func _process(_delta: float) -> void:
 				# The frame moved to another window (attach, detach, tear-off).
 				device.embed_gui(xid, rect, scroll)
 				_remember(xid, rect, scroll, _sent_visible)
-			elif rect != _sent_rect or scroll != _sent_scroll:
+			elif rect != _sent_rect or scroll != _sent_scroll or _window_pos() != _sent_window_pos:
 				device.set_gui_bounds(rect, scroll)
 				_sent_rect = rect
 				_sent_scroll = scroll
+				_sent_window_pos = _window_pos()
 			if _mode == Mode.EMBEDDED and shown != _sent_visible:
 				device.set_gui_visible(shown)
 				_sent_visible = shown
@@ -266,10 +270,16 @@ func _process(_delta: float) -> void:
 
 
 func _remember(xid: int, rect: Rect2i, scroll: Vector2i, visible_sent: bool) -> void:
+	_sent_window_pos = _window_pos()
 	_sent_xid = xid
 	_sent_rect = rect
 	_sent_scroll = scroll
 	_sent_visible = visible_sent
+
+
+func _window_pos() -> Vector2i:
+	var window := get_window()
+	return window.position if window else Vector2i.ZERO
 
 
 ## Lay out the scrollbars for the current size and return the viewport in window pixels and the

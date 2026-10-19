@@ -222,13 +222,12 @@ pub fn open_plugin_gui(
         }
         info!("✅ Parent window set to 0x{:x}", handle_value);
 
-        info!("🎨 Step 7: Setting window title...");
-        let title = std::ffi::CString::new("Plugin - Sonara").unwrap();
-        gui_ext.suggest_title(&mut handle, &title);
+        // No suggest_title() here: CLAP only allows it for floating GUIs, and the host owns the
+        // title of the window an embedded GUI lives in.
 
         // show() is advisory for embedded GUIs: the plugin's child window already exists after
         // set_parent. nih-plug always returns false here, and hosts such as Bitwig ignore it.
-        info!("🎨 Step 8: Showing GUI window...");
+        info!("🎨 Step 7: Showing GUI window...");
         if let Err(e) = gui_ext.show(&mut handle) {
             warn!(
                 "⚠️ Plugin returned false from gui.show() ({}); continuing, as embedded GUIs are already mapped by set_parent",

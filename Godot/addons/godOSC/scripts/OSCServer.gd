@@ -17,40 +17,92 @@ var incoming_messages := {}
 ## amount of recieved messages * average message rate / 60.
 #@export var parse_rate = 10 deprecated
 var server = UDPServer.new()
+## Peers are only touched by the receiver thread.
 var peers: Array[PacketPeerUDP] = []
+
+## How long the receiver thread sleeps between socket polls.
+const RECEIVE_POLL_USEC := 1000
+
+## The receiver thread drains the socket every millisecond into `_received`, which the main
+## thread parses each frame. Polling only from `_process` lost datagrams whenever more than one
+## frame's worth arrived (a plugin advertising hundreds of parameters, or a main-thread stall):
+## the kernel buffer holds about 275 small datagrams and a PacketPeerUDP holds 64 KiB.
+var _thread: Thread
+var _running := false
+var _received_mutex := Mutex.new()
+var _received: Array[PackedByteArray] = []
 
 signal message_received(address, value, time)
 
 
 func _ready():
-	server.listen(port)
+	_start()
+
+
+func _exit_tree():
+	_stop()
+
 
 ## Sets the port for the server to listen on. Can only listen to one port at a time.
 func listen(new_port):
 	port = new_port
+	if is_inside_tree():
+		_stop()
+		_start()
+
+
+func _start():
 	server.listen(port)
+	_running = true
+	_thread = Thread.new()
+	_thread.start(_receive_loop)
+
+
+func _stop():
+	_running = false
+	if _thread and _thread.is_started():
+		_thread.wait_to_finish()
+	_thread = null
+	server.stop()
+	peers.clear()
+
+
+func _receive_loop():
+	while _running:
+		server.poll()
+		if server.is_connection_available():
+			var peer: PacketPeerUDP = server.take_connection()
+			print("Accepted peer: %s:%s" % [peer.get_packet_ip(), peer.get_packet_port()])
+			# Keep a reference so we can keep contacting the remote peer.
+			peers.append(peer)
+		for peer in peers:
+			var count := peer.get_available_packet_count()
+			if count <= 0:
+				continue
+			var batch: Array[PackedByteArray] = []
+			for l in range(count):
+				batch.append(peer.get_packet())
+			_received_mutex.lock()
+			_received.append_array(batch)
+			_received_mutex.unlock()
+		OS.delay_usec(RECEIVE_POLL_USEC)
+
 
 func _process(_delta):
-	server.poll()
-	if server.is_connection_available():
-		var peer: PacketPeerUDP = server.take_connection()
-		print("Accepted peer: %s:%s" % [peer.get_packet_ip(), peer.get_packet_port()])
-		# Keep a reference so we can keep contacting the remote peer.
-		peers.append(peer)
-	
 	parse()
 
 
-## Parses an OSC packet. This is not intended to be called directly outside of the OSCServer
+## Parses the packets received since the last frame. This is not intended to be called directly outside of the OSCServer
 func parse():
-	for peer in peers:
-		for l in range(peer.get_available_packet_count()):
-			var packet = peer.get_packet()
-			
-			if packet.get_string_from_ascii() == "#bundle":
-				parse_bundle(packet)
-			else:
-				parse_message(packet)
+	_received_mutex.lock()
+	var batch := _received
+	_received = []
+	_received_mutex.unlock()
+	for packet in batch:
+		if packet.get_string_from_ascii() == "#bundle":
+			parse_bundle(packet)
+		else:
+			parse_message(packet)
 
 func parse_message(packet: PackedByteArray):
 	#print(packet)
