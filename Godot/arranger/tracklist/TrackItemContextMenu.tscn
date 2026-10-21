@@ -4,22 +4,22 @@
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_1v486"]
 [ext_resource type="Texture2D" uid="uid://bcmn5jer86wdt" path="res://assets/icons/trash.svg" id="3_3ycxx"]
 [ext_resource type="Texture2D" uid="uid://uekq5j7whsde" path="res://assets/icons/copy.svg" id="3_4iljr"]
-[ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="5_layers"]
 [ext_resource type="Texture2D" uid="uid://dhxxueey2a8jy" path="res://assets/icons/copy-plus.svg" id="4_r6nx2"]
+[ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="5_layers"]
 
 [node name="TrackItemContextMenu" type="PopupPanel" unique_id=1719893711]
 oversampling_override = 1.0
-size = Vector2i(256, 240)
+size = Vector2i(256, 274)
 visible = true
 theme_type_variation = &"ContextMenu"
 script = ExtResource("1_6slh3")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1010532439]
 custom_minimum_size = Vector2(150, 0)
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 248.0
-offset_bottom = 232.0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 252.0
+offset_bottom = 270.0
 theme_override_constants/separation = 4
 
 [node name="ColorAndName" type="HBoxContainer" parent="VBoxContainer" unique_id=751468388]
@@ -37,25 +37,25 @@ size_flags_horizontal = 3
 value_type = 1
 fit_text_width = true
 
-[node name="Toggles" type="HBoxContainer" parent="VBoxContainer"]
+[node name="Toggles" type="HBoxContainer" parent="VBoxContainer" unique_id=2098263150]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="Visible" type="CheckBox" parent="VBoxContainer/Toggles"]
+[node name="Visible" type="CheckBox" parent="VBoxContainer/Toggles" unique_id=99449640]
 layout_mode = 2
 size_flags_horizontal = 3
 tooltip_text = "Off leaves it out of the track list (visual only). Show Hidden brings it back"
 button_pressed = true
 text = "Visible"
 
-[node name="Enabled" type="CheckBox" parent="VBoxContainer/Toggles"]
+[node name="Enabled" type="CheckBox" parent="VBoxContainer/Toggles" unique_id=384568915]
 layout_mode = 2
 size_flags_horizontal = 3
 tooltip_text = "Off deactivates the channel's devices (and its children's) to save CPU"
 button_pressed = true
 text = "Enabled"
 
-[node name="MakeUniquePerTrack" type="Button" parent="VBoxContainer"]
+[node name="MakeUniquePerTrack" type="Button" parent="VBoxContainer" unique_id=1080227263]
 layout_mode = 2
 theme_override_constants/h_separation = 8
 theme_override_constants/icon_max_width = 18

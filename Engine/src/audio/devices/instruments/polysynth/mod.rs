@@ -25,7 +25,7 @@ use crate::audio::devices::{
     ParamInfo, ParamValue, PortFlow, SlotKind, SlotSpec,
 };
 use crate::audio::dsp::SmoothedParam;
-use crate::audio::midi_types::NoteEvent;
+use crate::audio::midi_types::{NoteEvent, DEFAULT_RELEASE};
 use crate::audio::modulation::kinds::{
     ModulatorKind, ENV_ATTACK, ENV_DECAY, ENV_RELEASE, ENV_SUSTAIN, LFO_RATE, LFO_RETRIGGER,
 };
@@ -349,17 +349,16 @@ impl PolySynthDevice {
             released: None,
         };
 
-        // The same key again: fade the sounding voice out over the steal fade and give the
-        // repeat a fresh voice with a full attack — the drum retrigger crossfade (spec 013).
-        // Retriggering in place would restart the amp envelope from its current level, which
-        // is at the peak while the note sounds, so the attack would be skipped entirely.
-        if let Some(v) = self
+        // The same key again: let the sounding voice ring out its release and give the repeat a
+        // fresh voice with a full attack (retriggering in place would restart the amp envelope
+        // from its current level, skipping the attack). Stealing it would cut the old note off.
+        // Note-off only releases gated voices, so the two never get confused.
+        for v in self
             .voices
             .iter_mut()
-            .find(|v| v.active && !v.is_fading() && v.note == note)
+            .filter(|v| v.active && v.gate && !v.is_fading() && v.note == note)
         {
-            v.steal(pending);
-            return;
+            v.release(DEFAULT_RELEASE);
         }
 
         let cost = unison[0].max(unison[1]);
@@ -1091,7 +1090,6 @@ mod tests {
     use super::params::*;
     use super::*;
     use crate::audio::devices::{enum_to_norm, real_to_norm, ParamType};
-    use crate::audio::midi_types::DEFAULT_RELEASE;
 
     const SR: f32 = 48_000.0;
     const BLOCK: usize = 256;
@@ -1453,11 +1451,18 @@ mod tests {
         );
 
         dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
-        render(&mut dev, 1); // the 4 ms steal fade completes, the queued note starts
+        render(&mut dev, 1);
+        // The first note keeps ringing through its release instead of being cut off.
+        assert!(
+            dev.voices
+                .iter()
+                .any(|v| v.active && !v.gate && !v.is_fading() && v.note == 60),
+            "the previous note should release, not be stolen"
+        );
         let v = dev
             .voices
             .iter()
-            .find(|v| v.active && !v.is_fading() && v.note == 60)
+            .find(|v| v.active && v.gate && !v.is_fading() && v.note == 60)
             .unwrap();
         assert_eq!(v.amp_env.state(), AdsrState::Attack);
         assert!(
@@ -1616,6 +1621,46 @@ mod tests {
         dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         let out = render(&mut dev, 4);
         assert!(out.chunks(2).all(|f| (f[0] - f[1]).abs() < 1e-6));
+    }
+
+    fn side_rms(param: ParamId, pan_percent: f32) -> (f32, f32) {
+        let mut dev = synth();
+        set_real(&mut dev, param, pan_percent);
+        dev.send_note_event(&NoteEvent::test_on(57, 100), 0);
+        render(&mut dev, 2); // skip the attack
+        let out = render(&mut dev, 40);
+        (
+            rms(out.iter().step_by(2).copied()),
+            rms(out.iter().skip(1).step_by(2).copied()),
+        )
+    }
+
+    #[test]
+    fn osc_and_output_pan_steer_the_stereo_image() {
+        for param in [OSC1 + PAN, OUT_PAN] {
+            let (cl, cr) = side_rms(param, 0.0);
+            assert!((cl - cr).abs() < 1e-6, "centre is balanced");
+            let (l, r) = side_rms(param, -100.0);
+            assert!(l > 0.0 && r < 1e-4, "hard left leaves the right silent: {l} {r}");
+            assert!((l - cl * std::f32::consts::SQRT_2).abs() < 0.02 * l, "equal power");
+            let (l, r) = side_rms(param, 100.0);
+            assert!(r > 0.0 && l < 1e-4, "hard right leaves the left silent: {l} {r}");
+        }
+    }
+
+    #[test]
+    fn osc_pan_only_moves_its_own_oscillator() {
+        let mut dev = synth();
+        set_real(&mut dev, OSC1 + LEVEL, 0.5);
+        set_real(&mut dev, OSC2 + LEVEL, 0.5);
+        set_real(&mut dev, OSC1 + PAN, -100.0);
+        set_real(&mut dev, OSC2 + PAN, 100.0);
+        dev.send_note_event(&NoteEvent::test_on(57, 100), 0);
+        render(&mut dev, 2);
+        let out = render(&mut dev, 40);
+        let l = rms(out.iter().step_by(2).copied());
+        let r = rms(out.iter().skip(1).step_by(2).copied());
+        assert!(l > 0.0 && r > 0.0, "both sides sound: {l} {r}");
     }
 
     #[test]
@@ -2098,7 +2143,8 @@ mod tests {
 
             dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 1);
-            let after = lfo_phase(&dev, 0, 0);
+            // Poly: the repeat gets a fresh voice while the first rings out its release.
+            let after = lfo_phase(&dev, if mode == 0.0 { 1 } else { 0 }, 0);
             assert!(
                 after < 0.05,
                 "{label}: retrigger should restart the LFO, {before} -> {after}"

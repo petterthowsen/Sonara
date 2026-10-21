@@ -1,7 +1,7 @@
 //! PolySynth parameter table and the shared, decoded parameter block voices read from.
 //!
 //! IDs are grouped in blocks of ten per module: Osc 1 = 0.., Osc 2 = 10.., Noise = 20..,
-//! Filter = 30.., Amp Env = 40.., Voice = 80.., Output = 90. Filter Env and the two LFOs are
+//! Filter = 30.., Amp Env = 40.., Voice = 80.., Output = 90.. (Volume 90, Pan 91). Each oscillator block's ID 9 is its Pan. Filter Env and the two LFOs are
 //! modulators now (spec 018 Phase 6), not parameters. The FM module (phase modulation on the
 //! Osc 1 carrier) uses the Noise block's spare IDs 22–23.
 //!
@@ -26,6 +26,7 @@ pub const LEVEL: ParamId = 5;
 pub const UNISON: ParamId = 6;
 pub const UNISON_DETUNE: ParamId = 7;
 pub const UNISON_SPREAD: ParamId = 8;
+pub const PAN: ParamId = 9;
 
 /// Two-op phase modulation applied to Osc 1's carrier. These live in the Noise block's spare
 /// ID space but form their own module.
@@ -61,6 +62,8 @@ pub const GLIDE_SCOPE: ParamId = 84;
 pub const VELOCITY: ParamId = 83;
 
 pub const VOLUME: ParamId = 90;
+/// Output pan, after the per-oscillator pans (`OSC + PAN`).
+pub const OUT_PAN: ParamId = 91;
 
 /// Upper bounds the voice pool is sized for.
 pub const MAX_UNISON: usize = 16;
@@ -209,6 +212,14 @@ macro_rules! osc_specs {
                 linear(0.0, 100.0),
                 50.0,
             ),
+            spec(
+                $base + PAN,
+                concat!($module, " Pan"),
+                $module,
+                "%",
+                linear(-100.0, 100.0),
+                0.0,
+            ),
         ]
     };
 }
@@ -253,14 +264,14 @@ macro_rules! env_specs {
 }
 
 #[rustfmt::skip]
-const OSC1_SPECS: [ParamSpec; 9] = osc_specs!(OSC1, "Osc 1", 2.0, 0.0, 0.8);
+const OSC1_SPECS: [ParamSpec; 10] = osc_specs!(OSC1, "Osc 1", 2.0, 0.0, 0.8);
 #[rustfmt::skip]
 const FM_SPECS: [ParamSpec; 2] = [
     spec(FM_RATIO, "FM Ratio", "FM", "", Kind::Enum(FM_RATIOS), 5.0),
     spec(FM_INDEX, "FM Index", "FM", "", linear(0.0, 8.0), 0.0),
 ];
 #[rustfmt::skip]
-const OSC2_SPECS: [ParamSpec; 9] = osc_specs!(OSC2, "Osc 2", 3.0, 7.0, 0.0);
+const OSC2_SPECS: [ParamSpec; 10] = osc_specs!(OSC2, "Osc 2", 3.0, 7.0, 0.0);
 #[rustfmt::skip]
 const NOISE_FILTER_SPECS: [ParamSpec; 7] = [
     spec(NOISE_LEVEL, "Noise Level", "Noise", "", linear(0.0, 1.0), 0.0),
@@ -274,17 +285,18 @@ const NOISE_FILTER_SPECS: [ParamSpec; 7] = [
 #[rustfmt::skip]
 const AMP_ENV_SPECS: [ParamSpec; 4] = env_specs!(AMP_ENV, "Amp", "Amp Env", 0.002, 0.3, 1.0, 0.2);
 #[rustfmt::skip]
-const VOICE_OUTPUT_SPECS: [ParamSpec; 6] = [
+const VOICE_OUTPUT_SPECS: [ParamSpec; 7] = [
     spec(VOICE_MODE, "Voice Mode", "Voice", "", Kind::Enum(MODES), 0.0),
     spec(POLYPHONY, "Polyphony", "Voice", "", Kind::Enum(POLYPHONY_COUNTS), 15.0),
     spec(GLIDE, "Glide", "Voice", "s", Kind::Float { min: 0.0, max: 1.0, log: false, skew: 3.0 }, 0.0),
     spec(GLIDE_SCOPE, "Glide Scope", "Voice", "", Kind::Enum(GLIDE_SCOPES), 0.0),
     spec(VELOCITY, "Velocity", "Voice", "%", linear(0.0, 100.0), 70.0),
     spec(VOLUME, "Volume", "Output", "dB", Kind::Float { min: VOLUME_MIN_DB, max: 6.0, log: false, skew: 0.5 }, -6.0),
+    spec(OUT_PAN, "Pan", "Output", "%", linear(-100.0, 100.0), 0.0),
 ];
 
 /// Number of real parameters.
-pub const PARAM_COUNT: usize = 9 + 9 + 2 + 7 + 4 + 6;
+pub const PARAM_COUNT: usize = 10 + 10 + 2 + 7 + 4 + 7;
 
 /// Every parameter, in display order. A parameter's index here is its slot.
 pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
@@ -339,6 +351,8 @@ pub struct OscParams {
     pub detune_cents: f32,
     /// 0–1.
     pub spread: f32,
+    /// −1 (left) to +1 (right).
+    pub pan: f32,
 }
 
 /// Envelope times in seconds, sustain 0–1.
@@ -394,6 +408,8 @@ pub struct SynthParams {
     pub volume_db: f32,
     /// Linear output gain (0 at the bottom of the range).
     pub volume_gain: f32,
+    /// Output pan, −1 (left) to +1 (right).
+    pub pan: f32,
 }
 
 impl SynthParams {
@@ -406,6 +422,7 @@ impl SynthParams {
             unison: 1,
             detune_cents: 0.0,
             spread: 0.0,
+            pan: 0.0,
         };
         let env = EnvParams {
             attack: 0.0,
@@ -434,6 +451,7 @@ impl SynthParams {
             velocity_sens: 0.0,
             volume_db: 0.0,
             volume_gain: 1.0,
+            pan: 0.0,
         };
         for spec in SPECS.iter() {
             params.set(spec.id, spec.to_norm(spec.default));
@@ -494,6 +512,7 @@ impl SynthParams {
                 UNISON => self.osc[o].unison = real as usize + 1,
                 UNISON_DETUNE => self.osc[o].detune_cents = real,
                 UNISON_SPREAD => self.osc[o].spread = real / 100.0,
+                PAN => self.osc[o].pan = real / 100.0,
                 _ => self.osc[o].transpose = self.transpose(id - id % 10), // octave, semi, fine
             }
             return Changed::Other;
@@ -539,6 +558,7 @@ impl SynthParams {
             GLIDE => self.glide = real,
             GLIDE_SCOPE => self.glide_only_connected = real as usize == 1,
             VELOCITY => self.velocity_sens = real / 100.0,
+            OUT_PAN => self.pan = real / 100.0,
             VOLUME => {
                 self.volume_db = real;
                 self.volume_gain = if real <= VOLUME_MIN_DB {

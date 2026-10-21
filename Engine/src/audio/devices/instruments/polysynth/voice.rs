@@ -192,6 +192,19 @@ struct Ramp {
     volume: f32,
     /// Block-end FM index (the FM path ramps it per frame between blocks).
     fm_index: f32,
+    /// Block-end (left, right) gains of each oscillator's pan.
+    osc_pan: [[f32; 2]; 2],
+    /// Block-end (left, right) gains of the output pan.
+    pan: [f32; 2],
+}
+
+/// Equal-power (left, right) gains for a pan position of −1..+1, unity per side at the centre.
+fn pan_gains(pan: f32) -> [f32; 2] {
+    if pan == 0.0 {
+        return [1.0; 2];
+    }
+    let (sin, cos) = ((pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4).sin_cos();
+    [cos * std::f32::consts::SQRT_2, sin * std::f32::consts::SQRT_2]
 }
 
 pub struct Voice {
@@ -258,6 +271,8 @@ impl Voice {
                 noise_delta: 0.0,
                 volume: 1.0,
                 fm_index: 0.0,
+                osc_pan: [[1.0; 2]; 2],
+                pan: [1.0; 2],
             },
             unison_shape: [None; 2],
             filter_setup: None,
@@ -677,6 +692,8 @@ impl Voice {
             noise_delta: e.noise_level - p.noise_level,
             volume,
             fm_index: e.fm_index,
+            osc_pan: [pan_gains(e.osc[0].pan), pan_gains(e.osc[1].pan)],
+            pan: pan_gains(e.pan),
         };
         if self.fresh {
             self.ramp = target;
@@ -688,7 +705,9 @@ impl Voice {
         let mut sum_r = [0.0f32; CONTROL_BLOCK];
         let mut osc_buf = [0.0f32; CONTROL_BLOCK];
         let mut level = [0.0f32; CONTROL_BLOCK];
-        let mut stereo = false;
+        let mut stereo = target.pan != [1.0; 2] || from.pan != [1.0; 2];
+        let mut pan_l = [1.0f32; CONTROL_BLOCK];
+        let mut pan_r = [1.0f32; CONTROL_BLOCK];
 
         let sr64 = sr as f64;
         for o in 0..2 {
@@ -702,6 +721,17 @@ impl Voice {
                 let delta = d0 + (d1 - d0) * (i + 1) as f32 * inv_n;
                 level[i] = (shared[i] + delta).clamp(0.0, 1.0);
                 audible |= level[i] != 0.0;
+            }
+            // This oscillator's pan, ramped across the block. Centred at both ends is a no-op.
+            let (p0, p1) = (from.osc_pan[o], target.osc_pan[o]);
+            let panned = p0 != [1.0; 2] || p1 != [1.0; 2];
+            if panned {
+                stereo = true;
+                for i in 0..n {
+                    let t = (i + 1) as f32 * inv_n;
+                    pan_l[i] = p0[0] + (p1[0] - p0[0]) * t;
+                    pan_r[i] = p0[1] + (p1[1] - p0[1]) * t;
+                }
             }
             let shape = match self.unison_shape[o] {
                 Some(s)
@@ -744,10 +774,18 @@ impl Voice {
 
                 stereo |= shape.stereo;
                 let (gl, gr) = (shape.gain_l[k], shape.gain_r[k]);
-                for i in 0..n {
-                    let s = osc_buf[i] * level[i];
-                    sum_l[i] += s * gl;
-                    sum_r[i] += s * gr;
+                if panned {
+                    for i in 0..n {
+                        let s = osc_buf[i] * level[i];
+                        sum_l[i] += s * gl * pan_l[i];
+                        sum_r[i] += s * gr * pan_r[i];
+                    }
+                } else {
+                    for i in 0..n {
+                        let s = osc_buf[i] * level[i];
+                        sum_l[i] += s * gl;
+                        sum_r[i] += s * gr;
+                    }
                 }
             }
         }
@@ -813,8 +851,10 @@ impl Voice {
                 self.fade = (self.fade - self.fade_step).max(0.0);
                 gain *= self.fade;
             }
-            out_l[start + i] += l * gain;
-            out_r[start + i] += r * gain;
+            let pl = from.pan[0] + (target.pan[0] - from.pan[0]) * t;
+            let pr = from.pan[1] + (target.pan[1] - from.pan[1]) * t;
+            out_l[start + i] += l * gain * pl;
+            out_r[start + i] += r * gain * pr;
         }
         if !stereo {
             // Keep the right channel's state in step, so turning spread up doesn't click.

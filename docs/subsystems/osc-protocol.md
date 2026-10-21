@@ -325,15 +325,17 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
 - **Params (typed):** IDs are grouped ten per module (`ParamInfo.module`); the gaps are reserved
   for Filter (30s), Filter Env (50s) and LFOs (60s, 70s). Real ranges travel in `/builtin/info`;
   the source of truth is `audio/devices/instruments/polysynth/params.rs`.
-  - `0`–`8` Osc 1, `10`–`18` Osc 2 (same offsets): `+0` Wave (enum: Sine, Triangle, Saw, Pulse),
+  - `0`–`9` Osc 1, `10`–`19` Osc 2 (same offsets): `+0` Wave (enum: Sine, Triangle, Saw, Pulse),
     `+1` Pulse Width (5–95 %), `+2` Octave (enum −3…+3), `+3` Semi (enum −12…+12),
     `+4` Fine (±100 cents), `+5` Level (0–1), `+6` Unison (enum 1–16),
-    `+7` Unison Detune (0–100 cents), `+8` Unison Spread (0–100 %)
+    `+7` Unison Detune (0–100 cents), `+8` Unison Spread (0–100 %),
+    `+9` Pan (−100…+100 %, equal-power, centre 0)
   - `20`: Noise Level (0–1), `21`: Noise Color (0–100 %, dark → white → bright)
   - `40`–`43`: Amp Attack, Decay, Sustain, Release (times 0.5 ms–10 s, skew 4)
   - `80`: Voice Mode (enum: Poly, Mono, Legato), `81`: Polyphony (enum 1–64),
     `82`: Glide (0–1 s, skew 3), `83`: Velocity (0–100 % amp sensitivity)
-  - `90`: Volume (−60…+6 dB, skew 0.5; the bottom is silence)
+  - `90`: Volume (−60…+6 dB, skew 0.5; the bottom is silence),
+    `91`: Pan (−100…+100 %, equal-power, applied per voice after the oscillator pans)
 
 **Delay (`sonara.builtin.delay`)**
 - **Type:** Effect
