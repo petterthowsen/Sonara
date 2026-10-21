@@ -28,6 +28,7 @@ func run_tests() -> void:
 	_test_slot_keys_only_active()
 	await _test_view()
 	_test_strip_clamps_edges()
+	await _test_spectrum_behind_bands()
 
 
 func _register_multiband() -> void:
@@ -145,3 +146,32 @@ func _test_strip_clamps_edges() -> void:
 	release.pressed = false
 	strip._gui_input(release)
 	strip.queue_free()
+
+
+func _test_spectrum_behind_bands() -> void:
+	# The engine's frame: [flag, sample_rate, lo_hz, hi_hz, A points, B points].
+	var points := 8
+	var frame := PackedFloat32Array([0.0, 48000.0, 20.0, 20000.0])
+	for i in points:
+		frame.append(-60.0 + 10.0 * i)
+	for i in points:
+		frame.append(-160.0)
+	var line: PackedVector2Array = _strip_script.spectrum_points(frame.slice(4, 4 + points), 20.0, 20000.0, 600.0, 58.0)
+	_assert(line.size() == points, "one plot point per spectrum point")
+	_assert(is_equal_approx(line[0].x, 0.0) and is_equal_approx(line[points - 1].x, 600.0), "the spectrum spans the strip's 20 Hz-20 kHz axis")
+	_assert(line[points - 1].y < line[0].y, "a louder point sits higher")
+	_assert(_strip_script.spectrum_points(PackedFloat32Array([-10.0]), 20.0, 20000.0, 600.0, 58.0).is_empty(), "a single point draws nothing")
+	var mb: Object = _multiband()
+	var view: Object = load("res://devices/builtin/MultibandDefaultView.tscn").instantiate()
+	root.add_child(view)
+	view.bind_to_device(mb)
+	await root.get_tree().process_frame
+	view.apply_spectrum_frame(frame)
+	_assert(view._strip._spectrum.size() == points, "the view hands the first signal's points to the strip")
+	view.apply_spectrum_frame(PackedFloat32Array([0.0, 48000.0, 0.0, 0.0, -10.0, -10.0]))
+	_assert(view._strip._spectrum.size() == points, "a frame without a valid range is ignored")
+	view.show_view()
+	_assert(view._subscribed, "showing the view subscribes to the spectrum stream")
+	view.hide_view()
+	_assert(not view._subscribed and view._strip._spectrum.is_empty(), "hiding unsubscribes and clears the spectrum")
+	view.queue_free()

@@ -8,7 +8,7 @@
 extends TestBase
 
 const EQ_ID := "sonara.builtin.eq"
-const SPECTRUM_ID := "sonara.builtin.spectrum_analyzer"
+const SPECTRUM_ID := "sonara.builtin.sampler"  # second built-in with a window view
 
 var _slot_script: GDScript
 var _frame_script: GDScript
@@ -100,13 +100,13 @@ func _plugin_device() -> Object:
 	return _device_script.new("test.frames.clap", "Room", _device_script.DeviceCategory.Effect, _device_script.DeviceType.CLAP)
 
 
-## A channel holding Synth (nothing to show) → EQ → Spectrum, as the design's Polysynth → EQ → Reverb.
+## A channel holding Synth (nothing to show) → EQ → Sampler, as the design's Polysynth → EQ → Reverb.
 func _channel_with_chain() -> Dictionary:
 	var project: Object = _project_script.new()
 	var ch: Object = project.create_instrument_track("Lead").channel
 	var synth: Object = _device_instance_script.new(_plain_instrument(), ch.id, 0)
 	var eq: Object = _device_instance_script.new(_builtin(EQ_ID, "EQ"), ch.id, 0)
-	var spectrum: Object = _device_instance_script.new(_builtin(SPECTRUM_ID, "Spectrum"), ch.id, 0)
+	var spectrum: Object = _device_instance_script.new(_builtin(SPECTRUM_ID, "Sampler"), ch.id, 0)
 	ch.add_device(synth)
 	ch.add_device(eq)
 	ch.add_device(spectrum)
@@ -315,7 +315,7 @@ func _test_per_channel() -> void:
 	_assert(frames.size() == 1, "opening EQ creates one frame")
 	var frame: Object = frames[0]
 	_assert(frame.channel == c.ch, "it is the channel frame")
-	_assert(_titles(frame) == ["EQ", "Spectrum"], "tabs for the chain devices with something to show (got %s)" % [_titles(frame)])
+	_assert(_titles(frame) == ["EQ", "Sampler"], "tabs for the chain devices with something to show (got %s)" % [_titles(frame)])
 	_assert(frame.get_active_device() == c.eq, "EQ selected")
 	_assert(frame.get_title() == "Lead", "a channel frame is titled by its channel (got %s)" % frame.get_title())
 	_assert(_manager.get_attached_frame() == frame, "a built-in's frame opens attached by default")

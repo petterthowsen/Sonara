@@ -1,6 +1,6 @@
 ## Companion view of the built-in EQ, shown in the device panel while the window view (the full
-## analyser) is open: one vertical strip per band with an on/off toggle, a solo toggle, the band
-## type dropdown and Freq, Gain and Q knobs. It holds the exact-entry and automation targets the
+## analyser) is open: one vertical strip per band: on/off and solo toggles, the band type and (for cuts) slope
+## dropdowns, and Freq, Gain and Q knobs showing their values. It holds the exact-entry and automation targets the
 ## panel view has no room for (it shows only the selected band).
 class_name EqBandsCompanionView extends DeviceView
 
@@ -36,9 +36,9 @@ func _build_strip(band: int, parent: Control) -> Dictionary:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
 	parent.add_child(box)
-	# Vertical space is free in a strip, width is not: the enabled toggle sits on top, the
-	# solo toggle below it, instead of sharing one wide header row.
-	var header := VBoxContainer.new()
+	# Rows: enabled and solo toggles side by side, then type and slope side by side, then the
+	# knobs (their value shown under each).
+	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 2)
 	box.add_child(header)
 	var toggle := CheckBox.new()
@@ -52,17 +52,26 @@ func _build_strip(band: int, parent: Control) -> Dictionary:
 	solo.tooltip_text = "Listen to band %d only" % (band + 1)
 	solo.toggled.connect(_on_solo_toggled.bind(band))
 	header.add_child(solo)
+	var selects := HBoxContainer.new()
+	selects.add_theme_constant_override("separation", 2)
+	box.add_child(selects)
 	var type := OptionButton.new()
-	type.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	var band_color := EqCurveEditor.band_color(band)
 	for i in EqResponse.TYPE_NAMES.size():
 		type.add_icon_item(EqTypeIcon.texture(i, band_color), "")
 		type.set_item_tooltip(i, EqResponse.TYPE_NAMES[i])
 	type.item_selected.connect(_on_type_selected.bind(band))
-	box.add_child(type)
-	var item := {"box": box, "toggle": toggle, "solo": solo, "type": type}
+	selects.add_child(type)
+	var slope := OptionButton.new()
+	slope.tooltip_text = "Slope (dB/oct)"
+	for i in EqResponse.SLOPE_NAMES.size():
+		slope.add_item(EqResponse.SLOPE_NAMES[i].trim_suffix(" dB/oct"))
+		slope.set_item_tooltip(i, EqResponse.SLOPE_NAMES[i])
+	slope.item_selected.connect(_on_slope_selected.bind(band))
+	selects.add_child(slope)
+	var item := {"box": box, "toggle": toggle, "solo": solo, "type": type, "slope": slope}
 	for entry in [["freq", "Freq", EqResponse.P_FREQ], ["gain", "Gain", EqResponse.P_GAIN], ["q", "Q", EqResponse.P_Q]]:
-		var knob := EqKnobs.make_knob(entry[1], _on_knob_changed.bind(band * EqResponse.BAND_STRIDE + int(entry[2])))
+		var knob := EqKnobs.make_knob(entry[1], _on_knob_changed.bind(band * EqResponse.BAND_STRIDE + int(entry[2])), LabeledKnob.DisplayMode.VALUE)
 		knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		box.add_child(knob)
 		item[entry[0]] = knob
@@ -97,6 +106,9 @@ func _refresh_band(band: int) -> void:
 	var type := int(device.get_parameter_real(base + EqResponse.P_TYPE))
 	item["toggle"].set_pressed_no_signal(enabled)
 	item["type"].select(type)
+	item["slope"].select(clampi(int(device.get_parameter_real(base + EqResponse.P_SLOPE)), 0, EqResponse.SLOPE_NAMES.size() - 1))
+	# Only the cuts have a slope; for other types the box stays but is disabled.
+	item["slope"].disabled = not EqResponse.type_is_cut(type)
 	item["freq"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_FREQ))
 	item["gain"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_GAIN))
 	item["q"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_Q))
@@ -130,6 +142,11 @@ func _on_solo_toggled(pressed: bool, band: int) -> void:
 func _on_type_selected(index: int, band: int) -> void:
 	if device != null:
 		ParameterActions.set_real(device, band * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(index))
+
+
+func _on_slope_selected(index: int, band: int) -> void:
+	if device != null:
+		ParameterActions.set_real(device, band * EqResponse.BAND_STRIDE + EqResponse.P_SLOPE, float(index))
 
 
 func _on_knob_changed(value: float, param_id: int) -> void:

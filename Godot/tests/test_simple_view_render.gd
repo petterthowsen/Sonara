@@ -33,6 +33,7 @@ func run_tests() -> void:
 	await _test_parameters_tab_default()
 	await _test_groups_fill_and_spread()
 	await _test_fixed_height()
+	await _test_split_groups_fill_height()
 	await _test_slot_tiles_render_with_count()
 	await _test_slot_tile_click_toggles()
 	await _test_drop_on_slot_tile()
@@ -227,6 +228,41 @@ func _test_parameters_tab_default() -> void:
 	_assert(panel._panel_view != null, "the Simple View appears once parameters arrive")
 	_assert(not panel.parameters_pane.visible, "the auto-opened Parameters close when the view arrives")
 	panel.queue_free()
+
+
+## The split devices stretch each group to the grid's bottom; knobs stay centered in their group.
+func _test_split_groups_fill_height() -> void:
+	var device: Object = _device_script.new("sonara.builtin.ms_split", "Mid/Side Split",
+		_device_script.DeviceCategory.Effect, _device_script.DeviceType.BuiltIn)
+	device.add_parameter(_float_param(0, "Mid Gain"))
+	device.add_parameter(_float_param(1, "Side Gain"))
+	root.get_node("AssetService").device_registry._devices[device.device_id] = device
+	var channel: Object = _project.create_instrument_track("Split").channel
+	var instance: Object = _device_instance_script.new(device, channel.id, 0)
+	var panel: Control = await _panel_for(instance)
+	var view: Control = panel._panel_view
+	var page := {"title": "Main", "groups": [
+		{"id": "mid", "title": "Mid", "rect": [0, 0, 1, 1]},
+		{"id": "side", "title": "Side", "rect": [1, 0, 1, 1]},
+	], "controls": [_knob_control(0, [0, 0, 1, 1], "mid"), _knob_control(1, [1, 0, 1, 1], "side")]}
+	view.layout.pages.assign([page])
+	view._build_page(0)
+	for _i in 3:
+		await process_frame
+	var grid_h: float = view._grid.size.y
+	for box in view._group_boxes:
+		_assert(absf(box.position.y + box.size.y - (grid_h - view.group_margin)) < 1.5,
+			"a split group reaches the grid bottom (box end %.0f, grid %.0f)" % [box.position.y + box.size.y, grid_h])
+	var box0: Control = view._group_boxes[0]
+	var knob: Control = view._controls[0]
+	var box_mid := box0.position.y + box0.size.y * 0.5
+	var knob_mid := knob.position.y + knob.size.y * 0.5
+	_assert(absf(box_mid - knob_mid) < view.group_header_height, "the knob is vertically centered in its group (%.0f vs %.0f)" % [knob_mid, box_mid])
+	panel.queue_free()
+	# The real device id was used, so drop the layout file this test caused to be saved.
+	var store: GDScript = load("res://devices/simple_view/SimpleLayoutStore.gd")
+	DirAccess.remove_absolute(store.path_for(device.device_id))
+	store.clear_cache()
 
 
 func _knob_control(param_id: int, rect: Array, group: String) -> Dictionary:

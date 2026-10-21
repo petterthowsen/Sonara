@@ -28,6 +28,7 @@ func run_tests() -> void:
 	_test_factory(instance)
 	_test_layout_and_sync(instance)
 	_test_live(instance)
+	_test_pitch_range(instance)
 
 
 func _param(id: int, name: String, type := "float", lo := 0.0, hi := 1.0, default_v := 0.0, values: Array = []) -> Object:
@@ -140,6 +141,29 @@ func _test_layout_and_sync(instance: Object) -> void:
 	instance.set_parameter_real(11, 150.0)
 	_assert(is_equal_approx(view.gate_slider.value, 150.0), "Gate follows the device")
 	view.queue_free()
+
+
+func _test_pitch_range(instance: Object) -> void:
+	var store := {}
+	var view: Control = load("res://devices/builtin/StepSequencerDefaultView.tscn").instantiate()
+	view.load_config = func(key: String) -> Variant: return store.get(key, 24)
+	view.save_config = func(key: String, value: Variant) -> void: store[key] = value
+	root.add_child(view)
+	view.bind_to_device(instance)
+	_assert(view.pitch_lane.max_value == 24.0 and view.pitch_lane.min_value == -24.0, "the Pitch lane defaults to +-24")
+	view.range_control.selected_changed.emit(1)
+	_assert(view.pitch_lane.max_value == 12.0 and view.pitch_lane.min_value == -12.0, "the toggle narrows the lane to +-12")
+	_assert(store.get(view.RANGE_CONFIG_KEY) == 12, "the choice is saved to the app config")
+	_assert(is_equal_approx(instance.get_parameter(101).min_value, -24.0), "the parameter range is untouched")
+	view.queue_free()
+	var again: Control = load("res://devices/builtin/StepSequencerDefaultView.tscn").instantiate()
+	again.load_config = func(key: String) -> Variant: return store.get(key, 24)
+	again.save_config = func(_k: String, _v: Variant) -> void: pass
+	root.add_child(again)
+	again.bind_to_device(instance)
+	_assert(again.pitch_lane.max_value == 12.0 and again.range_control.selected == 1, "a new view restores +-12")
+	again.queue_free()
+	_assert(view.lower_lane.custom_minimum_size.y <= 36.0 and StepLane.MIN_COLUMN_WIDTH == 24.0, "lower lanes are shorter and steps wider")
 
 
 func _test_live(instance: Object) -> void:

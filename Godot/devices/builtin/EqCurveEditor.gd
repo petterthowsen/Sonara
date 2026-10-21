@@ -22,7 +22,7 @@ signal band_hovered(band: int)
 ## The band shown in the view's knob row changed (-1: none).
 signal selection_changed(band: int)
 
-const PIANO_HEIGHT := 12.0
+const PIANO_HEIGHT := 18.0
 const NODE_RADIUS := 7.0
 const HIT_RADIUS := 11.0
 const WHEEL_Q_STEP := 1.12
@@ -91,7 +91,16 @@ var show_piano := true:
 		_curves_dirty = true
 		queue_redraw()
 
+## Draws a vertical line at the mouse with its frequency and note at the bottom (the window
+## view turns it on).
+var show_cursor_readout := false:
+	set(value):
+		show_cursor_readout = value
+		queue_redraw()
+
 var _fine := FineDrag.new()
+## The mouse x inside the editor, -1 while it is outside.
+var _cursor_x := -1.0
 var _curve_freqs := PackedFloat32Array()
 var _curves: Array[PackedFloat32Array] = []
 var _total := PackedFloat32Array()
@@ -392,6 +401,15 @@ func set_speed(speed: int) -> void:
 	view_state_changed.emit()
 
 
+## Show or hide the piano strip (the window view's toggle); persisted in the view state.
+func set_piano_visible(visible_strip: bool) -> void:
+	if state.piano == visible_strip:
+		return
+	state.piano = visible_strip
+	show_piano = visible_strip
+	view_state_changed.emit()
+
+
 func set_tilt_db(tilt_db: float) -> void:
 	if is_equal_approx(state.tilt_db, tilt_db):
 		return
@@ -587,6 +605,9 @@ func _on_mouse_button(mb: InputEventMouseButton) -> void:
 
 
 func _on_mouse_motion(motion: InputEventMouseMotion) -> void:
+	if show_cursor_readout:
+		_cursor_x = motion.position.x
+		queue_redraw()
 	if drag_band >= 0:
 		var point := _fine.update(motion.position, motion.shift_pressed, plot_rect())
 		drag_band_to(drag_band, point)
@@ -611,6 +632,9 @@ func _notification(what: int) -> void:
 			_curves_dirty = true
 			queue_redraw()
 		NOTIFICATION_MOUSE_EXIT:
+			if _cursor_x >= 0.0:
+				_cursor_x = -1.0
+				queue_redraw()
 			if drag_band < 0 and hover_band >= 0:
 				hover_band = -1
 				band_hovered.emit(-1)
@@ -759,8 +783,30 @@ func _draw() -> void:
 			_draw_node(i, i == hot)
 	if hot >= 0 and bands[hot]["enabled"]:
 		_draw_readout(hot, font)
+	if show_cursor_readout and _cursor_x >= 0.0:
+		_draw_cursor_readout(font)
 	if show_piano:
-		freq_axis.draw_piano_strip(self, piano_rect(), font, 8)
+		freq_axis.draw_piano_strip(self, piano_rect(), font, 9)
+
+
+## The text under the cursor line: "440 Hz  A3 +0¢".
+func cursor_readout_text() -> String:
+	var hz := freq_axis.x_to_hz(_cursor_x)
+	return "%s  %s" % [FreqAxis.format_hz_long(hz), FreqAxis.format_note_cents(hz)]
+
+
+## A vertical line at the mouse, and its frequency and note in a box on the line's foot, above
+## the grid labels.
+func _draw_cursor_readout(font: Font) -> void:
+	var plot := plot_rect()
+	var x := clampf(_cursor_x, plot.position.x, plot.end.x)
+	draw_line(Vector2(x, plot.position.y), Vector2(x, plot.end.y), Color(1, 1, 1, 0.35), 1.0)
+	var text := cursor_readout_text()
+	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+	var box := Rect2(x - text_size.x / 2.0 - 4.0, plot.end.y - text_size.y - 20.0, text_size.x + 8.0, text_size.y + 4.0)
+	box.position.x = clampf(box.position.x, 2.0, maxf(size.x - box.size.x - 2.0, 2.0))
+	draw_rect(box, Color(0.08, 0.08, 0.1, 0.9))
+	draw_string(font, box.position + Vector2(4.0, text_size.y - 1.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.92, 0.92, 0.95))
 
 
 ## Faint vertical fill between a band's curve and the 0 dB line.

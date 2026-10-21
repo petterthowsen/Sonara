@@ -2,7 +2,8 @@
 
 use super::container::gain_to_normalized;
 use super::container::{
-    apply_gain, insert_into_vec, move_in_vec, normalized_to_gain, remove_from_vec, DeviceContainer,
+    apply_gain, blend_dry_wet, clamp_mix, insert_into_vec, move_in_vec, normalized_to_gain,
+    read_dry, remove_from_vec, DeviceContainer, MIX_PARAM_ID,
 };
 use crate::audio::devices::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
@@ -100,6 +101,10 @@ pub struct LayerDevice {
     is_active: bool,
     mix_buffer: Vec<f32>,
     child_buffer: Vec<f32>,
+    /// Latency-aligned dry signal for the mix blend.
+    dry_buf: Vec<f32>,
+    /// Dry/wet mix in `[0, 1]`: 0 = input passes through, 1 = fully layered.
+    mix: f32,
     /// Delays the input by the Layer's latency while bypassed. Fed every block.
     dry: AlignDelay,
 }
@@ -114,6 +119,8 @@ impl LayerDevice {
             is_active: true,
             mix_buffer: vec![0.0; interleaved],
             child_buffer: vec![0.0; interleaved],
+            dry_buf: vec![0.0; interleaved],
+            mix: 1.0,
             dry: AlignDelay::default(),
         }
     }
@@ -247,6 +254,21 @@ impl LayerDevice {
         }
     }
 
+    /// Blend the dry input into `mix_buffer` per the Mix parameter. The extra (separate-out)
+    /// buses are unaffected.
+    fn apply_mix(&mut self, inputs: &[f32], sample_count: usize, interleaved: usize) {
+        if self.mix >= 1.0 {
+            return;
+        }
+        read_dry(&self.dry, inputs, &mut self.dry_buf, sample_count);
+        blend_dry_wet(
+            &mut self.mix_buffer[..interleaved],
+            &self.dry_buf,
+            sample_count,
+            self.mix,
+        );
+    }
+
     /// True when at least one slot is soloed.
     fn any_solo(&self) -> bool {
         self.slots.iter().any(|s| s.solo)
@@ -287,6 +309,7 @@ impl AudioDevice for LayerDevice {
             .min(inputs.len())
             .min(outputs.len())
             .min(self.mix_buffer.len())
+            .min(self.dry_buf.len())
             .min(self.child_buffer.len());
 
         if !self.enabled || !self.is_active {
@@ -295,13 +318,10 @@ impl AudioDevice for LayerDevice {
         }
         self.dry.write(inputs, sample_count);
 
-        outputs[..interleaved].fill(0.0);
-        if self.slots.is_empty() {
-            return;
-        }
-
+        // An empty layer renders silence, which the mix still blends with the dry input.
         // Not a multi-out source here: separate slots mix in so no audio is lost.
         self.render_slots(inputs, &mut [], sample_count, interleaved);
+        self.apply_mix(inputs, sample_count, interleaved);
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
@@ -344,6 +364,7 @@ impl AudioDevice for LayerDevice {
             .min(inputs.len())
             .min(outputs.len())
             .min(self.mix_buffer.len())
+            .min(self.dry_buf.len())
             .min(self.child_buffer.len());
 
         // Buses of non-separate (or missing) slots stay silent.
@@ -358,12 +379,9 @@ impl AudioDevice for LayerDevice {
         }
         self.dry.write(inputs, sample_count);
 
-        outputs[..interleaved].fill(0.0);
-        if self.slots.is_empty() {
-            return;
-        }
-
+        // An empty layer renders silence, which the mix still blends with the dry input.
         self.render_slots(inputs, extra_outs, sample_count, interleaved);
+        self.apply_mix(inputs, sample_count, interleaved);
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
@@ -422,12 +440,17 @@ impl AudioDevice for LayerDevice {
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
-        if let Some(i) = slot_of_param(param_id) {
+        if param_id == MIX_PARAM_ID {
+            self.mix = clamp_mix(value);
+        } else if let Some(i) = slot_of_param(param_id) {
             self.set_slot_volume_normalized(i, value);
         }
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
+        if param_id == MIX_PARAM_ID {
+            return Some(self.mix);
+        }
         let slot = self.slots.get(slot_of_param(param_id)?)?;
         Some(gain_to_normalized(slot.volume))
     }
@@ -467,8 +490,28 @@ impl AudioDevice for LayerDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        (0..self.slots.len())
-            .map(|i| ParamInfo {
+        let mix = ParamInfo {
+            id: MIX_PARAM_ID,
+            name: "Mix".to_string(),
+            unit: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default: 1.0,
+            is_automation_safe: true,
+            param_type: ParamType::Float,
+            syncable: true,
+            enum_values: Vec::new(),
+            is_hidden: false,
+            is_read_only: false,
+            is_bypass: false,
+            is_modulatable: false,
+            module: String::new(),
+            is_logarithmic: false,
+            skew: 1.0,
+            display: Vec::new(),
+        };
+        std::iter::once(mix)
+            .chain((0..self.slots.len()).map(|i| ParamInfo {
                 id: SLOT_VOLUME_PARAM_BASE + i as ParamId,
                 name: format!("Layer {} Volume", i + 1),
                 unit: String::new(),
@@ -488,7 +531,7 @@ impl AudioDevice for LayerDevice {
                 is_logarithmic: false,
                 skew: 1.0,
                 display: Vec::new(),
-            })
+            }))
             .collect()
     }
 
@@ -498,6 +541,7 @@ impl AudioDevice for LayerDevice {
             slot.held = [NOT_HELD; 128];
         }
         self.mix_buffer.fill(0.0);
+        self.dry_buf.fill(0.0);
         self.child_buffer.fill(0.0);
     }
 
@@ -709,6 +753,35 @@ mod tests {
         layer.insert_child(0, Box::new(GainDevice::new(0.5)));
         layer.insert_child(1, Box::new(GainDevice::new(0.25)));
         assert!((render(&mut layer, 1.0) - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mix_blends_dry_input_and_is_clamped() {
+        let mut layer = LayerDevice::new(8);
+        layer.insert_child(0, Box::new(GainDevice::new(0.0)));
+        // Children are silent, so the output is the dry share of the 1.0 input.
+        layer.set_parameter(MIX_PARAM_ID, 0.0);
+        assert!(
+            (render(&mut layer, 1.0) - 1.0).abs() < 1e-6,
+            "mix 0 is 100% dry"
+        );
+        layer.set_parameter(MIX_PARAM_ID, 0.25);
+        assert!((render(&mut layer, 1.0) - 0.75).abs() < 1e-6);
+        layer.set_parameter(MIX_PARAM_ID, 1.0);
+        assert!(render(&mut layer, 1.0).abs() < 1e-6, "mix 1 is 100% wet");
+        layer.set_parameter(MIX_PARAM_ID, 9.0);
+        assert_eq!(layer.get_parameter(MIX_PARAM_ID), Some(1.0));
+        layer.set_parameter(MIX_PARAM_ID, -9.0);
+        assert_eq!(layer.get_parameter(MIX_PARAM_ID), Some(0.0));
+        // The wet path is untouched at full mix: slots still sum.
+        let mut layer = LayerDevice::new(8);
+        layer.insert_child(0, Box::new(GainDevice::new(0.5)));
+        layer.insert_child(1, Box::new(GainDevice::new(0.25)));
+        assert!((render(&mut layer, 1.0) - 0.75).abs() < 1e-6);
+        // An empty layer at mix 0 passes the input through.
+        let mut empty = LayerDevice::new(8);
+        empty.set_parameter(MIX_PARAM_ID, 0.0);
+        assert!((render(&mut empty, 1.0) - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -978,7 +1051,11 @@ mod tests {
         layer.set_param_mod(id, 0.25);
         layer.set_slot_mute(0, true);
         assert_eq!(render(&mut layer, 1.0), 0.0);
-        assert!(layer.parameters().iter().all(|p| p.is_modulatable));
+        assert!(layer
+            .parameters()
+            .iter()
+            .filter(|p| p.id >= SLOT_VOLUME_PARAM_BASE)
+            .all(|p| p.is_modulatable));
     }
 
     #[test]

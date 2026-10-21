@@ -153,7 +153,7 @@ addon's `plugin.cfg`.
 | [cpal](https://github.com/RustAudio/cpal) | Audio output (PipeWire / ALSA) |
 | [symphonia](https://github.com/pdeljanov/symphonia) | Decode import formats (AAC, MP3, OGG, FLAC, WAV, …) |
 | [rubato](https://github.com/henquist/rubato) | Offline resampling during decode |
-| [realfft](https://github.com/ejmahler/realfft) | Spectrum analyzer FFT |
+| [realfft](https://github.com/ejmahler/realfft) | FFT for the EQ spectrum display |
 | [sfizz](https://github.com/petterthowsen/rust-sfizz) (git) | Built-in SFZ sampler |
 | [clack](https://github.com/prokopyl/clack) (`clack-host`, `clack-extensions`, git) | CLAP plugin hosting |
 | [rosc](https://github.com/klingtnet/rosc) | OSC to/from Godot |

@@ -48,6 +48,11 @@ func _test_strip_highlights() -> void:
 	_assert(strip.is_key_sounding(64), "the highlight survives a rejected blob")
 	strip.set_state(_strip_script.decode(PackedByteArray([0xFF, 67, 0xFF, 3, 60, 64, 67])))
 	_assert(strip.is_key_sounding(67) and not strip.is_key_sounding(64), "the highlight moves with the next blob")
+	strip.octaves = 3
+	strip.set_state(_strip_script.decode(PackedByteArray([0xFF, 60, 0xFF, 1, 60])))
+	_assert(strip.is_key_held(72) and strip.is_key_held(84) and not strip.is_key_held(96), "held keys are lit in the extra octaves")
+	_assert(not strip.is_key_held(61), "other keys stay unlit with several octaves")
+	strip.octaves = 1
 	strip.clear()
 	_assert(strip.sounding_key == -1 and strip.held.is_empty(), "clear forgets the state")
 	strip.free()

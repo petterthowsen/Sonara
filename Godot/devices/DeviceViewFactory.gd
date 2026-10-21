@@ -4,7 +4,6 @@ class_name DeviceViewFactory extends RefCounted
 
 ## Built-in device ID → view scenes, per view type.
 const BUILTIN_PANEL_SCENES := {
-	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
 	"sonara.builtin.chain": preload("res://devices/builtin/ChainDefaultView.tscn"),
 	"sonara.builtin.layer": preload("res://devices/builtin/LayerDefaultView.tscn"),
 	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerDefaultView.tscn"),
@@ -13,11 +12,11 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.compressor": preload("res://devices/builtin/CompressorDefaultView.tscn"),
 	"sonara.builtin.multiband": preload("res://devices/builtin/MultibandDefaultView.tscn"),
 	"sonara.builtin.arpeggiator": preload("res://devices/builtin/ArpeggiatorDefaultView.tscn"),
+	"sonara.builtin.chord": preload("res://devices/builtin/ChordDefaultView.tscn"),
 	"sonara.builtin.saturator": preload("res://devices/builtin/SaturatorDefaultView.tscn"),
 	"sonara.builtin.step_sequencer": preload("res://devices/builtin/StepSequencerDefaultView.tscn"),
 }
 const BUILTIN_WINDOW_SCENES := {
-	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
 	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
 	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerWindowView.tscn"),
 }

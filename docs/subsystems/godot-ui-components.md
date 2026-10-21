@@ -177,7 +177,7 @@ per-instance theme override, so it survives theme changes. In a scene, override 
 | `ValueTooltip.gd` | Floating value readout: `ValueTooltip.attach(host)`, then `place_above` / `place_below` / `place_right_of`, or `set_plain(true)` + `place_over` for text over the control |
 | `LabelOverlay.gd` | Full text of a trimmed Label on hover: `LabelOverlay.attach(label, [hover sources])` |
 | `FloatingValueEditor.gd` | Double-click value entry |
-| `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |
+| `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`); `display_mode` LABEL (default), VALUE or BOTH stacks knob, value (small font), caption, and drops the hover value tooltip |
 | `DropIndicator.gd` | Drop position glow (see `godot-drag-and-drop.md`) |
 | `core/UiColors.gd` | `UiColors.role(&"name")` reads a theme palette role. Also holds the fixed meter colours (`METER_WARN`, `METER_CLIP`, `METER_HOLD`) |
 | `components/ThemedColors.gd` | Colour cache for a custom-drawn control: routes its colour properties through theme overrides (see §5) |

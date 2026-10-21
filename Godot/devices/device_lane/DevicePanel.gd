@@ -353,7 +353,7 @@ func _is_on_header(global_pos: Vector2) -> bool:
 
 ## Release engine subscriptions and popups when the panel is freed (e.g.
 ## DeviceLane.clear()/_on_channel_device_removed(), or a parent being freed).
-## Without this, custom views (like the spectrum analyzer) never get
+## Without this, custom views (like the EQ) never get
 ## _on_view_hidden(). Device windows are exempt: DeviceWindowManager owns them.
 ## Not _exit_tree(): DockHost reparents docks, which would wipe the parameter
 ## controls with nothing to rebuild them.

@@ -20,7 +20,7 @@ signal edit_ended
 ## Horizontal space between groups of `group_size` columns.
 const GROUP_GAP := 4.0
 ## Narrowest a column may get, so steps stay easy to hit and their numbers fit.
-const MIN_COLUMN_WIDTH := 20.0
+const MIN_COLUMN_WIDTH := 24.0
 
 @export var mode := Mode.BARS:
 	set(m):

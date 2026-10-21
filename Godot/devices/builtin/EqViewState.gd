@@ -25,6 +25,8 @@ var range_db: float = DEFAULT_RANGE_DB
 var resolution: int = Resolution.MEDIUM
 var speed: int = Speed.MEDIUM
 var tilt_db: float = 0.0
+## The piano strip of the window view (the panel view never has one).
+var piano := true
 
 
 func to_dict() -> Dictionary:
@@ -34,6 +36,7 @@ func to_dict() -> Dictionary:
 		"resolution": RESOLUTION_NAMES[resolution],
 		"speed": SPEED_NAMES[speed],
 		"tilt_db": tilt_db,
+		"piano": piano,
 	}
 
 
@@ -50,6 +53,7 @@ static func from_dict(data: Variant) -> EqViewState:
 		state.speed = speed_index if speed_index >= 0 else Speed.MEDIUM
 		var tilt := float(data.get("tilt_db", 0.0))
 		state.tilt_db = tilt if tilt in TILTS else 0.0
+		state.piano = bool(data.get("piano", true))
 	return state
 
 
@@ -64,4 +68,5 @@ func equals(other: EqViewState) -> bool:
 		and resolution == other.resolution
 		and speed == other.speed
 		and is_equal_approx(tilt_db, other.tilt_db)
+		and piano == other.piano
 	)

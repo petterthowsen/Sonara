@@ -1,8 +1,9 @@
 //! Serial device container: children process in order, then a single volume is applied.
 
 use super::container::{
-    apply_gain, gain_to_normalized, insert_into_vec, move_in_vec, normalized_to_gain,
-    process_serial_chain, remove_from_vec, DeviceContainer,
+    apply_gain, blend_dry_wet, clamp_mix, gain_to_normalized, insert_into_vec, move_in_vec,
+    normalized_to_gain, process_serial_chain, read_dry, remove_from_vec, DeviceContainer,
+    MIX_PARAM_ID,
 };
 use crate::audio::devices::note_fx::routing::{route_note, run_note_phase};
 use crate::audio::devices::{
@@ -18,11 +19,15 @@ pub struct ChainDevice {
     children: Vec<Box<dyn AudioDevice>>,
     /// Linear gain in `[0, 2]` (1.0 = unity).
     volume: f32,
+    /// Dry/wet mix in `[0, 1]`: 0 = input passes through, 1 = fully processed.
+    mix: f32,
     enabled: bool,
     /// Dormant (deactivated) devices bypass like a disabled one.
     is_active: bool,
     buf_a: Vec<f32>,
     buf_b: Vec<f32>,
+    /// Latency-aligned dry signal for the mix blend.
+    dry_buf: Vec<f32>,
     /// Delays the input by the children's latency while bypassed (spec 042: bypass keeps
     /// latency). Fed every block so a switch to bypass plays on without a gap.
     dry: AlignDelay,
@@ -35,10 +40,12 @@ impl ChainDevice {
         Self {
             children: Vec::new(),
             volume: 1.0,
+            mix: 1.0,
             enabled: true,
             is_active: true,
             buf_a: vec![0.0; interleaved],
             buf_b: vec![0.0; interleaved],
+            dry_buf: vec![0.0; interleaved],
             dry: AlignDelay::default(),
         }
     }
@@ -89,7 +96,8 @@ impl AudioDevice for ChainDevice {
             .min(inputs.len())
             .min(outputs.len())
             .min(self.buf_a.len())
-            .min(self.buf_b.len());
+            .min(self.buf_b.len())
+            .min(self.dry_buf.len());
         if interleaved == 0 {
             return;
         }
@@ -111,6 +119,10 @@ impl AudioDevice for ChainDevice {
             &mut self.buf_a[..interleaved]
         };
         apply_gain(src, sample_count, self.volume);
+        if self.mix < 1.0 {
+            read_dry(&self.dry, inputs, &mut self.dry_buf, sample_count);
+            blend_dry_wet(src, &self.dry_buf, sample_count, self.mix);
+        }
         outputs[..interleaved].copy_from_slice(src);
     }
 
@@ -140,6 +152,9 @@ impl AudioDevice for ChainDevice {
         if self.buf_b.len() < interleaved {
             self.buf_b.resize(interleaved, 0.0);
         }
+        if self.dry_buf.len() < interleaved {
+            self.dry_buf.resize(interleaved, 0.0);
+        }
     }
 
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
@@ -162,16 +177,18 @@ impl AudioDevice for ChainDevice {
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
-        if param_id == 0 {
-            self.volume = normalized_to_gain(value);
+        match param_id {
+            0 => self.volume = normalized_to_gain(value),
+            MIX_PARAM_ID => self.mix = clamp_mix(value),
+            _ => {}
         }
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
-        if param_id == 0 {
-            Some(gain_to_normalized(self.volume))
-        } else {
-            None
+        match param_id {
+            0 => Some(gain_to_normalized(self.volume)),
+            MIX_PARAM_ID => Some(self.mix),
+            _ => None,
         }
     }
 
@@ -204,13 +221,13 @@ impl AudioDevice for ChainDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        vec![ParamInfo {
-            id: 0,
-            name: "Volume".to_string(),
+        let float = |id: ParamId, name: &str, max: f32, default: f32| ParamInfo {
+            id,
+            name: name.to_string(),
             unit: String::new(),
             min: 0.0,
-            max: 2.0,
-            default: 1.0,
+            max,
+            default,
             is_automation_safe: true,
             is_hidden: false,
             is_read_only: false,
@@ -223,7 +240,12 @@ impl AudioDevice for ChainDevice {
             param_type: ParamType::Float,
             syncable: true,
             enum_values: Vec::new(),
-        }]
+        };
+        vec![
+            float(0, "Volume", 2.0, 1.0),
+            // Dry/wet: 0 = input only, 1 = fully processed.
+            float(MIX_PARAM_ID, "Mix", 1.0, 1.0),
+        ]
     }
 
     fn reset(&mut self) {
@@ -232,6 +254,7 @@ impl AudioDevice for ChainDevice {
         }
         self.buf_a.fill(0.0);
         self.buf_b.fill(0.0);
+        self.dry_buf.fill(0.0);
     }
 
     fn is_active(&self) -> bool {
@@ -350,6 +373,40 @@ mod tests {
         for sample in &outputs {
             assert!((sample - 0.5).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn mix_blends_dry_and_wet_and_is_clamped() {
+        let run = |mix: f32| {
+            let mut chain = ChainDevice::new(16);
+            chain.insert_child(0, Box::new(GainDevice::new(0.0)));
+            chain.set_parameter(MIX_PARAM_ID, mix);
+            let inputs = vec![1.0f32; 8];
+            let mut outputs = vec![9.0f32; 8];
+            chain.process_block(&inputs, &mut outputs, 4);
+            outputs[0]
+        };
+        // The child silences the signal, so the output is exactly the dry share.
+        assert!((run(0.0) - 1.0).abs() < 1e-6, "mix 0 must be 100% dry");
+        assert!((run(0.25) - 0.75).abs() < 1e-6);
+        assert!(run(1.0).abs() < 1e-6, "mix 1 must be 100% wet");
+        // Out-of-range values clamp.
+        assert!(run(5.0).abs() < 1e-6);
+        assert!((run(-3.0) - 1.0).abs() < 1e-6);
+        let mut chain = ChainDevice::new(16);
+        chain.set_parameter(MIX_PARAM_ID, 7.0);
+        assert_eq!(chain.get_parameter(MIX_PARAM_ID), Some(1.0));
+    }
+
+    #[test]
+    fn mix_dry_path_is_latency_aligned() {
+        use crate::audio::mixing::test_support::{delayed_ramp, stream_device, LatencyDevice};
+        let mut chain = ChainDevice::new(64);
+        chain.insert_child(0, Box::new(LatencyDevice::new(5, 1.0)));
+        chain.update_latency(48_000.0);
+        chain.set_parameter(MIX_PARAM_ID, 0.0);
+        let (main, _) = stream_device(&mut chain, 5, 4, 0);
+        assert_eq!(main, delayed_ramp(5, 1.0, 40));
     }
 
     #[test]

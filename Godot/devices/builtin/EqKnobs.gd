@@ -5,8 +5,9 @@ const KNOB_SIZE := Vector2(34, 34)
 const KNOB_LABEL_WIDTH := 40.0
 
 
-static func make_knob(text: String, on_changed: Callable) -> LabeledKnob:
+static func make_knob(text: String, on_changed: Callable, display_mode := LabeledKnob.DisplayMode.LABEL) -> LabeledKnob:
 	var knob := LabeledKnob.new()
+	knob.display_mode = display_mode
 	knob.text = text
 	knob.knob_size = KNOB_SIZE
 	knob.label_width = KNOB_LABEL_WIDTH
@@ -30,6 +31,8 @@ static func configure(knob: RotaryKnob, device: Object, param_id: int, format: S
 			return FreqAxis.format_hz(value) + " Hz"
 		return (format % value) + unit_suffix
 	ModAssign.retarget(knob, device, param_id)
+	# A value caption (LabeledKnob) re-reads the text with the new format.
+	knob.value_set.emit()
 
 
 ## The same for the footer's `CompactSlider`s (no label of its own: the text names the control,

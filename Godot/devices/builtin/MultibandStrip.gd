@@ -6,6 +6,11 @@ class_name MultibandStrip extends Control
 
 const HANDLE_GRAB := 7.0
 const AXIS_HEIGHT := 14.0
+## The input spectrum behind the bands is drawn between these levels (dBFS).
+const SPECTRUM_FLOOR_DB := -90.0
+const SPECTRUM_CEIL_DB := 0.0
+const SPECTRUM_FILL := Color(1, 1, 1, 0.08)
+const SPECTRUM_LINE := Color(1, 1, 1, 0.18)
 const TICKS := [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0]
 
 var mb: DeviceInstance = null
@@ -13,6 +18,10 @@ var mb: DeviceInstance = null
 var _drag_band := 0
 var _drag_old := 0.0
 var _hover_band := 0
+## Input spectrum (dBFS), log-spaced from `_spectrum_lo_hz` to `_spectrum_hi_hz`; empty = none.
+var _spectrum := PackedFloat32Array()
+var _spectrum_lo_hz := 20.0
+var _spectrum_hi_hz := 20000.0
 
 
 func _init() -> void:
@@ -23,6 +32,37 @@ func _init() -> void:
 func bind(p_mb: DeviceInstance) -> void:
 	mb = p_mb
 	queue_redraw()
+
+
+## Show the input spectrum faintly behind the bands, to help place the crossovers.
+func set_spectrum(db_values: PackedFloat32Array, lo_hz: float, hi_hz: float) -> void:
+	_spectrum = db_values
+	_spectrum_lo_hz = lo_hz
+	_spectrum_hi_hz = hi_hz
+	queue_redraw()
+
+
+func clear_spectrum() -> void:
+	if _spectrum.is_empty():
+		return
+	_spectrum = PackedFloat32Array()
+	queue_redraw()
+
+
+## Plot points of a log-spaced spectrum (`db_values` from `lo_hz` to `hi_hz`) over a strip of
+## `width` x `height` pixels whose x axis is the Multiband crossover axis (20 Hz-20 kHz).
+static func spectrum_points(db_values: PackedFloat32Array, lo_hz: float, hi_hz: float, width: float, height: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var n := db_values.size()
+	if n < 2 or lo_hz <= 0.0 or hi_hz <= lo_hz:
+		return out
+	out.resize(n)
+	var span := SPECTRUM_CEIL_DB - SPECTRUM_FLOOR_DB
+	for i in n:
+		var hz := lo_hz * pow(hi_hz / lo_hz, float(i) / float(n - 1))
+		var level := clampf((db_values[i] - SPECTRUM_FLOOR_DB) / span, 0.0, 1.0)
+		out[i] = Vector2(Multiband.freq_to_norm(hz) * width, (1.0 - level) * height)
+	return out
 
 
 func _x_of(hz: float) -> float:
@@ -76,6 +116,7 @@ func _draw() -> void:
 		var label := mb.children[p - 1].get_display_name() if p <= mb.children.size() else names[p - 1]
 		if x1 - x0 > 30.0:
 			draw_string(font, Vector2(x0 + 5, 17), label, HORIZONTAL_ALIGNMENT_LEFT, x1 - x0 - 8, font_size, Color(1, 1, 1, 0.85))
+	_draw_spectrum(h)
 	for hz in TICKS:
 		var x := _x_of(hz)
 		draw_line(Vector2(x, h), Vector2(x, h + 3), Color(0.5, 0.5, 0.5))
@@ -92,6 +133,17 @@ func _draw() -> void:
 		var w := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 		draw_string(font, Vector2(clampf(x - w * 0.5, 0.0, size.x - w), h - 5), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+
+
+func _draw_spectrum(h: float) -> void:
+	var line := spectrum_points(_spectrum, _spectrum_lo_hz, _spectrum_hi_hz, size.x, h)
+	if line.size() < 2:
+		return
+	var fill := PackedVector2Array(line)
+	fill.append(Vector2(line[line.size() - 1].x, h))
+	fill.append(Vector2(line[0].x, h))
+	draw_colored_polygon(fill, SPECTRUM_FILL)
+	draw_polyline(line, SPECTRUM_LINE, 1.0, true)
 
 
 func _band_color(position: int) -> Color:

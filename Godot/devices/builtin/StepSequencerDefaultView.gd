@@ -11,6 +11,10 @@ const DATA_TYPE := "note_state"
 const STEPS := 16
 const FLASH_MS := 150.0
 const LEFT_WIDTH := 130.0
+## App-config key for the Pitch lane's display range (the same for every Step Sequencer).
+const RANGE_CONFIG_KEY := "devices/step_sequencer/pitch_range"
+## Selectable half-ranges of the Pitch lane, in semitones; the first is the default.
+const PITCH_RANGES := [24, 12]
 
 const P_LENGTH := 0
 const P_MODE := 1
@@ -28,6 +32,9 @@ const VELOCITY_SOURCE_LABELS := ["In × Step", "Step"]
 ## Injectable for tests: the millisecond clock, and the output latency in ms.
 var now_ms_provider: Callable = Callable(self, "_real_now_ms")
 var latency_provider: Callable = Callable(self, "_real_latency_ms")
+## Injectable for tests: read / write the view's app-config settings.
+var load_config := Callable(self, "_load_app_config")
+var save_config := Callable(self, "_save_app_config")
 
 var length_slider: CompactSlider
 var rate_option: OptionButton
@@ -40,6 +47,9 @@ var on_lane: StepLane
 var pitch_lane: StepLane
 var lower_lane: StepLane
 var lower_switch: SegmentedControl
+var range_control: SegmentedControl
+## Half-range of the Pitch lane in semitones (12 or 24). View-only: the parameter keeps +-24.
+var pitch_range := 24
 var playhead := StepPlayhead.new()
 ## 0 = Velocity, 1 = Chance. Lasts as long as the view; not saved.
 var lower_choice := 0
@@ -117,6 +127,19 @@ func _build() -> void:
 	mode_control = _segment(left, "Mode", PackedStringArray(["Chord", "Mono"]), P_MODE)
 	velocity_source_control = _segment(left, "Velocity", PackedStringArray(VELOCITY_SOURCE_LABELS),
 			P_VELOCITY_SOURCE)
+	range_control = SegmentedControl.new()
+	range_control.set_items(PackedStringArray(["±24", "±12"]))
+	range_control.font_size = 10
+	range_control.selected_changed.connect(_on_range_selected)
+	var range_box := VBoxContainer.new()
+	range_box.add_theme_constant_override("separation", 1)
+	var range_label := Label.new()
+	range_label.text = "Pitch range (st)"
+	range_label.add_theme_font_size_override("font_size", 10)
+	range_label.modulate = Color(1, 1, 1, 0.6)
+	range_box.add_child(range_label)
+	range_box.add_child(range_control)
+	left.add_child(range_box)
 
 	var right := VBoxContainer.new()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -151,9 +174,9 @@ func _build() -> void:
 	lower_lane = _lane(StepLane.Mode.BARS, 0.0, 100.0, 0.0, 100.0)
 	lower_lane.unit = "%"
 	lower_lane.value_text_callback = func(v: float) -> String: return "%d %%" % roundi(v)
-	lower_lane.custom_minimum_size.y = 60.0
+	lower_lane.custom_minimum_size.y = 36.0
 	lower_lane.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	lower_lane.size_flags_stretch_ratio = 90.0
+	lower_lane.size_flags_stretch_ratio = 54.0
 	lower_lane.value_edited.connect(_on_lane_edited.bind(-1))
 	right.add_child(lower_lane)
 
@@ -251,6 +274,8 @@ func _setup() -> void:
 	if mode != null and mode.enum_values.size() == 2:
 		mode_control.set_items(PackedStringArray(mode.enum_values))
 	_configure_lane_defaults()
+	var saved: Variant = load_config.call(RANGE_CONFIG_KEY)
+	_apply_pitch_range(12 if (saved is int or saved is float) and int(saved) == 12 else 24)
 	_refresh()
 
 
@@ -271,6 +296,39 @@ func _configure_lane_defaults() -> void:
 		pitch_lane.max_value = pitch.max_value
 		pitch_lane.default_value = pitch.default_value
 	_configure_lower_lane()
+
+
+## Show the Pitch lane over +-`half` semitones. Display only; values outside it are drawn clamped.
+func _apply_pitch_range(half: int) -> void:
+	pitch_range = 12 if half == 12 else 24
+	pitch_lane.min_value = -float(pitch_range)
+	pitch_lane.max_value = float(pitch_range)
+	pitch_lane.guide_values = PackedFloat32Array([-12.0, 12.0]) if pitch_range == 24 \
+			else PackedFloat32Array([-6.0, 6.0])
+	range_control.set_selected_no_signal(PITCH_RANGES.find(pitch_range))
+
+
+func _on_range_selected(index: int) -> void:
+	_apply_pitch_range(PITCH_RANGES[clampi(index, 0, PITCH_RANGES.size() - 1)])
+	save_config.call(RANGE_CONFIG_KEY, pitch_range)
+
+
+func _load_app_config(key: String) -> Variant:
+	var sonara := _autoload("Sonara")
+	return sonara.get_config(key, 24) if sonara != null else 24
+
+
+func _save_app_config(key: String, value: Variant) -> void:
+	var sonara := _autoload("Sonara")
+	if sonara == null:
+		return
+	sonara.set_config(key, value)
+	sonara.save_config()
+
+
+func _autoload(autoload_name: String) -> Node:
+	var tree := Engine.get_main_loop() as SceneTree
+	return tree.root.get_node_or_null(autoload_name) if tree != null else null
 
 
 func _configure_lower_lane() -> void:

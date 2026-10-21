@@ -8,6 +8,12 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Chord has its own panel view: a keyboard of intervals around middle C. Click a key to add or remove that note from the chord; zoom shows up to three octaves and the arrows page between octaves. Enabled keys use the secondary color and light up in the primary color while notes are held.
+- EQ window: a vertical line follows the mouse and shows the frequency under it with its note and cents ("440 Hz  A3 +0¢"); the piano strip is taller and has a toggle in the header. In the companion band strips, the enabled and solo toggles sit side by side, a slope box (6 to 48 dB/oct) sits next to the type box for the Low Cut and High Cut types, and the knobs show their values.
+- Multiband FX shows a faint spectrum of its input behind the crossover strip, to help place the band splits.
+- Knobs (`LabeledKnob`) can show the value under the knob, alone or above the caption.
+- Step Sequencer: a "Pitch range" toggle switches the Pitch lane between +-24 and +-12 semitones (remembered).
+- Chain has a real dry/wet Mix knob (0 = dry input, 1 = fully processed); its old "MIX" knob was the output volume and is now labeled VOL. Layer gets the same Mix knob. Both are clamped to 0–1.
 - PolySynth has a Pan control for each of Oscillator 1 and 2, and a global output Pan.
 - Device windows of a channel show the channel name with Solo/Mute toggles in the title bar, beside the device tabs. In a narrow window they wrap onto a second line within the title bar.
 - With "Color Clips by Track" on, MIDI notes and waveforms take the track's hue, lighter on a dark clip and darker on a near-white one, instead of plain white.
@@ -15,8 +21,14 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - New appearance setting "Mixer Strip Tint" sets how strongly Colored Mixer Strips take on the channel color (0–1, default 0.8).
 - New behavior setting "Toggle Visibility Groups While Modifier Is Held": Ctrl+1, then 2, 3… combines visibility groups, and pressing a number again removes that group, until the modifier (Ctrl, or Shift/Alt/Meta if rebound) is released.
 
+### Removed
+
+- The old Spectrum Analyzer device. Projects that still contain it load without it (the device is skipped).
+
 ### Changed
 
+- Step Sequencer: steps are 20% wider and the Velocity/Chance lane is about 40% shorter.
+- Mid/Side Split and L/R Split: each group stretches to the full height of the device, with its knobs centered.
 - Closing a device's View (collapsing its controls) in the device lane now also hides the devices in its slots, nested slots included (PolySynth, Delay, Reverb, Mid/Side and L/R Split, Chain, Layer, Drum Machine). Opening the View brings them back exactly as they were, including their own collapsed state, and hidden devices stop streaming their meters and displays.
 - Every knob, slider and parameter value in a time unit now switches dynamically between milliseconds and seconds (for example "250 ms" and "1.20 s"), like the envelope control; typed values accept an "s" or "ms" suffix.
 - Clip editor, track mode: notes of several editable tracks can be selected together. A box select (also the ruler's Ctrl+drag range) and the pitch header pick the notes of every editable track, Ctrl+click on a note of another track adds it to the selection without leaving your track, and Ctrl+Alt+A selects all notes of all editable tracks. Switching tracks keeps the selection; hiding a track or turning off its pencil takes its notes out. Delete, cut, the arrow-key edits and the selection tools (quantize, flip, strum, harmonize and the rest) act on all selected notes as one undo step. Transfer Notes and Split Voices need notes of a single track. Dragging, resizing and the Alt velocity drag move the whole selection across tracks, starting from a note of any track, and Esc cancels them. Copying notes of several tracks pastes each note back onto its own track at the new position (a note whose track is no longer editable goes to your track), Ctrl+drag duplicates a multi-track selection onto each note's own track, and the length-scale handle appears for a selection across tracks. The value lanes (velocity, release and the other note values) edit the selected notes of every track in one undo step.
@@ -24,6 +36,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Arpeggiator: with Octaves above 1, the held notes in the extra octaves are now colored like the base octave.
 - PolySynth: pressing the same key again no longer cuts off the previous note; it rings out its release while the repeat plays on a new voice.
 - Plugins with many parameters (such as Vital, 900+ CLAP / 2900+ VST3) now show all of them in the Simple View. Most of the parameter list was lost on the way from the engine to the UI.
 - Clicks in an embedded JUCE plugin GUI (such as Vital, CLAP and VST3) no longer land offset by the height of the device tab bar, by the scroll position, or after the window moves.

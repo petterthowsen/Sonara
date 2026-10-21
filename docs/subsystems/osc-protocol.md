@@ -343,12 +343,12 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
   - `0`: Delay Time (1-5000ms, normalized 0.0-1.0)
   - `1`: Wet Amount (0.0-1.0)
 
-**Spectrum Analyzer (`sonara.builtin.spectrum_analyzer`)**
-- **Type:** Utility (analyzer)
-- **Params (typed):**
-  - `0`: FFT Size (enum: Tiny=512, Small=1024, Medium=2048, Large=4096)
-  - `1`: Speed (enum: Freeze, Slow, Medium, Fast)
-  - UI-only (not synced): Scale (enum: Log, Linear), Style (enum: Bars, Line)
+**Chain (`sonara.builtin.chain`) and Layer (`sonara.builtin.layer`)**
+- **Type:** Utility (containers)
+- **Params:**
+  - `0` (Chain only): Volume (gain 0-2, normalized 0.5 = unity), applied after the children
+  - `1`: Mix (0.0-1.0, default 1). 0 = 100% dry (the input, aligned to the container's latency), 1 = 100% wet (the children's output). Values outside 0-1 are clamped
+  - `1000 + n` (Layer only): slot `n` volume (hidden)
 
 **Pitch Shifter (`sonara.builtin.pitch_shifter`)** (spec 045)
 - **Type:** Effect
@@ -751,7 +751,7 @@ its host, so they exclude the IPC handshake.
 
 ### Device Data Subscriptions
 
-Subscribe to device visualization data (spectrum analyzer, oscilloscope, phase meter, etc.):
+Subscribe to device visualization data (EQ spectrum, oscilloscope, phase meter, etc.):
 
 **Subscribe to Data Stream (Godot → Rust):**
 ```
@@ -774,6 +774,8 @@ after subscribing.
 
 **Data Types:**
 - `"spectrum"` - Frequency spectrum (FFT magnitude bins in dB)
+  Multiband FX also serves `"spectrum"`: its input, one frame `[0, sample_rate, lo_hz, hi_hz]`
+  then 128 dBFS points and 128 unused ones (`MiniAnalyser` layout, ~30 Hz; no options).
 - `"oscilloscope"` - Time-domain waveform (future)
 - `"phase"` - Stereo phase correlation (future)
 - `"lufs"` - Integrated loudness (future)
@@ -863,7 +865,7 @@ ballistics). Nothing runs or is sent while unsubscribed.
 
 **Note state stream (`"note_state"`):**
 
-Sent by the note effects that show a live position: the Arpeggiator, the Step Sequencer
+Sent by the note effects that show a live position: the Arpeggiator, Chord (held input keys only), the Step Sequencer
 (`sonara.builtin.step_sequencer`) and note containers that hold either. Other devices reject the
 subscription. It is polled at about 20 Hz and arrives through `device_data_received` as a
 `PackedByteArray`. `0xFF` in a `u8` field means none. All `u16` fields are little-endian.
@@ -921,7 +923,7 @@ Data type `"spectrum"`. The EQ uses the same data type and blob encoding (little
 - Options (`data/configure` with data type `"spectrum"`):
   - `"resolution"` 0..3: FFT size 2048 / 4096 / 8192 / 16384 at 48 kHz (scaled up with the sample rate) and band width 1/3, 1/6, 1/12, 1/24 octave. Default 1.
   - `"speed"` 0..2 (fast, medium, slow): attack/release 10/120 ms, 30/350 ms, 80 ms/1 s. Default 1.
-- The engine alternates pre and post frames, each about 30 Hz (about 60 messages a second; fewer with large audio buffers, since it polls once per buffer). The analyser (`sonara.builtin.spectrum_analyzer`) sends no header: don't mix the two parsers.
+- The engine alternates pre and post frames, each about 30 Hz (about 60 messages a second; fewer with large audio buffers, since it polls once per buffer).
 - While subscribed the EQ never sleeps, so the analyser decays on silence instead of freezing.
 
 #### Compressor dynamics stream (`sonara.builtin.compressor`)

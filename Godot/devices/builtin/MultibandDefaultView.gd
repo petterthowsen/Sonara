@@ -5,11 +5,17 @@
 ## Solo toggles and Gain knob. These are device parameters, not Layer slot controls. Clicking a row
 ## opens that band's slot chain in the device lane.
 ##
+## Behind the crossover strip a faint spectrum of the device's input shows (the `"spectrum"` data
+## stream, same frame layout as the EQ's: `[flag, sample_rate, lo_hz, hi_hz, points...]`). The view
+## subscribes while shown and unsubscribes when hidden.
+##
 ## Toggling a band goes through `Multiband.toggle_command`; disabling a band that holds devices asks
 ## for confirmation first.
 class_name MultibandDefaultView extends DeviceView
 
 const BandRowHeight := 30.0
+## Spectrum frames start with `[flag, sample_rate, lo_hz, hi_hz]` (multiband.rs `SPECTRUM_HEADER_LEN`).
+const SPECTRUM_HEADER_LEN := 4
 
 var _toggles: Array[Button] = []
 var _strip: MultibandStrip
@@ -21,6 +27,8 @@ var _pending_band := 0
 ## Per active band row: {band, mute: Button, solo: Button, gain: RotaryKnob, row: PanelContainer}
 var _rows: Array[Dictionary] = []
 var _built := false
+var _shown := false
+var _subscribed := false
 
 
 func _get_minimum_size() -> Vector2:
@@ -103,9 +111,56 @@ func _on_bind() -> void:
 
 
 func _on_unbind() -> void:
+	_shown = false
+	_sync_subscription()
 	for sig in [device.slots_changed, device.name_changed]:
 		if sig.is_connected(_refresh_all):
 			sig.disconnect(_refresh_all)
+
+
+func _on_view_shown() -> void:
+	_shown = true
+	_sync_subscription()
+
+
+func _on_view_hidden() -> void:
+	_shown = false
+	_sync_subscription()
+	if _strip != null:
+		_strip.clear_spectrum()
+
+
+## Subscribe to the input spectrum while the view is shown and bound; drop it otherwise.
+func _sync_subscription() -> void:
+	var want := _shown and device != null
+	if want == _subscribed:
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	var osc: Node = tree.root.get_node_or_null("AudioEngineOSC") if tree != null else null
+	if osc == null or device == null:
+		return
+	if want:
+		osc.subscribe_device_data(device.osc_path(), "spectrum")
+		osc.device_spectrum_received.connect(_on_spectrum_received)
+	else:
+		osc.unsubscribe_device_data(device.osc_path(), "spectrum")
+		osc.device_spectrum_received.disconnect(_on_spectrum_received)
+	_subscribed = want
+
+
+## `frame`: `[flag, sample_rate, lo_hz, hi_hz, points...]`; the engine appends a second, unused
+## signal after the first `SPECTRUM_POINTS` values.
+func _on_spectrum_received(osc_path: String, frame: PackedFloat32Array) -> void:
+	if device == null or osc_path != device.osc_path() or _strip == null:
+		return
+	apply_spectrum_frame(frame)
+
+
+func apply_spectrum_frame(frame: PackedFloat32Array) -> void:
+	if frame.size() < SPECTRUM_HEADER_LEN + 2 or frame[2] <= 0.0 or frame[3] <= frame[2]:
+		return
+	var points := (frame.size() - SPECTRUM_HEADER_LEN) / 2
+	_strip.set_spectrum(frame.slice(SPECTRUM_HEADER_LEN, SPECTRUM_HEADER_LEN + points), frame[2], frame[3])
 
 
 func _configure_knob(knob: RotaryKnob, param_id: int, format: String, unit: String) -> void:

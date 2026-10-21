@@ -85,8 +85,12 @@ func is_key_sounding(key: int) -> bool:
 	return key == sounding_key
 
 
+## True for a held key and for the copies of it in the extra octave layers.
 func is_key_held(key: int) -> bool:
-	return held.has(key)
+	for layer in octaves:
+		if held.has(key - 12 * layer):
+			return true
+	return false
 
 
 ## Forget everything (the effect has gone quiet or the view was hidden).

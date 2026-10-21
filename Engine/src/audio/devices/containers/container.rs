@@ -647,6 +647,47 @@ pub fn apply_gain(buffer: &mut [f32], sample_count: usize, gain: f32) {
     }
 }
 
+/// Parameter id of a Chain / Layer dry/wet mix (normalized 0–1: 0 = dry, 1 = 100% wet).
+pub const MIX_PARAM_ID: crate::audio::devices::ParamId = 1;
+
+/// Clamp a dry/wet mix to `[0, 1]`; non-finite values fall back to fully wet.
+pub fn clamp_mix(mix: f32) -> f32 {
+    if mix.is_finite() {
+        mix.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+/// Blend `wet` with the dry (input) signal in place: `wet = dry * (1 - mix) + wet * mix`.
+/// `dry` is the input delayed by the container's latency so both paths line up. Does nothing at
+/// full wet. Real-time safe.
+pub fn blend_dry_wet(wet: &mut [f32], dry: &[f32], sample_count: usize, mix: f32) {
+    if mix >= 1.0 {
+        return;
+    }
+    let count = (sample_count * 2).min(wet.len()).min(dry.len());
+    for (w, d) in wet[..count].iter_mut().zip(&dry[..count]) {
+        *w = *d * (1.0 - mix) + *w * mix;
+    }
+}
+
+/// Fill `out` with the dry (latency-aligned) input for `sample_count` frames. `dry` must already
+/// have had this block written to it.
+pub fn read_dry(
+    dry: &crate::audio::dsp::block_delay::AlignDelay,
+    inputs: &[f32],
+    out: &mut [f32],
+    sample_count: usize,
+) {
+    if dry.frames() > 0 {
+        dry.read(out, sample_count);
+    } else {
+        let n = (sample_count * 2).min(inputs.len()).min(out.len());
+        out[..n].copy_from_slice(&inputs[..n]);
+    }
+}
+
 /// Map a normalized 0–1 parameter to linear gain in `[0, 2]` (0.5 = unity).
 pub fn normalized_to_gain(normalized: f32) -> f32 {
     normalized.clamp(0.0, 1.0) * 2.0

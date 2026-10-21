@@ -1,7 +1,7 @@
 //! Chord (spec 027 REQ-018, REQ-019): add up to six voices above or below each note, with an
 //! optional strum. The original note keeps its id, so its note-off ends everything it started.
 
-use super::host::{NoteCx, NoteProcessor};
+use super::host::{NoteCx, NoteProcessor, NoteState};
 use crate::audio::devices::param_table::{linear, slot_table, spec, Kind, ParamSpec, ParamTable};
 use crate::audio::devices::ParamId;
 use crate::audio::midi_types::NoteEvent;
@@ -87,6 +87,8 @@ pub struct Chord {
     strum_ms: f32,
     strum_down: bool,
     voices: [Voice; VOICES],
+    /// Bit k: input key k is held (feeds the `note_state` stream).
+    held: u128,
 }
 
 /// One output of an input note: pitch, velocity, and whether it is the original.
@@ -109,6 +111,7 @@ impl NoteProcessor for Chord {
                 interval: 0,
                 velocity: 1.0,
             }; VOICES],
+            held: 0,
         }
     }
 
@@ -152,6 +155,7 @@ impl NoteProcessor for Chord {
                 key,
                 velocity,
             } => {
+                self.held |= 1u128 << (key & 127);
                 // Gather the distinct pitches (no allocation: at most 7).
                 let mut outs = [Out {
                     key: 0,
@@ -216,10 +220,26 @@ impl NoteProcessor for Chord {
                 }
             }
             NoteEvent::Off {
-                note_id, release, ..
-            } => cx.release_children(note_id, at, release),
+                note_id,
+                key,
+                release,
+            } => {
+                self.held &= !(1u128 << (key & 127));
+                cx.release_children(note_id, at, release)
+            }
             NoteEvent::Expression { .. } => {}
         }
+    }
+
+    fn reset(&mut self) {
+        self.held = 0;
+    }
+
+    const HAS_STATE: bool = true;
+
+    fn state(&mut self, out: &mut NoteState) {
+        out.held
+            .extend((0..128u8).filter(|k| self.held & (1u128 << k) != 0));
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
@@ -401,5 +421,21 @@ mod tests {
             .collect();
         assert_eq!(offs.len(), 2);
         assert!(offs.contains(&60) && offs.contains(&64));
+    }
+
+    #[test]
+    fn the_note_state_stream_lists_the_held_input_keys() {
+        let mut d = device();
+        d.subscribe_data("note_state").unwrap();
+        note_on(&mut d, 1, 60, 0.8, 0);
+        note_on(&mut d, 2, 64, 0.8, 0);
+        let _ = ons(&mut d, 64);
+        let (kind, blob) = d.poll_device_data().unwrap();
+        assert_eq!(kind, "note_state");
+        assert_eq!(&blob[3..6], &[2, 60, 64]);
+        note_off(&mut d, 1, 60, 0);
+        let _ = d.process_notes(64);
+        let (_, blob) = d.poll_device_data().unwrap();
+        assert_eq!(&blob[3..5], &[1, 64]);
     }
 }

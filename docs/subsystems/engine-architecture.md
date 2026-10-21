@@ -99,7 +99,7 @@ Engine/src/
                          # EFFECT_IDS + create_effect for the built-in effects (spec 012)
       param_table.rs     # Static parameter tables (ParamSpec, flatten, slot_table, ParamValues)
       effects/           # effect.rs (pass_through, TailSleep), chorus, compressor, delay, eq, filter, multiband,
-                         # phaser, pitch_shifter (spec 045), reverb, utility (spec 017), spectrum_analyzer, effect_conformance.rs
+                         # phaser, pitch_shifter (spec 045), reverb, utility (spec 017), effect_conformance.rs
       instruments/       # polysynth/ (mod.rs device, voice.rs, params.rs), sampler/ (mod.rs device, params.rs,
                          # regions.rs, voice.rs, multisample.rs, playback.rs, zones.rs, tests.rs),
                          # sfizz_device.rs + sfizz_keys.rs, drums/ (DrumHost and the four voices), drum_conformance.rs
@@ -188,14 +188,13 @@ Godot/              # Godot 4.7 UI App
 - Sleep transitions become `EngineStatus::DeviceSleepStatus`, forwarded as `/channel/{id}/device/{pos}/sleep [0|1]`.
 
 ### Built-in Device Advertisement
-- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (`sonara.builtin.polysynth`, `.delay`, `.sfizz`, `.spectrum_analyzer`) and emitting `/builtin/info` messages.
+- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (`sonara.builtin.polysynth`, `.delay`, `.sfizz`) and emitting `/builtin/info` messages.
 - Metadata includes channel counts, MIDI capability, file-loading support, and parameter descriptors so the Godot browser can build device assets without hardcoding names or parameters.
 - `PolySynthDevice` is the default polyphonic instrument built on the in-house DSP module (`audio::dsp`) with SIMD-accelerated block mixing. (The old FunDSP prototype has been removed; the `fundsp` dependency in `Cargo.toml` is legacy.)
 - `UtilityDevice` (`sonara.builtin.utility`, spec 017) is a plain effect in `EFFECT_IDS`. Its path is phase invert → bass mono → width → balance → gain × mute, and it passes through bit-exact while every control sits at its default.
   - Width works in M/S (M = (L+R)/2, S = (L−R)/2). Up to 100 % only the side is scaled (mid = 1, side = w), so narrowing never changes the mono sum. Above 100 %, mid = 1/n and side = w/n with n = √((1 + w²)/2). That keeps the level of uncorrelated M/S constant: 200 % is mid −4 dB, side +2 dB. Mono forces w = 0.
   - Pan is a balance law. The near side stays at unity, and the far side follows cos(|p|·π/2) to silence at ±100 %.
   - Bass Mono is a one-crossover `MultibandSplitter` (LR4). The low band is summed to mono and added back to the high band. It fades in and out over the 20 ms ramp, and the splitter runs only while it is on or fading. Phase invert is a smoothed ±1 gain, and Gain's −60 dB floor is silence.
-- `SpectrumAnalyzerDevice` is a stereo utility that mirrors its input to output while queueing FFT frames; it only performs analysis when Godot holds an active `"spectrum"` subscription to keep the audio callback light.
 
 ### Device slots (spec 040)
 - `devices/slots.rs`: a slotted device (PolySynth, Delay, Reverb) holds a `DeviceSlots`, one `ChainDevice` per `SlotSpec` (key, name, `SlotKind` Note/Audio/Loop) created in its constructor and exposed as fixed `DeviceContainer` children (child *i* = slot *i*). `insert_child` on the device is refused, `remove_child`/`move_child` do nothing. `container::insert_device` calls `slots::check_insert`, which finds the innermost enclosing slot and checks the new device (and anything nested) against `SlotKind::accepts`. `DeviceSlots` also owns the scratch (`slot_buf`, `loop_in`/`loop_out`, `note_sink`), sized in `new` and grown only in `prepare` (which also prepares the slot chains). `DeviceSlots::is_live(slot)` (any enabled child, checked once per block, not cached) picks the plain path or the slot path, so empty or bypassed slots keep today's code and output.

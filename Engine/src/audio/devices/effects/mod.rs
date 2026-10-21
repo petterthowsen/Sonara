@@ -1,4 +1,4 @@
-//! Built-in effects: the spec 012 effects, the utility and the spectrum analyzer, plus the
+//! Built-in effects: the spec 012 effects, and the utility, plus the
 //! helpers they share (`effect`).
 
 mod chorus;
@@ -14,7 +14,6 @@ mod phaser;
 mod pitch_shifter;
 mod reverb;
 mod saturator;
-mod spectrum_analyzer;
 pub mod split;
 mod utility;
 
@@ -27,6 +26,5 @@ pub use phaser::PhaserDevice;
 pub use pitch_shifter::PitchShifterDevice;
 pub use reverb::ReverbDevice;
 pub use saturator::SaturatorDevice;
-pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 pub use split::SplitDevice;
 pub use utility::UtilityDevice;

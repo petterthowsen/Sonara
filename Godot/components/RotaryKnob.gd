@@ -7,6 +7,9 @@ signal value_changed(new_value: float)
 var last_edit_kind := ValueEditKind.Kind.DRAG
 ## Emitted on Ctrl/Cmd-click even when the value is already the default (see `value_changed`).
 signal reset_requested
+## The value changed, with or without `value_changed` (`set_value_no_signal`). A caption that
+## shows the value text (`LabeledKnob`) follows it.
+signal value_set
 
 var _value := 0.5
 var _dragging := false
@@ -354,6 +357,7 @@ func _set_value(v: float, emit_change: bool) -> void:
 	if is_inside_tree():
 		queue_redraw()
 	_refresh_tooltip()
+	value_set.emit()
 	if emit_change:
 		value_changed.emit(_value)
 

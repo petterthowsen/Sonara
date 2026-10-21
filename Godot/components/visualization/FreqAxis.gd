@@ -55,6 +55,32 @@ static func format_hz(hz: float) -> String:
 	return "%d" % int(roundf(hz))
 
 
+## Nearest note and the offset from it in cents for `hz` (Middle C = C3 = MIDI 60, so 440 Hz is
+## A3). `cents` is an int in -50..50. Returns {note, cents}; both 0 for `hz` <= 0.
+static func hz_to_note_cents(hz: float) -> Dictionary:
+	if hz <= 0.0:
+		return {"note": 0, "cents": 0}
+	var exact := 69.0 + 12.0 * log(hz / 440.0) / log(2.0)
+	var note := roundi(exact)
+	var cents := roundi((exact - note) * 100.0)
+	return {"note": note, "cents": cents}
+
+
+## "A3 +0¢", "C3 -12¢".
+static func format_note_cents(hz: float) -> String:
+	var nc := hz_to_note_cents(hz)
+	return "%s %+d¢" % [note_name(nc["note"]), nc["cents"]]
+
+
+## Frequency for a readout: "440 Hz" below 1000, else "1.25 kHz" ("2 kHz" when round).
+static func format_hz_long(hz: float) -> String:
+	if hz < 999.5:
+		return "%d Hz" % roundi(hz)
+	var text := "%.2f" % (hz / 1000.0)
+	text = text.rstrip("0").rstrip(".")
+	return text + " kHz"
+
+
 ## Vertical grid lines over `rect`, with labels along the bottom edge of the plot.
 func draw_grid(ci: CanvasItem, font: Font, font_size: int, minor_color: Color, major_color: Color, label_color: Color) -> void:
 	for hz in MINOR_HZ:

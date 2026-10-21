@@ -9,7 +9,7 @@ use super::clap_host::SubprocessClapAdapter;
 use super::{
     AudioDevice, ChainDevice, ChorusDevice, DelayDevice, DevicePath, DrumMachineDevice,
     FilterDevice, LayerDevice, MultibandDevice, PolySynthDevice, PortFlow, ReverbDevice,
-    SamplerDevice, SaturatorDevice, SfizzDevice, SpectrumAnalyzerDevice, UtilityDevice,
+    SamplerDevice, SaturatorDevice, SfizzDevice, UtilityDevice,
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
@@ -125,9 +125,6 @@ impl DeviceFactory {
                 device_path.clone(),
                 Some(self.status_tx.clone()),
             )),
-            "sonara.builtin.spectrum_analyzer" => {
-                Box::new(SpectrumAnalyzerDevice::new(self.sample_rate))
-            }
             "sonara.builtin.chain" => Box::new(ChainDevice::new(self.max_buffer_size)),
             "sonara.builtin.layer" => Box::new(LayerDevice::new(self.max_buffer_size)),
             "sonara.builtin.multiband" => {
@@ -204,9 +201,8 @@ impl DeviceFactory {
     /// Describe every built-in device (ports, parameters, file support) for Godot's browser.
     pub fn builtin_device_infos(&self) -> Vec<EngineStatus> {
         // TODO: Simplify this to avoid creating temporary instances
-        let others: [Box<dyn AudioDevice>; 8] = [
+        let others: [Box<dyn AudioDevice>; 7] = [
             Box::new(PolySynthDevice::new(self.sample_rate)),
-            Box::new(SpectrumAnalyzerDevice::new(self.sample_rate)),
             Box::new(SfizzDevice::new_for_metadata(self.sample_rate)),
             Box::new(ChainDevice::new(self.max_buffer_size)),
             Box::new(LayerDevice::new(self.max_buffer_size)),
@@ -477,16 +473,13 @@ mod tests {
                 .insert_child(0, Box::new(PolySynthDevice::new(SR)));
             container
         }
-        let cases: [(&str, bool, Make); 8] = [
+        let cases: [(&str, bool, Make); 7] = [
             ("polysynth", true, || Box::new(PolySynthDevice::new(SR))),
             ("sampler", false, || {
                 Box::new(SamplerDevice::new_for_metadata())
             }),
             ("sfizz", false, || {
                 Box::new(SfizzDevice::new_for_metadata(SR))
-            }),
-            ("spectrum_analyzer", false, || {
-                Box::new(SpectrumAnalyzerDevice::new(SR))
             }),
             ("chain", true, || {
                 with_synth(Box::new(ChainDevice::new(512)))

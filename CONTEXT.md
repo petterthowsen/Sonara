@@ -30,7 +30,7 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 ## Devices
 
 - **AudioDevice** — a processing unit in a channel's ordered chain (`Engine/src/audio/devices/`). MIDI goes only to the first device.
-- **Built-in device** — first-party device advertised to Godot at runtime via `/builtin/request` → `/builtin/info` (`sonara.builtin.polysynth|delay|sfizz|sampler|spectrum_analyzer|chain|layer|drum_machine`).
+- **Built-in device** — first-party device advertised to Godot at runtime via `/builtin/request` → `/builtin/info` (`sonara.builtin.polysynth|delay|sfizz|sampler|chain|layer|drum_machine`).
 - **Container** — a built-in device that owns child devices (`is_container`): **Chain** (serial), **Layer** (parallel mix), **Multiband FX** (frequency-split bands) and **Drum Machine** (parallel, MIDI routed per pad). Nested devices are addressed by a **device path** (`{position}/child/{i}/…`).
 - **Slot** — a chain of devices inside a container, shown in the device lane beside the container under a bracket in the slot's color. A Chain has one slot: its own children. Each child of a Layer or Drum Machine is a **slot chain** (a Chain holding that slot's devices) with its own volume/mute/solo; a Drum Machine slot (a **pad**) also has a trigger note, and exists even while empty.
 - **Device slot** — a fixed, named chain of devices built into a **slotted device** (spec 040), unlike a container's user-managed children. Always exists, even empty; created by the engine, never added, removed or moved by the user. Has a **kind**: `note` (note effects only), `audio` (effects only) or `loop`. Addressed as `{device}/child/{slot}`. Slots: PolySynth Note FX and FX, Delay FB FX, Reverb Tank FX and Wet FX.

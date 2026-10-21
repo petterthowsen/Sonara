@@ -17,6 +17,13 @@
 //!   resets its filter state, and the output fades back in (D13). A block is split at those points.
 //!   Nothing allocates.
 //!
+//! - **Spectrum stream** (`"spectrum"`): while a view is subscribed, the device's input feeds a
+//!   [`MiniAnalyser`] (the same 4096-point analysis the EQ and the sidechain view use), so the
+//!   view can draw the input under the band edges. A frame is `[0, sample_rate, lo_hz, hi_hz]`
+//!   followed by [`SPECTRUM_POINTS`] dBFS points (log-spaced from lo to hi); the analyser's second
+//!   signal is unused and its points are appended after the first, for the view to ignore.
+//!   Unsubscribed, the cost is zero.
+//!
 //! Cost with no children: only the splitter, about 35 biquads per sample and channel at six bands
 //! (the LR4 stages are shared). Children (chains) sleep on their own, so this container has no sleep
 //! state (ADR 0008).
@@ -32,6 +39,7 @@ use crate::audio::devices::{
 use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::dsp::crossover::{MultibandSplitter, MAX_BANDS};
 use crate::audio::dsp::gain::db_to_gain;
+use crate::audio::dsp::mini_analyser::MiniAnalyser;
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::stream::MAX_BLOCK_FRAMES;
 use tracing::warn;
@@ -168,6 +176,11 @@ static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
 // === Constants ===
 
+/// Points per spectrum frame.
+pub const SPECTRUM_POINTS: usize = 128;
+/// Frames of the spectrum stream start with `[0, sample_rate, lo_hz, hi_hz]` (as the EQ's).
+pub const SPECTRUM_HEADER_LEN: usize = 4;
+
 /// Fade out and fade in around a change of the active set (D13).
 const TOPOLOGY_FADE_MS: f32 = 5.0;
 /// Smoothing of gain, mute/solo, mix and output.
@@ -230,6 +243,11 @@ pub struct MultibandDevice {
     /// The input, delayed by the latency, for the paths that skip the bands (fewer than two
     /// active, or bypassed). Fed every block so a switch between paths plays on.
     thru: AlignDelay,
+    /// The input spectrum for the view; only fed while `spectrum_subscribed`.
+    analyser: Box<MiniAnalyser>,
+    spectrum_subscribed: bool,
+    /// Frames fed since the last poll.
+    spectrum_frames: usize,
 }
 
 impl MultibandDevice {
@@ -271,6 +289,9 @@ impl MultibandDevice {
             align: std::array::from_fn(|_| AlignDelay::default()),
             dry_align: AlignDelay::default(),
             thru: AlignDelay::default(),
+            analyser: Box::new(MiniAnalyser::new(sample_rate, SPECTRUM_POINTS)),
+            spectrum_subscribed: false,
+            spectrum_frames: 0,
         };
         for spec in TABLE.specs {
             device.apply(spec.id, spec.default);
@@ -553,6 +574,12 @@ impl AudioDevice for MultibandDevice {
             }
             done += seg;
         }
+        if self.spectrum_subscribed {
+            for frame in inputs[..frames * 2].chunks_exact(2) {
+                self.analyser.push((frame[0] + frame[1]) * 0.5, 0.0);
+            }
+            self.spectrum_frames = self.spectrum_frames.saturating_add(frames);
+        }
     }
 
     /// The bands run in parallel and are aligned to the slowest band's child.
@@ -668,6 +695,9 @@ impl AudioDevice for MultibandDevice {
             }
             self.apply_topology();
             self.fade = Fade::Steady;
+            // A new rate needs a new analysis; `prepare` is rare and may allocate.
+            self.analyser = Box::new(MiniAnalyser::new(sample_rate, SPECTRUM_POINTS));
+            self.spectrum_frames = 0;
         }
     }
 
@@ -714,6 +744,40 @@ impl AudioDevice for MultibandDevice {
 
     fn is_container(&self) -> bool {
         true
+    }
+
+    fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
+        if data_type != "spectrum" {
+            return Err(format!("Multiband FX does not support '{data_type}' data"));
+        }
+        if !self.spectrum_subscribed {
+            self.analyser.reset();
+            self.spectrum_frames = 0;
+            self.spectrum_subscribed = true;
+        }
+        Ok(())
+    }
+
+    fn unsubscribe_data(&mut self, data_type: &str) {
+        if data_type == "spectrum" {
+            self.spectrum_subscribed = false;
+        }
+    }
+
+    fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
+        if !self.spectrum_subscribed {
+            return None;
+        }
+        let frames = std::mem::take(&mut self.spectrum_frames);
+        if !self.analyser.due(frames) {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity((SPECTRUM_HEADER_LEN + 2 + 2 * SPECTRUM_POINTS) * 4);
+        for value in [0.0, self.sample_rate] {
+            bytes.extend_from_slice(&f32::to_le_bytes(value));
+        }
+        self.analyser.write_points(&mut bytes);
+        Some(("spectrum".to_string(), bytes))
     }
 }
 
@@ -822,6 +886,48 @@ mod tests {
     fn flush(dev: &mut MultibandDevice) {
         let silence = vec![0.0f32; 8192];
         run(dev, &silence, BLOCK);
+    }
+
+    #[test]
+    fn spectrum_stream_shows_the_input_tone_and_stops_when_unsubscribed() {
+        let mut dev = device();
+        assert!(dev.subscribe_data("oscilloscope").is_err());
+        assert!(
+            dev.poll_device_data().is_none(),
+            "nothing before subscribing"
+        );
+        dev.subscribe_data("spectrum").unwrap();
+        let input = stereo(&sine(1_000.0, SR, 48_000, 0.5));
+        let mut last = None;
+        for block in input.chunks(BLOCK * 2) {
+            let mut out = vec![0.0f32; block.len()];
+            dev.process_block(block, &mut out, block.len() / 2);
+            while let Some((kind, bytes)) = dev.poll_device_data() {
+                assert_eq!(kind, "spectrum");
+                last = Some(bytes);
+            }
+        }
+        let v: Vec<f32> = last
+            .expect("frames arrive")
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(v.len(), SPECTRUM_HEADER_LEN + 2 * SPECTRUM_POINTS);
+        assert_eq!(v[1], SR);
+        let (lo, hi) = (v[2], v[3]);
+        let points = &v[SPECTRUM_HEADER_LEN..SPECTRUM_HEADER_LEN + SPECTRUM_POINTS];
+        let peak = (0..SPECTRUM_POINTS)
+            .max_by(|&i, &j| points[i].total_cmp(&points[j]))
+            .unwrap();
+        let peak_hz = lo * (hi / lo).powf(peak as f32 / (SPECTRUM_POINTS - 1) as f32);
+        assert!(
+            (peak_hz / 1_000.0 - 1.0).abs() < 0.1,
+            "peak at {peak_hz} Hz"
+        );
+        dev.unsubscribe_data("spectrum");
+        let mut out = vec![0.0f32; BLOCK * 2];
+        dev.process_block(&input[..BLOCK * 2], &mut out, BLOCK);
+        assert!(dev.poll_device_data().is_none());
     }
 
     #[test]

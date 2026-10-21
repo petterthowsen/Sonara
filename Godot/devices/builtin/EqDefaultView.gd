@@ -32,6 +32,7 @@ var save_config := Callable(self, "_save_app_config")
 var _analyser_option: OptionButton = null
 var _range_option: OptionButton = null
 var _display_menu: MenuButton = null
+var _piano_button: CheckButton = null
 var _band_option: OptionButton = null
 var _solo_button: Button = null
 var _enabled_button: Button = null
@@ -104,9 +105,16 @@ func _build() -> void:
 	_display_menu.tooltip_text = "Analyser resolution, speed and tilt"
 	_build_display_menu(_display_menu.get_popup())
 	toolbar.add_child(_display_menu)
+	if _is_window():
+		_piano_button = CheckButton.new()
+		_piano_button.text = "Piano"
+		_piano_button.tooltip_text = "Show the piano strip"
+		_piano_button.toggled.connect(_on_piano_toggled)
+		toolbar.add_child(_piano_button)
 
 	editor = EqCurveEditor.new()
 	editor.show_piano = _is_window()
+	editor.show_cursor_readout = _is_window()
 	editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	editor.view_state_changed.connect(_on_editor_view_state_changed)
@@ -349,6 +357,9 @@ func _read_state() -> EqViewState:
 ## Show `state` in the editor and the toolbar.
 func _apply_state(state: EqViewState) -> void:
 	editor.state = state
+	editor.show_piano = _is_window() and state.piano
+	if _piano_button != null:
+		_piano_button.set_pressed_no_signal(state.piano)
 	_analyser_option.select(state.analyser)
 	_range_option.select(maxi(DbGrid.EQ_RANGES.find(state.range_db), 0))
 	_refresh_display_menu()
@@ -374,6 +385,10 @@ func _on_display_item(id: int) -> void:
 		editor.set_speed(id - MENU_SPEED)
 	else:
 		editor.set_resolution(id - MENU_RESOLUTION)
+
+
+func _on_piano_toggled(pressed: bool) -> void:
+	editor.set_piano_visible(pressed)
 
 
 func _on_analyser_selected(index: int) -> void:

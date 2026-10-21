@@ -36,6 +36,9 @@ func run_tests() -> void:
 	_test_companion_solo_and_type()
 	_test_companion_strips_show_toggle_and_solo()
 	_test_spectrum_smoothing()
+	_test_note_and_cents()
+	_test_piano_toggle_and_cursor_readout()
+	_test_companion_slope_and_value_knobs()
 	_test_footer_modulation_follows_the_band()
 	_test_editor_draws_live_modulation()
 	_test_view_feeds_live_modulation()
@@ -97,6 +100,69 @@ func _make_instance() -> Object:
 	listen.enum_values.assign(["Off", "1", "2", "3", "4", "5", "6", "7", "8"])
 	device.add_parameter(listen)
 	return _instance_script.new(device, 2, 0)
+
+
+func _test_note_and_cents() -> void:
+	var a3 := FreqAxis.hz_to_note_cents(440.0)
+	_assert(a3["note"] == 69 and a3["cents"] == 0, "440 Hz is MIDI 69 with no offset")
+	_assert(FreqAxis.format_note_cents(440.0) == "A3 +0¢", "440 Hz reads A3 +0¢ (C3 = 60)")
+	_assert(FreqAxis.format_note_cents(261.6256) == "C3 +0¢", "middle C is C3")
+	_assert(FreqAxis.format_note_cents(440.0 * pow(2.0, 20.0 / 1200.0)) == "A3 +20¢", "20 cents sharp")
+	_assert(FreqAxis.format_note_cents(440.0 * pow(2.0, -30.0 / 1200.0)) == "A3 -30¢", "30 cents flat")
+	_assert(FreqAxis.format_note_cents(440.0 * pow(2.0, 70.0 / 1200.0)) == "A#3 -30¢", "past a quarter tone it names the next note")
+	_assert(FreqAxis.format_hz_long(440.0) == "440 Hz", "below 1 kHz in Hz")
+	_assert(FreqAxis.format_hz_long(1250.0) == "1.25 kHz", "above 1 kHz in kHz")
+	_assert(FreqAxis.format_hz_long(2000.0) == "2 kHz", "a round kHz has no decimals")
+	_assert(FreqAxis.hz_to_note_cents(0.0)["note"] == 0, "zero Hz does not crash")
+
+
+func _test_piano_toggle_and_cursor_readout() -> void:
+	var inst := _make_instance()
+	var view = load("res://devices/builtin/EqDefaultView.gd").new()
+	view.set_view_type(Device.ViewType.Window)
+	var saved := {}
+	view.load_config = func(_key: String) -> Variant: return {}
+	view.save_config = func(key: String, value: Variant) -> void: saved[key] = value
+	view.bind_to_device(inst)
+	_assert(view._piano_button != null and view._piano_button.button_pressed and view.editor.show_piano, "the window view starts with the piano on and a toggle")
+	view._piano_button.toggled.emit(false)
+	_assert(not view.editor.show_piano and not view.editor.state.piano, "the toggle hides the piano strip")
+	_assert(saved.has(EqViewState.CONFIG_KEY) and saved[EqViewState.CONFIG_KEY]["piano"] == false, "the choice is saved in the view state")
+	_assert(EqViewState.from_dict(saved[EqViewState.CONFIG_KEY]).piano == false, "and round-trips")
+	_assert(EqViewState.new().piano, "the piano defaults to on")
+	var editor: EqCurveEditor = view.editor
+	_assert(editor.show_cursor_readout, "the window view has the cursor readout")
+	editor.size = Vector2(640, 262)
+	editor._update_layout()
+	var motion := InputEventMouseMotion.new()
+	motion.position = Vector2(editor.freq_axis.hz_to_x(440.0), 100)
+	editor._gui_input(motion)
+	_assert(editor.cursor_readout_text() == "440 Hz  A3 +0¢", "the readout names the hovered frequency: %s" % editor.cursor_readout_text())
+	view.free()
+	var panel = load("res://devices/builtin/EqDefaultView.gd").new()
+	panel.load_config = func(_key: String) -> Variant: return {}
+	panel.save_config = func(_key: String, _value: Variant) -> void: pass
+	panel.bind_to_device(inst)
+	_assert(panel._piano_button == null and not panel.editor.show_cursor_readout and not panel.editor.show_piano, "the panel view has neither piano toggle nor cursor line")
+	panel.free()
+
+
+func _test_companion_slope_and_value_knobs() -> void:
+	var inst := _make_instance()
+	var companion = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	companion.bind_to_device(inst)
+	# Band 1 is a Low Cut by default, band 2 a Bell.
+	_assert(not companion._items[0]["slope"].disabled, "a cut band offers its slope")
+	_assert(companion._items[1]["slope"].disabled, "a bell has no slope")
+	_assert(companion._items[0]["slope"].get_parent() == companion._items[0]["type"].get_parent(), "type and slope sit side by side")
+	companion._items[0]["slope"].item_selected.emit(3)
+	_assert(int(_real(inst, 0, EqResponse.P_SLOPE)) == 3, "the slope box writes the band's slope")
+	_assert(companion._items[0]["slope"].selected == 3, "and shows it")
+	_assert(companion._items[0]["toggle"].get_parent() == companion._items[0]["solo"].get_parent(), "enabled and solo sit side by side")
+	var freq: LabeledKnob = companion._items[0]["freq"]
+	_assert(freq.display_mode == LabeledKnob.DisplayMode.VALUE and freq.value_label.visible and not freq.label.visible, "companion knobs show the value only")
+	_assert(freq.value_label.text != "" and freq.value_label.text.ends_with("Hz"), "the value text uses the freq format: %s" % freq.value_label.text)
+	companion.free()
 
 
 func _make_editor(instance: Object) -> EqCurveEditor:

@@ -3,7 +3,11 @@
 ## Clicking a row shows or hides that layer's slot in the device lane (one open at a time).
 class_name LayerDefaultView extends DeviceView
 
+const MIX_PARAM := "Mix"
+
 var _rows: Dictionary = {}  # instance id -> LayerSlotRow
+var _mix_knob: LabeledKnob = null
+var _mix_id := -1
 
 
 ## Prefer a compact column so Layer can sit beside parameter lists.
@@ -55,6 +59,7 @@ func _rebuild() -> void:
 	for child in get_children():
 		child.queue_free()
 	_rows.clear()
+	_mix_knob = null
 	if device == null:
 		return
 	var mapping := Button.new()
@@ -70,6 +75,39 @@ func _rebuild() -> void:
 		row.activated.connect(_on_row_activated.bind(child))
 		row.context_requested.connect(child_context_menu_requested.emit.bind(child))
 		_rows[child.id] = row
+	_add_mix_knob()
+
+
+## Dry/wet Mix knob below the slot rows (0 = dry input only, 1 = fully layered).
+func _add_mix_knob() -> void:
+	_mix_id = device.get_parameter_id_by_name(MIX_PARAM)
+	var param := device.get_parameter(_mix_id)
+	if param == null:
+		return
+	_mix_knob = LabeledKnob.new()
+	_mix_knob.text = "MIX"
+	_mix_knob.knob_size = Vector2(44, 44)
+	_mix_knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_mix_knob.knob.value_default = param.value_to_normalized(param.default_value)
+	_mix_knob.knob.set_value_no_signal(device.get_parameter_normalized(_mix_id))
+	_mix_knob.knob.value_changed.connect(_on_mix_changed)
+	_mix_knob.knob.value_text_callback = _format_mix
+	add_child(_mix_knob)
+
+
+func _on_device_parameter_changed(param_id: int, value: float) -> void:
+	if param_id == _mix_id and _mix_knob:
+		_mix_knob.knob.set_value_no_signal(value)
+
+
+func _on_mix_changed(normalized: float) -> void:
+	if device and _mix_id >= 0:
+		ParameterActions.set_normalized(device, _mix_id, clampf(normalized, 0.0, 1.0))
+
+
+func _format_mix(normalized: float) -> String:
+	var param := device.get_parameter(_mix_id) if device else null
+	return param.format_value(param.normalized_to_value(normalized)) if param else ""
 
 
 ## Show or hide the activated layer's slot.

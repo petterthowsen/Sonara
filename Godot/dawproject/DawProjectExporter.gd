@@ -338,8 +338,6 @@ func _report_channel_quirks(ch: Object) -> void:
 
 func _device_role(inst: Object) -> String:
 	var dev: Object = inst.device
-	if dev.id.ends_with("spectrum_analyzer"):
-		return "analyzer"
 	return "instrument" if dev.category == DawEnums.CATEGORY_INSTRUMENT else "audioFX"
 
 

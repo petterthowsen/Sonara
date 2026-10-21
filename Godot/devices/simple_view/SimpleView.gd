@@ -10,6 +10,10 @@ class_name SimpleView extends DeviceView
 
 const SimpleControlScene := preload("res://devices/simple_view/SimpleControl.tscn")
 
+## Devices whose groups stretch to the panel's full height, with knobs centered in their group
+## (the split devices: Mid/Side Split and L/R Split).
+const FILL_HEIGHT_DEVICES: PackedStringArray = ["sonara.builtin.ms_split", "sonara.builtin.lr_split"]
+
 ## Rows never get shorter than this, however little height the panel leaves.
 const MIN_ROW_HEIGHT := 32.0
 
@@ -162,6 +166,13 @@ func _add_control(data: Dictionary) -> void:
 	var pixel_rect := _control_pixel_rect(GridPacker.rect_from_array(data.rect), String(data.get("group", "")))
 	control.position = pixel_rect.position + Vector2(cell_margin, cell_margin) * 0.5
 	control.size = pixel_rect.size - Vector2(cell_margin, cell_margin)
+	var extra := _fill_extra(String(data.get("group", "")))
+	if extra > 0.0:
+		# A slot tile grows with its group; every other control stays centered in it.
+		if String(data.get("kind", "")) == SimpleControlKinds.SLOT:
+			control.size.y += extra
+		else:
+			control.position.y += extra * 0.5
 	control.bind(device, _decorated(data))
 	_controls.append(control)
 
@@ -290,6 +301,19 @@ func _pixel_rect(rect: Rect2i) -> Rect2:
 	return Rect2(rect.position.x * cell_size.x, top, rect.size.x * cell_size.x, bottom - top)
 
 
+## Extra pixel height group `group_id` gets to reach the bottom of the grid, 0 unless the device
+## fills the height and the group's box already reaches the last used row.
+func _fill_extra(group_id: String) -> float:
+	if device == null or device.device == null or layout == null or _grid.size.y <= 0.0:
+		return 0.0
+	if not FILL_HEIGHT_DEVICES.has(device.device.device_id) or not _group_fit.has(group_id):
+		return 0.0
+	var box: Rect2i = _group_fit[group_id].box
+	if box.end.y < _used_rows(layout.pages[_current_page]):
+		return 0.0
+	return maxf(_grid.size.y - _pixel_rect(box).end.y, 0.0)
+
+
 ## A background panel with a title strip on top, covering a group's controls.
 func _add_group_box(group: Dictionary) -> void:
 	var cells: Rect2i = _group_fit[group.id].box if _group_fit.has(group.id) else GridPacker.rect_from_array(group.rect)
@@ -299,6 +323,7 @@ func _add_group_box(group: Dictionary) -> void:
 	var box := Panel.new()
 	box.position = pixel_rect.position - Vector2(0, header) + Vector2(group_margin, group_margin)
 	box.size = pixel_rect.size + Vector2(0, header) - Vector2(group_margin, group_margin) * 2.0
+	box.size.y += _fill_extra(String(group.id))
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(1, 1, 1, 0.03)
