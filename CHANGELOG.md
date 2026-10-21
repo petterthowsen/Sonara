@@ -10,6 +10,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 - PolySynth has a Pan control for each of Oscillator 1 and 2, and a global output Pan.
 - Device windows of a channel show the channel name with Solo/Mute toggles in the title bar, beside the device tabs. In a narrow window they wrap onto a second line within the title bar.
+- With "Color Clips by Track" on, MIDI notes and waveforms take the track's hue, lighter on a dark clip and darker on a near-white one, instead of plain white.
 - Clip names follow their track: new clips are named "Track name N", numbered among that track's own clips. Moving a clip to another track, or making it unique per track, swaps the track name in the name. Names you type yourself are never changed automatically.
 - New appearance setting "Mixer Strip Tint" sets how strongly Colored Mixer Strips take on the channel color (0–1, default 0.8).
 - New behavior setting "Toggle Visibility Groups While Modifier Is Held": Ctrl+1, then 2, 3… combines visibility groups, and pressing a number again removes that group, until the modifier (Ctrl, or Shift/Alt/Meta if rebound) is released.

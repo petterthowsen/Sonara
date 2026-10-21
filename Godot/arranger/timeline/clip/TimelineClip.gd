@@ -213,10 +213,19 @@ func _exit_tree() -> void:
 func _apply_note_color() -> void:
 	if clip_renderer == null:
 		return
-	# On a track-colored body the notes and waveform switch to a light tone to stay visible.
 	var paint := Utils.display_color(track_color)
 	if Settings.get_value(SETTING_COLOR_BY_TRACK):
-		paint = Color(1.0, 1.0, 1.0, 0.85)
+		# On a track-colored body, tint the notes with the body color, pushed away from it for contrast:
+		# lighter on a dark body, darker on a near-white one.
+		var fill := Utils.header_color(track_color, TRACK_FILL_BRIGHTNESS, TRACK_FILL_SATURATION)
+		# Shift HSV value rather than mixing toward white/black, which would wash the hue out.
+		paint = fill
+		paint.s = clampf(fill.s * 1.3, 0.0, 1.0)
+		if fill.get_luminance() < 0.5:
+			paint.v = clampf(fill.v + 0.4, 0.0, 1.0)
+		else:
+			paint.v = clampf(fill.v - 0.5, 0.0, 1.0)
+		paint.a = 0.95
 	clip_renderer.note_color = paint
 	clip_renderer.queue_redraw()
 	if waveform_view:
