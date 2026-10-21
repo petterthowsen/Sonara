@@ -18,8 +18,18 @@ signal note_touched(note: MidiNoteData)
 ## Starting velocity and release of new notes. MidiEditor hands its shared instance down.
 var next_values := NextNoteValues.new()
 
-# Selection manager
+# Selection manager: box geometry and clipboard. The selected notes are in `selection_model`.
 var selection_manager: NoteSelectionManager
+
+## The selection this editor shows and edits. MidiEditor hands every editor its one model;
+## a standalone editor keeps its own. Notes of the selection that this editor has no visual
+## for (another track, or not bound) are simply not edited here.
+var selection_model: NoteSelectionModel:
+	get:
+		return selection_manager.model
+
+## Notes whose visuals were last drawn as selected -> their clip.
+var _lit: Dictionary = {}
 
 # Interaction state
 enum InteractionMode { NONE, DRAGGING, RESIZING, ERASING, PLACING_AND_DRAGGING, BOX_SELECTING, DUPLICATING, SCALING }
@@ -46,9 +56,6 @@ var resize_start_durations: Dictionary = {}  # note_id -> duration_ticks
 # Undo snapshots keyed by Clip (captured at gesture start)
 var _history_clip_snapshots: Dictionary = {}  # Clip -> Array snapshot
 var _history_selection_before: Dictionary = {}
-
-## Undo or redo changed the selection (range or notes); overlays should redraw.
-signal selection_range_restored
 
 
 # Drag mode tracking
@@ -97,21 +104,95 @@ func _ready():
 
 	# Create selection manager (grid_helper will be set via override below)
 	selection_manager = NoteSelectionManager.new(grid_helper)
-	selection_manager.selection_changed.connect(func(notes):
-		Hotkeys.set_condition("note_selection", not notes.is_empty())
-		Hotkeys.set_condition("note_range", selection_manager.has_range()))
 
-	# Provide coordinate conversion callback to selection manager
-	# This allows it to work in the correct coordinate space without tight coupling
+	# Provide the conversions between visuals and refs, and the coordinate conversion
+	# callback. This lets the manager work in the correct coordinate space without tight coupling.
 	selection_manager.get_note_song_position = get_note_song_position
-	selection_manager.selection_changed.connect(_on_selection_touched)
-	selection_manager.selection_changed.connect(func(_notes): queue_redraw())
-	selection_manager.selection_set_changed.connect(queue_redraw)
+	selection_manager.visual_of_ref = visual_of_ref
+	selection_manager.ref_of_visual = ref_of_visual
+	_connect_selection_model(selection_manager.model)
 
 
-func _on_selection_touched(notes: Array[VisualNote]) -> void:
-	if notes.size() == 1 and notes[0].midi_note_data:
-		note_touched.emit(notes[0].midi_note_data)
+## Use `model` as this editor's selection (MidiEditor shares one across its editors).
+func use_selection_model(model: NoteSelectionModel) -> void:
+	if model == null or model == selection_manager.model:
+		return
+	_disconnect_selection_model(selection_manager.model)
+	selection_manager.model = model
+	_lit.clear()
+	_connect_selection_model(model)
+	_sync_selected_look()
+
+
+func _connect_selection_model(model: NoteSelectionModel) -> void:
+	model.changed.connect(_on_selection_model_changed)
+	model.set_changed.connect(_on_selection_model_set_changed)
+
+
+func _disconnect_selection_model(model: NoteSelectionModel) -> void:
+	model.changed.disconnect(_on_selection_model_changed)
+	model.set_changed.disconnect(_on_selection_model_set_changed)
+
+
+func _on_selection_model_changed() -> void:
+	var model := selection_manager.model
+	Hotkeys.set_condition("note_selection", not model.is_empty())
+	Hotkeys.set_condition("note_range", model.has_range())
+	if model.size() == 1:
+		note_touched.emit(model.refs[0].data)
+	queue_redraw()
+
+
+func _on_selection_model_set_changed() -> void:
+	_sync_selected_look()
+	queue_redraw()
+
+
+## Draw every visual of a selected note as selected (loop repeats and linked instances show
+## the same note), and the visuals of notes that left the selection as not. O(selected).
+func _sync_selected_look() -> void:
+	var model := selection_manager.model
+	for data in _lit.keys():
+		if not model.has(data):
+			_light(data, _lit[data], false)
+			_lit.erase(data)
+	for ref in model.refs:
+		if not _lit.has(ref.data):
+			_lit[ref.data] = ref.clip
+			_light(ref.data, ref.clip, true)
+
+
+func _light(data: MidiNoteData, source_clip: Clip, on: bool) -> void:
+	for vn in _visuals_showing(data, source_clip):
+		if is_instance_valid(vn) and vn.is_selected != on:
+			vn.set_selected(on)
+
+
+## Every visual of `data` here: its visual on each instance of `source_clip`, and their loop repeats.
+func _visuals_showing(data: MidiNoteData, source_clip: Clip) -> Array[VisualNote]:
+	if not multi_clip_mode:
+		var only := visual_for(clip_instance, data)
+		return [only] if only else ([] as Array[VisualNote])
+	var out := _visuals_of(data, source_clip)
+	for ci in _instances_of_clip(source_clip):
+		out.append_array(_repeats_of(ci, data))
+	return out
+
+
+## The ref that selects the note `vn` shows: its instance and loop pass.
+func ref_of_visual(vn: VisualNote) -> NoteRef:
+	if vn == null or vn.midi_note_data == null:
+		return null
+	return NoteRef.new(_instance_for_visual_note(vn), vn.midi_note_data, vn.repeat_pass)
+
+
+## The visual that shows `ref` in this editor, or null (another track, a freed loop pass).
+func visual_of_ref(ref: NoteRef) -> VisualNote:
+	if ref.pass_index > 0 and multi_clip_mode:
+		var nodes: Array = _repeats.get(_make_note_key(ref.instance, ref.data), [])
+		var vn = nodes[ref.pass_index - 1] if ref.pass_index - 1 < nodes.size() else null
+		return vn if vn != null and is_instance_valid(vn) else null
+	return visual_for(ref.instance, ref.data)
 
 
 # Override set_grid_helper to also update selection manager
@@ -126,6 +207,7 @@ func unbind():
 	_dup_origins.clear()
 	dup_anchor = null
 	# Every note node goes away, so no gesture can carry on with one.
+	_lit.clear()
 	interaction_mode = InteractionMode.NONE
 	dragging_note = null
 	resizing_note = null
@@ -142,59 +224,13 @@ func unbind():
 ## Begin capturing note-list snapshots for the given clips (call before mutating).
 func _history_begin_clips(clips: Array) -> void:
 	_history_clip_snapshots = ClipNotesStateCommand.capture_many(clips)
-	_history_selection_before = capture_selection_state()
-
-
-## The selection as { "range": Vector2i(start, end ticks), "notes": [[Clip, MidiNoteData], ...] },
-## each selected note once.
-func capture_selection_state() -> Dictionary:
-	var notes: Array = []
-	for vn in _selected_note_visuals():
-		notes.append([_clip_for_visual_note(vn), vn.midi_note_data])
-	return {
-		"range": Vector2i(selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick),
-		"notes": notes,
-	}
-
-
-static func _same_selection(a: Dictionary, b: Dictionary) -> bool:
-	if a.get("range") != b.get("range") or a.notes.size() != b.notes.size():
-		return false
-	var data_in_a := {}
-	for pair in a.notes:
-		data_in_a[pair[1]] = true
-	for pair in b.notes:
-		if not data_in_a.has(pair[1]):
-			return false
-	return true
-
-
-## Put a captured selection back (undo/redo). Notes that no longer exist are skipped.
-func restore_selection_state(state: Dictionary) -> void:
-	var visuals: Array[VisualNote] = []
-	for pair in state.get("notes", []):
-		var note_clip: Clip = pair[0]
-		var data: MidiNoteData = pair[1]
-		if multi_clip_mode:
-			visuals.append_array(_visuals_of(data, note_clip))
-		else:
-			var vn := get_visual_note(data.id)
-			if vn:
-				visuals.append(vn)
-	selection_manager.select_visuals(visuals)
-	var range: Vector2i = state.get("range", Vector2i.ZERO)
-	selection_manager.box_selection_start_tick = range.x
-	selection_manager.box_selection_end_tick = range.y
-	selection_manager.selection_changed.emit(selection_manager.selected_notes)
-	selection_range_restored.emit()
+	_history_selection_before = selection_model.capture()
 
 
 ## Capture snapshots for every clip owning the selected notes.
 func _history_begin_selection() -> void:
 	var clips: Array = []
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note or not sel_note.midi_note_data:
-			continue
+	for sel_note in selection_manager.selected_visuals():
 		var note_clip: Clip = _clip_for_visual_note(sel_note)
 		if note_clip and note_clip not in clips:
 			clips.append(note_clip)
@@ -209,10 +245,10 @@ func _history_commit(action_name: String) -> void:
 	_history_clip_snapshots = {}
 	var first: Array[Command] = []
 	var last: Array[Command] = []
-	var selection_now := capture_selection_state()
-	if not _same_selection(_history_selection_before, selection_now):
-		first.append(SelectionStateCommand.new(action_name, self, _history_selection_before, selection_now, true))
-		last.append(SelectionStateCommand.new(action_name, self, _history_selection_before, selection_now, false))
+	var selection_now := selection_model.capture()
+	if not NoteSelectionModel.same_state(_history_selection_before, selection_now):
+		first.append(SelectionStateCommand.new(action_name, selection_model, _history_selection_before, selection_now, true))
+		last.append(SelectionStateCommand.new(action_name, selection_model, _history_selection_before, selection_now, false))
 	ClipNotesStateCommand.commit_many(action_name, before, first, last)
 
 
@@ -542,7 +578,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	if not with_range and saved_range != Vector2i.ZERO:
 		selection_manager.box_selection_start_tick = saved_range.x
 		selection_manager.box_selection_end_tick = saved_range.y
-		selection_manager.selection_changed.emit(selection_manager.selected_notes)
+		selection_model.changed.emit()
 	queue_redraw()
 
 	# Wait for drag to start
@@ -561,7 +597,7 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 		return
 
 	# If note not selected, select it
-	if note not in selection_manager.selected_notes:
+	if not selection_model.has(note.midi_note_data):
 		selection_manager.select_note(note)
 	note_touched.emit(note.midi_note_data)
 
@@ -583,7 +619,7 @@ func _snapshot_selection() -> void:
 	Shift/Alt mode switch mid-drag."""
 	drag_start_positions.clear()
 	resize_start_durations.clear()
-	for sel_note in selection_manager.selected_notes:
+	for sel_note in selection_manager.selected_visuals():
 		if sel_note.midi_note_data:
 			# Prefer the visual note's attached clip instance to avoid id collisions in multi-clip mode
 			var source_clip_instance: ClipInstance = sel_note.clip_instance
@@ -720,7 +756,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 	if current_mode == DragMode.POSITION:
 		# A note dragged out of its (unlooped) instance stays in view under the mouse until
 		# the drop moves it into the clip it lands on.
-		for sel_note in selection_manager.selected_notes:
+		for sel_note in selection_manager.selected_visuals():
 			if not is_instance_valid(sel_note) or not sel_note.midi_note_data or sel_note.repeat_pass > 0:
 				continue
 			var owner_ci := _instance_for_visual_note(sel_note)
@@ -739,7 +775,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 
 	# Check if any note changed
 	var any_changes = false
-	for sel_note in selection_manager.selected_notes:
+	for sel_note in selection_manager.selected_visuals():
 		if not sel_note.midi_note_data:
 			continue
 		var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
@@ -800,7 +836,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 	if total_affected > 0:
 		logger.info("Multi-drag ended - cut/merged %d overlapping notes" % total_affected)
 
-	logger.info("Updated %d note(s) position/duration" % selection_manager.selected_notes.size())
+	logger.info("Updated %d note(s) position/duration" % selection_model.size())
 
 	_history_commit("Move Notes")
 
@@ -824,7 +860,7 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 	if layout.is_drum():
 		return
 
-	if note not in selection_manager.selected_notes:
+	if not selection_model.has(note.midi_note_data):
 		selection_manager.select_note(note)
 	note_touched.emit(note.midi_note_data)
 
@@ -834,7 +870,7 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 
 	# Store starting durations for all selected notes
 	resize_start_durations.clear()
-	for sel_note in selection_manager.selected_notes:
+	for sel_note in selection_manager.selected_visuals():
 		if sel_note.midi_note_data:
 			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
 
@@ -936,7 +972,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 	if total_affected > 0:
 		logger.info("Multi-resize ended - cut/merged %d overlapping notes" % total_affected)
 
-	logger.info("Updated %d note(s) duration" % selection_manager.selected_notes.size())
+	logger.info("Updated %d note(s) duration" % selection_model.size())
 
 	# Don't update selection range - keep grid-snapped box selection boundaries
 	queue_redraw()
@@ -959,15 +995,12 @@ func _start_place_and_drag(note: VisualNote) -> void:
 	last_drag_mode = DragMode.POSITION
 
 	# Select the note
-	if selection_manager.selected_note and selection_manager.selected_note != note:
-		selection_manager.selected_note.set_selected(false)
-	selection_manager.selected_note = note
 	note.set_selected(true)
 
 	# Store starting positions
 	drag_start_positions.clear()
 	resize_start_durations.clear()
-	for sel_note in selection_manager.selected_notes:
+	for sel_note in selection_manager.selected_visuals():
 		if sel_note.midi_note_data:
 			drag_start_positions[sel_note.midi_note_data.id] = {
 				"start_tick": sel_note.midi_note_data.start_tick,
@@ -1015,7 +1048,7 @@ func _get_notes_in_box(box_rect: Rect2) -> Array[VisualNote]:
 # ============================================================================
 func _cut_selection() -> void:
 	"""Cut selected notes (copy + delete)."""
-	if selection_manager.selected_notes.is_empty():
+	if selection_model.is_empty():
 		logger.warn("No notes selected to cut")
 		return
 
@@ -1029,7 +1062,7 @@ func _cut_selection() -> void:
 ## the edited clips instead: their notes are selected and the range becomes their span, so
 ## the range can carry over to another track and the paste lands at the same position.
 func copy_to_clipboard() -> void:
-	if selection_manager.selected_notes.is_empty() and not selection_manager.has_range():
+	if selection_model.is_empty() and not selection_manager.has_range():
 		select_edited_clips()
 	selection_manager.copy_selection()
 
@@ -1068,10 +1101,10 @@ func select_edited_clips() -> bool:
 			var nd: MidiNoteData = vn.midi_note_data
 			if nd.start_tick >= start_tick and nd.start_tick < end_tick:
 				notes.append(vn)
-	selection_manager._set_selected_notes(notes)
+	selection_manager.select_visuals(notes)
 	selection_manager.box_selection_start_tick = start_tick
 	selection_manager.box_selection_end_tick = end_tick
-	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	selection_model.changed.emit()
 	return true
 
 
@@ -1079,7 +1112,7 @@ func select_edited_clips() -> bool:
 ## carried over from another track, or a ruler range over empty space), else the cursor.
 ## With notes selected the range is theirs, and pasting onto them would only replace them.
 func get_paste_tick() -> int:
-	if selection_manager.selected_notes.is_empty() and selection_manager.has_range():
+	if selection_model.is_empty() and selection_manager.has_range():
 		return selection_manager.box_selection_start_tick
 	return cursor_position_ticks
 
@@ -1164,15 +1197,15 @@ func _paste_at_position(tick_position: int) -> void:
 		if note_instance and note_instance not in pasted_notes:
 			pasted_notes.append(note_instance)
 
-	selection_manager._set_selected_notes(pasted_notes)
+	selection_manager.select_visuals(pasted_notes)
 
 	# Set selection range
-	if not selection_manager.selected_notes.is_empty():
+	if not selection_model.is_empty():
 		selection_manager.box_selection_start_tick = tick_position
 		selection_manager.box_selection_end_tick = span_end
 		queue_redraw()
 
-	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	selection_model.changed.emit()
 
 	logger.info("Pasted %d notes at tick %d (range: %d-%d)" % [
 		pasted.size(), tick_position, selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick
@@ -1183,7 +1216,7 @@ func _paste_at_position(tick_position: int) -> void:
 func _duplicate_selection() -> void:
 	"""Duplicate selected notes immediately after the selection."""
 	_history_begin_selection()
-	if selection_manager.selected_notes.is_empty():
+	if selection_model.is_empty():
 		logger.warn("No notes selected to duplicate")
 		return
 
@@ -1207,7 +1240,7 @@ func _duplicate_selection() -> void:
 func _delete_selection() -> void:
 	"""Delete all selected notes."""
 	_history_begin_selection()
-	if selection_manager.selected_notes.is_empty():
+	if selection_model.is_empty():
 		logger.warn("No notes selected to delete")
 		return
 
@@ -1219,9 +1252,8 @@ func _delete_selection() -> void:
 		if note_clip:
 			note_clip.remove_midi_note(note.midi_note_data)
 
-	selection_manager.selected_notes.clear()
-	selection_manager.selected_note = null
-	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	selection_manager.select_visuals([] as Array[VisualNote])
+	selection_model.changed.emit()
 
 	update_container_width()
 
@@ -1244,7 +1276,7 @@ func _transpose_selection(direction: int) -> void:
 ## Move all selected notes; `step` maps each note's pitch to its new pitch.
 func _move_selection_vertical(step: Callable) -> void:
 	_history_begin_selection()
-	if selection_manager.selected_notes.is_empty():
+	if selection_model.is_empty():
 		return
 
 	# Move all selected notes. Linked clip instances and loop repeats show the same
@@ -1278,7 +1310,7 @@ func _move_selection_vertical(step: Callable) -> void:
 	if total_affected > 0:
 		logger.info("Keyboard move vertical - cut/merged %d overlapping notes" % total_affected)
 
-	logger.info("Moved %d note(s) vertically" % selection_manager.selected_notes.size())
+	logger.info("Moved %d note(s) vertically" % selection_model.size())
 	update_container_width()
 	_history_commit("Transpose Notes")
 
@@ -1286,7 +1318,7 @@ func _move_selection_vertical(step: Callable) -> void:
 func _move_selection_horizontal(delta_ticks: int) -> void:
 	"""Move all selected notes left or right by ticks."""
 	_history_begin_selection()
-	if selection_manager.selected_notes.is_empty():
+	if selection_model.is_empty():
 		return
 
 	# Move all selected notes (each shared MidiNoteData once; see _move_selection_vertical)
@@ -1325,14 +1357,14 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 	if total_affected > 0:
 		logger.info("Keyboard move horizontal - cut/merged %d overlapping notes" % total_affected)
 
-	logger.info("Moved %d note(s) %+d ticks" % [selection_manager.selected_notes.size(), delta_ticks])
+	logger.info("Moved %d note(s) %+d ticks" % [selection_model.size(), delta_ticks])
 
 	# The selection range goes with the notes (it stops at tick 0).
 	if selection_manager.has_range():
 		var range_delta := maxi(delta_ticks, -selection_manager.box_selection_start_tick)
 		selection_manager.box_selection_start_tick += range_delta
 		selection_manager.box_selection_end_tick += range_delta
-		selection_manager.selection_changed.emit(selection_manager.selected_notes)
+		selection_model.changed.emit()
 	queue_redraw()
 	update_container_width()
 	_history_commit("Nudge Notes")
@@ -1354,7 +1386,7 @@ func _resize_selection_range(start_delta: int, end_delta: int) -> void:
 		return
 	selection_manager.box_selection_start_tick = start
 	selection_manager.box_selection_end_tick = end
-	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	selection_model.changed.emit()
 
 
 ## Move the selected notes and the range by the range's length (the span of the selected
@@ -1394,7 +1426,7 @@ func _edit_selection_data(history_name: String, mutate: Callable) -> void:
 ## are clips that gain notes but own no selected note: they are snapshotted too, and the edit then
 ## also runs with nothing selected. Returns the number of notes added.
 func _apply_selection_edit(history_name: String, edit: Callable, extra_clips: Array = []) -> int:
-	if selection_manager.selected_notes.is_empty() and extra_clips.is_empty():
+	if selection_model.is_empty() and extra_clips.is_empty():
 		return 0
 	_history_begin_selection()
 	for extra in extra_clips:
@@ -1440,14 +1472,12 @@ func _add_generated_notes(by_clip: Dictionary) -> int:
 					new_visuals.append(vn)
 	if added > 0:
 		var keep: Array[VisualNote] = []
-		for vn in selection_manager.selected_notes:
-			if is_instance_valid(vn):
-				keep.append(vn)
+		keep.append_array(selection_manager.selected_visuals())
 		for vn in new_visuals:
 			if vn not in keep:
 				keep.append(vn)
 		selection_manager.select_visuals(keep)
-		selection_manager.selection_changed.emit(selection_manager.selected_notes)
+		selection_model.changed.emit()
 		update_container_width()
 		queue_redraw()
 	return added
@@ -1870,7 +1900,7 @@ func select_voice(which: int) -> int:
 		for nd in NoteVoices.select(per_clip[c], which):
 			chosen.append(visual_of[nd])
 	selection_manager.select_visuals(chosen)
-	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	selection_model.changed.emit()
 	queue_redraw()
 	return chosen.size()
 
@@ -2107,14 +2137,14 @@ func _run_transfer(label: String, source_moves: Dictionary, per_target: Dictiona
 		count += per_target[dest].size()
 	if plans.is_empty():
 		return 0
-	var selection_before := capture_selection_state()
+	var selection_before := selection_model.capture()
 	var cmds := NoteTransfer.apply(project, source_moves, plans, label, false)
-	var selection_after := capture_selection_state()
+	var selection_after := selection_model.capture()
 	var all: Array[Command] = []
 	var last: Array[Command] = []
-	if not _same_selection(selection_before, selection_after):
-		all.append(SelectionStateCommand.new(label, self, selection_before, selection_after, true))
-		last.append(SelectionStateCommand.new(label, self, selection_before, selection_after, false))
+	if not NoteSelectionModel.same_state(selection_before, selection_after):
+		all.append(SelectionStateCommand.new(label, selection_model, selection_before, selection_after, true))
+		last.append(SelectionStateCommand.new(label, selection_model, selection_before, selection_after, false))
 	all.append_array(cmds)
 	all.append_array(last)
 	HistoryUtil.record_many(label, all)
@@ -2140,19 +2170,8 @@ func _adjust_selection_length(delta_ticks: int) -> void:
 
 func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is removed from the clip."""
-	# Drop every visual of the note from the selection (track mode: one per instance)
-	var gone: Array[VisualNote] = []
-	if multi_clip_mode:
-		gone = _visuals_of(note_data, source_clip)
-	else:
-		var note_instance := get_visual_note(note_data.id)
-		if note_instance:
-			gone.append(note_instance)
-	for vn in gone:
-		selection_manager.selected_notes.erase(vn)
-		queue_redraw()
-		if selection_manager.selected_note == vn:
-			selection_manager.selected_note = null
+	# The selection model forgets the note itself (it listens to the clip).
+	queue_redraw()
 
 	# Call parent implementation
 	super._on_clip_note_removed(note_data, source_clip)
@@ -2190,8 +2209,8 @@ func start_duplicate_drag(grabbed: VisualNote, mouse_pos_local: Vector2) -> bool
 		return false
 	cancel_duplicate_drag()
 	var sources: Array[VisualNote] = []
-	if grabbed in selection_manager.selected_notes:
-		sources.assign(selection_manager.selected_notes)
+	if selection_model.has(grabbed.midi_note_data):
+		sources.assign(selection_manager.selected_visuals())
 	else:
 		sources.append(grabbed)
 
@@ -2211,7 +2230,7 @@ func start_duplicate_drag(grabbed: VisualNote, mouse_pos_local: Vector2) -> bool
 		vn.set_selected(true)
 		_update_single_note_position(vn)
 		_dup_origins[vn] = {"start_tick": copy.start_tick, "note": copy.note}
-		if src == grabbed:
+		if nd == grabbed.midi_note_data:
 			dup_anchor = vn
 
 	if _dup_origins.is_empty():
@@ -2314,8 +2333,8 @@ func _handle_cross_clip_transfers() -> void:
 	if not multi_clip_mode:
 		return
 
-	# Iterate a copy: removing a note fires midi_note_removed, which erases entries
-	# from selected_notes and would make this loop skip elements. Each note once.
+	# Iterate a copy: removing a note fires midi_note_removed, which drops it from the
+	# selection and would make this loop skip elements. Each note once.
 	for sel_note in _selected_note_visuals():
 		if not is_instance_valid(sel_note) or not sel_note.midi_note_data:
 			continue
@@ -2403,16 +2422,11 @@ func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance,
 	logger.info("Note transferred: old_id=%d, new_id=%d, new_local_pos=%d" % [note_data.id, new_note.id, dest_local_position])
 
 
-## One selected visual per selected note. A note selected through several visuals (loop
-## repeats, instances of a linked clip) shares one MidiNoteData, so edits apply to it once.
+## One selected visual per selected note: the one it was selected through. A note shown by
+## several visuals (loop repeats, instances of a linked clip) shares one MidiNoteData, so edits
+## apply to it once.
 func _selected_note_visuals() -> Array[VisualNote]:
-	var seen := {}
-	var out: Array[VisualNote] = []
-	for vn in selection_manager.selected_notes:
-		if is_instance_valid(vn) and vn.midi_note_data and not seen.has(vn.midi_note_data):
-			seen[vn.midi_note_data] = true
-			out.append(vn)
-	return out
+	return selection_manager.selected_visuals()
 
 
 ## Show the current data of the notes behind `visuals` on all their visuals (mid-gesture).
@@ -2435,10 +2449,21 @@ func _instance_for_visual_note(vn: VisualNote) -> ClipInstance:
 
 ## A visual is freed (its note or loop pass went away): nothing may keep using it.
 func _forget_visual(vn: VisualNote) -> void:
-	selection_manager.selected_notes.erase(vn)
+	# If the selection reaches the note through this visual, move it to another visual of the
+	# note, or drop the note when there is none.
+	var sel := selection_model.ref_of(vn.midi_note_data) if vn.midi_note_data else null
+	if sel != null and sel.instance == _instance_for_visual_note(vn) and sel.pass_index == vn.repeat_pass:
+		var other: VisualNote = null
+		for cand in _visuals_showing(vn.midi_note_data, sel.clip):
+			if cand != vn and is_instance_valid(cand):
+				other = cand
+				break
+		if other != null:
+			sel.instance = _instance_for_visual_note(other)
+			sel.pass_index = other.repeat_pass
+		else:
+			selection_model.remove_data(vn.midi_note_data, true)
 	queue_redraw()
-	if selection_manager.selected_note == vn:
-		selection_manager.selected_note = selection_manager.selected_notes[0] if not selection_manager.selected_notes.is_empty() else null
 	var fallback: VisualNote = null
 	if vn.clip_instance and vn.midi_note_data:
 		fallback = visual_for(vn.clip_instance, vn.midi_note_data)
@@ -2618,7 +2643,7 @@ func end_group_scale() -> void:
 		var factor := float(new_end - _scale_anchor) / float(_scale_end - _scale_anchor)
 		selection_manager.box_selection_start_tick = _scaled_tick(_scale_range.x, factor)
 		selection_manager.box_selection_end_tick = _scaled_tick(_scale_range.y, factor)
-		selection_manager.selection_changed.emit(selection_manager.selected_notes)
+		selection_model.changed.emit()
 	_sync_edited_notes(_scale_visuals)
 	_history_commit("Scale Notes")
 	_scale_clear()

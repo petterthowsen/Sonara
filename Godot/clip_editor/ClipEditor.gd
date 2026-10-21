@@ -870,7 +870,7 @@ func _register_selection_tool(button: Button, run: Callable, works_in_drum_view:
 		if editor == null:
 			return
 		# Clip mode: no selection means "all notes". Track mode requires a selection.
-		if editor.selection_manager.selected_notes.is_empty() and not midi_editor.track_mode:
+		if midi_editor.note_selection.is_empty() and not midi_editor.track_mode:
 			editor.selection_manager.select_all(editor.get_all_visual_notes())
 		run.call(editor))
 	_sync_selection_tools()
@@ -989,8 +989,7 @@ func _build_strum_popup() -> void:
 
 func _sync_selection_tools() -> void:
 	var editor := midi_editor.get_active_note_editor() if midi_editor else null
-	var has_selection: bool = editor != null and editor.selection_manager != null \
-			and not editor.selection_manager.selected_notes.is_empty()
+	var has_selection: bool = editor != null and not midi_editor.note_selection.is_empty()
 	var can_run: bool = has_selection or (editor != null and not midi_editor.track_mode)
 	for button: Button in tools_group.find_children("*", "Button", true, false):
 		if button.name == &"QuantizeOptions" or button.name == &"StrumOptions" or button == harmony_button:
@@ -1083,7 +1082,7 @@ func _set_harmony_item(index: int, enabled: bool, tooltip: String) -> void:
 
 ## Like the toolbar buttons: in clip mode, nothing selected means all notes.
 func _prepare_selection(editor: NoteEditor) -> void:
-	if editor.selection_manager.selected_notes.is_empty() and not midi_editor.track_mode:
+	if midi_editor.note_selection.is_empty() and not midi_editor.track_mode:
 		editor.selection_manager.select_all(editor.get_all_visual_notes())
 
 
@@ -1205,8 +1204,8 @@ func _on_ruler_position_requested(ticks: int):
 	# A bare time range (no notes) would win over the cursor as the paste target, so a
 	# plain click drops it, like it drops a pending range start.
 	var active = midi_editor.get_active_note_editor()
-	if active and active.selection_manager and active.selection_manager.selected_notes.is_empty() \
-			and active.selection_manager.has_range():
+	var selection := midi_editor.note_selection
+	if active and selection.is_empty() and selection.has_range():
 		active.selection_manager.set_range(-1, -1)
 		midi_editor._update_selection_overlays()
 	var song_ticks := maxi(0, _ruler_to_song_ticks(ticks))
@@ -1221,9 +1220,8 @@ func _on_ruler_position_requested(ticks: int):
 ## the next paste lands (like the arranger's range start).
 func _on_ruler_selection_start_requested(ticks: int) -> void:
 	var active = midi_editor.get_active_note_editor()
-	if active and active.selection_manager:
-		active.selection_manager.clear_selection()
-		active.selection_manager.selection_changed.emit(active.selection_manager.selected_notes)
+	if active:
+		midi_editor.note_selection.clear()
 	cursor_position_ticks = ticks
 	_ruler_range_start = ticks
 	midi_editor._update_selection_overlays()
@@ -1277,10 +1275,10 @@ func _process_body() -> void:
 ## Mirror the active note selection's range (or a pending range start) onto the ruler.
 func _sync_ruler_selection() -> void:
 	var active = midi_editor.get_active_note_editor()
-	var sm: NoteSelectionManager = active.selection_manager if active else null
-	if sm and sm.box_selection_end_tick > sm.box_selection_start_tick:
+	var selection := midi_editor.note_selection
+	if active and selection.has_range():
 		_ruler_range_start = -1
-		ruler.set_selection_range(sm.box_selection_start_tick, sm.box_selection_end_tick)
+		ruler.set_selection_range(selection.range.x, selection.range.y)
 	elif _ruler_range_start >= 0:
 		ruler.set_selection_range(_ruler_range_start, _ruler_range_start)
 	else:

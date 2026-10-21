@@ -174,10 +174,10 @@ func _test_note_id_index() -> void:
 	clip.update_midi_note(nd)
 	_assert(is_equal_approx(vn.position.x, editor.ticks_to_pixels(3840)), "a changed note is repositioned")
 
-	editor.selection_manager._set_selected_notes([vn] as Array[VisualNote])
+	editor.selection_manager.select_visuals([vn] as Array[VisualNote])
 	clip.remove_midi_note(nd)
 	_assert(editor.get_visual_note(nd.id) == null, "a removed note is no longer found by id")
-	_assert(editor.selection_manager.selected_notes.is_empty(), "a removed note leaves the selection")
+	_assert(editor.selection_model.is_empty(), "a removed note leaves the selection")
 	ctx.clip_editor.queue_free()
 	await process_frame
 

@@ -124,12 +124,13 @@ func _test_box_selection_and_copy() -> void:
 	sm.start_box_selection(box.position)
 	sm.update_box_selection(box.end)
 	sm.end_box_selection(editor.get_notes_in_box(sm.box_selection_rect))
-	_assert(sm.selected_notes.size() == 2, "the box selects the two notes of that pass, got %d" % sm.selected_notes.size())
+	_assert(sm.model.size() == 2, "the box selects the two notes of that pass, got %d" % sm.model.size())
 	var passes_ok := true
-	for vn in sm.selected_notes:
-		passes_ok = passes_ok and vn.repeat_pass == 2 and vn.is_selected
-	_assert(passes_ok, "the selected visuals are the pass's repeats, drawn selected")
-	_assert(_repeat(editor, ctx.c3, 0).is_selected == false, "the first pass keeps its own selection state")
+	for ref in sm.model.refs:
+		var vn = editor.visual_of_ref(ref)
+		passes_ok = passes_ok and ref.pass_index == 2 and vn != null and vn.repeat_pass == 2 and vn.is_selected
+	_assert(passes_ok, "the refs are the pass's repeats, drawn selected")
+	_assert(_repeat(editor, ctx.c3, 0).is_selected, "the note's other passes are drawn selected too: one note, one selection")
 	var snapshot = sm.snapshot_selection()
 	var starts := []
 	for nd in snapshot.notes:
@@ -175,7 +176,7 @@ func _test_edits_apply_once() -> void:
 	var editor = ctx.editor
 	var sm = editor.selection_manager
 	sm.select_all(editor.get_all_visual_notes())
-	_assert(sm.selected_notes.size() == 8, "Ctrl+A selects every shown visual, got %d" % sm.selected_notes.size())
+	_assert(sm.model.size() == 2, "Ctrl+A selects each note once, however many passes show it, got %d" % sm.model.size())
 	editor._transpose_selection(1)
 	_assert(ctx.c3.note == 61 and ctx.e3.note == 65, "Up moves each note one semitone, not once per pass")
 	editor._move_selection_horizontal(480)
@@ -185,7 +186,7 @@ func _test_edits_apply_once() -> void:
 	editor._delete_selection()
 	await process_frame
 	_assert(ctx.clip.midi_notes.size() == 1, "Delete removes each note once, leaving the unplayed one")
-	_assert(editor.get_all_visual_notes().is_empty() and sm.selected_notes.is_empty(), "and every visual and selection entry")
+	_assert(editor.get_all_visual_notes().is_empty() and sm.model.is_empty(), "and every visual and selection entry")
 	editor.queue_free()
 
 
@@ -196,9 +197,9 @@ func _test_paste_onto_repeat() -> void:
 	sm.select_note(_repeat(editor, ctx.c3, 1))
 	editor.copy_to_clipboard()
 	editor._paste_at_position(3 * LOOP + 960)
-	var pasted: Array = sm.selected_notes
-	_assert(pasted.size() == 1 and pasted[0].repeat_pass == 3, "the pasted note is selected where it was pasted")
-	_assert(pasted.size() == 1 and pasted[0].midi_note_data.start_tick == 960, "pasting into a repeat lands in the loop region")
+	var pasted: Array = sm.model.refs
+	_assert(pasted.size() == 1 and pasted[0].pass_index == 3, "the pasted note is selected where it was pasted")
+	_assert(pasted.size() == 1 and pasted[0].data.start_tick == 960, "pasting into a repeat lands in the loop region")
 	editor.queue_free()
 
 
@@ -209,7 +210,8 @@ func _test_loop_changes_rebuild_repeats() -> void:
 	sm.select_note(_repeat(editor, ctx.c3, 3))
 	ctx.ci.set_loop(true, 0, 3840)
 	_assert(_visuals_of(editor, ctx.c3).size() == 2, "a longer loop means fewer passes")
-	_assert(sm.selected_notes.is_empty(), "a freed repeat leaves the selection")
+	_assert(sm.model.size() == 1 and sm.model.refs[0].pass_index == 0 and editor.visual_of_ref(sm.model.refs[0]) != null,
+		"a freed repeat keeps the note selected, through a visual it still has")
 	ctx.ci.set_loop(false, 0, 3840)
 	await process_frame
 	_assert(_visuals_of(editor, ctx.c3).size() == 1, "no repeats once looping is off")

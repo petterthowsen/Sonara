@@ -112,9 +112,8 @@ func bind(editor: MidiEditor) -> void:
 	for ne in editor.note_editors:
 		_connect_once(ne.notes_changed, queue_redraw)
 		_connect_once(ne.notes_refreshed, queue_redraw)
-		if ne.selection_manager:
-			_connect_once(ne.selection_manager.selection_changed, _on_selection_changed)
-			_connect_once(ne.selection_manager.selection_set_changed, queue_redraw)
+	_connect_once(editor.note_selection.changed, queue_redraw)
+	_connect_once(editor.note_selection.set_changed, queue_redraw)
 	queue_redraw()
 
 
@@ -124,10 +123,6 @@ func _connect_once(sig: Signal, callable: Callable) -> void:
 
 
 func _on_scrolled(_v: float) -> void:
-	queue_redraw()
-
-
-func _on_selection_changed(_notes: Array) -> void:
 	queue_redraw()
 
 

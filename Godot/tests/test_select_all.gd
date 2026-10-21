@@ -79,12 +79,12 @@ func _test_ctrl_a_selects_all_notes() -> void:
 		return
 
 	editor.selection_manager.select_note(all_notes[0])
-	_assert(editor.selection_manager.selected_notes.size() == 1, "setup: one note selected")
+	_assert(editor.selection_model.size() == 1, "setup: one note selected")
 
 	editor.handle_key_input(_ctrl_a())
 
 	var manager: Object = editor.selection_manager
-	_assert(manager.selected_notes.size() == 2, "Ctrl+A selects every note: %d" % manager.selected_notes.size())
+	_assert(manager.model.size() == 2, "Ctrl+A selects every note: %d" % manager.model.size())
 	_assert(manager.box_selection_start_tick == 0, "range starts at the first note: %d" % manager.box_selection_start_tick)
 	_assert(manager.box_selection_end_tick == 720, "range ends at the last note: %d" % manager.box_selection_end_tick)
 
@@ -123,8 +123,8 @@ func _test_ctrl_a_through_viewport() -> void:
 
 	root.push_input(_ctrl_a())
 	await process_frame
-	_assert(note_editor.selection_manager.selected_notes.size() == 2,
-		"Ctrl+A through the viewport selects every note: %d" % note_editor.selection_manager.selected_notes.size())
+	_assert(note_editor.selection_model.size() == 2,
+		"Ctrl+A through the viewport selects every note: %d" % note_editor.selection_model.size())
 	_assert(midi.overlays.show_selection_markers, "the selection range markers follow the keyboard selection")
 
 	editor.queue_free()
@@ -173,10 +173,10 @@ func _test_ctrl_a_track_mode_focus() -> void:
 
 	root.push_input(_ctrl_a())
 	await process_frame
-	_assert(note_editor.selection_manager.selected_notes.size() == 2,
-		"Ctrl+A selects every note on the active track: %d" % note_editor.selection_manager.selected_notes.size())
-	for vn in note_editor.selection_manager.selected_notes:
-		_assert(vn.midi_note_data in clip_b.midi_notes, "and only that track's notes")
+	_assert(note_editor.selection_model.size() == 2,
+		"Ctrl+A selects every note on the active track: %d" % note_editor.selection_model.size())
+	for ref in note_editor.selection_model.refs:
+		_assert(ref.data in clip_b.midi_notes, "and only that track's notes")
 
 	editor.queue_free()
 	await process_frame

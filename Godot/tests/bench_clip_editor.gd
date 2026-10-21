@@ -216,7 +216,7 @@ func _run() -> void:
 		if sel.size() >= 50:
 			break
 		sel.append(vn)
-	active.selection_manager._set_selected_notes(sel)
+	active.selection_manager.select_visuals(sel)
 	var step: int = active.get_snap_interval()
 	var move_ms := await _time_with_frame(func(): active._move_selection_horizontal(step))
 	_report("5. nudge 50 notes", move_ms)

@@ -419,12 +419,12 @@ func _test_hidden_track_not_drawn() -> void:
 
 	# Selection on A must survive B being hidden.
 	var first_note: Array[VisualNote] = [editor.get_all_visual_notes()[0]]
-	editor.selection_manager._set_selected_notes(first_note)
+	editor.selection_manager.select_visuals(first_note)
 	midi.set_track_views(_typed([a]), clips)
 	await process_frame
 	_assert(midi.context_layer.track_count() == 1, "hiding B leaves it out of the layer")
 	_assert(midi._editor_track(editor) == a, "A keeps its editor")
-	_assert(editor.selection_manager.selected_notes.size() == 1, "A's note selection survives hiding B")
+	_assert(editor.selection_model.size() == 1, "A's note selection survives hiding B")
 	_assert(midi.note_editors[0] == editor, "the scene editor stays first")
 	_assert(editor.get_all_visual_notes().size() == 2, "only A's 2 notes have nodes")
 

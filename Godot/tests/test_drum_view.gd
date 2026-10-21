@@ -292,14 +292,14 @@ func _test_mode_switch_keeps_selection() -> void:
 	for vn in notes:
 		ne.selection_manager.toggle_note_selection(vn)
 	var placed_len: int = notes[0].midi_note_data.duration_ticks  # one grid step
-	var before: int = ne.selection_manager.selected_notes.size()
+	var before: int = ne.selection_model.size()
 	_assert(before == 2, "both notes are selected (got %d)" % before)
 
 	midi.drum_view = true
 	for _i in 3:
 		await process_frame
-	_assert(ne.selection_manager.selected_notes.size() == before,
-		"REQ-015: switching to Drum View keeps the selection (%d -> %d)" % [before, ne.selection_manager.selected_notes.size()])
+	_assert(ne.selection_model.size() == before,
+		"REQ-015: switching to Drum View keeps the selection (%d -> %d)" % [before, ne.selection_model.size()])
 	for vn in notes:
 		_assert(vn.drum_mode, "REQ-022: notes render as hit markers")
 		_assert(vn.midi_note_data.duration_ticks == placed_len,
@@ -310,7 +310,7 @@ func _test_mode_switch_keeps_selection() -> void:
 	midi.drum_view = false
 	for _i in 3:
 		await process_frame
-	_assert(ne.selection_manager.selected_notes.size() == before,
+	_assert(ne.selection_model.size() == before,
 		"REQ-015: switching back keeps it too")
 	for vn in notes:
 		_assert(not vn.drum_mode, "REQ-022: the piano roll draws bars again")

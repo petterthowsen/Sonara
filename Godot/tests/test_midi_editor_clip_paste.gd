@@ -89,7 +89,7 @@ func _test_copy_notes_paste_on_other_track() -> void:
 	midi.current_track = a.track
 	var editor_a: Object = midi.get_active_note_editor()
 	editor_a.selection_manager.select_all(editor_a.get_all_visual_notes())
-	_assert(editor_a.selection_manager.selected_notes.size() == 2, "setup: both notes on A selected")
+	_assert(editor_a.selection_model.size() == 2, "setup: both notes on A selected")
 	editor_a.handle_key_input(_key(KEY_C))
 
 	var clipboard: Object = editor_a.selection_manager.clipboard
@@ -109,14 +109,14 @@ func _test_copy_notes_paste_on_other_track() -> void:
 	var sm_b: Object = editor_b.selection_manager
 	_assert(sm_b.box_selection_start_tick == BAR and sm_b.box_selection_end_tick == BAR + 720,
 		"the range carried over to B: %d-%d" % [sm_b.box_selection_start_tick, sm_b.box_selection_end_tick])
-	_assert(sm_b.selected_notes.is_empty(), "no notes are selected on B")
+	_assert(sm_b.model.is_empty(), "no notes are selected on B")
 	_assert(sm_b.clipboard == clipboard, "B's editor sees the same clipboard")
 	_assert(editor._song_to_ruler_ticks(BAR) == BAR, "track mode ruler is song ticks")
 
 	editor_b.handle_key_input(_key(KEY_V))
 	_assert(_notes_of(inst_b.clip) == [[BAR, 60], [BAR + 480, 64]],
 		"B's clip got the notes at the same song position: %s" % [_notes_of(inst_b.clip)])
-	_assert(sm_b.selected_notes.size() == 2, "the pasted notes are selected")
+	_assert(sm_b.model.size() == 2, "the pasted notes are selected")
 	_assert(_notes_of(inst_a.clip).size() == 2, "A is untouched")
 
 	# Back on A, the range is B's (the pasted span) again.
@@ -148,7 +148,7 @@ func _test_copy_edited_clips_paste_creates_clip() -> void:
 	editor_a.selection_manager.clear_selection()
 	editor_a.handle_key_input(_key(KEY_C))
 	var sm_a: Object = editor_a.selection_manager
-	_assert(sm_a.selected_notes.size() == 2, "Ctrl+C with nothing selected selects the clip's notes")
+	_assert(sm_a.model.size() == 2, "Ctrl+C with nothing selected selects the clip's notes")
 	_assert(sm_a.box_selection_start_tick == 2 * BAR and sm_a.box_selection_end_tick == 7 * BAR,
 		"the range is the clip's span: %d-%d" % [sm_a.box_selection_start_tick, sm_a.box_selection_end_tick])
 	_assert(sm_a.clipboard.duration_ticks == 5 * BAR, "the clipboard spans the whole clip")
@@ -197,7 +197,7 @@ func _test_range_carries_over_to_another_clip() -> void:
 	var sm: Object = ne.selection_manager
 	_assert(sm.box_selection_start_tick == BAR + 960 and sm.box_selection_end_tick == BAR + 1200,
 		"the range carried to B's clip at the same song position: %d-%d" % [sm.box_selection_start_tick, sm.box_selection_end_tick])
-	_assert(sm.selected_notes.is_empty(), "no stale notes are selected")
+	_assert(sm.model.is_empty(), "no stale notes are selected")
 
 	ne.handle_key_input(_key(KEY_V))
 	_assert(_notes_of(inst_b.clip) == [[BAR + 960, 72]], "pasted at the carried range start: %s" % [_notes_of(inst_b.clip)])

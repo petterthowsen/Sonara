@@ -181,7 +181,7 @@ func _test_duplicate_drag_commits() -> void:
 	for n in clip.midi_notes:
 		found["%d@%d" % [n.note, n.start_tick]] = true
 	_assert(found.has("61@3840") and found.has("65@4320"), "duplicates keep their layout, moved together: %s" % str(found.keys()))
-	_assert(editor.selection_manager.selected_notes.size() == 2, "the duplicates end up selected")
+	_assert(editor.selection_model.size() == 2, "the duplicates end up selected")
 	_assert(editor.get_pending_duplicates().is_empty(), "no pending notes remain")
 	_assert(editor.interaction_mode == editor.InteractionMode.NONE, "the interaction is over")
 	editor.queue_free()
@@ -275,7 +275,7 @@ func _test_placement_range_setting() -> void:
 	settings.set_value(key, false)
 	var vn = editor._place_note_at_position(Vector2(0.0, y))
 	await process_frame
-	_assert(vn != null and sm.selected_notes.size() == 1, "off: the placed note is selected")
+	_assert(vn != null and sm.model.size() == 1, "off: the placed note is selected")
 	_assert(not sm.has_range(), "off: placement does not set a range")
 
 	editor.selection_manager.clear_selection()

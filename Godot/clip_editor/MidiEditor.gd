@@ -33,6 +33,10 @@ var note_editors : Array[NoteEditor] = []
 ## Draws the visible tracks other than current_track (track mode) without a node per note.
 var context_layer := ContextNotesLayer.new()
 
+## The note selection (notes and time range) of this view. The note editor shows and edits it;
+## it survives rebinding the editor.
+var note_selection := NoteSelectionModel.new()
+
 # Active track.color_changed subscriptions, as [track, callable] pairs, so note
 # colors follow the track color while the editor is bound.
 var _color_bindings : Array = []
@@ -86,18 +90,17 @@ const NO_RANGE := Vector2i(-1, -1)
 ## bound instance's clip-content ticks.
 func get_selection_range_song() -> Vector2i:
 	var active := get_active_note_editor()
-	if not active or not active.selection_manager or not active.selection_manager.has_range():
+	if not active or not note_selection.has_range():
 		return NO_RANGE
-	var sm := active.selection_manager
-	return Vector2i(_editor_to_song_ticks(active, sm.box_selection_start_tick),
-		_editor_to_song_ticks(active, sm.box_selection_end_tick))
+	return Vector2i(_editor_to_song_ticks(active, note_selection.range.x),
+		_editor_to_song_ticks(active, note_selection.range.y))
 
 
 ## Put a song-tick range on the active editor as a bare range (no notes selected), so it
 ## survives switching tracks and clips. NO_RANGE clears the range.
 func apply_selection_range_song(song_range: Vector2i) -> void:
 	var active := get_active_note_editor()
-	if not active or not active.selection_manager:
+	if not active:
 		return
 	var start := -1
 	var end := -1
@@ -582,9 +585,8 @@ func _bind_editor_to_track(editor: NoteEditor, track: Track, clips: Array[ClipIn
 	# Bind to ALL clips on this track (multi-clip mode)
 	editor.bind_to_clips(track.clip_instances, track)
 	_set_edited_clips(editor, track, clips)
-	# Rebinding drops the notes but not the range, which only the active editor keeps.
-	if editor.selection_manager:
-		editor.selection_manager.clear_selection()
+	# Rebinding drops the notes but not the range.
+	editor.selection_manager.clear_selection()
 	# Set color from track (and keep following it)
 	_bind_track_color(editor, track)
 
@@ -627,8 +629,7 @@ func _sync_track_views() -> void:
 		if _editor_track(editor) != null or editor.visible:
 			_clear_color_bindings_for(editor)
 			editor.unbind()
-			if editor.selection_manager:
-				editor.selection_manager.clear_selection()
+			editor.selection_manager.clear_selection()
 			editor.visible = false
 	elif _editor_track(editor) != wanted or not editor.visible:
 		_clear_color_bindings_for(editor)
@@ -1314,7 +1315,7 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
 		active_editor.selection_manager.update_box_selection(note_editor_pos)
 		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
-		active_editor.selection_manager._set_selected_notes(notes_in_box)
+		active_editor.selection_manager.select_visuals(notes_in_box)
 		accept_event()
 		_update_selection_overlays()
 
@@ -1398,7 +1399,7 @@ func _update_ruler_box_selection() -> void:
 		return
 	var x := active_editor.get_local_mouse_position().x
 	active_editor.selection_manager.update_box_selection(Vector2(x, lane_layout.total_height()))
-	active_editor.selection_manager._set_selected_notes(active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect))
+	active_editor.selection_manager.select_visuals(active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect))
 	_update_selection_overlays()
 
 
@@ -1425,7 +1426,7 @@ func _input(event: InputEvent) -> void:
 func _update_selection_overlays() -> void:
 	"""Update overlays with current selection state."""
 	var active_editor = get_active_note_editor()
-	if not active_editor or not active_editor.selection_manager or not grid_helper or not overlays:
+	if not active_editor or not grid_helper or not overlays:
 		return
 
 	var sm = active_editor.selection_manager
@@ -1442,7 +1443,7 @@ func _update_selection_overlays() -> void:
 		overlays.box_selection_rect = Rect2()
 
 	# Update selection range markers
-	var selection_length = sm.box_selection_end_tick - sm.box_selection_start_tick
+	var selection_length = note_selection.range.y - note_selection.range.x
 	overlays.show_selection_markers = selection_length > 0
 
 	if overlays.show_selection_markers:
@@ -1452,8 +1453,8 @@ func _update_selection_overlays() -> void:
 		# In clip-mode, these are clip-local ticks
 		# Do NOT add clip offsets - the ticks are already in the correct coordinate space
 
-		var start_tick = sm.box_selection_start_tick
-		var end_tick = sm.box_selection_end_tick
+		var start_tick = note_selection.range.x
+		var end_tick = note_selection.range.y
 
 		# Convert to pixels in content space
 		var start_x_content = grid_helper.ticks_to_pixels(start_tick)
@@ -1566,7 +1567,7 @@ func _update_note_editor_states() -> void:
 		active.modulate.a = 1.0
 
 
-func _on_note_editor_selection_changed(_notes: Array[VisualNote]) -> void:
+func _on_note_editor_selection_changed() -> void:
 	selection_changed.emit()
 
 
@@ -1588,14 +1589,15 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 		editor.notes_changed.connect(_invalidate_sounding)
 	# The focused note editor handles keys itself (see NoteEditor._gui_input); the
 	# range overlays are ours, so refresh them when that changed the selection.
-	if not editor.selection_range_restored.is_connected(_update_selection_overlays):
-		editor.selection_range_restored.connect(_update_selection_overlays)
+	editor.use_selection_model(note_selection)
+	if not note_selection.restored.is_connected(_update_selection_overlays):
+		note_selection.restored.connect(_update_selection_overlays)
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
 		editor.key_input_handled.connect(_update_selection_overlays)
 	if not editor.harmony_dialog_requested.is_connected(harmony_dialog_requested.emit):
 		editor.harmony_dialog_requested.connect(harmony_dialog_requested.emit)
-	if editor.selection_manager and not editor.selection_manager.selection_changed.is_connected(_on_note_editor_selection_changed):
-		editor.selection_manager.selection_changed.connect(_on_note_editor_selection_changed)
+	if not note_selection.changed.is_connected(_on_note_editor_selection_changed):
+		note_selection.changed.connect(_on_note_editor_selection_changed)
 	editor.next_values = next_note_values
 	if not editor.note_touched.is_connected(next_note_values.take_from):
 		editor.note_touched.connect(next_note_values.take_from)
@@ -1662,7 +1664,6 @@ func value_stems() -> Array[Dictionary]:
 		if editor == null:
 			continue
 		var color: Color = editor.note_color if track_mode else Color(0.3, 0.6, 0.9)
-		var selected: Array[VisualNote] = editor.selection_manager.selected_notes if editor.selection_manager else ([] as Array[VisualNote])
 		for vn in editor.get_all_visual_notes():
 			var nd := vn.midi_note_data
 			var x0 := editor.position.x + vn.position.x  # the editor's own position already carries the scroll
@@ -1675,7 +1676,7 @@ func value_stems() -> Array[Dictionary]:
 				"clip": editor._clip_for_visual_note(vn),
 				"color": color,
 				"ghost": ghost,
-				"selected": vn in selected,
+				"selected": note_selection.has(nd),
 				"x_start": x0,
 				"x_end": x1,
 			})
@@ -1692,11 +1693,11 @@ func _on_row_select_requested(row: int, additive: bool) -> void:
 ## current selection too.
 func _select_pitch(pitch: int, additive: bool) -> void:
 	var editor := get_active_note_editor()
-	if editor == null or editor.selection_manager == null:
+	if editor == null:
 		return
 	var picked: Array[VisualNote] = []
 	if additive:
-		picked.append_array(editor.selection_manager.selected_notes)
+		picked.append_array(editor.selection_manager.selected_visuals())
 	for vn in editor.get_all_visual_notes():
 		if vn.midi_note_data.note == pitch and vn not in picked:
 			picked.append(vn)
@@ -1704,15 +1705,11 @@ func _select_pitch(pitch: int, additive: bool) -> void:
 	_update_selection_overlays()
 
 
-## Union of the selected notes of every note editor.
+## The selected notes' data, once each.
 func selected_note_data() -> Array[MidiNoteData]:
 	var out: Array[MidiNoteData] = []
-	for editor in note_editors:
-		if editor == null or editor.selection_manager == null:
-			continue
-		for vn in editor.selection_manager.selected_notes:
-			if vn.midi_note_data and vn.midi_note_data not in out:
-				out.append(vn.midi_note_data)
+	for ref in note_selection.refs:
+		out.append(ref.data)
 	return out
 
 
@@ -1911,10 +1908,8 @@ func _apply_view_mode() -> void:
 ## whatever sits in the middle of the viewport.
 func _visible_anchor_pitch() -> int:
 	var active := get_active_note_editor()
-	if active and active.selection_manager:
-		for vn in active.selection_manager.selected_notes:
-			if vn and vn.midi_note_data:
-				return vn.midi_note_data.note
+	if active and not note_selection.is_empty():
+		return note_selection.refs[0].data.note
 	if lane_layout.total_height() <= 0:
 		return -1
 	return lane_layout.y_to_pitch(scroll_vertical + size.y * 0.5)

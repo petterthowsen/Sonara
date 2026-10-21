@@ -57,7 +57,7 @@ func _setup() -> Dictionary:
 
 func _test_vertical_nudge_moves_shared_note_once() -> void:
 	var ctx := await _setup()
-	_assert(ctx.editor.selection_manager.selected_notes.size() == 3, "setup: one selected visual per instance")
+	_assert(ctx.editor.selection_model.size() == 1, "setup: the shared note is selected once, not once per instance")
 	ctx.editor._move_selection_vertical(func(p: int) -> int: return ctx.editor.step_note(p, 12))
 	_assert(ctx.note.note == 72, "octave up moves the shared note 12 semitones, not once per instance: %d" % ctx.note.note)
 	ctx.editor.queue_free()

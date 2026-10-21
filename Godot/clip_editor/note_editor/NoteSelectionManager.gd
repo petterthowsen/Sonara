@@ -1,4 +1,7 @@
-## Manages note selection state only.
+## Box-select geometry and the note clipboard of one NoteEditor.
+## The selected notes themselves live in the MidiEditor's NoteSelectionModel (`model`): this
+## class turns visuals into refs and back through the editor's callbacks, so the editor's
+## edit code can keep working on VisualNotes.
 ## Does NOT handle container operations, coordinate conversions, or clip mutations.
 ## Those responsibilities belong to NoteEditor.
 class_name NoteSelectionManager extends RefCounted
@@ -6,16 +9,27 @@ class_name NoteSelectionManager extends RefCounted
 static var logger := Log.make("NoteSelectionManager")
 
 
-signal selection_changed(notes: Array[VisualNote])
+## The selection (notes and range). One per MidiEditor, assigned by NoteEditor.
+var model: NoteSelectionModel
 
-## The set of selected notes changed without selection_changed (box select, clear): visuals
-## that depend on the selection, like the group-scale handle, redraw on this.
-signal selection_set_changed
+## NoteRef -> the VisualNote showing it (null when it has none), set by NoteEditor.
+var visual_of_ref: Callable = func(_ref: NoteRef) -> VisualNote: return null
+## VisualNote -> the NoteRef that selects its note, set by NoteEditor.
+var ref_of_visual: Callable = func(_vn: VisualNote) -> NoteRef: return null
 
 
-# Selection state
-var selected_note: VisualNote = null  # Currently selected note (legacy single selection)
-var selected_notes: Array[VisualNote] = []  # Multiple selected notes
+## The selected time range in editor ticks, kept in the model. Also the live range of a box
+## while it is dragged.
+var box_selection_start_tick: int:
+	get:
+		return model.range.x
+	set(value):
+		model.range = Vector2i(value, model.range.y)
+var box_selection_end_tick: int:
+	get:
+		return model.range.y
+	set(value):
+		model.range = Vector2i(model.range.x, value)
 
 
 # Clipboard for copy/paste operations. One clipboard for every note editor (track mode
@@ -33,8 +47,6 @@ var box_selection_start: Vector2 = Vector2.ZERO
 var box_selection_current: Vector2 = Vector2.ZERO
 var box_selection_rect: Rect2 = Rect2()
 var is_box_selecting: bool = false
-var box_selection_start_tick: int = 0
-var box_selection_end_tick: int = 0
 
 
 # Reference to grid helper (for time snapping only)
@@ -54,8 +66,30 @@ var get_note_song_position: Callable = func(note: VisualNote) -> Dictionary:
 	return {"start_tick": 0, "end_tick": 0}
 
 
-func _init(gh: GridHelper) -> void:
+func _init(gh: GridHelper, p_model: NoteSelectionModel = null) -> void:
 	grid_helper = gh
+	model = p_model if p_model else NoteSelectionModel.new()
+
+
+## The visuals of the selected notes (one per note, the one it was selected through), in
+## selection order. O(selected).
+func selected_visuals() -> Array[VisualNote]:
+	var out: Array[VisualNote] = []
+	for ref in model.refs:
+		var vn: VisualNote = visual_of_ref.call(ref)
+		if vn != null and is_instance_valid(vn):
+			out.append(vn)
+	return out
+
+
+func _refs_of(notes: Array[VisualNote]) -> Array[NoteRef]:
+	var out: Array[NoteRef] = []
+	for note in notes:
+		if is_instance_valid(note) and note.midi_note_data:
+			var ref: NoteRef = ref_of_visual.call(note)
+			if ref != null:
+				out.append(ref)
+	return out
 
 
 # ============================================================================
@@ -105,33 +139,31 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 	Hotkeys.end_state(self)
 
 	# Update selection with provided notes
-	_set_selected_notes(notes_in_box)
+	select_visuals(notes_in_box)
 
 	# The boundaries start at the grid-snapped box (so empty space can be selected). Notes the
 	# box only partly covers are selected whole, so the range grows to take in their full span.
 	# It never shrinks: a box wider than its notes keeps its grid edges.
 	_grow_range_to_selected_notes()
 
-	if selected_notes.is_empty():
+	if model.is_empty():
 		logger.info("Box selection completed - no notes, boundaries at grid: %d-%d" % [
 			box_selection_start_tick, box_selection_end_tick
 		])
 	else:
 		logger.info("Box selection completed - %d notes, boundaries at grid: %d-%d" % [
-			selected_notes.size(), box_selection_start_tick, box_selection_end_tick
+			model.size(), box_selection_start_tick, box_selection_end_tick
 		])
 
-	selection_changed.emit(selected_notes)
+	model.changed.emit()
 
 	logger.info("Ended box selection - %d notes selected (range: %d-%d ticks)" % [
-		selected_notes.size(), box_selection_start_tick, box_selection_end_tick
+		model.size(), box_selection_start_tick, box_selection_end_tick
 	])
 
 
 func _grow_range_to_selected_notes() -> void:
-	for note in selected_notes:
-		if not note.midi_note_data:
-			continue
+	for note in selected_visuals():
 		var pos: Dictionary = get_note_song_position.call(note)
 		box_selection_start_tick = mini(box_selection_start_tick, pos["start_tick"])
 		box_selection_end_tick = maxi(box_selection_end_tick, pos["end_tick"])
@@ -144,31 +176,10 @@ func _snap_x_to_grid(x: float) -> float:
 	return grid_helper.ticks_to_pixels(ticks)
 
 
-## Make exactly `notes` the selection (no range change, no signal).
+## Make exactly `notes` the selection (no range change; only `set_changed`). A note shown by
+## several visuals counts once, through the first.
 func select_visuals(notes: Array[VisualNote]) -> void:
-	_set_selected_notes(notes)
-
-
-func _set_selected_notes(notes: Array[VisualNote]) -> void:
-	"""Internal helper to update selected notes array."""
-	# Clear previous selection visuals
-	for note in selected_notes:
-		if is_instance_valid(note):
-			note.set_selected(false)
-	selected_notes.clear()
-
-	# Set new selection
-	for note in notes:
-		if is_instance_valid(note):
-			selected_notes.append(note)
-			note.set_selected(true)
-
-	# Update legacy single selection reference
-	if selected_notes.size() > 0:
-		selected_note = selected_notes[0]
-	else:
-		selected_note = null
-	selection_set_changed.emit()
+	model.select(_refs_of(notes), true)
 
 
 # caller should snap the position to the grid
@@ -194,51 +205,30 @@ func toggle_note_selection(note: VisualNote) -> void:
 	"""Toggle a note's selection state (for Ctrl+Click)."""
 	if not note or not note.midi_note_data:
 		return
-
-	if note in selected_notes:
-		# Remove from selection
-		selected_notes.erase(note)
-		note.set_selected(false)
-
-		if selected_note == note:
-			selected_note = selected_notes[0] if not selected_notes.is_empty() else null
-	else:
-		# Add to selection
-		selected_notes.append(note)
-		note.set_selected(true)
-
-		if selected_notes.size() == 1:
-			selected_note = note
+	var ref: NoteRef = ref_of_visual.call(note)
+	if ref == null:
+		return
+	model.toggle(ref, true)
 
 	# Update selection range
 	_update_selection_range()
-	selection_changed.emit(selected_notes)
-	#container.queue_redraw()
+	model.changed.emit()
 
 	logger.info("Toggled note selection - %d notes selected (range: %d-%d)" % [
-		selected_notes.size(), box_selection_start_tick, box_selection_end_tick
+		model.size(), box_selection_start_tick, box_selection_end_tick
 	])
 
 
 func clear_selection() -> void:
 	"""Clear all selected notes."""
-	for note in selected_notes:
-		if is_instance_valid(note):
-			note.set_selected(false)
-	selected_notes.clear()
-	selected_note = null
-	selection_set_changed.emit()
-
-	box_selection_start_tick = 0
-	box_selection_end_tick = 0
-	#container.queue_redraw()
+	model.clear(true)
 
 
 ## Select every note in `notes` at once (Ctrl+A). The range covers them all.
 func select_all(notes: Array[VisualNote]) -> void:
-	_set_selected_notes(notes)
+	select_visuals(notes)
 	_update_selection_range()
-	selection_changed.emit(selected_notes)
+	model.changed.emit()
 
 
 func select_note(note: VisualNote, with_range: bool = true) -> void:
@@ -247,15 +237,7 @@ func select_note(note: VisualNote, with_range: bool = true) -> void:
 	`with_range` also sets the selection range to the note's span; note placement
 	passes the user's "placement sets range" setting here.
 	"""
-	# Clear all previous selections
-	for n in selected_notes:
-		if is_instance_valid(n):
-			n.set_selected(false)
-
-	# Select new note
-	selected_note = note
-	selected_notes = [note]
-	note.set_selected(true)
+	select_visuals([note] as Array[VisualNote])
 
 	# Set selection range using coordinate conversion callback
 	if with_range and note.midi_note_data:
@@ -263,22 +245,18 @@ func select_note(note: VisualNote, with_range: bool = true) -> void:
 		box_selection_start_tick = pos["start_tick"]
 		box_selection_end_tick = pos["end_tick"]
 
-	selection_changed.emit(selected_notes)
-	#container.queue_redraw()
+	model.changed.emit()
 
 
 func _update_selection_range() -> void:
 	"""Update box selection range to encompass all selected notes."""
-	if selected_notes.is_empty():
+	if model.is_empty():
 		box_selection_start_tick = 0
 		box_selection_end_tick = 0
 		return
 
 	var first_note = true
-	for sel_note in selected_notes:
-		if not sel_note.midi_note_data:
-			continue
-		
+	for sel_note in selected_visuals():
 		# Use coordinate conversion callback to get song-relative position
 		var pos = get_note_song_position.call(sel_note)
 		var note_start = pos["start_tick"]
@@ -308,39 +286,35 @@ func copy_selection() -> void:
 
 ## True when a time range is set (a box/ruler range, or the span of the selected notes).
 func has_range() -> bool:
-	return box_selection_end_tick > box_selection_start_tick
+	return model.has_range()
 
 
 ## Replace the selection with a bare time range and no notes, e.g. a range carried over
 ## from another track or clip. A range with end <= start clears it.
 func set_range(start_tick: int, end_tick: int) -> void:
 	clear_selection()
-	if end_tick > start_tick:
-		box_selection_start_tick = start_tick
-		box_selection_end_tick = end_tick
-	selection_changed.emit(selected_notes)
+	model.set_range(start_tick, end_tick)
 
 
 ## The selected notes as a NoteSelection over the selection range, positioned in this
 ## editor's ticks (song ticks in track mode). Null when nothing is selected.
 func snapshot_selection() -> NoteSelection:
-	if selected_notes.is_empty():
+	if model.is_empty():
 		return null
+	var visuals := selected_visuals()
 	var start_tick := box_selection_start_tick
 	var end_tick := box_selection_end_tick
 	if end_tick <= start_tick:
 		# No explicit range: use the notes' bounds in this editor's space.
 		var first := true
-		for n in selected_notes:
-			if not is_instance_valid(n) or not n.midi_note_data:
-				continue
+		for n in visuals:
 			var pos: Dictionary = get_note_song_position.call(n)
 			start_tick = pos["start_tick"] if first else mini(start_tick, pos["start_tick"])
 			end_tick = pos["end_tick"] if first else maxi(end_tick, pos["end_tick"])
 			first = false
 		if first or end_tick <= start_tick:
 			return null
-	return NoteSelection.from_positioned_notes(selected_notes, start_tick, end_tick, get_note_song_position)
+	return NoteSelection.from_positioned_notes(visuals, start_tick, end_tick, get_note_song_position)
 
 
 # Drawing removed - now handled by MidiEditor._draw()
