@@ -164,7 +164,7 @@ func _test_ctrl_a_track_mode_focus() -> void:
 	_assert(midi.track_mode and midi.note_editors.size() == 1, "track mode: one note editor, bound to the active track")
 	var note_editor: Object = midi.note_editors[0]
 
-	midi.current_track = b.track
+	midi.focus_track = b.track
 	await process_frame
 	await process_frame
 	_assert(note_editor.has_focus(), "the active track's editor takes keyboard focus")

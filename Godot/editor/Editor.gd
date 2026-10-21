@@ -415,8 +415,8 @@ func _on_setting_changed(key: String, value) -> void:
 		_apply_record_arm_follows_active()
 	elif key == "arranger/record_arm_follows_midi_editor_track":
 		# Turning the setting on arms the track the MIDI editor has selected right now.
-		if value and clip_editor and clip_editor.midi_editor and clip_editor.midi_editor.current_track:
-			_apply_record_arm(clip_editor.midi_editor.current_track, key)
+		if value and clip_editor and clip_editor.midi_editor and clip_editor.midi_editor.focus_track:
+			_apply_record_arm(clip_editor.midi_editor.focus_track, key)
 
 
 func _connect_audio_engine_signals():

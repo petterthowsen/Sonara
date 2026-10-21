@@ -86,7 +86,7 @@ func _test_copy_notes_paste_on_other_track() -> void:
 	await _open(editor, [inst_a, inst_b], true)
 
 	var midi: Object = editor.midi_editor
-	midi.current_track = a.track
+	midi.focus_track = a.track
 	var editor_a: Object = midi.get_active_note_editor()
 	editor_a.selection_manager.select_all(editor_a.get_all_visual_notes())
 	_assert(editor_a.selection_model.size() == 2, "setup: both notes on A selected")
@@ -103,7 +103,7 @@ func _test_copy_notes_paste_on_other_track() -> void:
 		offsets.sort()
 		_assert(offsets == [0, 480], "notes are relative to the range, not the clip content: %s" % [offsets])
 
-	midi.current_track = b.track
+	midi.focus_track = b.track
 	var editor_b: Object = midi.get_active_note_editor()
 	_assert(editor_b == editor_a and midi._editor_track(editor_b) == b.track, "switching tracks rebinds the one editor to B")
 	var sm_b: Object = editor_b.selection_manager
@@ -120,7 +120,7 @@ func _test_copy_notes_paste_on_other_track() -> void:
 	_assert(_notes_of(inst_a.clip).size() == 2, "A is untouched")
 
 	# Back on A, the range is B's (the pasted span) again.
-	midi.current_track = a.track
+	midi.focus_track = a.track
 	var sm_a: Object = midi.get_active_note_editor().selection_manager
 	_assert(sm_a.box_selection_start_tick == BAR and sm_a.box_selection_end_tick == BAR + 720,
 		"the range carries back to A")
@@ -143,7 +143,7 @@ func _test_copy_edited_clips_paste_creates_clip() -> void:
 	await _open(editor, [inst_a, inst_b], true)
 
 	var midi: Object = editor.midi_editor
-	midi.current_track = a.track
+	midi.focus_track = a.track
 	var editor_a: Object = midi.get_active_note_editor()
 	editor_a.selection_manager.clear_selection()
 	editor_a.handle_key_input(_key(KEY_C))
@@ -153,7 +153,7 @@ func _test_copy_edited_clips_paste_creates_clip() -> void:
 		"the range is the clip's span: %d-%d" % [sm_a.box_selection_start_tick, sm_a.box_selection_end_tick])
 	_assert(sm_a.clipboard.duration_ticks == 5 * BAR, "the clipboard spans the whole clip")
 
-	midi.current_track = b.track
+	midi.focus_track = b.track
 	var editor_b: Object = midi.get_active_note_editor()
 	_assert(editor_b.get_paste_tick() == 2 * BAR, "the paste target is the carried range start")
 	editor_b.handle_key_input(_key(KEY_V))
@@ -204,7 +204,7 @@ func _test_range_carries_over_to_another_clip() -> void:
 
 	# Track mode keeps it as well.
 	await _open(editor, [inst_a, inst_b], true)
-	midi.current_track = a.track
+	midi.focus_track = a.track
 	sm = midi.get_active_note_editor().selection_manager
 	_assert(sm.box_selection_start_tick == BAR + 960 and sm.box_selection_end_tick == BAR + 1200,
 		"switching to track mode keeps the range in song ticks: %d-%d" % [sm.box_selection_start_tick, sm.box_selection_end_tick])

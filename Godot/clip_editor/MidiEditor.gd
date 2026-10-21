@@ -25,12 +25,12 @@ var logger := Log.make("MidiEditor")
 
 # h_scroll contains the NoteEditor and, behind it, the ContextNotesLayer
 @onready var h_scroll: ScrollContainer = $HBox/NoteArea/HScroll
-## The NoteEditors. Only ever one, the scene's: in track mode it is bound to current_track, and
+## The NoteEditors. Only ever one, the scene's: in track mode it is bound to focus_track, and
 ## the other visible tracks are drawn by context_layer. An array so code that loops over
 ## the editors keeps working.
 var note_editors : Array[NoteEditor] = []
 
-## Draws the visible tracks other than current_track (track mode) without a node per note.
+## Draws the visible tracks other than focus_track (track mode) without a node per note.
 var context_layer := ContextNotesLayer.new()
 
 ## The note selection (notes and time range) of this view. The note editor shows and edits it;
@@ -46,16 +46,16 @@ var track_mode: bool = false  # True when displaying multiple clips across track
 ## The visible tracks in list order (track mode), and the clips the user opened on them.
 var _view_tracks: Array[Track] = []
 var _edited_clips: Array[ClipInstance] = []
-var current_track: Track = null:  # Active track in track-mode
+var focus_track: Track = null:  # Active track in track-mode
 	set(value):
-		if current_track != value:
+		if focus_track != value:
 			# The time range is shared by the tracks: carry it to the new track's editor.
 			var carried := get_selection_range_song() if track_mode else NO_RANGE
-			current_track = value
+			focus_track = value
 			_sync_track_views()
 			if track_mode and value:
 				apply_selection_range_song(carried)
-			current_track_changed.emit()
+			focus_track_changed.emit()
 			# Labels and colours come from the focused track's map (REQ-024).
 			if is_inside_tree():
 				call_deferred("refresh_note_map")
@@ -132,7 +132,7 @@ func get_active_note_editor() -> NoteEditor:
 
 	# Track-mode: the editor of the selected track; none when no track is selected
 	for editor in note_editors:
-		if current_track and _editor_track(editor) == current_track:
+		if focus_track and _editor_track(editor) == focus_track:
 			return editor
 	return null
 
@@ -238,7 +238,7 @@ var _rows_dirty := false
 var _rebuild_queued := false
 
 ## The focused track (track mode) changed.
-signal current_track_changed
+signal focus_track_changed
 ## A left press hit a note of another editable track; the press switched to that track.
 signal note_track_picked(track: Track)
 
@@ -497,7 +497,7 @@ func unbind():
 	clip = null
 	clip_instance = null
 	track_mode = false
-	current_track = null
+	focus_track = null
 	_clear_color_bindings()
 	_scroll_extent_ticks = 0
 	_view_tracks.clear()
@@ -568,7 +568,7 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 
 	# Set first track as active by default
 	if not tracks.is_empty():
-		current_track = tracks[0]
+		focus_track = tracks[0]
 	_sync_track_views()
 	# The time range survives rebinding (same song ticks in track mode).
 	apply_selection_range_song(carried)
@@ -598,7 +598,7 @@ func _set_edited_clips(editor: NoteEditor, track: Track, clips: Array[ClipInstan
 			editor.edited_clip_instances.append(ci)
 
 
-## Makes the display match `tracks` (the visible ones): current_track gets the note editor
+## Makes the display match `tracks` (the visible ones): focus_track gets the note editor
 ## (when it is among them), all of them are known to the context layer, which draws every one
 ## but the current track.
 func set_track_views(tracks: Array[Track], edited_clips: Array[ClipInstance]) -> void:
@@ -618,13 +618,13 @@ func set_track_views(tracks: Array[Track], edited_clips: Array[ClipInstance]) ->
 	call_deferred("refresh_note_map")
 
 
-## Track mode: bind the note editor to current_track if it is shown, else hide it, and hand
+## Track mode: bind the note editor to focus_track if it is shown, else hide it, and hand
 ## the layer the tracks. Cheap when nothing changed.
 func _sync_track_views() -> void:
 	if not track_mode or note_editors.is_empty():
 		return
 	var editor := note_editors[0]
-	var wanted: Track = current_track if _view_tracks.has(current_track) else null
+	var wanted: Track = focus_track if _view_tracks.has(focus_track) else null
 	if wanted == null:
 		if _editor_track(editor) != null or editor.visible:
 			_clear_color_bindings_for(editor)
@@ -1125,8 +1125,8 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 	var hit := _note_hit(mevent.global_position)
 	var clicked_note: VisualNote = hit.get("visual") if not hit.is_empty() else null
 	if not hit.is_empty() and not hit.has("editor"):
-		current_track = hit.track
-		note_track_picked.emit(current_track)
+		focus_track = hit.track
+		note_track_picked.emit(focus_track)
 		active_editor = get_active_note_editor()
 		if not active_editor:
 			return
@@ -1560,7 +1560,7 @@ func _update_note_editor_states() -> void:
 
 	# The context layer dims per track: editable tracks slightly, view-only ones more.
 	context_layer.set_tracks(_view_tracks, editable_tracks)
-	context_layer.excluded_track = current_track
+	context_layer.excluded_track = focus_track
 	var active := get_active_note_editor()
 	if active:
 		active.z_index = 1
@@ -1755,7 +1755,7 @@ func _update_hovered_note(hovered: Control) -> void:
 ## Channel whose note map applies: the focused track's in track-mode, otherwise
 ## the bound clip's track's.
 func get_active_channel() -> Channel:
-	var t: Track = current_track if track_mode else (clip_instance.track if clip_instance else null)
+	var t: Track = focus_track if track_mode else (clip_instance.track if clip_instance else null)
 	if t == null:
 		return null
 	# The track's own link first: it needs no editor, which keeps this usable
@@ -1945,7 +1945,7 @@ func _update_empty_hint() -> void:
 ## Channel that previews should play on: the focused track in track-mode,
 ## otherwise the bound clip's track.
 func _get_preview_channel_id() -> int:
-	var t: Track = current_track if track_mode else (clip_instance.track if clip_instance else null)
+	var t: Track = focus_track if track_mode else (clip_instance.track if clip_instance else null)
 	return t.default_channel_id if t else -1
 
 

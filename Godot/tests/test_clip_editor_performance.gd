@@ -64,7 +64,7 @@ func _setup() -> Dictionary:
 	var edited := _typed_instances(tracks[0].clip_instances)
 	midi.set_track_views(typed, edited)
 	midi.editable_tracks = typed
-	midi.current_track = tracks[0]
+	midi.focus_track = tracks[0]
 	await process_frame
 	await process_frame
 	return {"project": project, "tracks": tracks, "clips": clips, "clip_editor": clip_editor, "midi": midi}

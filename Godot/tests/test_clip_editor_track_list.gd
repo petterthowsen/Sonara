@@ -442,7 +442,7 @@ func _test_hidden_track_not_drawn() -> void:
 
 	# Dimming: editable 0.85, visible but not editable 0.5; only editable tracks can be hit.
 	midi.editable_tracks = _typed([a])
-	midi.current_track = a
+	midi.focus_track = a
 	_assert(editor.modulate.a == 1.0, "active editor is fully opaque")
 	_assert(midi.context_layer.alpha_for(b) == 0.5, "visible non-editable track is dimmed to 0.5")
 	midi.editable_tracks = _typed([a, b])
@@ -460,7 +460,7 @@ func _test_cross_track_note_press() -> void:
 	midi.bind_to_clips(clips, _typed([a, b]))
 	midi.set_track_views(_typed([a, b]), clips)
 	midi.editable_tracks = _typed([a, b])
-	midi.current_track = a
+	midi.focus_track = a
 	await process_frame
 	await process_frame
 	var editor: Object = midi.note_editors[0]
@@ -475,16 +475,16 @@ func _test_cross_track_note_press() -> void:
 	var hit_b: Dictionary = midi._note_hit(_context_note_center(midi, b, 72))
 	_assert(hit_b.get("track") == b and hit_b.data.note == 72 and hit_b.instance == setup.ci_b,
 		"B's note is found in the data: track, instance and note")
-	midi.current_track = b
+	midi.focus_track = b
 	hit = midi._note_hit(_note_center(editor, 60))
 	_assert(hit.has("editor") and hit.visual.midi_note_data in setup.ci_b.clip.midi_notes,
 		"overlapping notes: after switching, B's note wins")
-	midi.current_track = a
+	midi.focus_track = a
 
 	# Pressing B's own note picks B (REQ-033, REQ-034) and carries on as a press on that note.
 	var gp := _context_note_center(midi, b, 72)
 	midi._handle_left_mouse_press(editor.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_LEFT, true))
-	_assert(midi.current_track == b, "pressing B's note selects B")
+	_assert(midi.focus_track == b, "pressing B's note selects B")
 	_assert(picked == [b], "note_track_picked emitted with B")
 	_assert(midi._editor_track(editor) == b, "the note editor is now bound to B")
 	# Drag or resize, depending on where the real (headless) mouse happens to be over the note.
@@ -503,14 +503,14 @@ func _test_cross_track_note_press() -> void:
 	_assert(picked == [b], "an empty-space press does not emit note_track_picked")
 
 	# Right-press erases B's note while A stays selected (REQ-037).
-	midi.current_track = a
+	midi.focus_track = a
 	picked.clear()
 	gp = _context_note_center(midi, b, 72)
 	var n_b: int = setup.ci_b.clip.midi_notes.size()
 	midi._handle_right_mouse_press(editor.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_RIGHT, true))
 	midi._handle_right_mouse_release()
 	_assert(setup.ci_b.clip.midi_notes.size() == n_b - 1, "right-press erased B's note")
-	_assert(midi.current_track == a and picked.is_empty(), "erasing does not switch tracks")
+	_assert(midi.focus_track == a and picked.is_empty(), "erasing does not switch tracks")
 	_assert(midi._note_hit(gp).get("track") != b or midi._note_hit(gp).data.note != 72, "the erased note can't be hit any more")
 
 	# Box select covers only the active track's notes (REQ-038).
@@ -531,7 +531,7 @@ func _test_cross_track_note_press() -> void:
 	_assert(not hit_b_any, "a visible but non-editable track's notes are not hit")
 
 	# No selected track: no active editor, so nothing to place on (REQ-031).
-	midi.current_track = null
+	midi.focus_track = null
 	_assert(midi.get_active_note_editor() == null, "track mode with no selected track has no active editor")
 	setup.clip_editor.queue_free()
 	await process_frame
@@ -585,7 +585,7 @@ func _test_initial_states() -> void:
 	var drawn := _editor_tracks(setup.midi)
 	_assert(drawn.size() == 2 and drawn.has(t[0]) and drawn.has(t[2]) and not drawn.has(t[1]),
 		"only A and C are shown")
-	_assert(setup.midi.current_track == t[0], "the first selected track is the active one")
+	_assert(setup.midi.focus_track == t[0], "the first selected track is the active one")
 	_assert(setup.midi.editable_tracks.size() == 2, "MidiEditor knows the editable tracks")
 
 	# Re-entry with no new selection keeps the states.
@@ -617,9 +617,9 @@ func _test_selection_follows_editability() -> void:
 	var emitted: Array = []
 	ce.track_mode_track_selected.connect(func(tr): emitted.append(tr))
 
-	_assert(midi.current_track == t[0], "A starts selected")
+	_assert(midi.focus_track == t[0], "A starts selected")
 	st.toggle_solo(t[1], 1)
-	_assert(midi.current_track == t[1], "soloing B's edit toggle selects B")
+	_assert(midi.focus_track == t[1], "soloing B's edit toggle selects B")
 	_assert(ce.track_selector.selected_track == t[1], "the list highlight follows")
 	st.toggle_solo(t[1], 1)
 
@@ -627,19 +627,19 @@ func _test_selection_follows_editability() -> void:
 	_assert(not st.is_on(t[2], 0), "C starts hidden")
 	ce.track_selector._on_item_pressed(false, t[2])
 	_assert(st.is_on(t[2], 0) and st.is_on(t[2], 1), "selecting C makes it visible and editable")
-	_assert(midi.current_track == t[2] and _editor_tracks(midi).has(t[2]), "C is active and drawn")
+	_assert(midi.focus_track == t[2] and _editor_tracks(midi).has(t[2]), "C is active and drawn")
 	_assert(emitted.has(t[2]), "track_mode_track_selected emitted for C")
 
 	# Hiding the selected track moves the selection to the first editable one. A plain click left
 	# C as the only editable track, so make A editable again first.
 	st.set_on(t[0], 1, true)
 	st.set_on(t[2], 0, false)
-	_assert(midi.current_track == t[0], "hiding the selected track selects the first editable")
+	_assert(midi.focus_track == t[0], "hiding the selected track selects the first editable")
 
 	# Nothing editable: no selection, and a press on empty space places nothing.
 	for tr in t:
 		st.set_on(tr, 1, false)
-	_assert(midi.current_track == null and ce.track_selector.selected_track == null, "no editable track: no selection")
+	_assert(midi.focus_track == null and ce.track_selector.selected_track == null, "no editable track: no selection")
 	var notes_before := 0
 	for ci in setup.cis:
 		notes_before += ci.clip.midi_notes.size()
@@ -654,12 +654,12 @@ func _test_selection_follows_editability() -> void:
 	# Removing the selected track moves the selection (REQ-032).
 	st.set_on(t[0], 1, true)
 	st.set_on(t[1], 1, true)
-	_assert(midi.current_track == t[0], "A is selected again")
+	_assert(midi.focus_track == t[0], "A is selected again")
 	setup.project.remove_track(t[0].id)
 	await process_frame
 	await process_frame
 	_assert(not ce.track_selector.listed_tracks().has(t[0]), "A left the list")
-	_assert(midi.current_track == t[1], "removing the selected track selects another editable one")
+	_assert(midi.focus_track == t[1], "removing the selected track selects another editable one")
 	ce.queue_free()
 	await process_frame
 
@@ -703,14 +703,14 @@ func _test_global_toggles() -> void:
 	_assert(_editor_tracks(midi).size() == 3, "all three tracks are drawn")
 	ce.all_visible_toggle.pressed.emit()
 	_assert(not st.is_on(t[0], 0) and not st.is_on(t[1], 0), "global eye again turns every track off")
-	_assert(midi.current_track == null, "with everything hidden nothing is selected")
+	_assert(midi.focus_track == null, "with everything hidden nothing is selected")
 
 	ce.all_editable_toggle.pressed.emit()
 	_assert(st.is_on(t[1], 1) and st.is_on(t[2], 1), "global pencil turns every edit toggle on")
 	ce.all_visible_toggle.pressed.emit()
-	_assert(midi.current_track == t[0], "showing everything selects the first editable track")
+	_assert(midi.focus_track == t[0], "showing everything selects the first editable track")
 	ce.all_editable_toggle.pressed.emit()
-	_assert(not st.is_on(t[0], 1) and midi.current_track == null, "global pencil again turns them all off")
+	_assert(not st.is_on(t[0], 1) and midi.focus_track == null, "global pencil again turns them all off")
 
 	# The list scrolls, and the header icons follow the state.
 	_assert(ce.track_selector.scroll is ScrollContainer and ce.track_selector.items.get_parent() == ce.track_selector.scroll,

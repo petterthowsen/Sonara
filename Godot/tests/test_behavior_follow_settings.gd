@@ -119,7 +119,7 @@ func _test_arm_follows_midi_editor_selection() -> void:
 	_assert(_armed(fx, b) and not _armed(fx, a), "with the setting off, a track pick leaves the arms alone")
 
 	# Live on again: the MIDI editor's current track is armed at once.
-	editor.clip_editor.midi_editor.current_track = a
+	editor.clip_editor.midi_editor.focus_track = a
 	_settings.set_value(KEY_ARM, true)
 	_assert(_armed(fx, a) and not _armed(fx, b), "enabling the setting arms the MIDI editor's current track at once")
 	await _free(fx)

@@ -238,7 +238,7 @@ func _test_one_editor_for_many_tracks() -> void:
 	var typed := _typed_tracks(tracks)
 	midi.set_track_views(typed, _typed_instances(edited))
 	midi.editable_tracks = typed
-	midi.current_track = tracks[0]
+	midi.focus_track = tracks[0]
 	await process_frame
 	await process_frame
 
@@ -250,7 +250,7 @@ func _test_one_editor_for_many_tracks() -> void:
 	_assert(midi.context_layer.get_child_count() == 0, "the layer has no note nodes")
 
 	# Switching tracks rebinds the same editor; the old notes are gone at once.
-	midi.current_track = tracks[5]
+	midi.focus_track = tracks[5]
 	_assert(midi.note_editors[0] == editor and midi._editor_track(editor) == tracks[5], "switching rebinds the editor")
 	_assert(editor.get_child_count() == 20 and editor.get_all_visual_notes().size() == 20,
 		"only the new track's notes have nodes: %d children" % editor.get_child_count())

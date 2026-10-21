@@ -166,7 +166,7 @@ func _run() -> void:
 	var bind_ms := await _time_with_frame(func():
 		midi.set_track_views(tracks, edited)
 		midi.editable_tracks = tracks
-		midi.current_track = first_track)
+		midi.focus_track = first_track)
 	_report("1. bind all tracks", bind_ms)
 	await process_frame
 	_report_value("nodes added by binding", _node_count() - nodes_before)
@@ -229,7 +229,7 @@ func _run() -> void:
 	_report("6b. show it again", show_ms)
 
 	# 7. Switch the active track (rebinds the note editor to it).
-	var switch_ms := await _time_with_frame(func(): midi.current_track = tracks[tracks.size() / 2])
+	var switch_ms := await _time_with_frame(func(): midi.focus_track = tracks[tracks.size() / 2])
 	_report("7. switch active track", switch_ms)
 
 	_report_value("node count at end", _node_count())

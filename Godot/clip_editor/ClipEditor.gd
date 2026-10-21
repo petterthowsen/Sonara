@@ -123,7 +123,7 @@ func _ready():
 	ruler.start_position_requested.connect(_on_ruler_position_requested)
 	ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
 	ruler.box_select_started.connect(_on_ruler_box_select_started)
-	midi_editor.current_track_changed.connect(_mark_ruler_context_dirty)
+	midi_editor.focus_track_changed.connect(_mark_ruler_context_dirty)
 	midi_editor.note_track_picked.connect(_on_note_track_picked)
 	track_toggles.changed.connect(_on_track_toggles_changed)
 	track_selector.track_selected.connect(_on_track_selector_track_selected)
@@ -479,7 +479,7 @@ func _bind_track_mode(from_selection: bool = false):
 	var preferred: Track = last_track_mode_selected_track if listed.has(last_track_mode_selected_track) else null
 	_apply_track_toggles(preferred)
 	_refresh_all_toggles()
-	log.info("  - Active track set to: '%s'" % [midi_editor.current_track.name if midi_editor and midi_editor.current_track else "null"])
+	log.info("  - Active track set to: '%s'" % [midi_editor.focus_track.name if midi_editor and midi_editor.focus_track else "null"])
 	call_deferred("_apply_drum_view_preference")
 	_mark_ruler_context_dirty()
 
@@ -562,7 +562,7 @@ func _apply_track_toggles(preferred: Track = null) -> void:
 ## else the first editable track in list order, else none (REQ-031).
 func _ensure_valid_selection(preferred: Track = null) -> void:
 	var listed := _listed_tracks()
-	var current: Track = midi_editor.current_track
+	var current: Track = midi_editor.focus_track
 	var target: Track = null
 	if preferred and track_toggles.is_editable(preferred):
 		target = preferred
@@ -572,7 +572,7 @@ func _ensure_valid_selection(preferred: Track = null) -> void:
 		target = track_toggles.first_editable(listed)
 	var changed: bool = target != current
 	if changed:
-		midi_editor.current_track = target
+		midi_editor.focus_track = target
 	track_selector.select_track_no_signal(target)
 	if target:
 		last_track_mode_selected_track = target
@@ -841,7 +841,7 @@ var _selection_tools := {}
 func _setup_selection_tools() -> void:
 	midi_editor.selection_changed.connect(_sync_selection_tools)
 	midi_editor.view_state_changed.connect(_sync_selection_tools)
-	midi_editor.current_track_changed.connect(_sync_selection_tools)
+	midi_editor.focus_track_changed.connect(_sync_selection_tools)
 	_register_selection_tool(tools_group.find_child("Quantize", true, false) as Button,
 			func(editor: NoteEditor): editor.quantize_selection(), true)
 	_register_selection_tool(tools_group.find_child("FlipVertical", true, false) as Button,
@@ -1296,7 +1296,7 @@ func _rebuild_ruler_regions() -> void:
 	_unwatch_ruler_context()
 	var regions: Array = []
 	if track_mode:
-		var active_track: Track = midi_editor.current_track
+		var active_track: Track = midi_editor.focus_track
 		var others: Array = []
 		var mine: Array = []
 		for t in _visible_tracks():
@@ -1453,7 +1453,7 @@ func _on_track_mode_toggle_toggled(pressed: bool):
 		log.info("  - Switched to TRACK mode (%d tracks)" % [selected_tracks.size()])
 	else:
 		# Switching to clip-mode: the clip nearest the last interacted note, else the first one
-		var current_t = midi_editor.current_track if midi_editor else last_track_mode_selected_track
+		var current_t = midi_editor.focus_track if midi_editor else last_track_mode_selected_track
 		if not current_t and not selected_tracks.is_empty():
 			current_t = selected_tracks[0]
 		var target_clip := _nearest_clip_for_clip_mode(current_t)
@@ -1469,7 +1469,7 @@ func _on_track_mode_toggle_toggled(pressed: bool):
 ## Track mode was entered from clip mode: make the clip's track visible, editable and current,
 ## then scroll to the clip, or to the track's first clip when there was none.
 func _focus_track_mode_on(clip: ClipInstance) -> void:
-	var track: Track = clip.track if clip and clip.track else midi_editor.current_track
+	var track: Track = clip.track if clip and clip.track else midi_editor.focus_track
 	if track and _listed_tracks().has(track):
 		_suppress_toggle_apply = true
 		track_toggles.set_on(track, TrackToggleState.Kind.VISIBLE, true)
