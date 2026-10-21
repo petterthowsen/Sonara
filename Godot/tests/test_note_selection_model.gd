@@ -34,6 +34,8 @@ func run_tests() -> void:
 	await _test_editor_selects_shared_note_once()
 	await _test_capture_restore_across_rebind()
 	await _test_undo_restores_selection()
+	await _test_shared_note_edited_once_and_one_undo_step()
+	await _test_edits_cancel()
 
 
 ## A typed Array[NoteRef]. The scripts are loaded at runtime because naming them here would
@@ -207,4 +209,66 @@ func _test_undo_restores_selection() -> void:
 		_assert(ref.data in ctx.clip.midi_notes, "a restored ref is a note of the clip")
 	recorded[0].do()
 	_assert(model.is_empty(), "redo deletes and unselects again")
+	editor.queue_free()
+
+
+## Run `call` with HistoryUtil recording into the returned array.
+func _record(call: Callable) -> Array:
+	var recorded: Array = []
+	var history_util: GDScript = load("res://history/HistoryUtil.gd")
+	history_util.test_recorder = func(cmd) -> void: recorded.append(cmd)
+	call.call()
+	history_util.test_recorder = Callable()
+	return recorded
+
+
+## A note shown through two instances of one clip is one ref: a key edit changes it once and
+## undoes in one step, with the selection restored.
+func _test_shared_note_edited_once_and_one_undo_step() -> void:
+	var ctx := _linked_setup()
+	var editor = await _editor_for(ctx)
+	editor.selection_manager.select_all(editor.get_all_visual_notes())
+	var pitch: int = ctx.n1.note
+	var recorded := _record(func(): editor._move_selection_vertical(func(p: int) -> int: return p + 12))
+	_assert(ctx.n1.note == pitch + 12, "a note on two instances moved one octave, not two: %d" % (ctx.n1.note - pitch))
+	_assert(recorded.size() == 1, "and it is one undo step")
+	recorded[0].undo()
+	_assert(ctx.n1.note == pitch, "one undo puts it back")
+	_assert(editor.selection_model.size() == 2, "and the selection is still both notes")
+	recorded[0].do()
+	_assert(ctx.n1.note == pitch + 12, "redo moves it again")
+
+	# A tool edit: the callback sees each shared note once.
+	var seen: Array = []
+	recorded = _record(func(): editor._apply_selection_edit("Test", func(notes): seen.append_array(notes)))
+	_assert(seen.size() == 2, "a selection edit sees each note once, got %d" % seen.size())
+
+	# Drag state is keyed by the note, so the two instances share one entry.
+	var vn = editor.get_all_visual_notes()[0]
+	editor._on_drag_started(vn, vn.position)
+	_assert(editor.drag_start_positions.size() == 2 and editor.drag_start_positions.has(vn.midi_note_data),
+		"drag start positions are keyed by MidiNoteData, one per note")
+	editor.dragging_note = null
+	editor.queue_free()
+
+
+func _test_edits_cancel() -> void:
+	var ctx := _linked_setup()
+	var model: Object = _model_script.new()
+	var editor = await _editor_for(ctx, model)
+	editor.selection_manager.select_all(editor.get_all_visual_notes())
+	var edits: Object = editor.edits
+	var start: int = ctx.n1.start_tick
+	var recorded := _record(func():
+		edits.begin()
+		for ref in model.refs:
+			ref.data.start_tick += 240
+		edits.refresh()
+		_assert(editor.get_visual_note(ctx.n1.id).position.x > editor.ticks_to_pixels(start), "refresh moves the visuals mid-gesture")
+		edits.cancel())
+	_assert(ctx.n1.start_tick == start, "cancel puts the notes back")
+	_assert(recorded.is_empty(), "and records nothing")
+	_assert(model.size() == 2, "the selection is kept")
+	_assert(is_equal_approx(editor.get_visual_note(ctx.n1.id).position.x, editor.ticks_to_pixels(start)), "and the visuals follow")
+	_assert(not edits.is_open(), "the edit is closed")
 	editor.queue_free()

@@ -9,7 +9,7 @@ This plan comes from reading the code at `8b6d17e`. Nothing has been measured ye
 ## Checklist
 
 - [x] Phase 1: Data-level selection (`NoteRef`, `NoteSelectionModel`), with no change in behaviour
-- [ ] Phase 2: Edits run on refs (`NoteEdits`), not on `VisualNote`s
+- [x] Phase 2: Edits run on refs (`NoteEdits`), not on `VisualNote`s
 - [ ] Phase 3: Selecting across tracks (click, Ctrl+click, box, ruler range, Ctrl+A), drawn on the context layer
 - [ ] Phase 4: Gestures across tracks (drag, resize, velocity drag, keyboard edits)
 - [ ] Phase 5: Value lanes, clipboard, tools and group scale across tracks
@@ -257,6 +257,24 @@ Still single track.
 Tests: `test_selection_edit_foundation`, `test_linked_note_nudge`, `test_loop_repeats`,
 `test_note_arrow_hotkeys` and the tool tests cover this. Add a case that edits a note of a shared
 clip through two instances once.
+
+**Outcome.** Done, no user-visible change. Deviations:
+
+- `NoteEdits.commit` only records; the engine sync is a separate `sync(refs)` call. The old code synced
+  before generated notes were added (Harmonize, Insert Chords), and a sync inside `commit` would have
+  changed that order. Callers keep their position for it.
+- `NoteEdits` is owned by `NoteEditor` (`editor.edits`), not `MidiEditor`, because the gestures that
+  call it are still there. `MidiEditor` sets `edits.context_layer`. Phase 4 can move it.
+- `NoteEdits.refresh` decides per ref: `editor.visual_of_ref(ref) != null` means the focus editor,
+  otherwise the context layer is redrawn. That needs no track comparison and works in clip mode too.
+- The edit code uses `NoteEditor._edit_refs()`: the selected refs that have a visual in this editor.
+  Phase 3 should switch it to `selection_model.refs`, which is what makes edits cross-track. Until
+  then a ref left by an undo on another track is not edited.
+- Gestures (drag, resize, group scale) still read visuals; only history, refresh and sync moved. The
+  Esc-cancel of a gesture is not wired: `NoteEdits.cancel()` exists and is tested but only group scale
+  has an Esc path, and it restores its own snapshot and calls `discard()`.
+- `_add_generated_notes` now selects the new notes by ref (through the first instance of the clip on
+  the track) and keeps the rest of the selection as refs.
 
 ### Phase 3: Selecting across tracks
 

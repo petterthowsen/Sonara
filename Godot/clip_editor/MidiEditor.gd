@@ -1590,6 +1590,7 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	# The focused note editor handles keys itself (see NoteEditor._gui_input); the
 	# range overlays are ours, so refresh them when that changed the selection.
 	editor.use_selection_model(note_selection)
+	editor.edits.context_layer = context_layer
 	if not note_selection.restored.is_connected(_update_selection_overlays):
 		note_selection.restored.connect(_update_selection_overlays)
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
