@@ -377,7 +377,7 @@ func set_solo(value: bool) -> void:
 
 ## Tell every ancestor group that this track is now its most recently armed child.
 func _remember_as_last_armed() -> void:
-	if _parent_track_id < 0 or not has_clips():
+	if _parent_track_id < 0 or not has_clips() or is_group():
 		return
 	var project := get_project_ref()
 	if project == null:
@@ -479,9 +479,41 @@ func can_contain_tracks() -> bool:
 	return ch != null and not ch.child_channel_ids.is_empty()
 
 
-## True when this track can hold clips (not a folder or group header).
+## True when this track can hold clips (not a folder header). Groups hold MIDI clips only
+## (spec 049); see accepts_audio_clips().
 func has_clips() -> bool:
+	return type != TrackType.FOLDER
+
+
+## True when the Note Editor lists this track and Transfer Notes / Split Voices may use it:
+## instrument tracks always, group tracks (spec 049) once they hold clips or their channel has a
+## note-effect or instrument device. Folders and empty, deviceless groups are out.
+func is_note_editor_track() -> bool:
+	if type == TrackType.INSTRUMENT:
+		return true
+	if type != TrackType.GROUP:
+		return false
+	if not clip_instances.is_empty():
+		return true
+	var ch := get_linked_channel()
+	if ch == null:
+		return false
+	for inst: DeviceInstance in ch.devices:
+		if inst.device and (inst.device.category == Device.DeviceCategory.NoteEffect \
+				or inst.device.category == Device.DeviceCategory.Instrument):
+			return true
+	return false
+
+
+## True when audio clips may be placed on this track. Groups play their MIDI into their own
+## chain, so audio clips are refused there (spec 049).
+func accepts_audio_clips() -> bool:
 	return type != TrackType.FOLDER and type != TrackType.GROUP
+
+
+## The clip type a new clip on this track gets by default (MIDI on instrument and group tracks).
+func default_clip_type() -> int:
+	return Clip.ClipType.AUDIO if type == TrackType.AUDIO else Clip.ClipType.MIDI
 
 
 ## Pair this track with a mixer strip (instrument, group, or folder bus).
@@ -541,11 +573,10 @@ func connect_to_engine() -> void:
 	if _is_connected:
 		return
 
-	# Folder and group tracks have no engine timeline (mixer pairing only).
-	if type == TrackType.FOLDER or type == TrackType.GROUP:
-		logger.info("[Track %d] %s not connected to engine (mixer pairing only)" % [
-			id, "Group" if type == TrackType.GROUP else "Folder"
-		])
+	# Folder tracks have no engine timeline (mixer pairing only). Groups do: their MIDI clips
+	# play into the group channel's chain (spec 049).
+	if type == TrackType.FOLDER:
+		logger.info("[Track %d] Folder not connected to engine (mixer pairing only)" % id)
 		return
 
 	# Create track in audio engine if routed to a channel

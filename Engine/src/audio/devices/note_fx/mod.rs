@@ -18,6 +18,7 @@ mod conformance;
 pub mod host;
 pub mod ids;
 pub mod latch;
+pub mod midi_send;
 pub mod note_echo;
 pub mod note_filter;
 pub mod note_length;

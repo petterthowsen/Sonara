@@ -44,6 +44,15 @@ impl CommandWorker {
             );
             return;
         }
+        // A MIDI Send forwards in the pre-pass, which only sees a channel's top-level chain
+        // (spec 049 design, divergence 1).
+        if !crate::audio::mixing::midi_send::placement_allowed(device_id, &parent_path) {
+            warn!(
+                "MIDI Send can only go in a channel's top-level chain, not at channel {} path {}",
+                channel_id, parent_path
+            );
+            return;
+        }
         let child_count = {
             let state = self.lock_state();
             let Some(channel) = state.channels.get(&channel_id) else {
@@ -101,7 +110,13 @@ impl CommandWorker {
         // hands over the project's saved state.
         let unloaded = device.loading_state().filter(|state| state == "unloaded");
 
-        let old_taps = {
+        let (
+            old_taps,
+            crate::audio::mixing::midi_send::MidiSendRebuild {
+                old: old_sends,
+                statuses: blocked,
+            },
+        ) = {
             let mut state = self.lock_state();
             let Some(channel) = state.channels.get_mut(&channel_id) else {
                 warn!(
@@ -122,17 +137,36 @@ impl CommandWorker {
                 ),
                 Err(e) => warn!("{}", e),
             }
-            // A new device can carry sidechains or change tap subscriber paths (spec 036).
-            crate::audio::mixing::sidechain::rebuild_taps(&mut state)
+            // A new device can carry sidechains or change tap subscriber paths (spec 036), and a
+            // MIDI Send joins the sender graph (spec 049).
+            let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
+            let sends = crate::audio::mixing::midi_send::rebuild_midi_sends(&mut state);
+            (old_taps, sends)
         };
         // The replaced pool's buffers drop with the lock released.
         drop(old_taps);
+        drop(old_sends);
+        for status in blocked {
+            self.send_status(status);
+        }
         if let Some(state) = unloaded {
             self.send_status(EngineStatus::DeviceLoadingStateChanged {
                 channel_id,
                 device_path,
                 state,
             });
+        }
+    }
+
+    /// After the lock is released: drop the replaced sender order and send the blocked
+    /// statuses a MIDI Send rebuild produced (spec 049).
+    pub(super) fn finish_midi_sends(
+        &self,
+        rebuild: crate::audio::mixing::midi_send::MidiSendRebuild,
+    ) {
+        drop(rebuild.old);
+        for status in rebuild.statuses {
+            self.send_status(status);
         }
     }
 
@@ -152,8 +186,10 @@ impl CommandWorker {
             return;
         }
         let path = parent_path.join(position);
-        let (removed, old_taps) = {
+        let (removed, old_taps, sends) = {
             let mut state = self.lock_state();
+            // A MIDI Send ends what it forwarded before it goes (spec 049 REQ-010).
+            crate::audio::mixing::midi_send::release_send_targets(&mut state, channel_id, &path);
             let Some(channel) = state.channels.get_mut(&channel_id) else {
                 warn!("Channel {} not found for remove device", channel_id);
                 return;
@@ -166,17 +202,20 @@ impl CommandWorker {
             }
             // Its sidechains (or the shifted paths of others) change the pool (spec 036).
             let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
-            (removed, old_taps)
+            let sends = crate::audio::mixing::midi_send::rebuild_midi_sends(&mut state);
+            (removed, old_taps, sends)
         };
         drop(old_taps);
         drop(removed);
+        self.finish_midi_sends(sends);
         info!("Device removed from channel {} at {}", channel_id, path);
     }
 
     /// Detach a channel's whole device chain under the lock and drop it afterwards.
     pub(super) fn clear_devices(&self, channel_id: ChannelId) {
-        let (removed, old_taps) = {
+        let (removed, old_taps, sends) = {
             let mut state = self.lock_state();
+            crate::audio::mixing::midi_send::release_channel_sends(&mut state, channel_id);
             let Some(channel) = state.channels.get_mut(&channel_id) else {
                 warn!("Channel {} not found for clear devices", channel_id);
                 return;
@@ -184,10 +223,12 @@ impl CommandWorker {
             let removed = std::mem::take(&mut channel.devices);
             // Any sidechains on the chain go away (spec 036).
             let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
-            (removed, old_taps)
+            let sends = crate::audio::mixing::midi_send::rebuild_midi_sends(&mut state);
+            (removed, old_taps, sends)
         };
         drop(old_taps);
         drop(removed);
+        self.finish_midi_sends(sends);
         info!("All devices cleared from channel {}", channel_id);
     }
 

@@ -450,6 +450,13 @@ pub trait AudioDevice: Send {
         None
     }
 
+    /// Mutable view of this device as a MIDI Send (spec 049), if it is one. A `ModulatedDevice`
+    /// forwards it to the wrapped device. The MIDI pre-pass and the command thread use it to
+    /// reach a send's outbox and targets.
+    fn as_midi_send_mut(&mut self) -> Option<&mut note_fx::midi_send::MidiSend> {
+        None
+    }
+
     // === Sleep/Wake System (CPU optimization) ===
 
     /// Check if device is currently sleeping (skipping processing to save CPU)

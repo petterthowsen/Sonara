@@ -216,7 +216,7 @@ impl ChannelPool {
 
     /// `promote`: the period to ask realtime for, or `None` to leave the workers unpromoted
     /// (tests).
-    fn spawn(threads: usize, promote: Option<(u32, u32)>) -> Self {
+    pub(crate) fn spawn(threads: usize, promote: Option<(u32, u32)>) -> Self {
         let shared = Arc::new(PoolShared::new(threads));
         let workers = (0..threads)
             .filter_map(|index| {

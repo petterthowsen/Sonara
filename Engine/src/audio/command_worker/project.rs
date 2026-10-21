@@ -12,13 +12,18 @@ use crate::audio::types::{ChannelId, Tick};
 impl CommandWorker {
     /// Detach a channel under the lock and drop it, with its devices, afterwards.
     pub(super) fn remove_channel(&self, id: ChannelId) {
-        let (removed, remaining, old_taps) = {
+        let (removed, remaining, old_taps, sends) = {
             let mut state = self.lock_state();
+            // Whatever its MIDI Sends forwarded ends first (spec 049 REQ-010).
+            crate::audio::mixing::midi_send::release_channel_sends(&mut state, id);
             let removed = state.channels.remove(&id);
             // The channel may be a tap source or host subscribers (spec 036).
             let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
-            (removed, state.channels.len(), old_taps)
+            // It may have been a sender, or a target other senders listed.
+            let sends = crate::audio::mixing::midi_send::rebuild_midi_sends(&mut state);
+            (removed, state.channels.len(), old_taps, sends)
         };
+        self.finish_midi_sends(sends);
         match removed {
             Some(channel) => {
                 drop(old_taps);
@@ -79,6 +84,7 @@ impl CommandWorker {
             state.ensure_master_channel(self.max_buffer_size);
             // Every subscriber and source went with the channels (spec 036).
             let _ = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
+            let _ = crate::audio::mixing::midi_send::rebuild_midi_sends(&mut state);
         }
         info!("Project cleared");
     }

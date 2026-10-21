@@ -211,6 +211,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/note_map` | `b:128_bytes` | Layer slot note map: byte *k* = output note for input note *k*, 255 = slot ignores it. Identity = the full map (default). Any other length is logged and ignored |
 | `/channel/{id}/device/{path}/slot/{n}/separate_out` | `i:0_or_1` | Layer slot audio goes to extra bus *n* (its return channel, see `/channel/{id}/aux_out`) instead of the Layer output. Only when the Layer is the channel's first device |
 | `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
+| `/channel/{id}/device/{path}/midi_send/targets` | `i...` | MIDI Send (spec 049): replace the target channel list with zero or more channel ids (zero args clears it). Godot resolves children mode to concrete ids before sending, so the engine only sees the list. Ids that are the sender itself, `1` (master), `>= 1000` (hardware) or not an existing channel are dropped; an edge that would close a MIDI loop is refused and reported on `midi_send/blocked`. A negative or non-integer argument rejects the whole message. Only valid at a channel's top-level chain |
 | `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
 | `/channel/{id}/device/{path}/reload` | - | Reload a crashed plugin (see Plugin crash and reload) |
 | `/channel/{id}/device/{path}/state/get` | - | Re-send the device's `loading_state`, for SFZ/CLAP devices its parameter list, and for devices with modulators the modulator list (see Recovering missed state) |
@@ -438,6 +439,14 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
   slot's mask, with a ~3 ms fade starting at the same frame offset as the note. Godot stores
   targets by pad id and re-sends every mask when a pad's note changes or a pad is added or
   removed (see ADR-0015, which supersedes ADR-0012).
+
+**MIDI Send (`sonara.builtin.midi_send`, spec 049)**
+- **Type:** note effect (`note_effect`), insertable in any user channel's top-level chain (instrument, audio, bus or group); the engine refuses and logs it at a nested path (inside a container or slot).
+- **Params:** `0` Thru (bool, default on). With Thru the events also continue to the devices after the send; with Consume (off) they stop at the send. Switching mid-note ends the notes correctly (the send keeps a second sounding table for the Thru path).
+- **Targets:** `/midi_send/targets` (above). Forwarded note-ons, note-offs, note expressions and CC reach each target's chain at the same frame of the same block (no latency), through a serial MIDI pre-pass before the pooled render (ADR 0023). Pitch bend is forwarded once the engine has a pitch-bend event.
+- **Status:** `/channel/{id}/device/{path}/midi_send/blocked` (`i...`, Rust -> Godot): the requested targets the engine ignores because they would close a loop; empty means none. Sent only when a sender's blocked set changes, including back to empty. Edges are added in a fixed order (sender id, device index, target id), so the blocked edge may be the older one; the UI marks the row(s) named by the status.
+- **Note-offs always follow:** removing a target from the list, switching mode, bypassing or removing the send, or deleting the target or sender releases the notes the send started on those targets in the next block. Known limitation: deactivating the sender channel skips its send but does not release notes it already forwarded.
+- Several sources on one target (its own clip, live input, other sends) get independent notes. Key-paired instruments (sfizz, some plugins) cannot keep two same-key notes apart, so two overlapping same-key sources behave like two overlapping same-key clip notes.
 
 ##### Built-in Parameter Advertisement (Rust → Godot)
 `/builtin/info` sends device metadata and typed parameter descriptors. `category` is `instrument`, `effect`, `utility` or `note_effect` (spec 027: note effects, listed under Note Effects in the browser):

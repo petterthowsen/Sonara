@@ -171,6 +171,10 @@ pub(super) fn handle_device_message(
             let cmd = parse_modulator_command(channel_id, device_path, &action_refs, &a)?;
             cx.commands.send(cmd)?;
         }
+        ["midi_send", "targets"] => {
+            cx.commands
+                .send(parse_midi_send_targets(channel_id, device_path, &a, args)?)?;
+        }
         ["data", "subscribe"] => {
             cx.commands.send(AudioCommand::SubscribeDeviceData {
                 channel_id,
@@ -352,6 +356,23 @@ fn parse_add_device_command(
     })
 }
 
+/// `{device}/midi_send/targets [i...]`: the MIDI Send's target channel ids, zero or more.
+fn parse_midi_send_targets(
+    channel_id: usize,
+    device_path: DevicePath,
+    a: &Args,
+    args: &[OscType],
+) -> Result<AudioCommand, ArgError> {
+    let targets = (0..args.len())
+        .map(|i| a.non_negative(i))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(AudioCommand::SetMidiSendTargets {
+        channel_id,
+        device_path,
+        targets,
+    })
+}
+
 /// `{device}/modulator/...` commands:
 /// - `modulator/add [i:mod_id, s:kind]`
 /// - `modulator/clear`
@@ -417,6 +438,31 @@ mod tests {
     fn parse(action: &[&str], args: &[OscType]) -> Result<AudioCommand, ArgError> {
         let a = Args::new("/channel/2/device/0/modulator", args);
         parse_modulator_command(2, DevicePath::root(0), action, &a)
+    }
+
+    #[test]
+    fn midi_send_targets_parse() {
+        let addr = "/channel/2/device/0/midi_send/targets";
+        let parse = |args: &[OscType]| {
+            let a = Args::new(addr, args);
+            parse_midi_send_targets(2, DevicePath::root(0), &a, args)
+        };
+        match parse(&[OscType::Int(3), OscType::Int(4)]) {
+            Ok(AudioCommand::SetMidiSendTargets {
+                channel_id: 2,
+                targets,
+                ..
+            }) => assert_eq!(targets, vec![3, 4]),
+            other => panic!("unexpected: {:?}", other.is_ok()),
+        }
+        // Zero arguments clear the list.
+        match parse(&[]) {
+            Ok(AudioCommand::SetMidiSendTargets { targets, .. }) => assert!(targets.is_empty()),
+            other => panic!("unexpected: {:?}", other.is_ok()),
+        }
+        // A negative id or the wrong type is rejected.
+        assert!(parse(&[OscType::Int(-1)]).is_err());
+        assert!(parse(&[OscType::Float(3.0)]).is_err());
     }
 
     #[test]

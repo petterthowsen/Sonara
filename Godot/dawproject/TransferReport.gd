@@ -38,6 +38,8 @@ const PLUGIN_NO_STATE := "plugin_no_state"
 const FILE_MISSING := "file_missing"
 const MODULATORS := "modulators"
 const DEVICE_SLOTS := "device_slots"              # devices inside a slotted device (spec 040) travel only in its Sonara state
+const MIDI_SEND := "midi_send"                    # MIDI Send forwards notes between channels; no DAWproject mapping (spec 049)
+const GROUP_CLIP := "group_clip"                  # MIDI clips on a group track (spec 049)
 const DRUM_CHOKE := "drum_choke"                  # Drum Machine pad choke targets have no DAWproject mapping
 
 ## Text per kind. `{n}` is the count, `{detail}` the distinct details joined by ", ".
@@ -75,6 +77,8 @@ const TEMPLATES: Dictionary = {
 	FILE_MISSING: "{detail}: referenced file not found, not embedded",
 	MODULATORS: "{detail}: modulators are kept only in Sonara's own state; other applications ignore them",
 	DEVICE_SLOTS: "{detail}: devices in its slots are kept only in Sonara's own state; other applications ignore them",
+	MIDI_SEND: "MIDI Send is kept only in Sonara's own state; other applications ignore it, so the notes it forwards to other channels are not played there",
+	GROUP_CLIP: "{n} MIDI clips on a group track are written on the group's lane; other applications may ignore them",
 	DRUM_CHOKE: "{detail}: Drum Machine choke targets are kept only in Sonara's own state; other applications ignore them",
 }
 

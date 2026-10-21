@@ -21,6 +21,8 @@ var _paint_shift := false
 var _paint_kind := 0
 var _paint_value := false
 var _rebuild_queued := false
+var _watched_groups: Array[Track] = []
+var _watched_channels: Array[Channel] = []
 
 signal track_selected(track: Track)
 ## Shift+press on an item: select it without taking editing away from other tracks.
@@ -33,7 +35,8 @@ func _ready() -> void:
 	clear()
 
 
-## Lists every instrument track of `p`, in visual order, and follows the project's changes.
+## Lists every instrument track of `p` (and group track that holds MIDI clips or note/instrument
+## devices, see Track.is_note_editor_track), in visual order, and follows the project's changes.
 func set_project(p: Project) -> void:
 	if project == p:
 		return
@@ -114,6 +117,40 @@ func _disconnect_track_orders() -> void:
 	for t in tracks:
 		if t.order_changed.is_connected(_on_track_order_changed):
 			t.order_changed.disconnect(_on_track_order_changed)
+	# Groups are watched whether or not they are listed, so one can enter the list.
+	for t in _watched_groups:
+		if is_instance_valid(t):
+			if t.clip_instance_added.is_connected(_on_group_content_changed):
+				t.clip_instance_added.disconnect(_on_group_content_changed)
+			if t.clip_instance_removed.is_connected(_on_group_content_changed):
+				t.clip_instance_removed.disconnect(_on_group_content_changed)
+	_watched_groups.clear()
+	for ch in _watched_channels:
+		if is_instance_valid(ch):
+			if ch.device_added.is_connected(_on_group_devices_changed):
+				ch.device_added.disconnect(_on_group_devices_changed)
+			if ch.device_removed.is_connected(_on_group_devices_changed):
+				ch.device_removed.disconnect(_on_group_devices_changed)
+	_watched_channels.clear()
+
+
+func _watch_group(t: Track) -> void:
+	_watched_groups.append(t)
+	t.clip_instance_added.connect(_on_group_content_changed)
+	t.clip_instance_removed.connect(_on_group_content_changed)
+	var ch := t.get_linked_channel()
+	if ch:
+		_watched_channels.append(ch)
+		ch.device_added.connect(_on_group_devices_changed)
+		ch.device_removed.connect(_on_group_devices_changed)
+
+
+func _on_group_content_changed(_instance: ClipInstance) -> void:
+	_queue_rebuild()
+
+
+func _on_group_devices_changed(_a, _b) -> void:
+	_queue_rebuild()
 
 
 func _on_project_tracks_changed(_track: Track) -> void:
@@ -139,7 +176,9 @@ func _rebuild() -> void:
 	clear()
 	if project:
 		for t in project.get_visual_track_list():
-			if t.type == Track.TrackType.INSTRUMENT and _is_listed(t):
+			if t.is_group():
+				_watch_group(t)
+			if t.is_note_editor_track() and _is_listed(t):
 				tracks.append(t)
 				t.order_changed.connect(_on_track_order_changed)
 	selected_track = kept if tracks.has(kept) else null

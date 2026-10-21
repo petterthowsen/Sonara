@@ -7,6 +7,8 @@ const ARM_GROUP := "Record arm the group"
 const ARM_FIRST := "Record arm the first valid child"
 const ARM_LAST := "Record arm the last armed valid child"
 
+const ARM_GROUP_IF_NOTES := "Record arm the group if it has a note device"
+
 const KEY_WITHOUT_TARGETS := "arranger/group_arm_without_targets"
 const KEY_WITH_TARGETS := "arranger/group_arm_with_targets"
 
@@ -26,7 +28,7 @@ static func _collect(project: Project, group: Track, out: Array[Track], seen: Di
 	for child in project.tracks:
 		if child.parent_track_id != group.id:
 			continue
-		if child.has_clips():
+		if child.has_clips() and not child.is_group():
 			out.append(child)
 		else:
 			_collect(project, child, out, seen)
@@ -38,6 +40,10 @@ static func resolve(project: Project, group: Track, option: String) -> Track:
 	var children := valid_children(project, group)
 	if children.is_empty() or option == ARM_GROUP:
 		return group
+	if option == ARM_GROUP_IF_NOTES:
+		if has_note_device(project, group):
+			return group
+		option = ARM_LAST  # no note device: the last armed valid child, as the option documents
 	if option == ARM_LAST:
 		for c in children:
 			if c.id == group.last_armed_child_id:
@@ -48,3 +54,18 @@ static func resolve(project: Project, group: Track, option: String) -> Track:
 ## Whether `group` has a valid child, i.e. which of the two group options applies.
 static func has_targets(project: Project, group: Track) -> bool:
 	return not valid_children(project, group).is_empty()
+
+
+## Whether `group`'s own channel chain holds a top-level note device: an instrument or a note
+## effect (a MIDI Send, say). A group with only audio effects does not count (spec 049).
+static func has_note_device(project: Project, group: Track) -> bool:
+	var channel := project.get_track_mixer_channel(group) if project != null and group != null else null
+	if channel == null:
+		return false
+	for instance in channel.devices:
+		if instance == null or instance.device == null:
+			continue
+		var category: int = instance.device.category
+		if category == Device.DeviceCategory.Instrument or category == Device.DeviceCategory.NoteEffect:
+			return true
+	return false

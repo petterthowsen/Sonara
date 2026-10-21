@@ -653,6 +653,13 @@ pub enum AudioCommand {
         slot: usize,
         mask: u128,
     },
+    /// Replace a MIDI Send's target channel list (spec 049). Ids that are invalid or would close
+    /// a loop are dropped by the rebuild; the blocked ones come back as `MidiSendBlocked`.
+    SetMidiSendTargets {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        targets: Vec<ChannelId>,
+    },
     /// Replace a Layer slot's note map (byte n = output note for input n, 255 = unmapped).
     SetLayerSlotNoteMap {
         channel_id: ChannelId,
@@ -763,8 +770,9 @@ fn dispatch(
     match cmd {
         AudioCommand::InitProject(settings) => {
             let status = transport::init_project(state, settings, buffer_size);
-            // A fresh project needs a fresh tap pool (spec 036).
+            // A fresh project needs a fresh tap pool (spec 036) and sender order (spec 049).
             effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            crate::audio::mixing::midi_send::rebuild_midi_sends(state).finish(effects);
             status
         }
         AudioCommand::Play => return transport::play(state),
@@ -782,8 +790,10 @@ fn dispatch(
         AudioCommand::SetProjectScale(mask) => transport::set_project_scale(state, mask),
         AudioCommand::CreateChannel { id, name } => {
             let status = channel::create_channel(state, id, name, buffer_size);
-            // A new channel can be a sidechain source (spec 036).
+            // A new channel can be a sidechain source (spec 036) or a MIDI Send target
+            // that was listed before it existed (spec 049).
             effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            crate::audio::mixing::midi_send::rebuild_midi_sends(state).finish(effects);
             status
         }
         AudioCommand::SetChannelVolume { id, db } => channel::set_channel_volume(state, id, db),
@@ -1049,8 +1059,9 @@ fn dispatch(
         } => {
             let status =
                 device::move_device(state, channel_id, parent_path, from_position, to_position);
-            // Device paths (tap subscriber keys) can change (spec 036).
+            // Device paths (tap subscriber keys, MIDI Send positions) can change (spec 036, 049).
             effects.discard(crate::audio::mixing::sidechain::rebuild_taps(state));
+            crate::audio::mixing::midi_send::rebuild_midi_sends(state).finish(effects);
             status
         }
         AudioCommand::SetDeviceParameter {
@@ -1332,6 +1343,11 @@ fn dispatch(
             slot,
             mask,
         } => layer::set_drum_slot_choke_targets(state, channel_id, device_path, slot, mask),
+        AudioCommand::SetMidiSendTargets {
+            channel_id,
+            device_path,
+            targets,
+        } => device::set_midi_send_targets(state, channel_id, device_path, targets, effects),
         AudioCommand::SetLayerSlotNoteMap {
             channel_id,
             device_path,

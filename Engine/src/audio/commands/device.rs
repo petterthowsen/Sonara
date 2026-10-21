@@ -10,6 +10,32 @@ use crate::audio::state::EngineState;
 use crate::audio::types::ChannelId;
 use tracing::{info, warn};
 
+/// Replace a MIDI Send's requested targets and rebuild the sender graph (spec 049): invalid ids
+/// and loop-closing edges are dropped, notes on targets the send loses are released, and the
+/// blocked set goes back to Godot.
+pub(super) fn set_midi_send_targets(
+    state: &mut EngineState,
+    channel_id: ChannelId,
+    device_path: DevicePath,
+    targets: Vec<ChannelId>,
+    effects: &mut CommandEffects,
+) {
+    let send = state
+        .channels
+        .get_mut(&channel_id)
+        .and_then(|channel| channel.device_at_path_mut(&device_path))
+        .and_then(|device| device.as_midi_send_mut());
+    let Some(send) = send else {
+        warn!(
+            "No MIDI Send at channel {} path {} to set targets on",
+            channel_id, device_path
+        );
+        return;
+    };
+    send.set_requested(&targets);
+    crate::audio::mixing::midi_send::rebuild_midi_sends(state).finish(effects);
+}
+
 /// Move a device within its chain, releasing the notes of note effects whose downstream changes.
 pub(super) fn move_device(
     state: &mut EngineState,

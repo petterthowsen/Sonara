@@ -272,7 +272,7 @@ func _on_double_click(pos: Vector2) -> void:
 		snapped_ticks = timeline.grid_helper.snap_ticks(click_ticks)
 
 	# Create a 4-beat clip in the pool plus its instance (undoable)
-	var clip_type = Clip.ClipType.MIDI if track.type == Track.TrackType.INSTRUMENT else Clip.ClipType.AUDIO
+	var clip_type = track.default_clip_type()
 	# One bar at the signature in effect at the insertion point, shortened when a following
 	# clip leaves less room.
 	var bar_ticks: int = project.ppq * 4
@@ -299,7 +299,12 @@ func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	"""Accept Asset drops from Browser onto tracks that hold clips."""
 	if track == null or not track.has_clips():
 		return false
-	return data is Asset
+	if not data is Asset:
+		return false
+	# A group plays MIDI into its own chain; audio files are refused there (spec 049).
+	if (data as Asset).is_audio() and not track.accepts_audio_clips():
+		return false
+	return true
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
@@ -313,6 +318,8 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 
 	var asset = data as Asset
 	var project = Sonara.editor.project
+	if asset.is_audio() and not track.accepts_audio_clips():
+		return
 
 	# Convert drop position to timeline ticks
 	if not timeline:

@@ -5,6 +5,7 @@ use crate::audio::block_clock::BlockClock;
 use crate::audio::channel::Channel;
 use crate::audio::clip::Clip;
 use crate::audio::devices::{AudioDevice, DevicePath};
+use crate::audio::mixing::midi_send::MidiSendOrder;
 use crate::audio::mixing::sidechain::SidechainTaps;
 use crate::audio::mixing::ChannelPool;
 use crate::audio::preview::PreviewPlayer;
@@ -98,6 +99,9 @@ pub struct EngineState {
     /// channels, fed to subscribing `sidechain` modulators one block later. Rebuilt only by
     /// the command thread; the callback only snapshots (end of mix) and feeds (block start).
     pub sc_taps: SidechainTaps,
+    /// The channels holding a MIDI Send, in the order the pre-pass walks them: every sender
+    /// after anything that sends to it (spec 049). Rebuilt only by the command thread.
+    pub midi_sends: MidiSendOrder,
     /// Channel and device timers run (spec 042): on while `perf_subscribers > 0`. Set by the
     /// command thread under the lock; the callback copies it into each channel's `mix.timing`.
     pub perf_timing: bool,
@@ -260,6 +264,7 @@ impl Default for EngineState {
             block_clock: Arc::new(BlockClock::new()),
             rendering: Arc::new(AtomicBool::new(false)),
             sc_taps: SidechainTaps::default(),
+            midi_sends: MidiSendOrder::default(),
             perf_timing: false,
             perf_subscribers: 0,
             pool: None,

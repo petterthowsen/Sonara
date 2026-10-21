@@ -1521,6 +1521,12 @@ impl AudioDevice for ModulatedDevice {
         self.dev_mut().as_any_mut()
     }
 
+    fn as_midi_send_mut(
+        &mut self,
+    ) -> Option<&mut crate::audio::devices::note_fx::midi_send::MidiSend> {
+        self.dev_mut().as_midi_send_mut()
+    }
+
     fn as_modulated_mut(&mut self) -> Option<&mut dyn Modulated> {
         Some(self)
     }

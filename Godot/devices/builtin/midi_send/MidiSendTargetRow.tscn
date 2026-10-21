@@ -1,0 +1,35 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/midi_send/MidiSendTargetRow.gd" id="1_row"]
+
+[node name="MidiSendTargetRow" type="HBoxContainer"]
+custom_minimum_size = Vector2(0, 24)
+theme_override_constants/separation = 6
+script = ExtResource("1_row")
+
+[node name="Swatch" type="ColorRect" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(4, 0)
+layout_mode = 2
+color = Color(0.5, 0.5, 0.5, 1)
+
+[node name="NameLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Channel"
+text_overrun_behavior = 3
+
+[node name="BlockedLabel" type="Label" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "loops"
+
+[node name="RemoveButton" type="Button" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Remove target"
+text = "×"

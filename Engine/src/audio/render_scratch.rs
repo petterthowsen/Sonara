@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 
 use super::channel::ChannelTimer;
 use super::devices::container::ChainCursor;
+use super::devices::note_fx::midi_send::{TimedCc, CC_CAPACITY, OUTBOX_CAPACITY};
+use super::devices::note_fx::NoteBuffer;
 use super::types::{ChannelId, MidiNote, NoteId, Tick, TrackId};
 
 /// Most tick boundaries one buffer can cross at 8192 frames (one per frame, plus the start tick).
@@ -53,6 +55,11 @@ pub struct RenderScratch {
     pub jobs: Vec<usize>,
     /// The callback thread's own parked pool jobs (indices into `jobs`).
     pub job_parks: VecDeque<usize>,
+    /// One MIDI Send's outbox, copied out of its channel so the targets can be borrowed while
+    /// it is delivered (spec 049 pre-pass).
+    pub midi_forward: NoteBuffer,
+    /// The same send's controller values.
+    pub midi_forward_cc: Vec<TimedCc>,
 }
 
 impl Default for RenderScratch {
@@ -67,6 +74,8 @@ impl Default for RenderScratch {
             ready: Vec::with_capacity(MAX_CHANNELS),
             jobs: Vec::with_capacity(MAX_CHANNELS),
             job_parks: VecDeque::with_capacity(MAX_CHANNELS),
+            midi_forward: NoteBuffer::new(OUTBOX_CAPACITY),
+            midi_forward_cc: Vec::with_capacity(CC_CAPACITY),
         }
     }
 }

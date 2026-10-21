@@ -388,6 +388,10 @@ func _write_device(inst: Object) -> void:
 		var slotted := _slot_device_names(inst)
 		if not slotted.is_empty():
 			_report.add(TransferReport.DEVICE_SLOTS, inst.get_display_name(), "%s (%s)" % [dev.name, ", ".join(slotted)])
+		# MIDI Send forwards notes between channels (spec 049); DAWproject has no mapping for it.
+		if inst.is_midi_send():
+			var host: Object = inst.get_channel()
+			_report.add(TransferReport.MIDI_SEND, "%s / %s" % [host.name if host != null else "?", inst.get_display_name()])
 		# Choke targets live only in a Drum Machine's Sonara state; DAWproject has no mapping.
 		var choked := 0
 		for child in inst.children:
@@ -521,6 +525,8 @@ func _write_track_lanes(track: Object) -> void:
 		instances.sort_custom(func(a, b): return a.start_ticks < b.start_ticks)
 		for inst in instances:
 			_write_clip(inst, track)
+			if track.is_group():
+				_report.add(TransferReport.GROUP_CLIP, track.name)
 		_w.close()
 	for lane in lanes_to_write:
 		_write_points(lane, _lane_targets[lane])

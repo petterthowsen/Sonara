@@ -1,6 +1,7 @@
 //! Mixing: fader and pan, routing in dependency order, and the master output.
 
 pub mod latency;
+pub mod midi_send;
 mod pool;
 mod routing;
 pub mod sidechain;
@@ -113,6 +114,7 @@ pub fn mix_and_output(
         perf_timing,
         device_sample_rate,
         pool,
+        midi_sends,
         ..
     } = state;
     let timing = *perf_timing;
@@ -122,6 +124,8 @@ pub fn mix_and_output(
         ready,
         jobs,
         job_parks,
+        midi_forward,
+        midi_forward_cc,
         ..
     } = render_scratch;
     let mut pooled = PooledPass {
@@ -129,6 +133,15 @@ pub fn mix_and_output(
         jobs,
         job_parks,
     };
+
+    // Cross-channel MIDI first: a send's targets must have their notes before they render.
+    midi_send::forward(
+        channel_map,
+        midi_sends,
+        midi_forward,
+        midi_forward_cc,
+        frames,
+    );
 
     let has_solo = channel_map.values().any(|c| c.solo);
     for channel in channel_map.values_mut() {
@@ -179,6 +192,8 @@ pub fn mix_and_output(
     );
 
     write_hardware_outputs(channel_map, data, channels);
+
+    midi_send::clear_dispatched(channel_map, midi_sends);
 
     // The sidechain taps read the final post-fader buffers (spec 036 D8); the next callback
     // feeds them before its device passes run.

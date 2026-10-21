@@ -1012,6 +1012,7 @@ const HARMONY_CHORDS := 11
 const HARMONY_BASSLINE := 12
 const HARMONY_TRANSFER := 13
 const HARMONY_SPLIT := 14
+const HARMONY_SPLIT_CHILDREN := 15
 const HARMONY_VOICES := 20
 const VOICE_ID_BASE := 100
 const MAX_VOICE_MENU := 6
@@ -1048,6 +1049,7 @@ func _setup_harmony_menu() -> void:
 	_harmony_popup.add_separator()
 	_harmony_popup.add_item("Transfer Notes...", HARMONY_TRANSFER)
 	_harmony_popup.add_item("Split Voices", HARMONY_SPLIT)
+	_harmony_popup.add_item("Split Into Child Tracks", HARMONY_SPLIT_CHILDREN)
 	_harmony_popup.id_pressed.connect(_on_harmony_menu_pressed)
 
 
@@ -1076,8 +1078,15 @@ func _sync_harmony_menu(editor: NoteEditor, has_selection: bool) -> void:
 	if spans:
 		split_tip = ONE_TRACK_TIP
 	elif live and not has_target:
-		split_tip = "Select another instrument track in the arranger to split the voices onto."
+		split_tip = "Select another instrument or group track in the arranger to split the voices onto."
 	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_SPLIT), has_notes and has_target and not spans, split_tip)
+	var children_tip := ""
+	if spans:
+		children_tip = ONE_TRACK_TIP
+	elif live and editor.child_split_targets().is_empty():
+		children_tip = "Only for a group track with child tracks that can play notes."
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_SPLIT_CHILDREN),
+			live and editor.can_split_into_children(), children_tip)
 
 
 func _set_harmony_item(index: int, enabled: bool, tooltip: String) -> void:
@@ -1117,6 +1126,8 @@ func _on_harmony_menu_pressed(id: int) -> void:
 			open_harmony_dialog(&"transfer")
 		HARMONY_SPLIT:
 			editor.split_voices()
+		HARMONY_SPLIT_CHILDREN:
+			editor.split_voices_into_children()
 
 
 ## Open the option dialog of a harmony tool (&"harmonize", &"chords", &"bassline", &"transfer"),

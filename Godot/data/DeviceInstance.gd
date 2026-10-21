@@ -35,6 +35,10 @@ signal child_moved(from_position: int, to_position: int)
 signal slot_changed()
 ## A Drum Machine pad's choke targets changed (sibling pad ids). See "DRUM CHOKE TARGETS".
 signal choke_targets_changed()
+## A MIDI Send's mode or list targets changed (spec 049). See "MIDI SEND".
+signal midi_send_changed()
+## The engine reported which requested MIDI Send targets it refused (they would close a loop).
+signal midi_send_blocked_changed()
 ## A container slot opened, closed or changed color (see "CONTAINER SLOTS").
 signal slots_changed()
 signal name_changed(new_name: String)
@@ -112,6 +116,17 @@ var slot_note: int = -1
 ## Choke targets for a Drum Machine pad: the `id`s of sibling pads a note-on here chokes
 ## (directed, ADR 0015). Lives on the pad's own instance; see "DRUM CHOKE TARGETS".
 var choke_targets: PackedStringArray = PackedStringArray()
+
+## MIDI Send (spec 049, `sonara.builtin.midi_send` only): "children" sends to the channels nested
+## directly under the sender, "list" to `midi_send_targets`. `midi_send_blocked` is runtime only.
+const MIDI_SEND_ID := "sonara.builtin.midi_send"
+const MIDI_SEND_CHILDREN := "children"
+const MIDI_SEND_LIST := "list"
+var midi_send_mode: String = MIDI_SEND_CHILDREN
+var midi_send_targets: PackedInt32Array = PackedInt32Array()
+var midi_send_blocked: PackedInt32Array = PackedInt32Array()
+var _midi_send_watched_channel: Channel = null
+var _midi_send_watched_project: Project = null
 
 ## Legacy choke group (0 = none) read from a project saved before choke targets; the Drum Machine
 ## turns it into mutual targets after loading its pads (`_migrate_choke_groups`), then clears it.
@@ -454,6 +469,11 @@ func get_channel() -> Channel:
 ## Record the owning channel (weak, to avoid RefCounted cycles).
 func set_channel(channel: Channel) -> void:
 	_channel_ref = weakref(channel) if channel else null
+	if is_midi_send():
+		if channel == null:
+			_unwatch_midi_send_sources()
+		else:
+			_watch_midi_send_sources()
 
 
 ## ============================================================================
@@ -2026,6 +2046,9 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(osc_addr("modulator/clear"), _on_modulator_clear_received)
 	if is_sampler():
 		AudioEngineOSC.listen(osc_addr("zone/*/loading_state"), _on_zone_loading_state_received)
+	if is_midi_send():
+		AudioEngineOSC.listen(osc_addr("midi_send/blocked"), _on_midi_send_blocked_received)
+		_watch_midi_send_sources()
 
 	sync_slot_to_engine()
 	for child in children:
@@ -2065,6 +2088,9 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(osc_addr("modulator/clear"), _on_modulator_clear_received)
 	if is_sampler():
 		AudioEngineOSC.unlisten(osc_addr("zone/*/loading_state"), _on_zone_loading_state_received)
+	if is_midi_send():
+		AudioEngineOSC.unlisten(osc_addr("midi_send/blocked"), _on_midi_send_blocked_received)
+		_unwatch_midi_send_sources()
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.unlisten(osc_addr("gui/opened"), _on_gui_opened_received)
@@ -2423,6 +2449,8 @@ func _push_restored_parameters_to_engine() -> void:
 func sync_to_engine() -> void:
 	sync_modulators_to_engine()
 	_sync_params_to_engine()
+	if is_midi_send():
+		_send_midi_send_targets()
 	if multisample != null:
 		multisample.sync_to_engine()
 
@@ -2692,6 +2720,170 @@ func _rekey_pad_slot(old_note: int, new_note: int) -> void:
 
 
 ## ============================================================================
+## MIDI SEND
+## ============================================================================
+## Spec 049. The engine only knows "this send targets channels [a, b, c]": children mode is
+## resolved here from the sender's `child_channel_ids` and re-sent whenever the nesting changes.
+## Loops are refused by the engine, which reports the refused ids back as `blocked`.
+
+func is_midi_send() -> bool:
+	return device != null and device.device_id == MIDI_SEND_ID
+
+
+## Whether `channel_id` may be a MIDI Send target of this device: an existing user channel other
+## than the sender (not master, not a hardware output, not a Layer or Drum Machine return).
+func midi_send_can_target(target_id: int) -> bool:
+	if target_id <= 1 or target_id >= AudioConfig.HARDWARE_OUTPUT_BASE or target_id == channel_id:
+		return false
+	var project := _midi_send_project()
+	if project == null:
+		return false
+	var target := project.get_channel_by_id(target_id)
+	return target != null and not target.is_master and not target.is_aux_return()
+
+
+## Channels the picker may offer: every valid target not already in the list, in mixer order.
+func midi_send_valid_channels() -> Array[Channel]:
+	var out: Array[Channel] = []
+	var project := _midi_send_project()
+	if project == null:
+		return out
+	for ch in project.channels:
+		if midi_send_can_target(ch.id):
+			out.append(ch)
+	return out
+
+
+## The concrete target ids to send to the engine: the direct children in children mode, the
+## filtered list in list mode.
+func resolved_midi_send_targets() -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var candidates: Array = []
+	if midi_send_mode == MIDI_SEND_CHILDREN:
+		var sender := get_channel()
+		if sender != null:
+			candidates = sender.child_channel_ids
+	else:
+		candidates = Array(midi_send_targets)
+	for target_id in candidates:
+		if midi_send_can_target(int(target_id)) and not out.has(int(target_id)):
+			out.append(int(target_id))
+	return out
+
+
+func set_midi_send_mode(mode: String) -> void:
+	if mode != MIDI_SEND_CHILDREN and mode != MIDI_SEND_LIST:
+		return
+	if mode == midi_send_mode:
+		return
+	midi_send_mode = mode
+	_send_midi_send_targets()
+	midi_send_changed.emit()
+
+
+func set_midi_send_targets(ids: PackedInt32Array) -> void:
+	var clean := PackedInt32Array()
+	for target_id in ids:
+		if target_id >= 0 and target_id != channel_id and not clean.has(target_id):
+			clean.append(target_id)
+	if clean == midi_send_targets:
+		return
+	midi_send_targets = clean
+	_send_midi_send_targets()
+	midi_send_changed.emit()
+
+
+## Switch the mode as one undo step.
+func change_midi_send_mode(mode: String) -> void:
+	HistoryUtil.execute_property("Set MIDI Send Mode", self, "set_midi_send_mode", midi_send_mode, mode)
+
+
+## Add or remove `target_id` in the list (list mode) as one undo step.
+func toggle_midi_send_target(target_id: int, on: bool) -> void:
+	if midi_send_targets.has(target_id) == on:
+		return
+	if on and not midi_send_can_target(target_id):
+		return
+	var next := midi_send_targets.duplicate()
+	if on:
+		next.append(target_id)
+	else:
+		next.remove_at(next.find(target_id))
+	HistoryUtil.execute_property("Set MIDI Send Target", self, "set_midi_send_targets", midi_send_targets.duplicate(), next)
+
+
+## Send the resolved target list to the engine (no-op for other devices).
+func _send_midi_send_targets() -> void:
+	if not is_midi_send() or channel_id < 0:
+		return
+	var args: Array = []
+	for target_id in resolved_midi_send_targets():
+		args.append(int(target_id))
+	AudioEngineOSC.send(osc_addr("midi_send/targets"), args)
+
+
+func _on_midi_send_blocked_received(values: Array, _address: String = "") -> void:
+	var next := PackedInt32Array()
+	for v in values:
+		next.append(int(v))
+	if next == midi_send_blocked:
+		return
+	midi_send_blocked = next
+	midi_send_blocked_changed.emit()
+
+
+func _midi_send_project() -> Project:
+	var channel := get_channel()
+	return channel.get_project() if channel != null else null
+
+
+## Re-resolve when the sender's nesting changes or a channel is removed.
+func _watch_midi_send_sources() -> void:
+	var channel := get_channel()
+	if channel != null and channel != _midi_send_watched_channel:
+		_unwatch_midi_send_sources()
+		_midi_send_watched_channel = channel
+		channel.hierarchy_changed.connect(_on_midi_send_hierarchy_changed)
+	var project := _midi_send_project()
+	if project != null and project != _midi_send_watched_project:
+		_midi_send_watched_project = project
+		project.channel_removed.connect(_on_midi_send_channel_removed)
+
+
+func _unwatch_midi_send_sources() -> void:
+	if _midi_send_watched_channel != null and is_instance_valid(_midi_send_watched_channel) \
+			and _midi_send_watched_channel.hierarchy_changed.is_connected(_on_midi_send_hierarchy_changed):
+		_midi_send_watched_channel.hierarchy_changed.disconnect(_on_midi_send_hierarchy_changed)
+	_midi_send_watched_channel = null
+	if _midi_send_watched_project != null and is_instance_valid(_midi_send_watched_project) \
+			and _midi_send_watched_project.channel_removed.is_connected(_on_midi_send_channel_removed):
+		_midi_send_watched_project.channel_removed.disconnect(_on_midi_send_channel_removed)
+	_midi_send_watched_project = null
+
+
+func _on_midi_send_hierarchy_changed() -> void:
+	_send_midi_send_targets()
+	midi_send_changed.emit()
+
+
+## A removed channel leaves the list (not undoable: the channel itself is what the user removed).
+func _on_midi_send_channel_removed(removed: Channel) -> void:
+	if removed == null:
+		return
+	if removed.id == channel_id:
+		_unwatch_midi_send_sources()
+		return
+	var at := midi_send_targets.find(removed.id)
+	if at >= 0:
+		var next := midi_send_targets.duplicate()
+		next.remove_at(at)
+		set_midi_send_targets(next)
+	else:
+		_send_midi_send_targets()
+		midi_send_changed.emit()
+
+
+## ============================================================================
 ## DRUM CHOKE TARGETS
 ## ============================================================================
 ## Each pad stores the ids of the sibling pads its note-on chokes; "choked by" is derived from the
@@ -2849,6 +3041,9 @@ func to_json() -> Dictionary:
 		"return_channel_ids": return_channel_ids.duplicate(),
 		"slots": _slots_to_json(),
 	}
+	if is_midi_send():
+		data["midi_send_mode"] = midi_send_mode
+		data["midi_send_targets"] = Array(midi_send_targets)
 	if not preset_name.is_empty():
 		data["preset_name"] = preset_name
 		data["preset_path"] = preset_path
@@ -3041,6 +3236,10 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.slot_note = int(data.get("slot_note", -1))
 	instance.choke_targets = PackedStringArray(Array(data.get("choke_targets", [])).map(func(t): return str(t)))
 	instance._legacy_choke_group = clampi(int(data.get("choke_group", 0)), 0, 8)
+	instance.midi_send_mode = MIDI_SEND_LIST if str(data.get("midi_send_mode", MIDI_SEND_CHILDREN)) == MIDI_SEND_LIST else MIDI_SEND_CHILDREN
+	for target in data.get("midi_send_targets", []):
+		if int(target) >= 0 and not instance.midi_send_targets.has(int(target)):
+			instance.midi_send_targets.append(int(target))
 	instance.slot_note_map = LayerNoteMap.from_json(data.get("slot_note_map", null))
 	instance.slot_separate_out = bool(data.get("slot_separate_out", false))
 	instance.return_channel_id = int(data.get("return_channel_id", -1))

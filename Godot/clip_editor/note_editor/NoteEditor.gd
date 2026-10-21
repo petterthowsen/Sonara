@@ -1415,12 +1415,33 @@ func can_split_voices(selected_tracks: Array = []) -> bool:
 			and not selection_spans_tracks()
 
 
-## True when `candidate` can receive transferred notes: an instrument track other than the source.
+## True when `candidate` can receive transferred notes: a track other than the source that is an
+## instrument track or a qualifying group (Track.is_note_editor_track).
 func is_transfer_target(candidate: Track) -> bool:
-	return candidate != null and candidate != source_track() and candidate.type == Track.TrackType.INSTRUMENT
+	return candidate != null and candidate != source_track() and candidate.is_note_editor_track()
 
 
-## Split targets: the selected instrument tracks in project track order. The source track is in
+## The source track's child tracks that can receive notes, in track order. Empty unless the source
+## is a group (spec 049: a MIDI Send in Children mode forwards to these).
+func child_split_targets() -> Array[Track]:
+	var out: Array[Track] = []
+	var source := source_track()
+	var project := _project_of_editor()
+	if source == null or project == null or not source.is_group():
+		return out
+	for t in project.get_track_children(source):
+		if t.is_note_editor_track():
+			out.append(t)
+	return out
+
+
+## Split Voices into the group's child tracks needs notes and at least one child track.
+func can_split_into_children() -> bool:
+	return not layout.is_drum() and not get_all_visual_notes().is_empty() \
+			and not child_split_targets().is_empty() and not selection_spans_tracks()
+
+
+## Split targets: the selected instrument and qualifying group tracks in project track order. The source track is in
 ## the list (keeping its place) when it is selected. `selected_tracks` empty means the app's
 ## track selection (Editor.selected_tracks).
 func split_target_tracks(selected_tracks: Array = []) -> Array[Track]:
@@ -1434,11 +1455,11 @@ func split_target_tracks(selected_tracks: Array = []) -> Array[Track]:
 	var out: Array[Track] = []
 	if project:
 		for t in project.tracks:
-			if t in picked and t.type == Track.TrackType.INSTRUMENT:
+			if t in picked and t.is_note_editor_track():
 				out.append(t)
 	else:
 		for t in picked:
-			if t is Track and t.type == Track.TrackType.INSTRUMENT:
+			if t is Track and t.is_note_editor_track():
 				out.append(t)
 	return out
 
@@ -1701,7 +1722,18 @@ func transfer_selection(target: Track) -> int:
 func split_voices(selected_tracks: Array = []) -> int:
 	if layout.is_drum() or not has_split_targets(selected_tracks) or selection_spans_tracks():
 		return 0
-	var targets := split_target_tracks(selected_tracks)
+	return _split_onto(split_target_tracks(selected_tracks))
+
+
+## Split Voices onto the source group's child tracks: voice 1 (top) goes to the first child, voice 2
+## to the second, and so on. Voices beyond the last child stay on the group. One undo step.
+func split_voices_into_children() -> int:
+	if not can_split_into_children():
+		return 0
+	return _split_onto(child_split_targets())
+
+
+func _split_onto(targets: Array[Track]) -> int:
 	var source := source_track()
 	var pool := _voice_pool()
 	var ref_of := _ref_per_note(pool)

@@ -14,6 +14,7 @@ const K_ACTIVE := "arranger/record_arm_follows_active_track"
 const GROUP := "Record arm the group"
 const FIRST := "Record arm the first valid child"
 const LAST := "Record arm the last armed valid child"
+const IF_NOTES := "Record arm the group if it has a note device"
 
 var _settings
 var _project_script: GDScript
@@ -34,6 +35,7 @@ func run_tests() -> void:
 	await _test_group_with_targets()
 	await _test_group_without_targets()
 	await _test_mixer_setting()
+	await _test_group_if_notes()
 	_settings.set_value(K_EMPTY, _settings.get_setting(K_EMPTY).default)
 	_settings.set_value(K_FULL, _settings.get_setting(K_FULL).default)
 	_settings.set_value(K_MIXER, true)
@@ -44,7 +46,7 @@ func _test_defaults() -> void:
 	for k in [K_EMPTY, K_FULL]:
 		var s = _settings.get_setting(k)
 		_assert(s != null and s.type == _settings.Type.CHOICE, "%s is a registered choice" % k)
-		_assert(s.options.size() == 3 and s.options.has(s.default), "%s has three options incl. its default" % k)
+		_assert(s.options.size() == 4 and s.options.has(s.default) and s.options.has(IF_NOTES), "%s has four options incl. its default and the note-device one" % k)
 	_assert(_settings.get_setting(K_EMPTY).default == GROUP, "empty-group default arms the group")
 	_assert(_settings.get_setting(K_FULL).default == LAST, "non-empty-group default arms the last armed child")
 	_assert(_settings.get_setting(K_MIXER).type == _settings.Type.BOOL, "mixer setting is a bool")
@@ -199,3 +201,51 @@ func _test_mixer_setting() -> void:
 
 func _chs(ch: Object) -> Array:
 	return Array([ch], TYPE_OBJECT, &"RefCounted", _channel_script)
+
+
+## Registers a fake device `device_id` of `category` in the asset registry.
+func _device(device_id: String, category: int) -> Object:
+	var device_script: GDScript = load("res://data/Device.gd")
+	var registry: Object = root.get_node("AssetService").device_registry
+	var device: Object = registry._devices.get(device_id)
+	if device == null:
+		device = device_script.new(device_id, device_id, category, device_script.DeviceType.BuiltIn)
+		registry._devices[device_id] = device
+	return device
+
+
+## REQ-018: "Record arm the group if it has a note device" arms a group whose own chain holds an
+## instrument or note effect, and falls back to the last armed valid child otherwise.
+func _test_group_if_notes() -> void:
+	_settings.set_value(K_ACTIVE, true)
+	var fx := await _setup()
+	var project: Object = fx.project
+	var g: Object = fx.g
+	var device_script: GDScript = load("res://data/Device.gd")
+	var instance_script: GDScript = load("res://data/DeviceInstance.gd")
+	var group_channel: Object = project.get_track_mixer_channel(g)
+	_assert(not _policy.has_note_device(project, g), "an empty group has no note device")
+
+	var reverb: Object = instance_script.new(_device("test.fx.reverb", device_script.DeviceCategory.Effect), group_channel.id, -1)
+	group_channel.add_device(reverb)
+	_assert(not _policy.has_note_device(project, g), "a group with only an audio effect has no note device")
+
+	_settings.set_value(K_FULL, IF_NOTES)
+	fx.i2.set_armed(true)
+	_select(fx, fx.top)
+	_select(fx, g)
+	_assert(_armed_names(fx) == ["I2"], "a Reverb-only group arms its last armed child: %s" % [_armed_names(fx)])
+
+	var send: Object = instance_script.new(_device("test.note.send", device_script.DeviceCategory.NoteEffect), group_channel.id, -1)
+	group_channel.add_device(send)
+	_assert(_policy.has_note_device(project, g), "a group with a note effect has a note device")
+	_select(fx, fx.top)
+	_select(fx, g)
+	_assert(_armed_names(fx) == ["G"], "a group with a MIDI Send arms itself: %s" % [_armed_names(fx)])
+
+	# A group without valid children arms itself either way; the empty-group setting accepts the option.
+	_settings.set_value(K_EMPTY, IF_NOTES)
+	_select(fx, fx.top)
+	_select(fx, fx.e)
+	_assert(_armed_names(fx) == ["E"], "an empty group arms itself with the new option: %s" % [_armed_names(fx)])
+	await _free(fx)

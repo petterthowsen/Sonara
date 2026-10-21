@@ -13,6 +13,7 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.multiband": preload("res://devices/builtin/multiband/MultibandDefaultView.tscn"),
 	"sonara.builtin.arpeggiator": preload("res://devices/builtin/arpeggiator/ArpeggiatorDefaultView.tscn"),
 	"sonara.builtin.chord": preload("res://devices/builtin/chord/ChordDefaultView.tscn"),
+	"sonara.builtin.midi_send": preload("res://devices/builtin/midi_send/MidiSendDefaultView.tscn"),
 	"sonara.builtin.saturator": preload("res://devices/builtin/saturator/SaturatorDefaultView.tscn"),
 	"sonara.builtin.step_sequencer": preload("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn"),
 }

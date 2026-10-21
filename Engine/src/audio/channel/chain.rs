@@ -112,7 +112,9 @@ impl Channel {
     }
 
     fn process_aux_source_untimed(&mut self, sample_count: usize) {
-        self.dispatch_notes(sample_count);
+        if !self.notes_dispatched {
+            self.dispatch_notes(sample_count);
+        }
         let src = self.aux_source_index();
         if src >= self.devices.len() {
             return;
@@ -187,7 +189,8 @@ impl Channel {
             };
         }
         let started = self.mix.timing.then(Instant::now);
-        if start == 0 {
+        // A MIDI Send's channel was dispatched by the pre-pass already (spec 049).
+        if start == 0 && !self.notes_dispatched {
             crate::audio::rt_debug::section("device MIDI dispatch", || {
                 self.dispatch_notes(sample_count)
             });

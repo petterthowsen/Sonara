@@ -452,7 +452,7 @@ func _test_toolbar_and_menu() -> void:
 	var texts := []
 	for i in popup.item_count:
 		texts.append("-" if popup.is_item_separator(i) else popup.get_item_text(i))
-	_assert(texts == ["Select Voices", "Harmonize...", "Insert Chords...", "Insert Bassline...", "-", "Transfer Notes...", "Split Voices"],
+	_assert(texts == ["Select Voices", "Harmonize...", "Insert Chords...", "Insert Bassline...", "-", "Transfer Notes...", "Split Voices", "Split Into Child Tracks"],
 			"the Harmony menu lists its items in order (got %s)" % [texts])
 	var sub: PopupMenu = popup.get_item_submenu_node(0)
 	var sub_texts := []

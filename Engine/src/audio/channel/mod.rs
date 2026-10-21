@@ -114,6 +114,10 @@ pub struct Channel {
 
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
+
+    /// The MIDI pre-pass (spec 049) already ran this buffer's live MIDI and note phase, so the
+    /// render skips `dispatch_notes`. Set and cleared within one `mix_and_output`.
+    pub notes_dispatched: bool,
 }
 
 /// One channel's latency compensation (spec 042 part D): its path latency and the delay on each
@@ -195,6 +199,7 @@ impl Channel {
             device_timers: [DeviceTimer::default(); MAX_TIMED_DEVICES],
             latency: ChannelLatency::default(),
             mix: MixBuffers::new(buffer_size),
+            notes_dispatched: false,
         }
     }
 

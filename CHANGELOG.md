@@ -8,6 +8,11 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- MIDI Send, a new note device: it forwards the notes reaching a channel to other channels in the same block, either to the channels nested under it (Children) or to a list you choose, with a Thru/Consume switch. Rows for targets that would make a MIDI loop are marked and ignored. Notes it started always end when a target is removed, the mode changes or the send is bypassed or removed.
+- Group tracks can hold MIDI clips (draw, move, copy, paste, open in the MIDI editor); audio clips are refused on a group. Add a MIDI Send to the group to play its clips on the tracks inside it.
+- New group record-arm choice "Record arm the group if it has a note device" for both group-arm settings.
+- MIDI editor: group tracks that hold MIDI clips or have a note or instrument device now appear in the track-mode track list, and work as Transfer Notes and Split Voices sources and targets. New Harmony > Split Into Child Tracks spreads the voices of a group's clip over the group's child tracks.
+- DAWproject export lists each MIDI Send and the group MIDI clips in the transfer report.
 - Layer rows: right-click a layer for Duplicate Layer / Remove Layer; the row light now matches the device panel light; removing the last device of a layer removes the layer too.
 - Chord has its own panel view: a keyboard of intervals around middle C. Click a key to add or remove that note from the chord; zoom shows up to three octaves and the arrows page between octaves. Enabled keys use the secondary color and light up in the primary color while notes are held.
 - EQ window: a vertical line follows the mouse and shows the frequency under it with its note and cents ("440 Hz  A3 +0¢"); the piano strip is taller and has a toggle in the header. In the companion band strips, the enabled and solo toggles sit side by side, a slope box (6 to 48 dB/oct) sits next to the type box for the Low Cut and High Cut types, and the knobs show their values.

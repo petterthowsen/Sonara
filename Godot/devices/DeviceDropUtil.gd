@@ -10,6 +10,30 @@ class_name DeviceDropUtil extends RefCounted
 const SFIZZ_ID := "sonara.builtin.sfizz"
 const SAMPLER_ID := "sonara.builtin.sampler"
 const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
+const MIDI_SEND_ID := "sonara.builtin.midi_send"
+
+
+## True when `device` is the MIDI Send (spec 049). It forwards notes between channels from a
+## channel's top-level chain, so it goes on any non-master channel but never inside a container.
+static func is_midi_send_device(device: Device) -> bool:
+	return device != null and device.device_id == MIDI_SEND_ID
+
+
+## True when `inst` is a MIDI Send or holds one anywhere inside it.
+static func contains_midi_send(inst: DeviceInstance) -> bool:
+	if inst == null:
+		return false
+	if is_midi_send_device(inst.device):
+		return true
+	for child in inst.children:
+		if contains_midi_send(child):
+			return true
+	return false
+
+
+## Whether `inst` holds a note effect that needs an instrument channel (a MIDI Send alone doesn't).
+static func needs_instrument_channel(inst: DeviceInstance) -> bool:
+	return NoteFx.contains_note_effect(inst) and not is_midi_send_device(inst.device)
 
 
 ## Whether this asset can be added to the channel (device, SFZ, or audio-into-drum).
@@ -40,6 +64,8 @@ static func device_for_asset(asset: Asset) -> Device:
 static func device_fits_channel(device: Device, channel: Channel) -> bool:
 	if device == null or channel == null:
 		return false
+	if is_midi_send_device(device):
+		return not channel.is_master  # instrument, audio, bus and group channels alike
 	if device.category == Device.DeviceCategory.Instrument or device.is_note_effect():
 		return channel.channel_type == Channel.ChannelType.INSTRUMENT and not channel.is_master
 	return true
@@ -52,6 +78,8 @@ static func device_fits_channel(device: Device, channel: Channel) -> bool:
 static func device_fits_host(device: Device, host_parent: DeviceInstance) -> bool:
 	if device == null:
 		return true
+	if is_midi_send_device(device) and host_parent != null:
+		return false  # MIDI Send lives in a channel's top-level chain only (spec 049)
 	if DeviceSlots.is_slotted(host_parent):
 		return DeviceSlots.has_slot_for(host_parent, device)
 	if not DeviceSlots.accepts(DeviceSlots.kind_for_host(host_parent), device):
@@ -74,6 +102,8 @@ static func can_drop_instance_on_host(
 		return false  # band positions are fixed (spec 016 D9)
 	if DeviceSlots.is_slot_chain(inst):
 		return false  # a slotted device's slots are fixed (spec 040 REQ-018)
+	if contains_midi_send(inst) and (host_parent != null or not is_midi_send_device(inst.device)):
+		return false  # not inside a container or slot, and not wrapped in a Chain (spec 049)
 	if copying:
 		# A copy leaves the original (and its aux returns) behind; it only has to fit.
 		if not device_fits_channel(inst.device, channel) or not copy_fits_host(inst, host_parent):
@@ -81,7 +111,7 @@ static func can_drop_instance_on_host(
 	elif inst.channel_id != channel.id and not can_transfer_to_channel(inst, channel):
 		return false
 	if NoteFx.contains_note_effect(inst):
-		if channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master:
+		if needs_instrument_channel(inst) and (channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master):
 			return false
 		if NoteFx.is_inside_multiband(host_parent):
 			return false
@@ -106,6 +136,8 @@ static func can_drop_instance_on_host(
 static func copy_fits_host(inst: DeviceInstance, host_parent: DeviceInstance) -> bool:
 	if host_parent == null:
 		return true
+	if contains_midi_send(inst):
+		return false  # MIDI Send stays in the top-level chain (spec 049)
 	if DeviceSlots.is_slotted(host_parent):
 		return false
 	if not DeviceSlots.accepts_instance(DeviceSlots.kind_for_host(host_parent), inst):
@@ -134,7 +166,9 @@ static func copy_instances(
 static func can_transfer_to_channel(inst: DeviceInstance, channel: Channel) -> bool:
 	if channel == null or not can_leave_channel(inst) or inst.get_channel() == channel:
 		return false
-	if NoteFx.contains_note_effect(inst) and (channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master):
+	if needs_instrument_channel(inst) and (channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master):
+		return false
+	if contains_midi_send(inst) and not is_midi_send_device(inst.device):
 		return false
 	return device_fits_channel(inst.device, channel)
 
@@ -692,6 +726,8 @@ static func can_drop_on_drum_pad(
 		return false
 	var asset := data as Asset
 	var asset_device := device_for_asset(asset)
+	if is_midi_send_device(asset_device):
+		return false  # a drum pad's chain is nested: MIDI Send is top-level only (spec 049)
 	if asset_device != null and asset_device.is_note_effect() and channel != null and not device_fits_channel(asset_device, channel):
 		return false
 	if occupied:

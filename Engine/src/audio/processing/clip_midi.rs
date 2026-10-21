@@ -360,6 +360,63 @@ mod tests {
         );
     }
 
+    /// A clip on a track routed to a bus channel (one other channel routes into it) reaches the
+    /// bus's chain at the same frames an instrument track's clip would (spec 049 REQ-002).
+    #[test]
+    fn clip_on_bus_channel_reaches_its_chain() {
+        const BLOCK: usize = 64;
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut state = EngineState::default();
+        state.device_sample_rate = 48_000.0;
+        state.ensure_master_channel(BLOCK);
+        let mut bus = Channel::new(3, "Bus".to_string(), BLOCK, 48_000.0);
+        bus.devices.push(Box::new(NoteProbe {
+            events: events.clone(),
+        }));
+        state.channels.insert(3, bus);
+        let mut child = Channel::new(4, "Child".to_string(), BLOCK, 48_000.0);
+        child.output_channel_id = Some(3);
+        state.channels.insert(4, child);
+
+        let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
+        clip.midi_notes.push(ClipNote {
+            id: 7,
+            note: 60,
+            velocity: 0.5,
+            release: 0.25,
+            start_tick: 0,
+            duration_ticks: 480,
+        });
+        clip.content_length_ticks = 480;
+        state.clips.insert("c".to_string(), clip);
+        let mut track = Track::new(1, 3);
+        track
+            .clip_instances
+            .push(ClipInstance::new("i".to_string(), "c".to_string(), 0, 960));
+        state.tracks.insert(1, track);
+
+        state.set_is_playing(true);
+        state.request_playhead_midi_dispatch();
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut out = vec![0.0f32; BLOCK * 2];
+        let mut absolute = Vec::new();
+        let mut block_start = 0;
+        while state.get_current_tick() < 960 {
+            process_audio(&mut state, BLOCK, 48_000.0, Instant::now());
+            crate::audio::mixing::mix_and_output(&mut state, &mut out, 2, BLOCK, &status_tx);
+            for (event, offset) in events.lock().unwrap().drain(..) {
+                absolute.push((event, block_start + offset));
+            }
+            block_start += BLOCK;
+        }
+        assert_eq!(absolute.len(), 2, "{absolute:?}");
+        assert!(matches!(absolute[0].0, NoteEvent::On { key: 60, .. }));
+        assert_eq!(absolute[0].1, 0);
+        assert!(matches!(absolute[1].0, NoteEvent::Off { key: 60, .. }));
+        // 120 BPM at 48 kHz: tick 480 lands on frame 12000.
+        assert!(absolute[1].1.abs_diff(12_000) <= 1, "{absolute:?}");
+    }
+
     #[test]
     fn overlapping_instances_get_distinct_note_ids() {
         let note = ClipNote {

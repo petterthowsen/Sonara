@@ -34,7 +34,7 @@ func _init(p_project: Project = null, p_source: Track = null, p_with_channel: bo
 
 ## True when `t` can be duplicated (clip tracks; folders and groups carry children instead).
 static func can_duplicate(t: Track) -> bool:
-	return t != null and t.has_clips()
+	return t != null and t.has_clips() and not t.is_group()
 
 
 ## Create the copy (first run) or re-add it (redo).

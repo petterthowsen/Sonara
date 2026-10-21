@@ -41,6 +41,7 @@ func run_tests() -> void:
 	await _test_automation()
 	await _test_devices()
 	await _test_export_reports_slot_devices()
+	await _test_export_reports_midi_send_and_group_clips()
 
 
 # ---------------------------------------------------------------------------
@@ -520,3 +521,26 @@ func _test_export_reports_slot_devices() -> void:
 	var state = JSON.parse_string(exported.entries[devs[0].child("State").get_attr("path")].get_string_from_utf8())
 	_assert(state is Dictionary and state.get("children", []).size() == 2 and state.children[1].children.size() == 1,
 		"the slot contents are still in the Sonara state JSON")
+
+
+## Spec 049 REQ-020: a MIDI Send gets one report entry each, and a group's MIDI clips are written
+## on the group's lane and reported.
+func _test_export_reports_midi_send_and_group_clips() -> void:
+	var project: Object = _project_script.new()
+	var send_device := _device("sonara.builtin.midi_send", DawEnums.DEVICE_BUILTIN, _device_script.DeviceCategory.NoteEffect)
+	var group: Dictionary = project.create_group_track("Choir")
+	var lead: Dictionary = project.create_instrument_track("Lead")
+	_add_device(group.channel, send_device)
+	_add_device(lead.channel, send_device)
+	var clip: Object = _make_midi_clip(project, "Chord")
+	group.track.create_clip_instance(clip, 0, 3840)
+	group.track.create_clip_instance(clip, 3840, 3840)
+	var exported := await _export(project, "midi_send.dawproject")
+	_assert(exported.result.ok, "export with a MIDI Send and a group clip succeeds: %s" % exported.result.error)
+	var report = exported.result.report
+	_assert(report.count_of(TransferReport.MIDI_SEND) == 2, "the report has one entry per MIDI Send")
+	_assert(report.entries().filter(func(e): return e.kind == TransferReport.MIDI_SEND).size() == 2, "the two MIDI Sends are separate entries")
+	_assert(report.count_of(TransferReport.GROUP_CLIP) == 2, "the group's clips are reported")
+	var lane := _lane_for(exported.xml, _find_track(exported.xml, "Choir"))
+	_assert(lane != null and lane.child("Clips") != null and lane.child("Clips").children_named("Clip").size() == 2,
+		"the group's clips are written on the group's lane")

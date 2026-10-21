@@ -392,13 +392,13 @@ func _apply_record_arm(track: Track, key: String) -> void:
 			RecordArmPolicy.KEY_WITH_TARGETS if RecordArmPolicy.has_targets(project, track)
 			else RecordArmPolicy.KEY_WITHOUT_TARGETS))
 		for t in project.tracks:
-			if t.has_clips() or t.is_group():
+			if t.has_clips():
 				t.set_armed(t == target)
 		return
 	if not track.has_clips():
 		return
 	for t in project.tracks:
-		if t.has_clips():
+		if t.has_clips() and not t.is_group():
 			t.set_armed(t == track)
 		elif t.is_group() and t.armed:
 			t.set_armed(false)

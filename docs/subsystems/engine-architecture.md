@@ -231,6 +231,10 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 ### Audio Mixing Implementation
 **`mixing/mod.rs::mix_and_output` orchestrates four passes, keeping the audio thread real-time safe:**
 
+-1. **MIDI pre-pass** (spec 049, ADR 0023, `mixing/midi_send.rs::forward`)
+   - Runs first, serially on the callback. For each channel holding a MIDI Send, in `EngineState::midi_sends` order (every sender after anything that sends to it), it runs `dispatch_notes` early (live MIDI plus the note phase), marks the channel `notes_dispatched` so the render does not run it again, then copies each MIDI Send's outbox into `RenderScratch::midi_forward` and delivers it to every effective target with `send_note_event_to_devices` at the same frame (CC through `route_cc`). Targets get the events before their own note phase, so forwarding is same block, same frame, and chains of sends (A to B to C) work.
+   - The sender order, effective targets (invalid ids dropped, loop-closing edges refused) and `blocked` sets are built by `rebuild_midi_sends` on the command thread under the lock, next to every `rebuild_taps` call, like sidechain taps. The audio callback only iterates. A project without a MIDI Send has an empty order and the pre-pass is a no-op. `notes_dispatched` is cleared at the end of `mix_and_output`.
+
 0. **Route counting**
    - `count_route_inputs` counts each channel's incoming routes and sends (`MixBuffers::pending_inputs`). A send at -inf (-60 dB, `Send::is_live` false) is no edge, so a route can close a loop through it without the cycle break cutting that route; the latency signature leaves it out the same way. Channels with inputs, and master, are route targets.
 

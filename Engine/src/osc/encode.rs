@@ -622,6 +622,14 @@ pub(super) fn encode_status(status: EngineStatus) -> Vec<OscMessage> {
             device_path.to_osc_addr(channel_id, "sleep"),
             vec![OscType::Int(if is_sleeping { 1 } else { 0 })],
         ),
+        EngineStatus::MidiSendBlocked {
+            channel_id,
+            device_path,
+            ids,
+        } => (
+            device_path.to_osc_addr(channel_id, "midi_send/blocked"),
+            ids.into_iter().map(|id| OscType::Int(id as i32)).collect(),
+        ),
     };
 
     vec![OscMessage { addr, args }]
@@ -736,6 +744,29 @@ mod tests {
         let msg = messages.remove(0);
         let tags = osc_arg_types(&msg.args);
         (msg.addr, tags, msg.args)
+    }
+
+    #[test]
+    fn midi_send_blocked_encodes_the_ids() {
+        let (addr, tags, args) = wire(EngineStatus::MidiSendBlocked {
+            channel_id: 3,
+            device_path: DevicePath::root(0),
+            ids: vec![2, 5],
+        });
+        assert_eq!(addr, "/channel/3/device/0/midi_send/blocked");
+        assert_eq!(tags, "i i");
+        assert_eq!(args, vec![OscType::Int(2), OscType::Int(5)]);
+
+        let (_, tags, args) = wire(EngineStatus::MidiSendBlocked {
+            channel_id: 3,
+            device_path: DevicePath::root(0),
+            ids: Vec::new(),
+        });
+        assert_eq!(
+            (tags.as_str(), args.len()),
+            ("", 0),
+            "an empty set has no arguments"
+        );
     }
 
     #[test]

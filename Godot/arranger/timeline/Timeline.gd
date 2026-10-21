@@ -1267,13 +1267,23 @@ func _compute_allowed_track_delta(instances: Array[ClipInstance], initial_indice
 			if not target_track_node or not target_track_node.track:
 				valid = false
 				break
-			if not target_track_node.track.has_clips():
+			if not _track_accepts_instance(target_track_node.track, inst):
 				valid = false
 				break
 		if valid:
 			return allowed_delta
 		allowed_delta -= direction
 	return 0
+
+
+## True when `track` can hold `instance`'s clip: any clip track takes MIDI, but a group refuses
+## audio clips (spec 049).
+func _track_accepts_instance(track: Track, instance: ClipInstance) -> bool:
+	if track == null or not track.has_clips():
+		return false
+	if track.accepts_audio_clips():
+		return true
+	return instance == null or instance.clip == null or instance.clip.type == Clip.ClipType.MIDI
 
 
 func _get_track_index_for_instance(instance: ClipInstance) -> int:
@@ -1631,7 +1641,7 @@ func _plan_placement(source: ClipSelection, target_tick: int, target_track: Trac
 				plan.clear()
 				return plan
 			dest_track = lanes[dest_index]
-		if not dest_track.has_clips():
+		if not _track_accepts_instance(dest_track, inst):
 			continue
 		plan.append({
 			"instance": inst,

@@ -303,8 +303,9 @@ func _register_all_settings() -> void:
 		"What record arm does when a group with no audio or instrument track inside it (at any depth) becomes the active track. Needs Record Arm Follows Active Track.\n\n"
 		+ "Record arm the group: arms the group itself.\n\n"
 		+ "Record arm the first valid child: arms the first audio or instrument track inside the group (none exists here, so the group is armed).\n\n"
-		+ "Record arm the last armed valid child: arms the child that was armed last (none exists here, so the group is armed).",
-	)).sub("Arranger").choices(["Record arm the group", "Record arm the first valid child", "Record arm the last armed valid child"])
+		+ "Record arm the last armed valid child: arms the child that was armed last (none exists here, so the group is armed).\n\n"
+		+ "Record arm the group if it has a note device: arms the group when its own device chain holds an instrument or a note effect such as MIDI Send, otherwise the group is armed too (it has no valid child).",
+	)).sub("Arranger").choices(["Record arm the group", "Record arm the first valid child", "Record arm the last armed valid child", "Record arm the group if it has a note device"])
 	_register(Setting.new(
 		"arranger/group_arm_with_targets",
 		"Selecting a Group With Instrument or Audio Tracks",
@@ -314,8 +315,9 @@ func _register_all_settings() -> void:
 		"What record arm does when a group containing an audio or instrument track (at any depth, nested groups included) becomes the active track. Needs Record Arm Follows Active Track.\n\n"
 		+ "Record arm the group: arms the group itself.\n\n"
 		+ "Record arm the first valid child: arms the first audio or instrument track inside the group.\n\n"
-		+ "Record arm the last armed valid child: arms the child of the group that was armed most recently, or the first valid child if none was armed before.",
-	)).sub("Arranger").choices(["Record arm the group", "Record arm the first valid child", "Record arm the last armed valid child"])
+		+ "Record arm the last armed valid child: arms the child of the group that was armed most recently, or the first valid child if none was armed before.\n\n"
+		+ "Record arm the group if it has a note device: arms the group when its own device chain holds an instrument or a note effect such as MIDI Send (a group with only audio effects does not count), otherwise falls back to the last armed valid child.",
+	)).sub("Arranger").choices(["Record arm the group", "Record arm the first valid child", "Record arm the last armed valid child", "Record arm the group if it has a note device"])
 	_register(Setting.new(
 		"mixer/record_arm_follows_channel_selection",
 		"Record Arm Follows Mixer Channel Selection",

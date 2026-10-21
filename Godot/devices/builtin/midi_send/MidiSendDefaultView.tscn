@@ -1,0 +1,88 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/midi_send/MidiSendDefaultView.gd" id="1_view"]
+
+[sub_resource type="ButtonGroup" id="ButtonGroup_mode"]
+
+[node name="MidiSendView" type="Control"]
+custom_minimum_size = Vector2(220, 100)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_view")
+
+[node name="Box" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 6
+
+[node name="ModeBar" type="HBoxContainer" parent="Box"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="ModeLabel" type="Label" parent="Box/ModeBar"]
+layout_mode = 2
+text = "Send to"
+
+[node name="ChildrenButton" type="Button" parent="Box/ModeBar"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Send to the channels nested directly under this channel"
+toggle_mode = true
+button_group = SubResource("ButtonGroup_mode")
+text = "Children"
+
+[node name="ListButton" type="Button" parent="Box/ModeBar"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Send to channels you choose"
+toggle_mode = true
+button_group = SubResource("ButtonGroup_mode")
+text = "List"
+
+[node name="Spacer" type="Control" parent="Box/ModeBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ThruCheck" type="CheckBox" parent="Box/ModeBar"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "On: the notes also play on this channel. Off (Consume): they stop at the MIDI Send."
+text = "Thru"
+
+[node name="Scroll" type="ScrollContainer" parent="Box"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="TargetList" type="VBoxContainer" parent="Box/Scroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="EmptyLabel" type="Label" parent="Box"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+text = "No targets"
+
+[node name="AddButton" type="MenuButton" parent="Box"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Add a channel to send to"
+text = "Add target…"

@@ -433,6 +433,14 @@ pub enum EngineStatus {
         device_path: DevicePath,
         is_sleeping: bool, // true = device sleeping (saving CPU), false = device active
     },
+
+    /// A MIDI Send's requested targets that are not used because they would close a loop
+    /// (spec 049 REQ-014). Sent after every rebuild that changes the set; empty means none.
+    MidiSendBlocked {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        ids: Vec<ChannelId>,
+    },
 }
 
 impl EngineStatus {
