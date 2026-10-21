@@ -1125,8 +1125,49 @@ var last_interaction_track: Track = null
 ## Note of another editable track under the press while it waits for the release (see
 ## _handle_left_mouse_press), as the hit dictionary; {} when no such press is pending.
 var _context_press: Dictionary = {}
-var _context_press_ctrl := false
 var _context_press_pos := Vector2.ZERO
+
+## A plain press on a selected note of another track starts a drag of the selection at once. If
+## the mouse is released without it changing anything, the click selects that note alone and
+## moves the focus to its track (REQ-034), like a click on any other note. {} when no such press.
+var _context_click: Dictionary = {}
+var _context_click_pos := Vector2.ZERO
+
+
+## The rect of a context note (this layer's coordinates), as the layer draws it.
+func _context_note_rect(hit: Dictionary) -> Rect2:
+	var ci: ClipInstance = hit.instance
+	var pass_index: int = hit.get("pass", 0)
+	if pass_index > 0:
+		var segments := ci.get_loop_segments()
+		if pass_index < segments.size():
+			return NotePlacement.repeat_rect(hit.data, ci, segments[pass_index], lane_layout, grid_helper)
+		return Rect2()
+	return NotePlacement.note_rect(hit.data, ci.content_origin_ticks(), lane_layout, grid_helper)
+
+
+## Start the drag (or, on the right edge, the resize) of the selection from a note of another
+## track, without moving the focus. The edge comes from NotePlacement's rect, since the note has
+## no node.
+func _begin_context_gesture(editor: NoteEditor, hit: Dictionary, ref: NoteRef, mevent: InputEventMouseButton, plain_click: bool) -> void:
+	var pos := editor.make_canvas_position_local(mevent.global_position)
+	var layer_pos := context_layer.make_canvas_position_local(mevent.global_position)
+	var rect := _context_note_rect(hit)
+	var on_edge := not lane_layout.is_drum() and rect.size.x >= VisualNote.MIN_RESIZABLE_WIDTH \
+			and layer_pos.x >= rect.end.x - VisualNote.RESIZE_HANDLE_WIDTH
+	if grid_helper:
+		last_interaction_song_tick = _editor_to_song_ticks(editor, grid_helper.pixels_to_ticks(pos.x))
+		last_interaction_track = ref.track
+	if not mevent.ctrl_pressed:
+		_audition_note(ref.data, ref.track)
+	if on_edge and editor.gestures.begin_resize(ref, pos):
+		editor.interaction_mode = NoteEditor.InteractionMode.RESIZING
+		return
+	editor.gestures.begin_drag(ref, pos, true, mevent.ctrl_pressed)
+	editor.interaction_mode = NoteEditor.InteractionMode.DRAGGING
+	if plain_click:
+		_context_click = hit
+		_context_click_pos = mevent.global_position
 
 
 ## REQ-034: a plain click on an unselected note of another editable track moves the focus to
@@ -1147,16 +1188,22 @@ func _focus_context_note(hit: Dictionary, global_pos: Vector2) -> VisualNote:
 	return visual
 
 
-## The release of a press on a note of another track (see _context_press).
+## The release of a Ctrl press on a selected note of another track (see _context_press): without
+## a drag, the note leaves the selection.
 func _finish_context_press(mevent: InputEventMouseButton) -> void:
 	var hit := _context_press
 	_context_press = {}
-	var moved := mevent.global_position.distance_to(_context_press_pos) >= NoteEditor.DRAG_THRESHOLD
-	if moved:
+	if mevent.global_position.distance_to(_context_press_pos) >= NoteEditor.DRAG_THRESHOLD:
 		return
-	var editor := get_active_note_editor()
-	if _context_press_ctrl:
-		editor.selection_manager.toggle_ref(NoteRef.new(hit.instance, hit.data, hit.get("pass", 0)))
+	get_active_note_editor().selection_manager.toggle_ref(NoteRef.new(hit.instance, hit.data, hit.get("pass", 0)))
+
+
+## The release of a plain click on a selected note of another track that changed nothing: it
+## becomes the whole selection, on its own track.
+func _finish_context_click(mevent: InputEventMouseButton) -> void:
+	var hit := _context_click
+	_context_click = {}
+	if mevent.global_position.distance_to(_context_click_pos) >= NoteEditor.DRAG_THRESHOLD:
 		return
 	var visual := _focus_context_note(hit, mevent.global_position)
 	if visual:
@@ -1165,6 +1212,7 @@ func _finish_context_press(mevent: InputEventMouseButton) -> void:
 
 func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle left mouse button press for note editing."""
+	_context_click = {}
 	var active_editor = get_active_note_editor()
 	if not active_editor:
 		return
@@ -1179,15 +1227,24 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 	var hit := _note_hit(mevent.global_position)
 	var clicked_note: VisualNote = hit.get("visual") if not hit.is_empty() else null
 	if not hit.is_empty() and not hit.has("editor"):
-		# A note of another editable track.
-		if mevent.ctrl_pressed or note_selection.has(hit.data):
-			# Ctrl+click adds or removes it without moving the focus. A plain press on a note
-			# that is already selected keeps the selection (dragging a selection across tracks
-			# is Phase 4); on release it becomes the whole selection, like any plain click.
+		# A note of another editable track (the gesture table in the plan, Design > Gestures).
+		var selected := note_selection.has(hit.data)
+		if mevent.ctrl_pressed and selected:
+			# Ctrl+click on a selected note takes it out on release (Ctrl+drag would duplicate
+			# it: Phase 5, so a drag does nothing).
 			_context_press = hit
-			_context_press_ctrl = mevent.ctrl_pressed
 			_context_press_pos = mevent.global_position
 			accept_event()
+			return
+		if mevent.ctrl_pressed or selected:
+			# Ctrl adds an unselected note and drags the selection; a plain press on a selected
+			# note drags the selection. Neither moves the focus.
+			var ref := NoteRef.new(hit.instance, hit.data, hit.get("pass", 0))
+			if not selected:
+				active_editor.selection_manager.add_ref(ref)
+			_begin_context_gesture(active_editor, hit, ref, mevent, selected and not mevent.ctrl_pressed)
+			accept_event()
+			_update_selection_overlays()
 			return
 		clicked_note = _focus_context_note(hit, mevent.global_position)
 		if not clicked_note:
@@ -1264,9 +1321,11 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or active_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
-		if active_editor.dragging_note:
-			active_editor._on_drag_ended(active_editor.dragging_note)
+		var changed: bool = active_editor.gestures.end_drag()
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+		if not changed and not _context_click.is_empty():
+			_finish_context_click(mevent)
+		_context_click = {}
 		on_interaction_finished()
 		accept_event()
 
@@ -1277,8 +1336,7 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
-		if active_editor.resizing_note:
-			active_editor._on_resize_ended(active_editor.resizing_note)
+		active_editor.gestures.end_resize()
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		on_interaction_finished()
 		accept_event()
@@ -1381,15 +1439,16 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 		_update_selection_overlays()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or active_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
-		if active_editor.dragging_note:
-			active_editor._on_drag_updated(active_editor.dragging_note, note_editor_pos)
-			_retrigger_audition_on_pitch_change(active_editor.dragging_note)
+		if active_editor.gestures.kind == NoteGestures.Kind.DRAG:
+			active_editor.gestures.update_drag(note_editor_pos)
+			var grabbed: NoteRef = active_editor.gestures.grabbed
+			_retrigger_audition_for(grabbed.data, grabbed.track)
 			accept_event()
 			_update_selection_overlays()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
-		if active_editor.resizing_note:
-			active_editor._on_resize_updated(active_editor.resizing_note, note_editor_pos)
+		if active_editor.gestures.kind == NoteGestures.Kind.RESIZE:
+			active_editor.gestures.update_resize(note_editor_pos)
 			accept_event()
 			_update_selection_overlays()
 
@@ -2039,9 +2098,9 @@ func _get_preview_channel_id() -> int:
 	return t.default_channel_id if t else -1
 
 
-func _start_preview_note(note: int, velocity: float) -> void:
+func _start_preview_note(note: int, velocity: float, track: Track = null) -> void:
 	_stop_preview_note()
-	var channel_id := _get_preview_channel_id()
+	var channel_id := track.default_channel_id if track != null else _get_preview_channel_id()
 	if channel_id < 0:
 		return
 	_preview_note = note
@@ -2209,9 +2268,16 @@ func _on_piano_key_released(note: int) -> void:
 
 
 func _audition_visual_note(vn: VisualNote) -> void:
-	if not audition_enabled or vn == null or vn.midi_note_data == null:
+	if vn == null or vn.midi_note_data == null:
 		return
-	_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)
+	_audition_note(vn.midi_note_data, null)
+
+
+## Play `data` on `track`'s channel (null: the focused track's).
+func _audition_note(data: MidiNoteData, track: Track) -> void:
+	if not audition_enabled or data == null:
+		return
+	_start_preview_note(data.note, data.velocity, track)
 
 
 ## Minimum time between audition retriggers during a drag (about twice per second).
@@ -2259,14 +2325,21 @@ func _cancel_pending_audition() -> void:
 
 ## While dragging with audition on, replay the note whenever its pitch changes (throttled).
 func _retrigger_audition_on_pitch_change(vn: VisualNote) -> void:
-	if not audition_enabled or _preview_note < 0 or vn == null or vn.midi_note_data == null:
+	if vn == null or vn.midi_note_data == null:
 		return
-	if vn.midi_note_data.note != _preview_note:
-		audition_throttled(_replay_if_pitch_changed.bind(vn))
+	_retrigger_audition_for(vn.midi_note_data, null)
 
 
-func _replay_if_pitch_changed(vn: VisualNote) -> void:
-	if not audition_enabled or _preview_note < 0 or not is_instance_valid(vn) or vn.midi_note_data == null:
+## Same for a note of any track; it replays on that track's channel.
+func _retrigger_audition_for(data: MidiNoteData, track: Track) -> void:
+	if not audition_enabled or _preview_note < 0 or data == null:
 		return
-	if vn.midi_note_data.note != _preview_note:
-		_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)
+	if data.note != _preview_note:
+		audition_throttled(_replay_if_pitch_changed.bind(data, track))
+
+
+func _replay_if_pitch_changed(data: MidiNoteData, track: Track) -> void:
+	if not audition_enabled or _preview_note < 0 or data == null:
+		return
+	if data.note != _preview_note:
+		_start_preview_note(data.note, data.velocity, track)

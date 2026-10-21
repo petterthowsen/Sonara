@@ -18,19 +18,19 @@ func run_tests() -> void:
 	root.add_child(_editor)
 	await process_frame
 	var t: float = _editor.ALT_AXIS_THRESHOLD
-	_editor.drag_start_mouse_pos = Vector2(100, 100)
+	_editor.gestures.drag_start_mouse_pos = Vector2(100, 100)
 
-	_editor.last_drag_mode = _editor.DragMode.POSITION
-	_assert(_editor._alt_axis_mode(Vector2(100, 100)) == _editor.DragMode.PENDING, "Alt pressed mid-drag starts pending")
+	_editor.gestures.last_drag_mode = _editor.gestures.DragMode.POSITION
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100, 100)) == _editor.gestures.DragMode.PENDING, "Alt pressed mid-drag starts pending")
 
-	_editor.last_drag_mode = _editor.DragMode.PENDING
-	_assert(_editor._alt_axis_mode(Vector2(100 + t - 1, 100)) == _editor.DragMode.PENDING, "below the threshold stays pending")
-	_assert(_editor._alt_axis_mode(Vector2(100 + t + 4, 100 + 2)) == _editor.DragMode.RESIZE, "sideways movement is length")
-	_assert(_editor._alt_axis_mode(Vector2(100 - t - 4, 100 + 2)) == _editor.DragMode.RESIZE, "sideways to the left is length")
-	_assert(_editor._alt_axis_mode(Vector2(100 + 2, 100 - t - 4)) == _editor.DragMode.VELOCITY, "upward movement is velocity")
-	_assert(_editor._alt_axis_mode(Vector2(100 + 2, 100 + t + 4)) == _editor.DragMode.VELOCITY, "downward movement is velocity")
+	_editor.gestures.last_drag_mode = _editor.gestures.DragMode.PENDING
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100 + t - 1, 100)) == _editor.gestures.DragMode.PENDING, "below the threshold stays pending")
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100 + t + 4, 100 + 2)) == _editor.gestures.DragMode.RESIZE, "sideways movement is length")
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100 - t - 4, 100 + 2)) == _editor.gestures.DragMode.RESIZE, "sideways to the left is length")
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100 + 2, 100 - t - 4)) == _editor.gestures.DragMode.VELOCITY, "upward movement is velocity")
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100 + 2, 100 + t + 4)) == _editor.gestures.DragMode.VELOCITY, "downward movement is velocity")
 
-	_editor.last_drag_mode = _editor.DragMode.VELOCITY
-	_assert(_editor._alt_axis_mode(Vector2(400, 100)) == _editor.DragMode.VELOCITY, "the axis stays locked once picked")
-	_editor.last_drag_mode = _editor.DragMode.RESIZE
-	_assert(_editor._alt_axis_mode(Vector2(100, 400)) == _editor.DragMode.RESIZE, "length stays locked once picked")
+	_editor.gestures.last_drag_mode = _editor.gestures.DragMode.VELOCITY
+	_assert(_editor.gestures.alt_axis_mode(Vector2(400, 100)) == _editor.gestures.DragMode.VELOCITY, "the axis stays locked once picked")
+	_editor.gestures.last_drag_mode = _editor.gestures.DragMode.RESIZE
+	_assert(_editor.gestures.alt_axis_mode(Vector2(100, 400)) == _editor.gestures.DragMode.RESIZE, "length stays locked once picked")

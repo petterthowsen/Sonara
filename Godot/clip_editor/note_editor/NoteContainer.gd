@@ -977,96 +977,23 @@ func get_or_create_clip_at_position(tick: int, min_end_tick: int = -1) -> ClipIn
 	"""Get clip at position, or create a new one if empty space (multi-clip mode).
 
 	A new clip is at least four bars long, extended in whole bars to reach `min_end_tick`
-	(a paste passes its span end) as far as the next clip allows.
+	(a paste passes its span end) as far as the next clip allows. TrackClips does the work.
 	"""
-	# First try to find existing clip
 	var existing = get_clip_at_position(tick)
 	if existing:
 		return existing
-
-	# No clip at position - create a new one
 	if not multi_clip_mode or not track:
 		logger.error("Cannot create clip: not in multi-clip mode or no track set")
 		return null
-
-	logger.info("Creating new clip at tick %d on track '%s'" % [tick, track.name])
-
-	# Calculate clip boundaries (snap to bars for clean organization)
-	var ticks_per_bar = grid_helper.get_ticks_per_bar() if grid_helper else 3840
-
-	# Snap start position to bar boundary
-	@warning_ignore("integer_division")
-	var clip_start_ticks = int(tick / ticks_per_bar) * ticks_per_bar
-
-	# Find previous and next clips on the track
-	var prev_clip_end: int = -1
-	var next_clip_start: int = -1
-	
-	for instance in track.clip_instances:
-		var clip_end = instance.start_ticks + instance.duration_ticks
-		
-		# Check for previous clip
-		if clip_end <= clip_start_ticks:
-			if prev_clip_end == -1 or clip_end > prev_clip_end:
-				prev_clip_end = clip_end
-		
-		# Check for next clip
-		if instance.start_ticks > clip_start_ticks:
-			if next_clip_start == -1 or instance.start_ticks < next_clip_start:
-				next_clip_start = instance.start_ticks
-	
-	# Adjust start position if it overlaps with previous clip
-	if prev_clip_end != -1 and clip_start_ticks < prev_clip_end:
-		# Snap to bar after previous clip ends
-		@warning_ignore("integer_division")
-		clip_start_ticks = ((prev_clip_end + ticks_per_bar - 1) / ticks_per_bar) * ticks_per_bar
-		logger.info("  - Adjusted start to %d to avoid previous clip" % clip_start_ticks)
-
-	# Calculate clip length
-	var default_length = ticks_per_bar * 4  # Default: 4 bars
-	if min_end_tick > clip_start_ticks:
-		@warning_ignore("integer_division")
-		var bars_needed: int = (min_end_tick - clip_start_ticks + ticks_per_bar - 1) / ticks_per_bar
-		default_length = maxi(default_length, bars_needed * ticks_per_bar)
-	var clip_length_ticks: int
-	
-	if next_clip_start != -1:
-		# Constrain to end before the next clip
-		var max_length = next_clip_start - clip_start_ticks
-		
-		# Ensure there's actually space for a clip
-		if max_length <= 0:
-			logger.error("Cannot create clip: no space between existing clips at tick %d" % tick)
-			return null
-		
-		clip_length_ticks = min(default_length, max_length)
-		logger.info("  - Constrained length to %d ticks (next clip at %d)" % [clip_length_ticks, next_clip_start])
-	else:
-		# No next clip, use default length
-		clip_length_ticks = default_length
-
-	# Create clip in project (the track's own project first: no Editor in headless tests)
-	var project: Project = track.get_project_ref()
-	if not project and Sonara.editor:
-		project = Sonara.editor.project
-	if not project:
-		logger.error("Cannot create clip: no project available")
-		return null
-
-	# Undoable, like creating a clip on the timeline
-	var new_clip_instance := ClipActions.create_clip(
-		project, track, clip_start_ticks, clip_length_ticks
-	)
+	var new_clip_instance := TrackClips.get_or_create(track, tick, grid_helper.get_ticks_per_bar() if grid_helper else 3840, min_end_tick)
 	if new_clip_instance == null:
-		logger.error("Cannot create clip: track rejected the instance")
 		return null
 	var new_clip := new_clip_instance.clip
 
-	logger.info("Created clip '%s' (instance: %s) at tick %d (length: %d)" % [new_clip.name, new_clip_instance.id, clip_start_ticks, clip_length_ticks])
-
 	# Add the new clip instance to our tracking and connect signals
 	# (no need to rebind everything, just add the new one)
-	clip_instances.append(new_clip_instance)
+	if new_clip_instance not in clip_instances:
+		clip_instances.append(new_clip_instance)
 	
 	# Connect to new clip's signals for reactive updates
 	if new_clip:

@@ -358,19 +358,18 @@ func _draw_instance(ci: ClipInstance, fills: PackedColorArray, alpha: float,
 		var rect := NotePlacement.note_rect(nd, origin, layout, grid_helper)
 		if not rect.has_area() or rect.end.y < top or rect.position.y > bottom:
 			continue
-		_fill(rect, fills, nd, alpha, ci, 0)
+		_fill(rect, fills, nd, alpha)
 
 
-## Fill one note. A selected note is drawn at full alpha with an outline, except through the
-## (instance, pass) its ref reaches it by: the selected pass draws that one from the ref.
-func _fill(rect: Rect2, fills: PackedColorArray, nd: MidiNoteData, alpha: float, ci: ClipInstance, pass_index: int) -> void:
-	var ref: NoteRef = selection.ref_of(nd) if selection != null else null
-	if ref == null:
-		var color := fills[_shade_of(nd.velocity)]
-		color.a = alpha
-		draw_rect(rect, color)
-	elif ref.instance != ci or ref.pass_index != pass_index:
-		_draw_selected(rect, fills, nd)
+## Fill one note of the index pass. Selected notes are skipped: _draw_selected_refs draws every
+## visual of them from the refs, so a gesture that moves their data cannot leave them behind in
+## the (then stale) index.
+func _fill(rect: Rect2, fills: PackedColorArray, nd: MidiNoteData, alpha: float) -> void:
+	if selection != null and selection.has(nd):
+		return
+	var color := fills[_shade_of(nd.velocity)]
+	color.a = alpha
+	draw_rect(rect, color)
 
 
 func _draw_selected(rect: Rect2, fills: PackedColorArray, nd: MidiNoteData) -> void:
@@ -378,34 +377,60 @@ func _draw_selected(rect: Rect2, fills: PackedColorArray, nd: MidiNoteData) -> v
 	draw_rect(rect, SELECTED_OUTLINE, false, 1.0)
 
 
-## The selected notes of the drawn tracks, straight from the refs, so they stay right while a
-## gesture moves their data without telling the clips (the sorted index would be stale).
+## The selected notes, straight from the refs: every visual of each (its note on every instance
+## of its clip on the drawn tracks, and the loop repeats of those), at full alpha with an outline.
+## Reading the refs and not the index keeps them right while a gesture moves their data without
+## telling the clips. The instance a ref was reached through is drawn even when its note has been
+## dragged out of the played window, like the note editor does until the drop.
 func _draw_selected_refs(first_tick: int, last_tick: int, top: float, bottom: float) -> void:
-	var segments_of := {}  # ClipInstance -> its loop segments, for this draw
+	var instances_of := {}  # Clip -> Array[ClipInstance] on the drawn tracks, only selected clips
 	for ref in selection.refs:
-		var ci := ref.instance
-		var t := ci.track if ci != null else null
-		if t == null or t == excluded_track or not _drawn.has(t):
+		var c := ref.clip
+		if c != null:
+			instances_of[c] = []
+	for t in _tracks:
+		if t == excluded_track:
+			continue
+		for ci in t.clip_instances:
+			if ci != null and instances_of.has(ci.clip):
+				instances_of[ci.clip].append(ci)
+	# Per instance, found once for all notes: where it plays its content, the track's fills and
+	# the loop passes that overlap the screen.
+	var origin_of := {}
+	var fills_of := {}
+	var passes_of := {}  # ClipInstance -> Array[Vector3i]
+	for list: Array in instances_of.values():
+		for ci: ClipInstance in list:
+			origin_of[ci] = ci.content_origin_ticks()
+			fills_of[ci] = _fills_for(ci.track)
+			var shown: Array[Vector3i] = []
+			if ci.loop_enabled:
+				var segments := ci.get_loop_segments()
+				for k in range(1, segments.size()):
+					var seg := segments[k]
+					if ci.start_ticks + seg.y >= first_tick and ci.start_ticks + seg.x <= last_tick:
+						shown.append(seg)
+			passes_of[ci] = shown
+	for ref in selection.refs:
+		var c := ref.clip
+		if c == null:
 			continue
 		var nd := ref.data
-		var rect := Rect2()
-		if ref.pass_index > 0:
-			var segs: Array[Vector3i] = segments_of.get(ci, [])
-			if not segments_of.has(ci):
-				segs = ci.get_loop_segments()
-				segments_of[ci] = segs
-			if ref.pass_index < segs.size():
-				rect = NotePlacement.repeat_rect(nd, ci, segs[ref.pass_index], layout, grid_helper)
-		else:
-			var start := ci.content_origin_ticks() + nd.start_tick
-			if start > last_tick or start + nd.duration_ticks < first_tick:
-				continue
-			rect = NotePlacement.note_rect(nd, ci.content_origin_ticks(), layout, grid_helper)
-		if not rect.has_area() or rect.end.y < top or rect.position.y > bottom:
-			continue
-		if rect.end.x < view_rect.position.x or rect.position.x > view_rect.end.x:
-			continue
-		_draw_selected(rect, _fills_for(t), nd)
+		var end_offset := nd.start_tick + nd.duration_ticks
+		for ci: ClipInstance in instances_of[c]:
+			var origin: int = origin_of[ci]
+			var fills: PackedColorArray = fills_of[ci]
+			var start := origin + nd.start_tick
+			if start <= last_tick and origin + end_offset >= first_tick \
+					and (ci == ref.instance or ci.plays_clip_span(nd.start_tick, end_offset)):
+				var rect := NotePlacement.note_rect(nd, origin, layout, grid_helper)
+				if rect.has_area() and rect.end.y >= top and rect.position.y <= bottom:
+					_draw_selected(rect, fills, nd)
+			var shown_passes: Array[Vector3i] = passes_of[ci]
+			for seg in shown_passes:
+				var rect := NotePlacement.repeat_rect(nd, ci, seg, layout, grid_helper)
+				if rect.has_area() and rect.end.y >= top and rect.position.y <= bottom:
+					_draw_selected(rect, fills, nd)
 
 
 ## The passes after the first of a looped instance: the notes starting in the loop region
@@ -435,7 +460,7 @@ func _draw_loop_repeats(ci: ClipInstance, fills: PackedColorArray, alpha: float,
 			var rect := NotePlacement.repeat_rect(nd, ci, seg, layout, grid_helper)
 			if not rect.has_area() or rect.end.y < top or rect.position.y > bottom:
 				continue
-			_fill(rect, fills, nd, alpha, ci, k)
+			_fill(rect, fills, nd, alpha)
 
 
 # ============================================================================

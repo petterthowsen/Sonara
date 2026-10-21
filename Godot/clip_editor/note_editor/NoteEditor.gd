@@ -33,6 +33,8 @@ var selection_model: NoteSelectionModel:
 
 ## The shared edit path (history, refresh, engine sync) over `selection_model`.
 var edits: NoteEdits
+## Drag, resize and velocity drag of the selection, on refs.
+var gestures: NoteGestures
 
 ## Notes whose visuals were last drawn as selected -> their clip.
 var _lit: Dictionary = {}
@@ -42,29 +44,15 @@ enum InteractionMode { NONE, DRAGGING, RESIZING, ERASING, PLACING_AND_DRAGGING, 
 var interaction_mode: InteractionMode = InteractionMode.NONE
 
 
-# Drag/resize state
-var dragging_note: VisualNote = null:
-	set(value):
-		dragging_note = value
-		if value:
-			Hotkeys.begin_state(self, "note_drag_alt" if _alt_auto_mode() else "note_drag")
-		else:
-			Hotkeys.end_state(self)
-var drag_start_midi_note: int = 0
-var drag_start_mouse_pos: Vector2 = Vector2.ZERO
-var drag_start_positions: Dictionary = {}  # MidiNoteData -> {start_tick, note, velocity, clip_instance}
-
-var resizing_note: VisualNote = null
-var resize_start_duration: int = 0
-var resize_start_mouse_pos: Vector2 = Vector2.ZERO
-var resize_start_durations: Dictionary = {}  # MidiNoteData -> duration_ticks
-
-
-
-# Drag mode tracking
-## PENDING: Alt is held but the mouse has not moved far enough to tell length from velocity.
-enum DragMode { POSITION, RESIZE, VELOCITY, PENDING }
-var last_drag_mode: DragMode = DragMode.POSITION
+# Drag/resize state: NoteGestures keeps it (see `gestures`).
+## The visual of the note being dragged, if this editor shows it.
+var dragging_note: VisualNote:
+	get:
+		return gestures.grabbed_visual() if gestures.kind == NoteGestures.Kind.DRAG else null
+## The visual of the note whose edge is being dragged, if this editor shows it.
+var resizing_note: VisualNote:
+	get:
+		return gestures.grabbed_visual() if gestures.kind == NoteGestures.Kind.RESIZE else null
 
 ## Pixels the mouse must travel with Alt held before the drag becomes length or velocity.
 const ALT_AXIS_THRESHOLD := 6.0
@@ -117,6 +105,7 @@ func _ready():
 	_connect_selection_model(selection_manager.model)
 	edits = NoteEdits.new(selection_manager.model)
 	edits.editor = self
+	gestures = NoteGestures.new(self)
 
 
 ## Use `model` as this editor's selection (MidiEditor shares one across its editors).
@@ -229,8 +218,7 @@ func unbind():
 	# Every note node goes away, so no gesture can carry on with one.
 	_lit.clear()
 	interaction_mode = InteractionMode.NONE
-	dragging_note = null
-	resizing_note = null
+	gestures.abandon()
 	placed_note_awaiting_drag = null
 	last_erased_note = null
 	erasing_mode = false
@@ -304,6 +292,12 @@ func handle_key_input(event: InputEventKey) -> void:
 	"""Handle keyboard input."""
 	if interaction_mode == InteractionMode.SCALING and event.pressed and event.keycode == KEY_ESCAPE:
 		cancel_group_scale()
+		accept_event()
+		return
+	if gestures.is_active() and event.pressed and event.keycode == KEY_ESCAPE:
+		# Esc mid-drag or mid-resize, on any track: every note goes back, no undo step.
+		gestures.cancel()
+		interaction_mode = InteractionMode.NONE
 		accept_event()
 		return
 	if Hotkeys.pressed(event, "edit_select_all"):
@@ -591,307 +585,6 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 # ============================================================================
 # NOTE INTERACTION HANDLERS
 # ============================================================================
-func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
-	"""Handle note drag start."""
-	if not note.midi_note_data:
-		return
-
-	# If note not selected, select it
-	if not selection_model.has(note.midi_note_data):
-		selection_manager.select_note(note)
-	note_touched.emit(note.midi_note_data)
-
-	dragging_note = note
-	drag_start_midi_note = note.midi_note_data.note
-	drag_start_mouse_pos = click_position
-	last_drag_mode = DragMode.POSITION
-
-	# Store starting positions for all selected notes
-	_snapshot_selection()
-
-	edits.begin()
-
-
-func _snapshot_selection() -> void:
-	"""Capture (or re-capture, on a mid-drag mode switch) the starting tick/note/
-	velocity/duration and owning clip instance for every selected note. Must
-	include clip_instance so cross-clip note transfer keeps working after a
-	Shift/Alt mode switch mid-drag."""
-	drag_start_positions.clear()
-	resize_start_durations.clear()
-	for sel_note in selection_manager.selected_visuals():
-		if sel_note.midi_note_data:
-			# Prefer the visual note's attached clip instance to avoid id collisions in multi-clip mode
-			var source_clip_instance: ClipInstance = sel_note.clip_instance
-			if not source_clip_instance:
-				source_clip_instance = get_clip_instance_for_note(sel_note.midi_note_data.id)
-			drag_start_positions[sel_note.midi_note_data] = {
-				"start_tick": sel_note.midi_note_data.start_tick,
-				"note": sel_note.midi_note_data.note,
-				"velocity": sel_note.midi_note_data.velocity,
-				"clip_instance": source_clip_instance
-			}
-			resize_start_durations[sel_note.midi_note_data] = sel_note.midi_note_data.duration_ticks
-
-
-func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
-	"""Handle note drag update (ctrl-to-resize, alt-for-velocity, shift-to-bypass-snapping)."""
-	if dragging_note != note or not note.midi_note_data:
-		return
-
-	var ctrl_pressed = Input.is_key_pressed(KEY_CTRL)
-	var alt_pressed = Input.is_key_pressed(KEY_ALT)
-	var drum_view := layout.is_drum()
-
-	# Drum View draws hits, not bars, so there is no length to drag out (REQ-022).
-	# Length falls back to plain dragging (Ctrl) or to velocity only (Alt).
-	var auto_alt := _alt_auto_mode()
-	if drum_view or auto_alt:
-		ctrl_pressed = false
-
-	# Determine current mode
-	var current_mode: DragMode
-	if alt_pressed and auto_alt and not drum_view:
-		current_mode = _alt_axis_mode(mouse_pos_local)
-	elif alt_pressed:
-		current_mode = DragMode.VELOCITY
-	elif ctrl_pressed:
-		current_mode = DragMode.RESIZE
-	else:
-		current_mode = DragMode.POSITION
-
-	# Check if mode changed
-	if current_mode != last_drag_mode:
-		drag_start_mouse_pos = mouse_pos_local
-
-		# Update stored starting positions
-		_snapshot_selection()
-
-		last_drag_mode = current_mode
-		logger.info("Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY", "PENDING"][current_mode])
-
-	# Alt is down but undecided: nothing moves until the mouse commits to an axis.
-	if current_mode == DragMode.PENDING:
-		return
-
-	var delta_x = mouse_pos_local.x - drag_start_mouse_pos.x
-	var delta_ticks = pixels_to_ticks(delta_x)
-	# Snap the drag delta, not each note, so notes keep their offsets from each other.
-	var snapped_delta_ticks: int = _snap_unless_shift(delta_ticks)
-
-	# Each note once, however many of its visuals (loop repeats, linked instances) are selected.
-	var edited := _selected_note_visuals()
-
-	if current_mode == DragMode.VELOCITY:
-		# Alt mode: Control velocity. Dragging up raises it, 2 px per 1/127 step.
-		var velocity_delta := int(-(mouse_pos_local.y - drag_start_mouse_pos.y) / 2.0) / 127.0
-
-		for sel_note in edited:
-			var start_pos = drag_start_positions.get(sel_note.midi_note_data)
-			if not start_pos:
-				continue
-
-			var start_velocity: float = start_pos.get("velocity", MidiNoteData.DEFAULT_VELOCITY)
-			var new_velocity := clampf(start_velocity + velocity_delta, MidiNoteData.MIN_VELOCITY, 1.0)
-
-			sel_note.midi_note_data.velocity = new_velocity
-
-	elif current_mode == DragMode.RESIZE:
-		# Length mode (Ctrl, or Alt dragged sideways): Control note length
-		# One snapped delta from the dragged note, applied to every selected note
-		var anchor_start = resize_start_durations.get(note.midi_note_data, note.midi_note_data.duration_ticks)
-		var snapped_delta: int = _snapped_duration(anchor_start + delta_ticks) - anchor_start
-		for sel_note in edited:
-			var start_duration = resize_start_durations.get(sel_note.midi_note_data)
-			if start_duration == null:
-				continue
-
-			sel_note.midi_note_data.duration_ticks = maxi(1, start_duration + snapped_delta)
-	else:
-		# Normal mode: Control position
-		# Row-wise in Drum View, semitone-wise in the piano roll (REQ-020). The two
-		# agree exactly in chromatic mode.
-		var delta_steps := layout.row_of_pitch(drag_start_midi_note) - layout.y_to_row(mouse_pos_local.y)
-		# Scale snap (REQ-015, 016, 018): the cursor picks an in-scale target and every note
-		# moves the same number of scale steps. Shift keeps the plain row walk.
-		var scale_steps := 0
-		var scale_drag: bool = scale_context.snap_active() and not Input.is_key_pressed(KEY_SHIFT)
-		if scale_drag:
-			var upper_half := fposmod(mouse_pos_local.y, layout.row_height) < layout.row_height * 0.5
-			var target := scale_context.snap_pitch(layout.y_to_pitch(mouse_pos_local.y), upper_half)
-			scale_steps = scale_context.steps_between(drag_start_midi_note, target)
-
-		for sel_note in edited:
-			var start_pos = drag_start_positions.get(sel_note.midi_note_data)
-			if not start_pos:
-				continue
-
-			var new_ticks: int = maxi(0, start_pos.start_tick + snapped_delta_ticks)
-			var new_midi_note := step_note(start_pos.note, delta_steps)
-			if scale_drag and not scale_context.is_keyswitch(start_pos.note):
-				new_midi_note = scale_context.step(start_pos.note, scale_steps)
-
-			# Clamp within clip content in track-mode to avoid crossing instance boundaries
-			if multi_clip_mode:
-				var owner_ci_clamp := _instance_for_visual_note(sel_note)
-				if owner_ci_clamp and owner_ci_clamp.in_loop_region(start_pos.start_tick):
-					# A note in the loop stays in it: dragged past the loop end it comes in
-					# again at the loop start, which is where the next pass shows it.
-					new_ticks = owner_ci_clamp.fold_into_loop(start_pos.start_tick + snapped_delta_ticks)
-				elif owner_ci_clamp and owner_ci_clamp.clip:
-					# The bound is the instance's played window, not the content
-					# length: content length is the rightmost note end, so using it
-					# would pin the last note in place and make dragging right a no-op.
-					# Content that reaches past the window (a trimmed instance) still
-					# gets that larger bound, so no note is ever clamped backwards.
-					var clip_len: int = max(owner_ci_clamp.clip_offset + owner_ci_clamp.duration_ticks, owner_ci_clamp.clip.get_content_length())
-					if clip_len > 0:
-						new_ticks = clampi(new_ticks, 0, maxi(0, clip_len - sel_note.midi_note_data.duration_ticks))
-
-			sel_note.midi_note_data.start_tick = new_ticks
-			sel_note.midi_note_data.note = new_midi_note
-
-	edits.refresh()
-
-	if current_mode == DragMode.POSITION:
-		# A note dragged out of its (unlooped) instance stays in view under the mouse until
-		# the drop moves it into the clip it lands on.
-		for sel_note in selection_manager.selected_visuals():
-			if not is_instance_valid(sel_note) or not sel_note.midi_note_data or sel_note.repeat_pass > 0:
-				continue
-			var owner_ci := _instance_for_visual_note(sel_note)
-			if multi_clip_mode and owner_ci and not owner_ci.loop_enabled and not sel_note.visible:
-				var rect := NotePlacement.note_rect(sel_note.midi_note_data, owner_ci.content_origin_ticks(), layout, grid_helper)
-				if rect.has_area():
-					sel_note.visible = true
-					sel_note.position = rect.position
-					sel_note.size = rect.size
-
-
-func _on_drag_ended(note: VisualNote) -> void:
-	"""Handle note drag end."""
-	if dragging_note != note or not note.midi_note_data:
-		return
-
-	# Check if any note changed
-	var any_changes = false
-	for sel_note in selection_manager.selected_visuals():
-		if not sel_note.midi_note_data:
-			continue
-		var start_pos = drag_start_positions.get(sel_note.midi_note_data)
-		var start_duration = resize_start_durations.get(sel_note.midi_note_data)
-
-		if start_pos:
-			if sel_note.midi_note_data.start_tick != start_pos.start_tick or sel_note.midi_note_data.note != start_pos.note:
-				any_changes = true
-				break
-			if sel_note.midi_note_data.velocity != start_pos.get("velocity", MidiNoteData.DEFAULT_VELOCITY):
-				any_changes = true
-				break
-		if start_duration != null and sel_note.midi_note_data.duration_ticks != start_duration:
-			any_changes = true
-			break
-
-	if not any_changes:
-		logger.info("Drag ended with no changes")
-		dragging_note = null
-		drag_start_positions.clear()
-		resize_start_durations.clear()
-		edits.discard()
-		update_container_width()
-		return
-
-	var drag_start_duration = resize_start_durations.get(note.midi_note_data)
-	if drag_start_duration != null and note.midi_note_data.duration_ticks != drag_start_duration:
-		last_note_length = note.midi_note_data.duration_ticks
-
-	# MULTI-CLIP MODE: Check if notes need to be transferred between clips
-	if multi_clip_mode:
-		_handle_cross_clip_transfers()
-
-	# Process all selected notes (cut overlaps and update)
-	var total_affected = 0
-	# A cross-clip transfer above frees the old visual and replaces it with a new one
-	# carrying a new id, and drops it from the selection, so this list is current.
-	for sel_note in _selected_note_visuals():
-		var note_data = sel_note.midi_note_data
-		var end_tick = note_data.start_tick + note_data.duration_ticks
-
-		# Get the clip this visual note belongs to (prefer its clip_instance)
-		var note_clip: Clip = _clip_for_visual_note(sel_note)
-		if not note_clip:
-			continue
-
-		var affected_notes = note_clip.cut_overlapping_notes_at_pitch(
-			note_data.note,
-			note_data.start_tick,
-			end_tick,
-			note_clip.allocate_note_id,
-			note_data.id
-		)
-
-		total_affected += affected_notes.size()
-		note_clip.update_midi_note(note_data)
-
-	if total_affected > 0:
-		logger.info("Multi-drag ended - cut/merged %d overlapping notes" % total_affected)
-
-	logger.info("Updated %d note(s) position/duration" % selection_model.size())
-
-	edits.commit("Move Notes")
-
-	# Don't update selection range - keep grid-snapped box selection boundaries
-	# This preserves the user's original box selection for duplicate/paste operations
-	queue_redraw()
-	update_container_width()
-
-	dragging_note = null
-	drag_start_positions.clear()
-	resize_start_durations.clear()
-
-
-
-func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
-	"""Handle note resize start."""
-	if not note.midi_note_data:
-		return
-
-	# Drum View draws hits, not bars: there is no length to drag (REQ-022).
-	if layout.is_drum():
-		return
-
-	if not selection_model.has(note.midi_note_data):
-		selection_manager.select_note(note)
-	note_touched.emit(note.midi_note_data)
-
-	resizing_note = note
-	resize_start_duration = note.midi_note_data.duration_ticks
-	resize_start_mouse_pos = click_position
-
-	# Store starting durations for all selected notes
-	resize_start_durations.clear()
-	for sel_note in selection_manager.selected_visuals():
-		if sel_note.midi_note_data:
-			resize_start_durations[sel_note.midi_note_data] = sel_note.midi_note_data.duration_ticks
-
-	edits.begin()
-
-
-## Note length rounded to the nearest grid step, never shorter than one grid step.
-## Alt auto mode: while the mouse is within ALT_AXIS_THRESHOLD of where Alt engaged the drag
-## is PENDING, then the dominant axis picks length (sideways) or velocity (up, down) and
-## stays picked until Alt is released.
-func _alt_axis_mode(mouse_pos_local: Vector2) -> DragMode:
-	if last_drag_mode == DragMode.RESIZE or last_drag_mode == DragMode.VELOCITY:
-		return last_drag_mode
-	if last_drag_mode != DragMode.PENDING:
-		return DragMode.PENDING
-	var moved := mouse_pos_local - drag_start_mouse_pos
-	if moved.length() < ALT_AXIS_THRESHOLD:
-		return DragMode.PENDING
-	return DragMode.RESIZE if absf(moved.x) >= absf(moved.y) else DragMode.VELOCITY
-
-
 ## While Shift is held the snap is bypassed and the minimum is a single tick.
 func _snapped_duration(ticks: int) -> int:
 	if Input.is_key_pressed(KEY_SHIFT):
@@ -909,106 +602,44 @@ func _snap_unless_shift(ticks: int) -> int:
 	return ticks
 
 
+## The VisualNote-facing entry points of the gestures (MidiEditor and tests hand over the visual
+## the mouse is on); NoteGestures works on its ref.
+func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
+	gestures.begin_drag(ref_of_visual(note), click_position)
+
+
+func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
+	if gestures.grabbed != null and gestures.grabbed.data == note.midi_note_data:
+		gestures.update_drag(mouse_pos_local)
+
+
+func _on_drag_ended(note: VisualNote) -> void:
+	if gestures.grabbed != null and gestures.grabbed.data == note.midi_note_data:
+		gestures.end_drag()
+
+
+func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
+	gestures.begin_resize(ref_of_visual(note), click_position)
+
+
 func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
-	"""Handle note resize update."""
-	if resizing_note != note or not note.midi_note_data:
-		return
-
-	var delta = mouse_pos_local - resize_start_mouse_pos
-	var delta_ticks = pixels_to_ticks(delta.x)
-
-	var new_duration := _snapped_duration(resize_start_duration + delta_ticks)
-
-	var same_length := Input.is_key_pressed(KEY_ALT if _alt_auto_mode() else KEY_CTRL)
-	# Same delta for every note, snapped once from the dragged note
-	var snapped_delta: int = new_duration - resize_start_duration
-
-	# Update all selected notes (each once; see _selected_note_visuals)
-	var edited := _selected_note_visuals()
-	for sel_note in edited:
-		var note_new_duration: int
-
-		if same_length:
-			# Length key (Alt or Ctrl, see the note drag modifiers setting): all notes get the same duration
-			note_new_duration = new_duration
-		else:
-			# Default: Apply same delta to each note
-			var note_start_duration = resize_start_durations.get(sel_note.midi_note_data, sel_note.midi_note_data.duration_ticks)
-			note_new_duration = maxi(1, note_start_duration + snapped_delta)
-
-		sel_note.midi_note_data.duration_ticks = note_new_duration
-	edits.refresh()
+	if gestures.grabbed != null and gestures.grabbed.data == note.midi_note_data:
+		gestures.update_resize(mouse_pos_local)
 
 
 func _on_resize_ended(note: VisualNote) -> void:
-	"""Handle note resize end."""
-	if resizing_note != note or not note.midi_note_data:
-		return
-
-	last_note_length = note.midi_note_data.duration_ticks
-
-	# Process all selected notes
-	var total_affected = 0
-	for sel_note in _selected_note_visuals():
-		var note_data = sel_note.midi_note_data
-		var end_tick = note_data.start_tick + note_data.duration_ticks
-
-		# Get the clip this note belongs to
-		var note_clip = _clip_for_visual_note(sel_note)
-		if not note_clip:
-			continue
-
-		var affected_notes = note_clip.cut_overlapping_notes_at_pitch(
-			note_data.note,
-			note_data.start_tick,
-			end_tick,
-			note_clip.allocate_note_id,
-			note_data.id
-		)
-
-		total_affected += affected_notes.size()
-		note_clip.update_midi_note(note_data)
-
-	if total_affected > 0:
-		logger.info("Multi-resize ended - cut/merged %d overlapping notes" % total_affected)
-
-	logger.info("Updated %d note(s) duration" % selection_model.size())
-
-	# Don't update selection range - keep grid-snapped box selection boundaries
-	queue_redraw()
-	update_container_width()
-
-	edits.commit("Resize Notes")
-	resizing_note = null
-	resize_start_durations.clear()
+	if gestures.grabbed != null and gestures.grabbed.data == note.midi_note_data:
+		gestures.end_resize()
 
 
 func _start_place_and_drag(note: VisualNote) -> void:
 	"""Start dragging a newly placed note."""
 	if not note or not note.midi_note_data:
 		return
-
 	interaction_mode = InteractionMode.PLACING_AND_DRAGGING
-	dragging_note = note
-	drag_start_midi_note = note.midi_note_data.note
-	drag_start_mouse_pos = get_local_mouse_position()
-	last_drag_mode = DragMode.POSITION
-
-	# Select the note
 	note.set_selected(true)
-
-	# Store starting positions
-	drag_start_positions.clear()
-	resize_start_durations.clear()
-	for sel_note in selection_manager.selected_visuals():
-		if sel_note.midi_note_data:
-			drag_start_positions[sel_note.midi_note_data] = {
-				"start_tick": sel_note.midi_note_data.start_tick,
-				"note": sel_note.midi_note_data.note,
-				"velocity": sel_note.midi_note_data.velocity
-			}
-			resize_start_durations[sel_note.midi_note_data] = sel_note.midi_note_data.duration_ticks
-
+	# The placement is already one undo step; the drag after it is not recorded on its own.
+	gestures.begin_drag(ref_of_visual(note), get_local_mouse_position(), false)
 	logger.info("Started place-and-drag for note %d" % note.midi_note_data.id)
 
 
@@ -2282,103 +1913,6 @@ func cancel_duplicate_drag() -> void:
 		interaction_mode = InteractionMode.NONE
 
 
-# ============================================================================
-# CROSS-CLIP NOTE MOVEMENT (MULTI-CLIP MODE)
-# ============================================================================
-func _handle_cross_clip_transfers() -> void:
-	"""Transfer notes between clips if they moved to different clip regions."""
-	if not multi_clip_mode:
-		return
-
-	# Iterate a copy: removing a note fires midi_note_removed, which drops it from the
-	# selection and would make this loop skip elements. Each note once.
-	for sel_note in _selected_note_visuals():
-		if not is_instance_valid(sel_note) or not sel_note.midi_note_data:
-			continue
-		# A note in a loop stays in its instance: the drag folded it into the loop region.
-		var owner_ci := _instance_for_visual_note(sel_note)
-		if owner_ci and owner_ci.loop_enabled and owner_ci.in_loop_region(sel_note.midi_note_data.start_tick):
-			continue
-
-		var note_data = sel_note.midi_note_data
-		var note_id = note_data.id
-
-		# Get source and destination clips
-		var start_pos = drag_start_positions.get(note_data)
-		if not start_pos:
-			continue
-
-		# Resolve the source from the note's current owner rather than the snapshot
-		# taken at drag start: an earlier transfer may already have moved it, and a
-		# stale source makes the removal below silently do nothing.
-		var source_clip_instance: ClipInstance = sel_note.clip_instance
-		if not source_clip_instance:
-			source_clip_instance = start_pos.get("clip_instance") as ClipInstance
-		if not source_clip_instance or not source_clip_instance.clip:
-			continue
-
-		# Calculate song-relative position (note position + clip offset)
-		var current_clip_instance = get_clip_instance_for_note(note_id)
-		if not current_clip_instance:
-			continue
-
-		var song_position = current_clip_instance.clip_to_song_ticks(note_data.start_tick)
-
-		# Find which clip should contain this note at its new position
-		var dest_clip_instance = get_clip_at_position(song_position)
-
-		# If destination is within an instance of the SAME underlying clip, do not transfer;
-		# edits are clip-local and shared across instances. Just keep the updated clip-local position.
-		if dest_clip_instance and dest_clip_instance.clip and source_clip_instance and source_clip_instance.clip and dest_clip_instance.clip == source_clip_instance.clip:
-			continue
-
-		# If no clip at position, try to create one
-		if not dest_clip_instance:
-			dest_clip_instance = get_or_create_clip_at_position(song_position)
-
-		# Transfer note if it moved to a different clip
-		if dest_clip_instance and dest_clip_instance != source_clip_instance:
-			_transfer_note_between_clips(note_data, source_clip_instance, dest_clip_instance, song_position)
-
-
-func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance, dest: ClipInstance, song_position: int) -> void:
-	"""Transfer a note from source clip to destination clip."""
-	logger.info("Transferring note %d from clip '%s' to '%s'" % [note_data.id, source.clip.name if source.clip else "?", dest.clip.name if dest.clip else "?"])
-
-	# Calculate clip-local position for destination clip
-	var dest_local_position = dest.song_to_clip_ticks(song_position)
-
-	# Create a copy of the note data for the destination clip
-	var new_note = MidiNoteData.new()
-	new_note.id = dest.clip.allocate_note_id()
-	new_note.copy_values_from(note_data)
-	new_note.start_tick = dest_local_position
-	new_note.duration_ticks = note_data.duration_ticks
-
-	# Clear the landing spot first. Without this the add below is rejected as an
-	# overlap and the note would be dropped entirely.
-	dest.clip.cut_overlapping_notes_at_pitch(
-		new_note.note,
-		new_note.start_tick,
-		new_note.start_tick + new_note.duration_ticks,
-		dest.clip.allocate_note_id
-	)
-
-	# Remove from source clip (this will trigger reactive removal)
-	if not source.clip.remove_midi_note(note_data):
-		logger.warn("Transfer aborted: note %d is not in clip '%s'" % [note_data.id, source.clip.name])
-		return
-
-	# Add to destination clip (this will trigger reactive addition)
-	if dest.clip.add_midi_note_data(new_note) == null:
-		# Put it back rather than losing it.
-		logger.warn("Transfer of note %d into '%s' was rejected; restoring it in '%s'" % [note_data.id, dest.clip.name, source.clip.name])
-		source.clip.add_midi_note_data(note_data)
-		return
-
-	logger.info("Note transferred: old_id=%d, new_id=%d, new_local_pos=%d" % [note_data.id, new_note.id, dest_local_position])
-
-
 ## One selected visual per selected note: the one it was selected through. A note shown by
 ## several visuals (loop repeats, instances of a linked clip) shares one MidiNoteData, so edits
 ## apply to it once.
@@ -2413,13 +1947,6 @@ func _forget_visual(vn: VisualNote) -> void:
 		else:
 			selection_model.remove_data(vn.midi_note_data, true)
 	queue_redraw()
-	var fallback: VisualNote = null
-	if vn.clip_instance and vn.midi_note_data:
-		fallback = visual_for(vn.clip_instance, vn.midi_note_data)
-	if dragging_note == vn:
-		dragging_note = fallback
-	if resizing_note == vn:
-		resizing_note = fallback
 	if placed_note_awaiting_drag == vn:
 		placed_note_awaiting_drag = null
 	if last_erased_note == vn:

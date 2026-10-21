@@ -11,7 +11,7 @@ This plan comes from reading the code at `8b6d17e`. Nothing has been measured ye
 - [x] Phase 1: Data-level selection (`NoteRef`, `NoteSelectionModel`), with no change in behaviour
 - [x] Phase 2: Edits run on refs (`NoteEdits`), not on `VisualNote`s
 - [x] Phase 3: Selecting across tracks (click, Ctrl+click, box, ruler range, Ctrl+A), drawn on the context layer
-- [ ] Phase 4: Gestures across tracks (drag, resize, velocity drag, keyboard edits)
+- [x] Phase 4: Gestures across tracks (drag, resize, velocity drag, keyboard edits)
 - [ ] Phase 5: Value lanes, clipboard, tools and group scale across tracks
 - [ ] Phase 6 (optional): `clip-editor-performance-plan.md` Phase 3, draw the focus track too and retire `VisualNote`
 
@@ -321,6 +321,25 @@ Tests: drag a selection spanning two tracks (each note stays on its track and it
 loop fold and played-window clamp apply per instance), resize from a context note, Alt velocity
 drag across tracks, Esc cancels across tracks, and the drop-transfer between clips of one track
 still works with another track in the selection.
+
+**Outcome.** Done. Deviations:
+
+- `NoteGestures` and `NoteEdits` are owned by `NoteEditor` (one per `MidiEditor`), not by `MidiEditor`:
+  standalone editors in the tests have no `MidiEditor`, and `MidiEditor` reaches both through
+  `active_editor.gestures` / `.edits`. The old `NoteEditor._on_drag_*` / `_on_resize_*` remain as thin
+  VisualNote-facing wrappers. Group scale stayed in `NoteEditor` (it only reads its own visuals).
+- `get_or_create_clip_at_position` is `TrackClips.get_or_create(track, tick, ticks_per_bar, min_end)`;
+  the NoteContainer method delegates to it and tracks the new instance.
+- The drop transfer used to be nearly dead code (the window clamp keeps a note inside content that
+  reaches past its instance only if the clip is longer than the instance). It still behaves the same,
+  but undo of a transfer now restores the destination clip too (`NoteEdits.include_clip`); before, the
+  note stayed in the destination after undo.
+- The clamp bound (clip content length) is taken once at the start of the drag or mode switch, not on
+  every update: `Clip.get_content_length` scans all notes, which cost 80 ms per motion with 5,000
+  selected notes. It only differs from before for a note that is the rightmost of its clip.
+- A plain click that changes nothing on a selected context note still selects it alone and switches
+  focus (the drag it starts is empty). Ctrl+press on a selected context note toggles it out on release.
+- `Input.is_key_pressed` is reached through `NoteGestures.key_held`, so tests can fake Alt and Ctrl.
 
 ### Phase 5: Value lanes, clipboard, tools, group scale, duplicates
 

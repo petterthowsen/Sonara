@@ -46,13 +46,20 @@ func begin_clips(clips: Array) -> void:
 	_selection_before = model.capture()
 
 
+## Add `c` to the open edit before it changes (a note dropped into another clip changes that
+## clip too). A clip already in the edit is left as it was snapshotted.
+func include_clip(c: Clip) -> void:
+	if is_open() and c != null and not _snapshots.has(c):
+		_snapshots[c] = ClipNotesStateCommand.capture_clip_notes(c)
+
+
 ## Show the current data of `refs` (default: the selection) on their visuals: the editor's for
 ## notes it shows, a redraw of the context layer for the rest.
 func refresh(refs: Variant = null) -> void:
 	var list: Array = refs if refs != null else model.refs
 	var context_dirty := false
 	for ref: NoteRef in list:
-		if editor != null and editor.visual_of_ref(ref) != null:
+		if editor != null and _shown_by_editor(ref):
 			editor.refresh_note(ref.data, ref.clip)
 		else:
 			context_dirty = true
@@ -60,6 +67,14 @@ func refresh(refs: Variant = null) -> void:
 		context_layer.queue_redraw()
 	if editor != null:
 		editor.notes_refreshed.emit()
+
+
+## True when the focus editor has a visual for `ref`. Notes of another track are known not to,
+## which spares a lookup per note.
+func _shown_by_editor(ref: NoteRef) -> bool:
+	if editor.multi_clip_mode and ref.instance != null and ref.instance.track != editor.track:
+		return false
+	return editor.visual_of_ref(ref) != null
 
 
 ## Cut same-pitch overlaps made by the edit and send the notes to the engine (default: the

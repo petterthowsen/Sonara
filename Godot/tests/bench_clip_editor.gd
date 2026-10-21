@@ -251,6 +251,23 @@ func _run() -> void:
 	_report("8b. scroll step with that selection (median of 20)", _median(sel_scroll))
 	var nudge_all_ms := await _time_with_frame(func(): active._move_selection_horizontal(step))
 	_report("8c. nudge the whole selection", nudge_all_ms)
+
+	# 9. A drag of that selection, grabbed on one of its notes (none is the focus track's): one
+	# motion frame moves all 5,000 notes and redraws them.
+	var grab_ref: Object = selected_refs[0]
+	var grab_pos: Vector2 = active.make_canvas_position_local(midi.context_layer.get_global_transform() * Vector2(
+		midi.grid_helper.ticks_to_pixels(grab_ref.song_start()) + 2.0, midi.lane_layout.pitch_to_y(grab_ref.data.note) + 2.0))
+	active.gestures.begin_drag(grab_ref, grab_pos)
+	var drag_times: Array = []
+	for i in 10:
+		var dx: float = midi.grid_helper.ticks_to_pixels(240 * (i + 1))
+		drag_times.append(await _time_with_frame(func(): active.gestures.update_drag(grab_pos + Vector2(dx, 0.0))))
+	_report("9. drag motion frame, whole selection (median of 10)", _median(drag_times))
+	var t_call := Time.get_ticks_usec()
+	active.gestures.update_drag(grab_pos + Vector2(40.0, 0.0))
+	_report("9a. update_drag call alone", (Time.get_ticks_usec() - t_call) / 1000.0)
+	var end_ms := await _time_with_frame(func(): active.gestures.cancel())
+	_report("9b. Esc cancel of that drag", end_ms)
 	midi.note_selection.clear()
 
 	_report_value("node count at end", _node_count())

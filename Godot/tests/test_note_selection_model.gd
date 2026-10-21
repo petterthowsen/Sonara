@@ -246,9 +246,9 @@ func _test_shared_note_edited_once_and_one_undo_step() -> void:
 	# Drag state is keyed by the note, so the two instances share one entry.
 	var vn = editor.get_all_visual_notes()[0]
 	editor._on_drag_started(vn, vn.position)
-	_assert(editor.drag_start_positions.size() == 2 and editor.drag_start_positions.has(vn.midi_note_data),
+	_assert(editor.gestures.drag_start_positions.size() == 2 and editor.gestures.drag_start_positions.has(vn.midi_note_data),
 		"drag start positions are keyed by MidiNoteData, one per note")
-	editor.dragging_note = null
+	editor.gestures.cancel()
 	editor.queue_free()
 
 

@@ -237,6 +237,24 @@ func toggle_ref(ref: NoteRef) -> void:
 	model.changed.emit()
 
 
+## Make `ref`'s note the whole selection, and the range its span (like select_note, for a note
+## of any track).
+func select_ref(ref: NoteRef, with_range: bool = true) -> void:
+	select_visuals([ref])
+	if with_range:
+		var pos: Dictionary = span_of_ref.call(ref)
+		box_selection_start_tick = pos["start_tick"]
+		box_selection_end_tick = pos["end_tick"]
+	model.changed.emit()
+
+
+## Add `ref`'s note to the selection (Ctrl on an unselected note) and widen the range to all.
+func add_ref(ref: NoteRef) -> void:
+	model.add(_refs_of([ref]), true)
+	_update_selection_range()
+	model.changed.emit()
+
+
 func clear_selection() -> void:
 	"""Clear all selected notes."""
 	model.clear(true)
