@@ -1,0 +1,375 @@
+[gd_scene format=3 uid="uid://c7k2napq4vxsa"]
+
+[ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="1_segment"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="2_knob"]
+[ext_resource type="Script" uid="uid://4yg4t01sougn" path="res://components/Badge.gd" id="3_badge"]
+[ext_resource type="PackedScene" uid="uid://cj6bkxh40g8w4" path="res://components/EnvelopeControl.tscn" id="4_envelope"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rxavb"]
+content_margin_left = 7.0
+content_margin_top = 2.0
+content_margin_right = 8.0
+content_margin_bottom = 2.0
+bg_color = Color(0.42749998, 0.297, 0.135, 0.55)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.95, 0.66, 0.3, 0.9)
+corner_radius_top_left = 999
+corner_radius_top_right = 999
+corner_radius_bottom_right = 999
+corner_radius_bottom_left = 999
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3itj3"]
+content_margin_left = 7.0
+content_margin_top = 2.0
+content_margin_right = 8.0
+content_margin_bottom = 2.0
+bg_color = Color(0.42749998, 0.297, 0.135, 0.55)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.95, 0.66, 0.3, 0.9)
+corner_radius_top_left = 999
+corner_radius_top_right = 999
+corner_radius_bottom_right = 999
+corner_radius_bottom_left = 999
+
+[node name="SamplerControls" type="VBoxContainer" unique_id=580730588]
+offset_right = 626.0
+offset_bottom = 160.0
+theme_override_constants/separation = 4
+
+[node name="Top" type="HBoxContainer" parent="." unique_id=1091426340]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 14
+
+[node name="Playback" type="VBoxContainer" parent="Top" unique_id=251843311]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Header" type="HBoxContainer" parent="Top/Playback" unique_id=808057204]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="Top/Playback/Header" unique_id=2137205213]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Playback"
+
+[node name="Body" type="HBoxContainer" parent="Top/Playback" unique_id=1458347278]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Stack" type="VBoxContainer" parent="Top/Playback/Body" unique_id=1511409739]
+layout_mode = 2
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="PlayMode" type="HBoxContainer" parent="Top/Playback/Body/Stack" unique_id=1492406079]
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("1_segment")
+font_size = 10
+items = PackedStringArray("One-shot", "Gated")
+metadata/param = "Play Mode"
+
+[node name="Reverse" type="CheckBox" parent="Top/Playback/Body/Stack" unique_id=229832154]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Reverse"
+metadata/param = "Reverse"
+
+[node name="Knobs" type="HBoxContainer" parent="Top/Playback/Body" unique_id=1857460578]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Speed" type="VBoxContainer" parent="Top/Playback/Body/Knobs" unique_id=571793594]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Speed"
+metadata/param = "Speed"
+
+[node name="Voices" type="VBoxContainer" parent="Top/Playback/Body/Knobs" unique_id=1685079872]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Voices"
+metadata/param = "Voices"
+
+[node name="Velocity" type="VBoxContainer" parent="Top/Playback/Body/Knobs" unique_id=1936593541]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Vel"
+metadata/param = "Velocity"
+
+[node name="Pitch" type="VBoxContainer" parent="Top" unique_id=240908581]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Header" type="HBoxContainer" parent="Top/Pitch" unique_id=231094253]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="Top/Pitch/Header" unique_id=453554671]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Pitch"
+
+[node name="Badge" type="PanelContainer" parent="Top/Pitch/Header" unique_id=336066577]
+visible = false
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Edits the focused sample (multisample mode)"
+theme_override_styles/panel = SubResource("StyleBoxFlat_rxavb")
+script = ExtResource("3_badge")
+text = "Sample"
+color = Color(0.95, 0.66, 0.3, 1)
+font_size = 8
+
+[node name="Body" type="HBoxContainer" parent="Top/Pitch" unique_id=1170084596]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Knobs" type="HBoxContainer" parent="Top/Pitch/Body" unique_id=438602030]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Root" type="VBoxContainer" parent="Top/Pitch/Body/Knobs" unique_id=538304460]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Root"
+metadata/param = "Root"
+
+[node name="Tune" type="VBoxContainer" parent="Top/Pitch/Body/Knobs" unique_id=950561519]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Tune"
+metadata/param = "Tune"
+
+[node name="Fine" type="VBoxContainer" parent="Top/Pitch/Body/Knobs" unique_id=244591305]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Fine"
+metadata/param = "Fine"
+
+[node name="KeyTrack" type="CheckBox" parent="Top/Pitch/Body" unique_id=1483483361]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Key Track"
+metadata/param = "Key Track"
+
+[node name="Loop" type="VBoxContainer" parent="Top" unique_id=2004572081]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Header" type="HBoxContainer" parent="Top/Loop" unique_id=918013908]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="Top/Loop/Header" unique_id=841668979]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Loop"
+
+[node name="Badge" type="PanelContainer" parent="Top/Loop/Header" unique_id=1757036410]
+visible = false
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Edits the focused sample (multisample mode)"
+theme_override_styles/panel = SubResource("StyleBoxFlat_3itj3")
+script = ExtResource("3_badge")
+text = "Sample"
+color = Color(0.95, 0.66, 0.3, 1)
+font_size = 8
+
+[node name="Body" type="HBoxContainer" parent="Top/Loop" unique_id=2132849410]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Stack" type="VBoxContainer" parent="Top/Loop/Body" unique_id=528768530]
+layout_mode = 2
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="LoopMode" type="HBoxContainer" parent="Top/Loop/Body/Stack" unique_id=801561263]
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("1_segment")
+font_size = 10
+items = PackedStringArray("Off", "On", "Ping-Pong")
+metadata/param = "Loop Mode"
+
+[node name="Knobs" type="HBoxContainer" parent="Top/Loop/Body" unique_id=557331805]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Crossfade" type="VBoxContainer" parent="Top/Loop/Body/Knobs" unique_id=1838767323]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Xfade"
+metadata/param = "Crossfade"
+
+[node name="Bottom" type="HBoxContainer" parent="." unique_id=1936692203]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 14
+
+[node name="Filter" type="VBoxContainer" parent="Bottom" unique_id=61412088]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Header" type="HBoxContainer" parent="Bottom/Filter" unique_id=1571500296]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="Bottom/Filter/Header" unique_id=2128852181]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Filter"
+
+[node name="Body" type="HBoxContainer" parent="Bottom/Filter" unique_id=647861094]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Stack" type="VBoxContainer" parent="Bottom/Filter/Body" unique_id=1840914950]
+layout_mode = 2
+
+[node name="FilterType" type="HBoxContainer" parent="Bottom/Filter/Body/Stack" unique_id=233247923]
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("1_segment")
+font_size = 10
+items = PackedStringArray("Off", "LP12", "LP24", "BP12", "BP24", "HP12", "HP24")
+metadata/param = "Filter Type"
+
+[node name="Knobs" type="HBoxContainer" parent="Bottom/Filter/Body/Stack" unique_id=553598845]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Cutoff" type="VBoxContainer" parent="Bottom/Filter/Body/Stack/Knobs" unique_id=1010445141]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Cutoff"
+metadata/param = "Cutoff"
+
+[node name="Resonance" type="VBoxContainer" parent="Bottom/Filter/Body/Stack/Knobs" unique_id=2032453026]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Res"
+metadata/param = "Resonance"
+
+[node name="FilterKeyTrack" type="VBoxContainer" parent="Bottom/Filter/Body/Stack/Knobs" unique_id=1849690279]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Key"
+metadata/param = "Filter Key Track"
+
+[node name="Amp" type="VBoxContainer" parent="Bottom" unique_id=1804312280]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Header" type="HBoxContainer" parent="Bottom/Amp" unique_id=1338984677]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="Bottom/Amp/Header" unique_id=1384013891]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Amp"
+
+[node name="Body" type="HBoxContainer" parent="Bottom/Amp" unique_id=504389718]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="EnvelopeControl" parent="Bottom/Amp/Body" unique_id=1107780981 instance=ExtResource("4_envelope")]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(110, 56)
+layout_mode = 2
+size_flags_vertical = 4
+
+[node name="Knobs" type="HBoxContainer" parent="Bottom/Amp/Body" unique_id=100898594]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Attack" type="VBoxContainer" parent="Bottom/Amp/Body/Knobs" unique_id=110277023]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "A"
+metadata/param = "Attack"
+
+[node name="Decay" type="VBoxContainer" parent="Bottom/Amp/Body/Knobs" unique_id=1203948571]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "D"
+metadata/param = "Decay"
+
+[node name="Sustain" type="VBoxContainer" parent="Bottom/Amp/Body/Knobs" unique_id=1774920365]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "S"
+metadata/param = "Sustain"
+
+[node name="Release" type="VBoxContainer" parent="Bottom/Amp/Body/Knobs" unique_id=392018457]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "R"
+metadata/param = "Release"
+
+[node name="Volume" type="VBoxContainer" parent="Bottom/Amp/Body/Knobs" unique_id=1648205937]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("2_knob")
+label_width = 40.0
+knob_size = Vector2(30, 30)
+text = "Vol"
+metadata/param = "Volume"

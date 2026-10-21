@@ -24,6 +24,7 @@ func run_tests() -> void:
 	_test_toggle(instance)
 	_test_window()
 	_test_live(instance)
+	await _test_bind_before_tree(instance)
 	# The views generated a Simple View layout for the Chord; don't leave it in the user's config.
 	var store: GDScript = load("res://devices/simple_view/SimpleLayoutStore.gd")
 	DirAccess.remove_absolute(store.path_for(instance.device.device_id))
@@ -56,7 +57,7 @@ func _make_instance() -> Object:
 
 
 func _view(instance: Object) -> Control:
-	var view: Control = load("res://devices/builtin/ChordDefaultView.tscn").instantiate()
+	var view: Control = load("res://devices/builtin/chord/ChordDefaultView.tscn").instantiate()
 	root.add_child(view)
 	view.bind_to_device(instance)
 	return view
@@ -91,7 +92,7 @@ func _test_toggle(instance: Object) -> void:
 
 
 func _test_window() -> void:
-	var kb = load("res://devices/builtin/ChordKeyboard.gd").new()
+	var kb = load("res://devices/builtin/chord/ChordKeyboard.gd").new()
 	kb.set_visible_octaves(3)
 	_assert(kb.visible_octaves == 3, "three octaves can be shown")
 	kb.set_visible_octaves(4)
@@ -124,3 +125,20 @@ func _test_live(instance: Object) -> void:
 	view.hide_view()
 	_assert(view._subscribed_path == "", "hiding unsubscribes")
 	view.queue_free()
+
+
+## Bound before it enters the tree (as the device lane does): the scene's keyboard and buttons
+## pick the device up on ready, and the header-tab getters are safe before then.
+func _test_bind_before_tree(instance: Object) -> void:
+	var view: Control = load("res://devices/builtin/chord/ChordDefaultView.tscn").instantiate()
+	view.bind_to_device(instance)
+	_assert(view.get_header_tabs().is_empty() and view.get_header_tab() == 0, "header tabs are safe before ready")
+	root.add_child(view)
+	await process_frame
+	var kb = view.keyboard
+	_assert(kb != null and not kb.enabled.is_empty() and kb.enabled.size() == view.enabled_intervals().size(), "bound before tree: the keyboard shows the enabled keys")
+	_assert(view.page_left_button.text == "‹" and view.zoom_in_button.tooltip_text == "Show more octaves", "buttons come from the scene")
+	view.zoom_in_button.pressed.emit()
+	_assert(kb.visible_octaves == 3 and view.zoom_in_button.disabled, "+ shows another octave and disables itself at the limit")
+	view.queue_free()
+	await process_frame

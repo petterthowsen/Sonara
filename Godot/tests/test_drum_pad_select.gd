@@ -61,7 +61,7 @@ func _setup(notes: Array) -> Dictionary:
 	var pads: Dictionary = {}
 	for n in notes:
 		pads[n] = _pad(ch, drum, n)
-	var view: Control = (load("res://devices/builtin/DrumMachineDefaultView.tscn") as PackedScene).instantiate()
+	var view: Control = (load("res://devices/builtin/drum_machine/DrumMachineDefaultView.tscn") as PackedScene).instantiate()
 	root.add_child(view)
 	view.bind_to_device(drum)
 	await process_frame

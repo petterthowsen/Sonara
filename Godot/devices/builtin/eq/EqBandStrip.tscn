@@ -1,0 +1,85 @@
+[gd_scene format=3 uid="uid://dyuo7p38mvyd"]
+
+[ext_resource type="Script" uid="uid://bq3eqstrip8m2" path="res://devices/builtin/eq/EqBandStrip.gd" id="1_strip"]
+[ext_resource type="Texture2D" uid="uid://duaiqymfq2h1x" path="res://assets/icons/volume-2.svg" id="2_solo"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="3_knob"]
+
+[node name="EqBandStrip" type="VBoxContainer" unique_id=968043170]
+offset_right = 70.0
+offset_bottom = 291.0
+size_flags_vertical = 3
+theme_override_constants/separation = 3
+script = ExtResource("1_strip")
+
+[node name="Header" type="HBoxContainer" parent="." unique_id=1037131465]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 2
+
+[node name="Toggle" type="CheckBox" parent="." unique_id=1461636882]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "1"
+alignment = 1
+icon_alignment = 1
+
+[node name="SoloButton" type="Button" parent="." unique_id=1792328214]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Listen to this band only"
+toggle_mode = true
+icon = ExtResource("2_solo")
+icon_alignment = 1
+
+[node name="Selects" type="HBoxContainer" parent="." unique_id=689759244]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+theme_override_constants/separation = 2
+
+[node name="TypeOption" type="OptionButton" parent="Selects" unique_id=1391770472]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SlopeOption" type="OptionButton" parent="Selects" unique_id=741876472]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Slope (dB/oct)"
+
+[node name="FreqKnob" type="VBoxContainer" parent="." unique_id=838674374]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 6
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+label_width = 80.0
+knob_size = Vector2(34, 34)
+text = "Freq"
+display_mode = 1
+
+[node name="GainKnob" type="VBoxContainer" parent="." unique_id=1698057676]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 6
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+label_width = 40.0
+knob_size = Vector2(34, 34)
+text = "Gain"
+display_mode = 1
+
+[node name="QKnob" type="VBoxContainer" parent="." unique_id=94443399]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 6
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+label_width = 40.0
+knob_size = Vector2(34, 34)
+text = "Q"
+display_mode = 1

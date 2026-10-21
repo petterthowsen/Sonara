@@ -118,12 +118,13 @@ func _test_note_and_cents() -> void:
 
 func _test_piano_toggle_and_cursor_readout() -> void:
 	var inst := _make_instance()
-	var view = load("res://devices/builtin/EqDefaultView.gd").new()
+	var view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	view.set_view_type(Device.ViewType.Window)
 	var saved := {}
 	view.load_config = func(_key: String) -> Variant: return {}
 	view.save_config = func(key: String, value: Variant) -> void: saved[key] = value
 	view.bind_to_device(inst)
+	root.add_child(view)  # bound before entering the tree, as the panel does
 	_assert(view._piano_button != null and view._piano_button.button_pressed and view.editor.show_piano, "the window view starts with the piano on and a toggle")
 	view._piano_button.toggled.emit(false)
 	_assert(not view.editor.show_piano and not view.editor.state.piano, "the toggle hides the piano strip")
@@ -139,27 +140,29 @@ func _test_piano_toggle_and_cursor_readout() -> void:
 	editor._gui_input(motion)
 	_assert(editor.cursor_readout_text() == "440 Hz  A3 +0¢", "the readout names the hovered frequency: %s" % editor.cursor_readout_text())
 	view.free()
-	var panel = load("res://devices/builtin/EqDefaultView.gd").new()
+	var panel = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	panel.load_config = func(_key: String) -> Variant: return {}
 	panel.save_config = func(_key: String, _value: Variant) -> void: pass
 	panel.bind_to_device(inst)
-	_assert(panel._piano_button == null and not panel.editor.show_cursor_readout and not panel.editor.show_piano, "the panel view has neither piano toggle nor cursor line")
+	root.add_child(panel)  # bound before entering the tree, as the panel does
+	_assert(not panel._piano_button.visible and not panel.editor.show_cursor_readout and not panel.editor.show_piano, "the panel view hides the piano toggle and has no cursor line")
 	panel.free()
 
 
 func _test_companion_slope_and_value_knobs() -> void:
 	var inst := _make_instance()
-	var companion = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	var companion = load("res://devices/builtin/eq/EqBandsCompanionView.tscn").instantiate()
 	companion.bind_to_device(inst)
+	root.add_child(companion)  # bound before entering the tree, as the panel does
 	# Band 1 is a Low Cut by default, band 2 a Bell.
-	_assert(not companion._items[0]["slope"].disabled, "a cut band offers its slope")
-	_assert(companion._items[1]["slope"].disabled, "a bell has no slope")
-	_assert(companion._items[0]["slope"].get_parent() == companion._items[0]["type"].get_parent(), "type and slope sit side by side")
-	companion._items[0]["slope"].item_selected.emit(3)
+	_assert(not companion._items[0].slope.disabled, "a cut band offers its slope")
+	_assert(companion._items[1].slope.disabled, "a bell has no slope")
+	_assert(companion._items[0].slope.get_parent() == companion._items[0].type.get_parent(), "type and slope sit side by side")
+	companion._items[0].slope.item_selected.emit(3)
 	_assert(int(_real(inst, 0, EqResponse.P_SLOPE)) == 3, "the slope box writes the band's slope")
-	_assert(companion._items[0]["slope"].selected == 3, "and shows it")
-	_assert(companion._items[0]["toggle"].get_parent() == companion._items[0]["solo"].get_parent(), "enabled and solo sit side by side")
-	var freq: LabeledKnob = companion._items[0]["freq"]
+	_assert(companion._items[0].slope.selected == 3, "and shows it")
+	_assert(companion._items[0].toggle.get_parent() == companion._items[0].solo.get_parent(), "enabled and solo sit side by side")
+	var freq: LabeledKnob = companion._items[0].freq
 	_assert(freq.display_mode == LabeledKnob.DisplayMode.VALUE and freq.value_label.visible and not freq.label.visible, "companion knobs show the value only")
 	_assert(freq.value_label.text != "" and freq.value_label.text.ends_with("Hz"), "the value text uses the freq format: %s" % freq.value_label.text)
 	companion.free()
@@ -332,19 +335,20 @@ func _test_view_persists_state() -> void:
 	var store := {}
 	var load_fn := func(key: String) -> Variant: return store.get(key, {})
 	var save_fn := func(key: String, value: Variant) -> void: store[key] = value
-	var view_script: GDScript = load("res://devices/builtin/EqDefaultView.gd")
 	var inst := _make_instance()
-	var view = view_script.new()
+	var view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	view.load_config = load_fn
 	view.save_config = save_fn
 	view.bind_to_device(inst)
+	root.add_child(view)  # bound before entering the tree, as the panel does
 	_assert(view.editor.state.analyser == EqViewState.Analyser.POST and view.editor.state.range_db == 12.0, "a new view starts with the default state")
 	view.editor.set_analyser_mode(EqViewState.Analyser.OFF)
 	view.editor.set_range_db(6.0)
 	_assert(store.has(EqViewState.CONFIG_KEY), "changing the state writes it to the config")
-	var reloaded = view_script.new()
+	var reloaded = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	reloaded.load_config = load_fn
 	reloaded.save_config = save_fn
+	root.add_child(reloaded)  # this one enters the tree first, then binds
 	reloaded.bind_to_device(_make_instance())
 	_assert(reloaded.editor.state.analyser == EqViewState.Analyser.OFF and reloaded.editor.state.range_db == 6.0, "a view created later picks the saved state up")
 	_assert(reloaded._analyser_option.selected == EqViewState.Analyser.OFF and reloaded._range_option.selected == 0, "and shows it in the toolbar")
@@ -379,19 +383,21 @@ func _test_selection_and_piano() -> void:
 	editor.show_piano = false
 	_assert(editor.plot_rect().size.y == editor.size.y and with_piano < editor.size.y, "hiding the piano gives its height to the plot")
 	editor.free()
-	var companion_view = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	var companion_view = load("res://devices/builtin/eq/EqBandsCompanionView.tscn").instantiate()
 	companion_view.bind_to_device(inst)
-	_assert(companion_view._items[0]["toggle"].button_pressed and not companion_view._items[2]["toggle"].button_pressed, "the companion view toggles show which bands are on")
-	companion_view._items[2]["toggle"].toggled.emit(true)
+	root.add_child(companion_view)  # bound before entering the tree, as the panel does
+	_assert(companion_view._items[0].toggle.button_pressed and not companion_view._items[2].toggle.button_pressed, "the companion view toggles show which bands are on")
+	companion_view._items[2].toggle.toggled.emit(true)
 	_assert(_real(inst, 2, EqResponse.P_ENABLED) >= 0.5, "a toggle enables its band")
-	companion_view._items[1]["q"].knob.value_changed.emit(2.0)
+	companion_view._items[1].q.knob.value_changed.emit(2.0)
 	_assert(absf(_real(inst, 1, EqResponse.P_Q) - 2.0) < 0.05, "a knob writes its band")
 	companion_view.free()
-	var window_view = load("res://devices/builtin/EqDefaultView.gd").new()
+	var window_view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	window_view.set_view_type(Device.ViewType.Window)
 	window_view.load_config = func(_key: String) -> Variant: return {}
 	window_view.save_config = func(_key: String, _value: Variant) -> void: pass
 	window_view.bind_to_device(inst)
+	root.add_child(window_view)  # bound before entering the tree, as the panel does
 	_assert(window_view.editor.show_piano, "the window view keeps the piano strip")
 	window_view.free()
 
@@ -399,11 +405,11 @@ func _test_selection_and_piano() -> void:
 func _test_hidden_view_stops_interaction() -> void:
 	var inst := _make_instance()
 	_enable(inst, 0, EqResponse.Type.BELL, 500.0, 3.0)
-	var view_script: GDScript = load("res://devices/builtin/EqDefaultView.gd")
-	var view = view_script.new()
+	var view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	view.load_config = func(_key: String) -> Variant: return {}
 	view.save_config = func(_key: String, _value: Variant) -> void: pass
 	view.bind_to_device(inst)
+	root.add_child(view)  # bound before entering the tree, as the panel does
 	view._on_view_shown()
 	var pos: Vector2 = view.editor.node_position(view.editor.bands[0])
 	view.editor.size = Vector2(640, 262)
@@ -424,11 +430,12 @@ func _test_display_menu_sends_analyser_options() -> void:
 		_assert(false, "AudioEngineOSC autoload is present")
 		return
 	var store := {}
-	var view_script: GDScript = load("res://devices/builtin/EqDefaultView.gd")
-	var view = view_script.new()
+	var view_script: GDScript = load("res://devices/builtin/eq/EqDefaultView.gd")
+	var view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	view.load_config = func(key: String) -> Variant: return store.get(key, {})
 	view.save_config = func(key: String, value: Variant) -> void: store[key] = value
 	view.bind_to_device(_make_instance())
+	root.add_child(view)  # bound before entering the tree, as the panel does
 	osc._pending_sends.clear()
 	view._on_view_shown()
 	var configures := func() -> Array:
@@ -521,8 +528,7 @@ func _test_draws_in_the_tree() -> void:
 	_enable(inst, 4, EqResponse.Type.NOTCH, 3000.0, 0.0)
 	_enable(inst, 5, EqResponse.Type.HIGH_SHELF, 6000.0, 8.0)
 	_enable(inst, 7, EqResponse.Type.HIGH_CUT, 14000.0, 0.0)
-	var view_script: GDScript = load("res://devices/builtin/EqDefaultView.gd")
-	var view = view_script.new()
+	var view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	view.load_config = func(_key: String) -> Variant: return {}
 	view.save_config = func(_key: String, _value: Variant) -> void: pass
 	view.size = Vector2(700, 300)
@@ -565,10 +571,11 @@ func _test_draws_in_the_tree() -> void:
 
 ## A panel view bound to `inst` with the config stubs the other view tests use.
 func _make_panel_view(inst: Object) -> Object:
-	var view = load("res://devices/builtin/EqDefaultView.gd").new()
+	var view = load("res://devices/builtin/eq/EqDefaultView.tscn").instantiate()
 	view.load_config = func(_key: String) -> Variant: return {}
 	view.save_config = func(_key: String, _value: Variant) -> void: pass
 	view.bind_to_device(inst)
+	root.add_child(view)  # bound before entering the tree, as the panel does
 	return view
 
 
@@ -650,29 +657,30 @@ func _test_companion_solo_and_type() -> void:
 	var inst := _make_instance()
 	_enable(inst, 3, EqResponse.Type.BELL, 520.0, 2.0)
 	_enable(inst, 5, EqResponse.Type.BELL, 2500.0, 1.0)
-	var companion = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	var companion = load("res://devices/builtin/eq/EqBandsCompanionView.tscn").instantiate()
 	companion.bind_to_device(inst)
+	root.add_child(companion)  # bound before entering the tree, as the panel does
 	# Per-band solo writes n+1; pressing the active one again goes back to Off.
-	companion._items[3]["solo"].toggled.emit(true)
+	companion._items[3].solo.toggled.emit(true)
 	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 4, "band 4's solo button writes LISTEN_BAND 4")
-	_assert(companion._items[3]["solo"].button_pressed, "and its own state shows it")
-	companion._items[5]["solo"].toggled.emit(true)
+	_assert(companion._items[3].solo.button_pressed, "and its own state shows it")
+	companion._items[5].solo.toggled.emit(true)
 	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 6, "soloing another band moves the listen band")
-	companion._items[5]["solo"].toggled.emit(false)
+	companion._items[5].solo.toggled.emit(false)
 	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 0, "pressing it again goes back to Off")
 	# LISTEN_BAND is one device-level parameter: every strip's solo refreshes together.
 	inst.set_parameter_real(EqResponse.LISTEN_BAND, 4.0)
 	companion._on_device_parameter_changed(EqResponse.LISTEN_BAND, 4.0)
-	_assert(companion._items[3]["solo"].button_pressed and not companion._items[5]["solo"].button_pressed and not companion._items[0]["solo"].button_pressed, "a LISTEN_BAND change updates every strip's solo state")
+	_assert(companion._items[3].solo.button_pressed and not companion._items[5].solo.button_pressed and not companion._items[0].solo.button_pressed, "a LISTEN_BAND change updates every strip's solo state")
 	# The type dropdown writes the band's P_TYPE.
-	companion._items[5]["type"].item_selected.emit(EqResponse.Type.NOTCH)
+	companion._items[5].type.item_selected.emit(EqResponse.Type.NOTCH)
 	_assert(int(_real(inst, 5, EqResponse.P_TYPE)) == EqResponse.Type.NOTCH, "band 6's type dropdown writes its P_TYPE")
-	_assert(companion._items[5]["type"].get_item_tooltip(companion._items[5]["type"].selected) == "Notch", "the item carries the type name as a tooltip")
+	_assert(companion._items[5].type.get_item_tooltip(companion._items[5].type.selected) == "Notch", "the item carries the type name as a tooltip")
 	# And follows the device when the type changes from elsewhere.
 	inst.set_parameter_real(5 * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(EqResponse.Type.TILT))
 	companion._on_device_parameter_changed(5 * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(EqResponse.Type.TILT))
-	_assert(companion._items[5]["type"].selected == EqResponse.Type.TILT, "the dropdown's selection follows the device")
-	var icon: Texture2D = companion._items[5]["type"].get_item_icon(EqResponse.Type.TILT)
+	_assert(companion._items[5].type.selected == EqResponse.Type.TILT, "the dropdown's selection follows the device")
+	var icon: Texture2D = companion._items[5].type.get_item_icon(EqResponse.Type.TILT)
 	_assert(icon != null and icon.get_size().x > 0, "and its item icon is the band-coloured curve")
 	companion.free()
 
@@ -680,18 +688,18 @@ func _test_companion_solo_and_type() -> void:
 ## Regression (#133): the header (enabled toggle, solo) was built but never added to the strip.
 func _test_companion_strips_show_toggle_and_solo() -> void:
 	var inst := _make_instance()
-	var companion = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	var companion = load("res://devices/builtin/eq/EqBandsCompanionView.tscn").instantiate()
 	root.add_child(companion)  # minimum sizes are only computed in the tree
 	companion.bind_to_device(inst)
 	for band in EqResponse.BAND_COUNT:
-		var item: Dictionary = companion._items[band]
+		var item: Control = companion._items[band]
 		for key in ["toggle", "solo"]:
-			var control: Control = item[key]
-			_assert(item["box"].is_ancestor_of(control), "band %d's %s is inside its strip" % [band + 1, key])
+			var control: Control = item.get(key)
+			_assert(item.is_ancestor_of(control), "band %d's %s is inside its strip" % [band + 1, key])
 			_assert(control.visible and control.get_combined_minimum_size().x > 0 and control.get_combined_minimum_size().y > 0, "band %d's %s has a size" % [band + 1, key])
 	_assert(companion.get_combined_minimum_size().x > 0, "the companion asks for width")
 	# Solo goes through ParameterActions like the other controls.
-	companion._items[2]["solo"].toggled.emit(true)
+	companion._items[2].solo.toggled.emit(true)
 	_assert(int(inst.get_parameter_real(EqResponse.LISTEN_BAND)) == 3, "solo still writes LISTEN_BAND")
 	companion.free()
 

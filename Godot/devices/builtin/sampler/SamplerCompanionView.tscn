@@ -1,0 +1,23 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" uid="uid://qb4ghav5fn1h" path="res://devices/builtin/sampler/SamplerDefaultView.gd" id="1_pimo6"]
+[ext_resource type="PackedScene" path="res://devices/builtin/sampler/ZoneStrip.tscn" id="2_strip"]
+[ext_resource type="PackedScene" uid="uid://c7k2napq4vxsa" path="res://devices/builtin/sampler/SamplerControls.tscn" id="3_controls"]
+
+[node name="SamplerCompanionView" type="VBoxContainer" unique_id=1302749165]
+custom_minimum_size = Vector2(440, 150)
+offset_right = 440.0
+offset_bottom = 150.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+script = ExtResource("1_pimo6")
+
+[node name="ZoneStrip" parent="." unique_id=2093847561 instance=ExtResource("2_strip")]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="Controls" parent="." unique_id=459102836 instance=ExtResource("3_controls")]
+unique_name_in_owner = true
+layout_mode = 2

@@ -3,7 +3,7 @@
 # Run: godot --headless --path Godot -s tests/test_step_sequencer_view.gd -- --test
 extends TestBase
 
-const VIEW_SCRIPT := "res://devices/builtin/StepSequencerDefaultView.gd"
+const VIEW_SCRIPT := "res://devices/builtin/step_sequencer/StepSequencerDefaultView.gd"
 const DEVICE_ID := "sonara.builtin.step_sequencer"
 
 var _device_script: GDScript
@@ -29,6 +29,7 @@ func run_tests() -> void:
 	_test_layout_and_sync(instance)
 	_test_live(instance)
 	_test_pitch_range(instance)
+	await _test_bind_before_tree(instance)
 
 
 func _param(id: int, name: String, type := "float", lo := 0.0, hi := 1.0, default_v := 0.0, values: Array = []) -> Object:
@@ -86,7 +87,7 @@ func _test_factory(instance: Object) -> void:
 
 
 func _bound_view(instance: Object) -> Object:
-	var view: Control = load("res://devices/builtin/StepSequencerDefaultView.tscn").instantiate()
+	var view: Control = load("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn").instantiate()
 	root.add_child(view)
 	view.bind_to_device(instance)
 	return view
@@ -145,7 +146,7 @@ func _test_layout_and_sync(instance: Object) -> void:
 
 func _test_pitch_range(instance: Object) -> void:
 	var store := {}
-	var view: Control = load("res://devices/builtin/StepSequencerDefaultView.tscn").instantiate()
+	var view: Control = load("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn").instantiate()
 	view.load_config = func(key: String) -> Variant: return store.get(key, 24)
 	view.save_config = func(key: String, value: Variant) -> void: store[key] = value
 	root.add_child(view)
@@ -156,7 +157,7 @@ func _test_pitch_range(instance: Object) -> void:
 	_assert(store.get(view.RANGE_CONFIG_KEY) == 12, "the choice is saved to the app config")
 	_assert(is_equal_approx(instance.get_parameter(101).min_value, -24.0), "the parameter range is untouched")
 	view.queue_free()
-	var again: Control = load("res://devices/builtin/StepSequencerDefaultView.tscn").instantiate()
+	var again: Control = load("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn").instantiate()
 	again.load_config = func(key: String) -> Variant: return store.get(key, 24)
 	again.save_config = func(_k: String, _v: Variant) -> void: pass
 	root.add_child(again)
@@ -203,3 +204,32 @@ func _blob(step: int, fired: int, elapsed: int, next_in: int) -> PackedByteArray
 		b.append(v & 0xFF)
 		b.append((v >> 8) & 0xFF)
 	return b
+
+
+## Bound before it enters the tree (the panel's order): the scene's controls pick the device up
+## in `_ready`. Unbound (the editor preview) the scene still builds.
+func _test_bind_before_tree(instance: Object) -> void:
+	var preview: Control = load("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn").instantiate()
+	root.add_child(preview)
+	await process_frame
+	_assert(preview.on_lane.mode == StepLane.Mode.TOGGLES and preview.pitch_lane.mode == StepLane.Mode.BARS,
+			"the scene sets the lane modes")
+	_assert(preview.rate_option.item_count == 0, "unbound: Rate has no items")
+	preview.queue_free()
+	instance.set_parameter_real(0, 5.0)
+	instance.set_parameter_real(101 + 10 * 4, 7.0)
+	var view: Control = load("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn").instantiate()
+	view.load_config = func(_key: String) -> Variant: return 24
+	view.save_config = func(_k: String, _v: Variant) -> void: pass
+	view.bind_to_device(instance)
+	root.add_child(view)
+	await process_frame
+	_assert(view.rate_option.item_count == 4, "bound before the tree: Rate lists the enum values")
+	_assert(is_equal_approx(view.length_slider.value, 5.0) and view.number_row.length == 5, "bound before the tree: Length shows")
+	_assert(is_equal_approx(view.pitch_lane.get_value_at(4), 7.0), "bound before the tree: the Pitch lane shows step 5")
+	view.gate_slider.value_changed.emit(120.0)
+	_assert(is_equal_approx(instance.get_parameter_real(11), 120.0), "a Gate drag writes the parameter")
+	view.mode_control.selected_changed.emit(1)
+	_assert(is_equal_approx(instance.get_parameter_real(1), 1.0), "the Mode control writes the parameter")
+	view.queue_free()
+	await process_frame

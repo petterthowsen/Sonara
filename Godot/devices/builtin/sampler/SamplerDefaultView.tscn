@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://17un123jilyn"]
+
+[ext_resource type="Script" uid="uid://qb4ghav5fn1h" path="res://devices/builtin/sampler/SamplerDefaultView.gd" id="1_pimo6"]
+[ext_resource type="Script" uid="uid://dhd1oiv11b6g5" path="res://devices/builtin/sampler/SampleDisplay.gd" id="2_display"]
+[ext_resource type="PackedScene" uid="uid://c7k2napq4vxsa" path="res://devices/builtin/sampler/SamplerControls.tscn" id="3_controls"]
+
+[node name="SamplerDefaultView" type="VBoxContainer" unique_id=1044416401]
+custom_minimum_size = Vector2(440, 180)
+offset_right = 626.0
+offset_bottom = 180.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+script = ExtResource("1_pimo6")
+
+[node name="SampleDisplay" type="Control" parent="." unique_id=1618273940]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("2_display")
+
+[node name="Controls" parent="." unique_id=874015263 instance=ExtResource("3_controls")]
+unique_name_in_owner = true
+layout_mode = 2

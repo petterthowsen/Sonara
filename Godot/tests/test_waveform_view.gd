@@ -32,9 +32,9 @@ func run_tests() -> void:
 	_grid_helper_script = load("res://components/GridHelper.gd")
 	var view_script: GDScript = load("res://support/waveform/WaveformView.gd")
 	_assert(view_script != null and view_script.can_instantiate(), "WaveformView compiles")
-	var sampler_script: GDScript = load("res://devices/builtin/SamplerDefaultView.gd")
+	var sampler_script: GDScript = load("res://devices/builtin/sampler/SamplerDefaultView.gd")
 	_assert(sampler_script != null and sampler_script.can_instantiate(), "SamplerDefaultView compiles")
-	_assert(load("res://devices/builtin/SamplerDefaultView.tscn").instantiate() != null, "Sampler scene instantiates")
+	_assert(load("res://devices/builtin/sampler/SamplerDefaultView.tscn").instantiate() != null, "Sampler scene instantiates")
 
 	var data := _make_data()
 	_test_settings_to_uniforms(view_script)

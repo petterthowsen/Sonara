@@ -1,6 +1,6 @@
 extends TestBase
 
-const Playhead := preload("res://devices/builtin/StepPlayhead.gd")
+const Playhead := preload("res://devices/builtin/step_sequencer/StepPlayhead.gd")
 ## StepPlayhead with a fake clock (spec 039 REQ-016, REQ-017).
 
 

@@ -1,0 +1,270 @@
+[gd_scene format=3 uid="uid://b7satvw3k2xqd"]
+
+[ext_resource type="Script" uid="uid://be8uwghpbu3s4" path="res://devices/builtin/saturator/SaturatorDefaultView.gd" id="1_view"]
+[ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="2_segmented"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="3_knob"]
+[ext_resource type="Script" uid="uid://8lwhmcwav52r" path="res://devices/builtin/saturator/SaturatorCurve.gd" id="4_curve"]
+[ext_resource type="Script" uid="uid://3fglhr4dpof8" path="res://components/Fader.gd" id="5_fader"]
+
+[node name="SaturatorDefaultView" type="Control" unique_id=1695244659]
+custom_minimum_size = Vector2(720, 250)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 720.0
+offset_bottom = 250.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_view")
+
+[node name="MainPage" type="VBoxContainer" parent="." unique_id=924527626]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="Top" type="HBoxContainer" parent="MainPage" unique_id=2143847044]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="TypeControl" type="HBoxContainer" parent="MainPage/Top" unique_id=1988388641]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("2_segmented")
+font_size = 10
+items = PackedStringArray("Soft", "Tube", "Tape", "Hard")
+metadata/param = "Type"
+
+[node name="QualityControl" type="HBoxContainer" parent="MainPage/Top" unique_id=769484972]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("2_segmented")
+font_size = 10
+items = PackedStringArray("1x", "2x", "4x")
+metadata/param = "Quality"
+
+[node name="Spacer" type="Control" parent="MainPage/Top" unique_id=528899806]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="AutoGain" type="CheckBox" parent="MainPage/Top" unique_id=1677316008]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Auto Gain"
+metadata/param = "Auto Gain"
+
+[node name="Middle" type="HBoxContainer" parent="MainPage" unique_id=1024684773]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="DriveKnobs" type="HBoxContainer" parent="MainPage/Middle" unique_id=1860805260]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Drive" type="VBoxContainer" parent="MainPage/Middle/DriveKnobs" unique_id=101414405]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Drive"
+metadata/param = "Drive"
+
+[node name="Bias" type="VBoxContainer" parent="MainPage/Middle/DriveKnobs" unique_id=327350477]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Bias"
+metadata/param = "Bias"
+
+[node name="Dynamics" type="VBoxContainer" parent="MainPage/Middle/DriveKnobs" unique_id=649513191]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Dyn"
+metadata/param = "Dynamics"
+
+[node name="Input" type="VBoxContainer" parent="MainPage/Middle/DriveKnobs" unique_id=1911495920]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "In"
+metadata/param = "Input"
+
+[node name="Curve" type="Control" parent="MainPage/Middle" unique_id=855229312]
+unique_name_in_owner = true
+clip_contents = true
+custom_minimum_size = Vector2(240, 130)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("4_curve")
+
+[node name="Faders" type="HBoxContainer" parent="MainPage/Middle" unique_id=819684767]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="MixColumn" type="VBoxContainer" parent="MainPage/Middle/Faders" unique_id=1339905225]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Middle/Faders/MixColumn" unique_id=1064785252]
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "MIX"
+horizontal_alignment = 1
+
+[node name="MixFader" type="Control" parent="MainPage/Middle/Faders/MixColumn" unique_id=769384669]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(36, 70)
+layout_mode = 2
+size_flags_vertical = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("5_fader")
+max_value = 100.0
+value = 100.0
+value_default = 100.0
+metadata/param = "Mix"
+
+[node name="MixValue" type="Label" parent="MainPage/Middle/Faders/MixColumn" unique_id=1062132997]
+unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+horizontal_alignment = 1
+
+[node name="OutputColumn" type="VBoxContainer" parent="MainPage/Middle/Faders" unique_id=1095105182]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Middle/Faders/OutputColumn" unique_id=398526997]
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "OUT"
+horizontal_alignment = 1
+
+[node name="OutputFader" type="Control" parent="MainPage/Middle/Faders/OutputColumn" unique_id=599310981]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(36, 70)
+layout_mode = 2
+size_flags_vertical = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("5_fader")
+min_value = -24.0
+max_value = 24.0
+metadata/param = "Output"
+
+[node name="OutputValue" type="Label" parent="MainPage/Middle/Faders/OutputColumn" unique_id=245810897]
+unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+horizontal_alignment = 1
+
+[node name="Bottom" type="HBoxContainer" parent="MainPage" unique_id=1002964059]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ToneGroup" type="VBoxContainer" parent="MainPage/Bottom" unique_id=853447011]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Title" type="Label" parent="MainPage/Bottom/ToneGroup" unique_id=1111115905]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Tone"
+
+[node name="Knobs" type="HBoxContainer" parent="MainPage/Bottom/ToneGroup" unique_id=1979598395]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LowCut" type="VBoxContainer" parent="MainPage/Bottom/ToneGroup/Knobs" unique_id=282111355]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Low Cut"
+metadata/param = "Low Cut"
+
+[node name="HighCut" type="VBoxContainer" parent="MainPage/Bottom/ToneGroup/Knobs" unique_id=1585018404]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "High Cut"
+metadata/param = "High Cut"
+
+[node name="Tone" type="VBoxContainer" parent="MainPage/Bottom/ToneGroup/Knobs" unique_id=2088932266]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Tone"
+metadata/param = "Tone"
+
+[node name="TapeGroup" type="VBoxContainer" parent="MainPage/Bottom" unique_id=1387325237]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Title" type="Label" parent="MainPage/Bottom/TapeGroup" unique_id=1328955655]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Tape"
+
+[node name="Knobs" type="HBoxContainer" parent="MainPage/Bottom/TapeGroup" unique_id=633939831]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="HFLoss" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=806992017]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "HF Loss"
+metadata/param = "HF Loss"
+
+[node name="HeadBump" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=495674250]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Bump"
+metadata/param = "Head Bump"
+
+[node name="Squash" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=1324171543]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Squash"
+metadata/param = "Squash"
+
+[node name="Wow" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=1363696071]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Wow"
+metadata/param = "Wow"
+
+[node name="Noise" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=990399799]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Noise"
+metadata/param = "Noise"

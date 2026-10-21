@@ -108,7 +108,7 @@ func _test_view_in_the_tree() -> void:
 	for _i in 4:
 		await process_frame
 	var views: Array = []
-	_find_nodes_of_script(panel, "res://devices/builtin/ArpeggiatorDefaultView.gd", views)
+	_find_nodes_of_script(panel, "res://devices/builtin/arpeggiator/ArpeggiatorDefaultView.gd", views)
 	_assert(views.size() == 1, "the panel uses the Arpeggiator view")
 	var controls: Array = []
 	_find_controls(panel, controls)

@@ -1,0 +1,117 @@
+[gd_scene format=3 uid="uid://b1utrh3ien4jo"]
+
+[ext_resource type="Script" uid="uid://bwksspi81lg40" path="res://devices/builtin/multiband/MultibandDefaultView.gd" id="1_view"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="2_knob"]
+[ext_resource type="Script" uid="uid://dfijpn73n67v0" path="res://devices/builtin/multiband/MultibandStrip.gd" id="3_strip"]
+
+[node name="MultibandDefaultView" type="Control" unique_id=979750656]
+custom_minimum_size = Vector2(380, 200)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 380.0
+offset_bottom = 200.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_view")
+
+[node name="Root" type="VBoxContainer" parent="." unique_id=987772975]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="Top" type="HBoxContainer" parent="Root" unique_id=1790240012]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Band1" type="Button" parent="Root/Top" unique_id=1493764136]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "1"
+
+[node name="Band2" type="Button" parent="Root/Top" unique_id=953372562]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "2"
+
+[node name="Band3" type="Button" parent="Root/Top" unique_id=1644291210]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "3"
+
+[node name="Band4" type="Button" parent="Root/Top" unique_id=210898523]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "4"
+
+[node name="Band5" type="Button" parent="Root/Top" unique_id=1258353771]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "5"
+
+[node name="Band6" type="Button" parent="Root/Top" unique_id=1206173811]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "6"
+
+[node name="Spacer" type="Control" parent="Root/Top" unique_id=855468786]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="MixKnob" type="VBoxContainer" parent="Root/Top" unique_id=2107112803]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 30.0
+knob_size = Vector2(30, 30)
+text = "Mix"
+
+[node name="OutKnob" type="VBoxContainer" parent="Root/Top" unique_id=241561703]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 30.0
+knob_size = Vector2(30, 30)
+text = "Out"
+
+[node name="Strip" type="Control" parent="Root" unique_id=1803090255]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 72)
+layout_mode = 2
+size_flags_horizontal = 3
+script = ExtResource("3_strip")
+
+[node name="Scroll" type="ScrollContainer" parent="Root" unique_id=1416117660]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="RowsBox" type="VBoxContainer" parent="Root/Scroll" unique_id=578840017]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="Confirm" type="ConfirmationDialog" parent="." unique_id=1169001747]
+unique_name_in_owner = true

@@ -1,0 +1,59 @@
+[gd_scene format=3 uid="uid://dame1p2m3yjre"]
+
+[ext_resource type="Script" uid="uid://c4mbrow7x2q1k" path="res://devices/builtin/multiband/MultibandBandRow.gd" id="1_row"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="2_knob"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_row"]
+content_margin_left = 8.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0.12, 0.12, 0.12, 0.6)
+border_width_left = 4
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[node name="MultibandBandRow" type="PanelContainer" unique_id=1916994872]
+custom_minimum_size = Vector2(0, 30)
+theme_override_styles/panel = SubResource("StyleBoxFlat_row")
+script = ExtResource("1_row")
+
+[node name="Box" type="HBoxContainer" parent="." unique_id=1088685980]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="NameLabel" type="Label" parent="Box" unique_id=176628358]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 1
+text = "Band"
+
+[node name="MuteButton" type="Button" parent="Box" unique_id=16728811]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 22)
+layout_mode = 2
+tooltip_text = "Mute"
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+toggle_mode = true
+text = "M"
+
+[node name="SoloButton" type="Button" parent="Box" unique_id=1517898307]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 22)
+layout_mode = 2
+tooltip_text = "Solo"
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+toggle_mode = true
+text = "S"
+
+[node name="GainKnob" type="Control" parent="Box" unique_id=2132175725]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+tooltip_text = "Band gain"
+script = ExtResource("2_knob")

@@ -1,0 +1,51 @@
+[gd_scene format=3 uid="uid://drvull75p327n"]
+
+[ext_resource type="Script" uid="uid://btvk585a1oian" path="res://devices/builtin/chain/ChainDefaultView.gd" id="1_3lmch"]
+[ext_resource type="Script" uid="uid://vtc0k8s63n4t" path="res://components/DeviceSlotButton.gd" id="2_slot"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="3_knob"]
+
+[node name="ChainDefaultView" type="Control" unique_id=1630215478]
+custom_minimum_size = Vector2(168, 200)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 168.0
+offset_bottom = 200.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_3lmch")
+
+[node name="Box" type="VBoxContainer" parent="." unique_id=1903726154]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 24
+alignment = 1
+
+[node name="SlotButton" type="Control" parent="Box" unique_id=597382016]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 80)
+layout_mode = 2
+size_flags_horizontal = 4
+script = ExtResource("2_slot")
+
+[node name="Knobs" type="HBoxContainer" parent="Box" unique_id=1284470973]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="MixKnob" type="VBoxContainer" parent="Box/Knobs" unique_id=844120639]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(44, 44)
+text = "MIX"
+
+[node name="VolumeKnob" type="VBoxContainer" parent="Box/Knobs" unique_id=372915540]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(44, 44)
+text = "VOL"

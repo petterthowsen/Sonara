@@ -1,5 +1,5 @@
 # Saturator panel view: the `"curve"` record decodes the frozen layout (header + 128 curve
-# points + 16 harmonics), the curve control draws from a hand-built record, the code-built view
+# points + 16 harmonics), the curve control draws from a hand-built record, the scene-built view
 # wires Type/Quality/Auto Gain/knobs/faders, the tape group dims for non-Tape types, and the
 # view subscribes to `"curve"` while shown and unsubscribes when hidden.
 # Run: godot --headless --path Godot -s tests/test_saturator_view.gd -- --test
@@ -24,6 +24,7 @@ func run_tests() -> void:
 	_test_curve_draws()
 	_test_curve_clears()
 	await _test_view_in_the_tree()
+	await _test_bind_after_tree()
 
 
 ## The engine's 17 parameters (ids, ranges and defaults from design.md's table).
@@ -163,7 +164,7 @@ func unsubscribe_device_data(osc_path: String, data_type: String) -> void:
 func _test_view_in_the_tree() -> void:
 	var osc := _fake_osc()
 	var inst := _make_instance()
-	var view = load("res://devices/builtin/SaturatorDefaultView.tscn").instantiate()
+	var view = load("res://devices/builtin/saturator/SaturatorDefaultView.tscn").instantiate()
 	view.load_osc = func(_name: String): return osc
 	view.size = Vector2(760, 250)
 	view.bind_to_device(inst)
@@ -228,3 +229,25 @@ func _test_view_in_the_tree() -> void:
 	view.queue_free()
 	await process_frame
 	osc.free()
+
+
+## The editor-preview case (no device) and a device bound after the view entered the tree.
+func _test_bind_after_tree() -> void:
+	var view = load("res://devices/builtin/saturator/SaturatorDefaultView.tscn").instantiate()
+	view.load_osc = func(_name: String): return null
+	root.add_child(view)
+	await process_frame
+	_assert(view._knobs.size() == 12, "the scene tags 12 knobs with their parameter (%d)" % view._knobs.size())
+	_assert(view.curve != null and not view.curve.has_record(), "unbound: the curve is empty")
+	var inst := _make_instance()
+	inst.set_parameter_real(SaturatorData.P_DRIVE, 18.0)
+	inst.set_parameter_real(SaturatorData.P_TYPE, 2.0)
+	view.bind_to_device(inst)
+	_assert(is_equal_approx(view._knobs["Drive"].knob.value, 18.0), "binding after ready shows Drive")
+	_assert(view.type_control.selected == 2, "binding after ready shows Type")
+	_assert(is_equal_approx(view.tape_row.modulate.a, 1.0), "binding after ready un-dims the tape row for Tape")
+	_assert(view.curve.has_record(), "binding after ready draws the fallback curve")
+	view._knobs["Noise"].knob.value = -60.0
+	_assert(is_equal_approx(inst.get_parameter_real(SaturatorData.P_NOISE), -60.0), "a tape knob writes its parameter")
+	view.queue_free()
+	await process_frame

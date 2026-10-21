@@ -1,0 +1,76 @@
+[gd_scene format=3 uid="uid://yiy7flelkycd"]
+
+[ext_resource type="Script" uid="uid://cjpb6aylscwq8" path="res://devices/builtin/chord/ChordDefaultView.gd" id="1_chord"]
+[ext_resource type="Script" uid="uid://kmwpsubpnf0l" path="res://devices/builtin/chord/ChordKeyboard.gd" id="2_keyboard"]
+[ext_resource type="PackedScene" uid="uid://w8crf2ud3vhf" path="res://devices/simple_view/SimpleView.tscn" id="3_simple"]
+
+[node name="ChordView" type="Control" unique_id=192861768]
+custom_minimum_size = Vector2(200, 100)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_chord")
+
+[node name="Box" type="VBoxContainer" parent="." unique_id=1131333644]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="Bar" type="HBoxContainer" parent="Box" unique_id=822725570]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="PageLeftButton" type="Button" parent="Box/Bar" unique_id=1400024833]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Show lower octaves"
+text = "‹"
+
+[node name="Keyboard" type="Control" parent="Box/Bar" unique_id=1473579865]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 44)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 0
+mouse_default_cursor_shape = 2
+script = ExtResource("2_keyboard")
+
+[node name="PageRightButton" type="Button" parent="Box/Bar" unique_id=6937622]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Show higher octaves"
+text = "›"
+
+[node name="ZoomOutButton" type="Button" parent="Box/Bar" unique_id=1882317803]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Show fewer octaves"
+text = "−"
+
+[node name="ZoomInButton" type="Button" parent="Box/Bar" unique_id=478110046]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Show more octaves"
+text = "+"
+
+[node name="Simple" parent="Box" unique_id=983605193 instance=ExtResource("3_simple")]
+unique_name_in_owner = true
+layout_mode = 2

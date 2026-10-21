@@ -19,7 +19,7 @@ func suite_name() -> String:
 
 func run_tests() -> void:
 	Multiband = load("res://data/Multiband.gd")
-	_strip_script = load("res://devices/builtin/MultibandStrip.gd")
+	_strip_script = load("res://devices/builtin/multiband/MultibandStrip.gd")
 	_project_script = load("res://data/Project.gd")
 	_device_script = load("res://data/Device.gd")
 	_instance_script = load("res://data/DeviceInstance.gd")
@@ -98,7 +98,7 @@ func _test_slot_keys_only_active() -> void:
 
 func _test_view() -> void:
 	var mb: Object = _multiband()
-	var view: Object = load("res://devices/builtin/MultibandDefaultView.tscn").instantiate()
+	var view: Object = load("res://devices/builtin/multiband/MultibandDefaultView.tscn").instantiate()
 	root.add_child(view)
 	view.bind_to_device(mb)
 	await root.get_tree().process_frame
@@ -115,6 +115,14 @@ func _test_view() -> void:
 	_assert(Multiband.active_positions(mb).size() == 2, "two bands remain, the third disable is refused")
 	_assert(view._toggles[Multiband.active_positions(mb)[0] - 1].disabled, "the last two toggles are locked on")
 	view.queue_free()
+
+	# The panel binds views before they enter the tree.
+	var early: Object = load("res://devices/builtin/multiband/MultibandDefaultView.tscn").instantiate()
+	early.bind_to_device(_multiband())
+	root.add_child(early)
+	_assert(early._rows.size() == 3, "a view bound before entering the tree builds its rows on ready")
+	_assert(early._rows[0].name_label.text != "" and early._mix_knob.knob.max_value == 100.0, "rows and knobs are configured")
+	early.queue_free()
 
 
 func _test_strip_clamps_edges() -> void:
@@ -162,7 +170,7 @@ func _test_spectrum_behind_bands() -> void:
 	_assert(line[points - 1].y < line[0].y, "a louder point sits higher")
 	_assert(_strip_script.spectrum_points(PackedFloat32Array([-10.0]), 20.0, 20000.0, 600.0, 58.0).is_empty(), "a single point draws nothing")
 	var mb: Object = _multiband()
-	var view: Object = load("res://devices/builtin/MultibandDefaultView.tscn").instantiate()
+	var view: Object = load("res://devices/builtin/multiband/MultibandDefaultView.tscn").instantiate()
 	root.add_child(view)
 	view.bind_to_device(mb)
 	await root.get_tree().process_frame

@@ -313,7 +313,7 @@ func _test_view_in_the_tree() -> void:
 	inst.set_parameter_real(CompressorData.P_STYLE, 2.0)
 	inst.set_parameter_real(CompressorData.P_SC_LOW_CUT, 120.0)
 	var saved := {}
-	var view = load("res://devices/builtin/CompressorDefaultView.tscn").instantiate()
+	var view = load("res://devices/builtin/compressor/CompressorDefaultView.tscn").instantiate()
 	view.load_config = func(_key: String) -> Variant: return saved
 	view.save_config = func(_key: String, value: Variant) -> void: saved.merge(value, true)
 	view.size = Vector2(780, 250)

@@ -1,0 +1,38 @@
+[gd_scene format=3 uid="uid://b2lmmsau7g0sv"]
+
+[ext_resource type="Script" uid="uid://0ck4fh1e1i00" path="res://devices/builtin/arpeggiator/ArpeggiatorDefaultView.gd" id="1_7u8el"]
+[ext_resource type="Script" uid="uid://hv1nt055xgp4" path="res://devices/builtin/NoteStrip.gd" id="2_2k64o"]
+[ext_resource type="PackedScene" uid="uid://w8crf2ud3vhf" path="res://devices/simple_view/SimpleView.tscn" id="3_uqt40"]
+
+[node name="ArpeggiatorView" type="Control" unique_id=730283044]
+custom_minimum_size = Vector2(200, 100)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_7u8el")
+
+[node name="Box" type="VBoxContainer" parent="." unique_id=1508393969]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="Strip" type="Control" parent="Box" unique_id=401146217]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 22)
+layout_mode = 2
+size_flags_horizontal = 3
+script = ExtResource("2_2k64o")
+
+[node name="Simple" parent="Box" unique_id=895398286 instance=ExtResource("3_uqt40")]
+unique_name_in_owner = true
+layout_mode = 2

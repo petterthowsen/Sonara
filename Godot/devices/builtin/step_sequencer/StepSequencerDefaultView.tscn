@@ -1,0 +1,236 @@
+[gd_scene format=3 uid="uid://ctaq2stepview"]
+
+[ext_resource type="Script" uid="uid://c4did6fecvrg7" path="res://devices/builtin/step_sequencer/StepSequencerDefaultView.gd" id="1_seq"]
+[ext_resource type="Script" uid="uid://cg5slchi6vuah" path="res://components/CompactHSlider.gd" id="2_slider"]
+[ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="3_segmented"]
+[ext_resource type="Script" uid="uid://bq7stepnumr4w" path="res://devices/builtin/step_sequencer/StepNumberRow.gd" id="4_numbers"]
+[ext_resource type="Script" uid="uid://don1g0qpftim" path="res://components/StepLane.gd" id="5_lane"]
+
+[node name="StepSequencerView" type="Control" unique_id=1096718409]
+custom_minimum_size = Vector2(200, 100)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_seq")
+
+[node name="Box" type="HBoxContainer" parent="." unique_id=1598855661]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 8
+
+[node name="Left" type="VBoxContainer" parent="Box" unique_id=1964177242]
+custom_minimum_size = Vector2(130, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LengthRow" type="HBoxContainer" parent="Box/Left" unique_id=158016513]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Caption" type="Label" parent="Box/Left/LengthRow" unique_id=1235986602]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Length"
+
+[node name="LengthSlider" type="Control" parent="Box/Left/LengthRow" unique_id=1083726023]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("2_slider")
+min_value = 1.0
+max_value = 16.0
+value = 1.0
+step = 1.0
+text_font_size = 11
+
+[node name="RateRow" type="HBoxContainer" parent="Box/Left" unique_id=558705791]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Caption" type="Label" parent="Box/Left/RateRow" unique_id=1734725609]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Rate"
+
+[node name="RateOption" type="OptionButton" parent="Box/Left/RateRow" unique_id=1719429709]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 11
+
+[node name="GateRow" type="HBoxContainer" parent="Box/Left" unique_id=644477460]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Caption" type="Label" parent="Box/Left/GateRow" unique_id=690833601]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Gate"
+
+[node name="GateSlider" type="Control" parent="Box/Left/GateRow" unique_id=1766018751]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("2_slider")
+min_value = 10.0
+max_value = 200.0
+value = 10.0
+step = 1.0
+text_font_size = 11
+
+[node name="SwingRow" type="HBoxContainer" parent="Box/Left" unique_id=578309402]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Caption" type="Label" parent="Box/Left/SwingRow" unique_id=238979194]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Swing"
+
+[node name="SwingSlider" type="Control" parent="Box/Left/SwingRow" unique_id=2069548645]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("2_slider")
+max_value = 75.0
+value = 1.0
+step = 1.0
+text_font_size = 11
+
+[node name="ModeBox" type="VBoxContainer" parent="Box/Left" unique_id=1604199930]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Caption" type="Label" parent="Box/Left/ModeBox" unique_id=2021136103]
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Mode"
+
+[node name="ModeControl" type="HBoxContainer" parent="Box/Left/ModeBox" unique_id=369625574]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("3_segmented")
+font_size = 10
+items = PackedStringArray("Chord", "Mono")
+
+[node name="VelocityBox" type="VBoxContainer" parent="Box/Left" unique_id=786182185]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Caption" type="Label" parent="Box/Left/VelocityBox" unique_id=2090386795]
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Velocity"
+
+[node name="VelocitySourceControl" type="HBoxContainer" parent="Box/Left/VelocityBox" unique_id=624540202]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("3_segmented")
+font_size = 10
+items = PackedStringArray("In × Step", "Step")
+
+[node name="RangeBox" type="VBoxContainer" parent="Box/Left" unique_id=944479926]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Caption" type="Label" parent="Box/Left/RangeBox" unique_id=474109230]
+modulate = Color(1, 1, 1, 0.6)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Pitch range (st)"
+
+[node name="RangeControl" type="HBoxContainer" parent="Box/Left/RangeBox" unique_id=500621233]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("3_segmented")
+font_size = 10
+items = PackedStringArray("±24", "±12")
+
+[node name="Right" type="VBoxContainer" parent="Box" unique_id=330067977]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 3
+
+[node name="NumberRow" type="Control" parent="Box/Right" unique_id=1315768472]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("4_numbers")
+
+[node name="OnLane" type="Control" parent="Box/Right" unique_id=1849891670]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 18)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("5_lane")
+mode = 0
+min_value = 0.0
+max_value = 1.0
+default_value = 1.0
+guide_values = PackedFloat32Array()
+show_value_tooltip = false
+
+[node name="PitchLane" type="Control" parent="Box/Right" unique_id=2125493336]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 130.0
+mouse_default_cursor_shape = 2
+script = ExtResource("5_lane")
+guide_values = PackedFloat32Array(-12, 12)
+unit = "st"
+
+[node name="LowerSwitch" type="HBoxContainer" parent="Box/Right" unique_id=1801886653]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("3_segmented")
+font_size = 10
+items = PackedStringArray("Velocity", "Chance")
+
+[node name="LowerLane" type="Control" parent="Box/Right" unique_id=81952878]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 54.0
+mouse_default_cursor_shape = 2
+script = ExtResource("5_lane")
+min_value = 0.0
+max_value = 100.0
+default_value = 100.0
+guide_values = PackedFloat32Array()
+unit = "%"

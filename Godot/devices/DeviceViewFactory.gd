@@ -4,25 +4,25 @@ class_name DeviceViewFactory extends RefCounted
 
 ## Built-in device ID → view scenes, per view type.
 const BUILTIN_PANEL_SCENES := {
-	"sonara.builtin.chain": preload("res://devices/builtin/ChainDefaultView.tscn"),
-	"sonara.builtin.layer": preload("res://devices/builtin/LayerDefaultView.tscn"),
-	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerDefaultView.tscn"),
-	"sonara.builtin.drum_machine": preload("res://devices/builtin/DrumMachineDefaultView.tscn"),
-	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
-	"sonara.builtin.compressor": preload("res://devices/builtin/CompressorDefaultView.tscn"),
-	"sonara.builtin.multiband": preload("res://devices/builtin/MultibandDefaultView.tscn"),
-	"sonara.builtin.arpeggiator": preload("res://devices/builtin/ArpeggiatorDefaultView.tscn"),
-	"sonara.builtin.chord": preload("res://devices/builtin/ChordDefaultView.tscn"),
-	"sonara.builtin.saturator": preload("res://devices/builtin/SaturatorDefaultView.tscn"),
-	"sonara.builtin.step_sequencer": preload("res://devices/builtin/StepSequencerDefaultView.tscn"),
+	"sonara.builtin.chain": preload("res://devices/builtin/chain/ChainDefaultView.tscn"),
+	"sonara.builtin.layer": preload("res://devices/builtin/layer/LayerDefaultView.tscn"),
+	"sonara.builtin.sampler": preload("res://devices/builtin/sampler/SamplerDefaultView.tscn"),
+	"sonara.builtin.drum_machine": preload("res://devices/builtin/drum_machine/DrumMachineDefaultView.tscn"),
+	"sonara.builtin.eq": preload("res://devices/builtin/eq/EqDefaultView.tscn"),
+	"sonara.builtin.compressor": preload("res://devices/builtin/compressor/CompressorDefaultView.tscn"),
+	"sonara.builtin.multiband": preload("res://devices/builtin/multiband/MultibandDefaultView.tscn"),
+	"sonara.builtin.arpeggiator": preload("res://devices/builtin/arpeggiator/ArpeggiatorDefaultView.tscn"),
+	"sonara.builtin.chord": preload("res://devices/builtin/chord/ChordDefaultView.tscn"),
+	"sonara.builtin.saturator": preload("res://devices/builtin/saturator/SaturatorDefaultView.tscn"),
+	"sonara.builtin.step_sequencer": preload("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn"),
 }
 const BUILTIN_WINDOW_SCENES := {
-	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
-	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerWindowView.tscn"),
+	"sonara.builtin.eq": preload("res://devices/builtin/eq/EqDefaultView.tscn"),
+	"sonara.builtin.sampler": preload("res://devices/builtin/sampler/SamplerWindowView.tscn"),
 }
 const BUILTIN_COMPANION_SCENES := {
-	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerCompanionView.tscn"),
-	"sonara.builtin.eq": preload("res://devices/builtin/EqBandsCompanionView.tscn"),
+	"sonara.builtin.sampler": preload("res://devices/builtin/sampler/SamplerCompanionView.tscn"),
+	"sonara.builtin.eq": preload("res://devices/builtin/eq/EqBandsCompanionView.tscn"),
 }
 const BUILTIN_COMPACT_SCENES := {}
 

@@ -28,7 +28,7 @@ func run_tests() -> void:
 	_instance_script = load("res://data/DeviceInstance.gd")
 	_history_util = load("res://history/HistoryUtil.gd")
 	_sd = load("res://devices/builtin/sampler/SampleDisplay.gd")
-	_sv = load("res://devices/builtin/SamplerDefaultView.gd")
+	_sv = load("res://devices/builtin/sampler/SamplerDefaultView.gd")
 	_test_hit_testing()
 	_test_play_constraints()
 	_test_loop_constraints()
@@ -40,6 +40,7 @@ func run_tests() -> void:
 	_test_display_title_and_action()
 	_test_display_drop()
 	await _test_view()
+	await _test_bind_before_tree()
 	await _test_window_and_companion()
 	await _test_view_multisample()
 	await _test_zone_strip()
@@ -299,7 +300,7 @@ func _make_data() -> WaveformData:
 
 func _test_view() -> void:
 	var instance := _make_instance()
-	var view: Control = (load("res://devices/builtin/SamplerDefaultView.tscn") as PackedScene).instantiate()
+	var view: Control = (load("res://devices/builtin/sampler/SamplerDefaultView.tscn") as PackedScene).instantiate()
 	root.add_child(view)
 	view.bind_to_device(instance)
 	await process_frame
@@ -372,6 +373,25 @@ func _test_view() -> void:
 	view.apply_playheads(_playhead_blob([]))
 	_assert(display.playheads.is_empty(), "an empty playheads record clears them")
 	view.queue_free()
+
+
+## Views are bound before they enter the tree (the scene's controls exist only once ready).
+func _test_bind_before_tree() -> void:
+	var instance := _make_instance()
+	instance.set_parameter_real(7, 0.25)
+	instance.set_parameter_real(30, 2.0)
+	var view: Control = (load("res://devices/builtin/sampler/SamplerDefaultView.tscn") as PackedScene).instantiate()
+	view.bind_to_device(instance)
+	root.add_child(view)
+	await process_frame
+	_assert(is_equal_approx(view.display.play_start, 0.25), "a view bound before the tree shows Start on its display")
+	_assert(view._knobs["Cutoff"].modulate.a == 1.0, "a view bound before the tree applies Filter Type")
+	_assert(view._knobs["Root"].knob.get_value_text() == "C3", "a view bound before the tree configures its knobs")
+	var other: Control = (load("res://devices/builtin/sampler/SamplerCompanionView.tscn") as PackedScene).instantiate()
+	root.add_child(other)
+	_assert(other._envelope != view._envelope, "each view has its own envelope")
+	view.queue_free()
+	other.queue_free()
 
 
 ## Window and Companion views, built the way the device frame and panel do (spec 023, T-002/T-003).
@@ -508,7 +528,7 @@ func _test_view_multisample() -> void:
 
 	# REQ-010: the empty Sampler's button converts.
 	var empty := _make_instance()
-	var view: Control = (load("res://devices/builtin/SamplerDefaultView.tscn") as PackedScene).instantiate()
+	var view: Control = (load("res://devices/builtin/sampler/SamplerDefaultView.tscn") as PackedScene).instantiate()
 	root.add_child(view)
 	view.bind_to_device(empty)
 	await process_frame
@@ -523,7 +543,7 @@ func _test_view_multisample() -> void:
 	var model: Object = instance.multisample
 	var a: Object = model.zones[0]
 	var b: Object = model.zones[1]
-	view = (load("res://devices/builtin/SamplerDefaultView.tscn") as PackedScene).instantiate()
+	view = (load("res://devices/builtin/sampler/SamplerDefaultView.tscn") as PackedScene).instantiate()
 	root.add_child(view)
 	view.bind_to_device(instance)
 	await process_frame

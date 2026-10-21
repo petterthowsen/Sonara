@@ -1,0 +1,90 @@
+[gd_scene format=3 uid="uid://daxm7uov432a7"]
+
+[ext_resource type="Script" uid="uid://dqn3g1e8cu7p6" path="res://devices/builtin/layer/LayerSlotRow.gd" id="1_row"]
+[ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_light"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_name"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="4_knob"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_idle"]
+content_margin_left = 8.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0.12, 0.12, 0.12, 0.6)
+border_width_left = 4
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_open"]
+content_margin_left = 8.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0.2, 0.2, 0.2, 0.95)
+border_width_left = 4
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="Gradient" id="Gradient_dqv1x"]
+interpolation_mode = 2
+offsets = PackedFloat32Array(0, 0.36585367, 1, 1.025)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 0.8235294, 1, 1, 1, 0.023529412, 1, 0.63390625, 0.33999997, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_j01qf"]
+gradient = SubResource("Gradient_dqv1x")
+fill = 1
+fill_from = Vector2(0.4957265, 0.5)
+fill_to = Vector2(0.14529915, 0.14102565)
+
+[node name="LayerSlotRow" type="PanelContainer" unique_id=1988927422]
+custom_minimum_size = Vector2(160, 36)
+offset_right = 160.0
+offset_bottom = 32.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_idle")
+script = ExtResource("1_row")
+idle_style = SubResource("StyleBoxFlat_idle")
+open_style = SubResource("StyleBoxFlat_open")
+
+[node name="Row" type="HBoxContainer" parent="." unique_id=1264180565]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Light" type="Control" parent="Row" unique_id=672198104]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(20, 20)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+tooltip_text = "Disabled & Inactive (Saving RAM. Ctrl-click to activate)"
+script = ExtResource("2_light")
+light_texture = SubResource("GradientTexture2D_j01qf")
+
+[node name="Name" parent="Row" unique_id=1404313972 instance=ExtResource("3_name")]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 22)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Double-click to rename"
+value_type = 1
+display_format = "%s"
+
+[node name="Out" type="Button" parent="Row" unique_id=139841360]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+toggle_mode = true
+text = "OUT"
+flat = true
+
+[node name="Knob" type="Control" parent="Row" unique_id=959255856]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("4_knob")
+arc_width = 4.0

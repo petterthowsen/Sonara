@@ -1,0 +1,20 @@
+[gd_scene format=3 uid="uid://bm5mqxra82obh"]
+
+[ext_resource type="Script" uid="uid://7sig5i20gjh7" path="res://devices/builtin/eq/EqBandsCompanionView.gd" id="1_eqbands"]
+
+[node name="EqBandsCompanionView" type="Control" unique_id=1706398979]
+layout_mode = 3
+anchors_preset = 0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_eqbands")
+
+[node name="Row" type="HBoxContainer" parent="." unique_id=736502107]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 8

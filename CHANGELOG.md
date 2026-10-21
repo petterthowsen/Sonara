@@ -36,6 +36,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Sampler: dragging the amp envelope in one Sampler no longer changes Attack, Decay, Sustain and Release on other Samplers whose views are open (the views shared one envelope).
 - Arpeggiator: with Octaves above 1, the held notes in the extra octaves are now colored like the base octave.
 - PolySynth: pressing the same key again no longer cuts off the previous note; it rings out its release while the repeat plays on a new voice.
 - Plugins with many parameters (such as Vital, 900+ CLAP / 2900+ VST3) now show all of them in the Simple View. Most of the parameter list was lost on the way from the engine to the UI.

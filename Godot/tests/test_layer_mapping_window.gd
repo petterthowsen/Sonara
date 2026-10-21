@@ -153,7 +153,7 @@ func _test_closes_when_layer_removed() -> void:
 
 func _test_slot_row_out_toggle() -> void:
 	var d := _layer(["Kick"])
-	var row: Control = load("res://devices/container/LayerSlotRow.gd").new()
+	var row: Control = load("res://devices/builtin/layer/LayerSlotRow.tscn").instantiate()
 	root.add_child(row)
 	row.setup(d.layer, d.slots[0])
 	await process_frame
@@ -172,7 +172,7 @@ func _test_slot_row_out_toggle() -> void:
 
 func _test_slot_row_rename() -> void:
 	var d := _layer(["PolySynth"])
-	var row: Control = load("res://devices/container/LayerSlotRow.gd").new()
+	var row: Control = load("res://devices/builtin/layer/LayerSlotRow.tscn").instantiate()
 	root.add_child(row)
 	row.setup(d.layer, d.slots[0])
 	await process_frame
@@ -187,7 +187,7 @@ func _test_slot_row_rename() -> void:
 
 func _test_slot_row_knob_follows_out() -> void:
 	var d := _layer(["Snare"])
-	var row: Control = load("res://devices/container/LayerSlotRow.gd").new()
+	var row: Control = load("res://devices/builtin/layer/LayerSlotRow.tscn").instantiate()
 	root.add_child(row)
 	row.setup(d.layer, d.slots[0])
 	await process_frame
@@ -208,7 +208,7 @@ func _test_slot_row_knob_follows_out() -> void:
 
 func _test_slot_row_name_width() -> void:
 	var d := _layer(["Kick"])
-	var row: Control = load("res://devices/container/LayerSlotRow.gd").new()
+	var row: Control = load("res://devices/builtin/layer/LayerSlotRow.tscn").instantiate()
 	root.add_child(row)
 	row.setup(d.layer, d.slots[0])
 	await process_frame
@@ -223,7 +223,7 @@ func _test_slot_row_name_width() -> void:
 
 func _test_out_resets_slot_volume() -> void:
 	var d := _layer(["Snare"])
-	var row: Control = load("res://devices/container/LayerSlotRow.gd").new()
+	var row: Control = load("res://devices/builtin/layer/LayerSlotRow.tscn").instantiate()
 	root.add_child(row)
 	row.setup(d.layer, d.slots[0])
 	await process_frame
