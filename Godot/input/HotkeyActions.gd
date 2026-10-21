@@ -144,6 +144,8 @@ const ACTIONS := [
 	{ "id": "notes_length_shrink", "label": "Shorten notes", "group": "Clip Editor", "context": "clip_editor",
 		"requires": "note_selection",
 		"defaults": ["Alt+Left"], "allow_echo": true, "description": "By the snap interval, never below one snap interval." },
+	{ "id": "notes_select_all_tracks", "label": "Select all notes on every editable track", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Ctrl+Alt+A"], "description": "Select every note of every visible, editable track in the Clip Editor's track mode. Ctrl+A selects the focused track only." },
 	{ "id": "notes_quantize", "label": "Quantize notes", "group": "Clip Editor", "context": "clip_editor",
 		"requires": "note_selection",
 		"defaults": ["Ctrl+Q"], "description": "Move the selected notes toward the grid, using the strength and mode set in the Quantize options." },

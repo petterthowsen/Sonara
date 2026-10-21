@@ -240,7 +240,11 @@ the pointer, and shall not change the selected track.
 - **Acceptance:** Godot test. With A selected and B editable, a right-press on B's note removes
   it and A stays selected.
 
-#### REQ-038 — Box select and keyboard stay on the selected track
+#### REQ-038 — Box select and keyboard stay on the selected track (superseded)
+
+> Superseded by `docs/multi-track-note-editing-plan.md` (Phase 3): the note selection now spans
+> every editable track, and the keyboard shortcuts act on all selected notes. Ctrl+A still selects
+> the focused track only; Ctrl+Alt+A selects every editable track.
 
 Box select, Ctrl+A, copy, paste, delete and the arrow-key shortcuts shall keep acting on the
 selected track only.
@@ -267,7 +271,8 @@ editable.
 ## Out of scope
 
 - Persisting the visibility, editability and solo state.
-- Box select, Ctrl+A or copy across several tracks at once.
+- Copy and paste across several tracks at once (box select and the key edits do span tracks, see
+  the superseded REQ-038).
 - Shift+drag, which toggles like a plain drag and does not solo.
 - Folder, group and audio tracks in the list.
 - Changing track selection in the arranger or mixer. The existing optional mirroring through

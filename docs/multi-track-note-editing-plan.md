@@ -10,7 +10,7 @@ This plan comes from reading the code at `8b6d17e`. Nothing has been measured ye
 
 - [x] Phase 1: Data-level selection (`NoteRef`, `NoteSelectionModel`), with no change in behaviour
 - [x] Phase 2: Edits run on refs (`NoteEdits`), not on `VisualNote`s
-- [ ] Phase 3: Selecting across tracks (click, Ctrl+click, box, ruler range, Ctrl+A), drawn on the context layer
+- [x] Phase 3: Selecting across tracks (click, Ctrl+click, box, ruler range, Ctrl+A), drawn on the context layer
 - [ ] Phase 4: Gestures across tracks (drag, resize, velocity drag, keyboard edits)
 - [ ] Phase 5: Value lanes, clipboard, tools and group scale across tracks
 - [ ] Phase 6 (optional): `clip-editor-performance-plan.md` Phase 3, draw the focus track too and retire `VisualNote`
@@ -288,6 +288,28 @@ track, Ctrl+click adds without switching focus, a focus switch keeps the selecti
 drops its notes, delete across tracks is one undo step, and undo after a focus switch restores the
 selection. Re-run the benchmark: binding and scroll must not regress, and a 5,000-note cross-track
 selection must scroll without per-frame cost beyond drawing the visible notes.
+
+**Outcome.** Done (rename `current_track` to `focus_track` was a separate first commit). Deviations:
+
+- **Hotkey:** `notes_select_all_tracks` defaults to Ctrl+Alt+A, not Ctrl+Shift+A, because
+  `toggle_assistant` already owns Ctrl+Shift+A and the registry test forbids default conflicts.
+- **Queries:** `ContextNotesLayer` holds them (`notes_in_rect`, `notes_in_range`, `notes_of`) and
+  they are used for the focus track too in track mode, so box select no longer reads the focus
+  editor's `VisualNote`s. Clip mode still uses `NoteEditor.get_notes_in_box`.
+- **Drawing:** the selected pass draws only the ref's own (instance, pass) from the refs. The note's
+  other linked instances and loop passes are drawn selected inside the index pass, because skipping
+  them there would make them vanish.
+- **Context-note presses:** Ctrl+click, and a plain press on an already selected context note, are
+  handled on release (`_context_press`). Ctrl+drag on a context note does nothing yet (no duplicate).
+- **Edits:** `_edit_refs()` is the whole model. The selection tools' helpers (`_loop_owners`, strum and
+  invert grouping, voices, `_song_copies`, harmonize groups) now work on refs. Copy takes every
+  selected note and Paste puts them all on the focus track (Phase 5 records the source track). Cut
+  deletes all of them.
+- **Paste target:** `get_paste_tick` uses the range start when none of the selected notes is shown by
+  the focus editor (`has_selection_here`), so copy on A, switch to B, Ctrl+V still pastes in place.
+- **Value lanes:** stems for selected off-focus notes are left for Phase 5; `selected_note_data()`
+  only reports notes the focus editor shows, so the lanes behave as before.
+- Drag, resize and group scale still act on the focus track's selected notes only (Phase 4).
 
 ### Phase 4: Gestures across tracks
 

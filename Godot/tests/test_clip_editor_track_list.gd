@@ -513,13 +513,13 @@ func _test_cross_track_note_press() -> void:
 	_assert(midi.focus_track == a and picked.is_empty(), "erasing does not switch tracks")
 	_assert(midi._note_hit(gp).get("track") != b or midi._note_hit(gp).data.note != 72, "the erased note can't be hit any more")
 
-	# Box select covers only the active track's notes (REQ-038).
+	# The editor itself only knows its own track (REQ-038 was superseded by docs/multi-track-note-editing-plan.md).
 	var boxed: Array = editor.get_notes_in_box(Rect2(-100000, -100000, 200000, 200000))
 	var only_a := true
 	for vn in boxed:
 		if not editor.is_ancestor_of(vn) or vn.midi_note_data not in setup.ci_a.clip.midi_notes:
 			only_a = false
-	_assert(only_a and boxed.size() == editor.get_all_visual_notes().size(), "box select covers only A's notes")
+	_assert(only_a and boxed.size() == editor.get_all_visual_notes().size(), "the note editor's own box query covers only A's notes (selecting across tracks goes through MidiEditor._notes_in_box)")
 
 	# A non-editable B is not hit (REQ-039).
 	midi.editable_tracks = _typed([a])

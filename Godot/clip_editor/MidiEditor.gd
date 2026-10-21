@@ -49,12 +49,9 @@ var _edited_clips: Array[ClipInstance] = []
 var focus_track: Track = null:  # Active track in track-mode
 	set(value):
 		if focus_track != value:
-			# The time range is shared by the tracks: carry it to the new track's editor.
-			var carried := get_selection_range_song() if track_mode else NO_RANGE
+			# The note selection (notes and range) is the view's, so it stays across the switch.
 			focus_track = value
 			_sync_track_views()
-			if track_mode and value:
-				apply_selection_range_song(carried)
 			focus_track_changed.emit()
 			# Labels and colours come from the focused track's map (REQ-024).
 			if is_inside_tree():
@@ -82,8 +79,24 @@ var editable_tracks: Array[Track] = []:
 	set(value):
 		editable_tracks = value
 		_update_note_editor_states()
+		_drop_unavailable_selection()
 
 const NO_RANGE := Vector2i(-1, -1)
+
+
+## The tracks whose notes can be selected and edited: visible and editable, in list order.
+func selectable_tracks() -> Array[Track]:
+	var out: Array[Track] = []
+	for t in editable_tracks:
+		if _view_tracks.has(t):
+			out.append(t)
+	return out
+
+
+## A track that was hidden or stopped being editable takes its notes out of the selection.
+func _drop_unavailable_selection() -> void:
+	if track_mode:
+		note_selection.retain_tracks(selectable_tracks())
 
 
 ## The active editor's time range in song ticks, or NO_RANGE. Clip mode converts from the
@@ -387,6 +400,7 @@ func _ready():
 	scale_context.changed.connect(_on_scale_context_changed)
 	
 	context_layer.name = "ContextNotes"
+	context_layer.selection = note_selection
 	context_layer.layout = lane_layout
 	context_layer.notes_changed.connect(queue_row_rebuild)
 	context_layer.content_extent_changed.connect(queue_content_width_update)
@@ -502,6 +516,7 @@ func unbind():
 	_scroll_extent_ticks = 0
 	_view_tracks.clear()
 	_edited_clips.clear()
+	note_selection.clear(true)
 	context_layer.set_tracks([], [])
 	context_layer.excluded_track = null
 	
@@ -585,8 +600,8 @@ func _bind_editor_to_track(editor: NoteEditor, track: Track, clips: Array[ClipIn
 	# Bind to ALL clips on this track (multi-clip mode)
 	editor.bind_to_clips(track.clip_instances, track)
 	_set_edited_clips(editor, track, clips)
-	# Rebinding drops the notes but not the range.
-	editor.selection_manager.clear_selection()
+	# The notes of this track that are already selected (the selection survives a focus switch).
+	editor._sync_selected_look()
 	# Set color from track (and keep following it)
 	_bind_track_color(editor, track)
 
@@ -610,6 +625,7 @@ func set_track_views(tracks: Array[Track], edited_clips: Array[ClipInstance]) ->
 	_view_tracks = tracks.duplicate()
 	_edited_clips = edited_clips.duplicate()
 	_sync_track_views()
+	_drop_unavailable_selection()
 
 	if not tracks.is_empty() and not clip_instance:
 		clip_instance = edited_clips[0] if not edited_clips.is_empty() else null
@@ -629,7 +645,6 @@ func _sync_track_views() -> void:
 		if _editor_track(editor) != null or editor.visible:
 			_clear_color_bindings_for(editor)
 			editor.unbind()
-			editor.selection_manager.clear_selection()
 			editor.visible = false
 	elif _editor_track(editor) != wanted or not editor.visible:
 		_clear_color_bindings_for(editor)
@@ -1107,6 +1122,47 @@ var last_interaction_song_tick: int = -1
 var last_interaction_track: Track = null
 
 
+## Note of another editable track under the press while it waits for the release (see
+## _handle_left_mouse_press), as the hit dictionary; {} when no such press is pending.
+var _context_press: Dictionary = {}
+var _context_press_ctrl := false
+var _context_press_pos := Vector2.ZERO
+
+
+## REQ-034: a plain click on an unselected note of another editable track moves the focus to
+## that track. This is the one place that decides it. The note editor is rebound to the track
+## and the press carries on as a press on the note's new VisualNote, which returns (null when it
+## has none).
+func _focus_context_note(hit: Dictionary, global_pos: Vector2) -> VisualNote:
+	focus_track = hit.track
+	note_track_picked.emit(focus_track)
+	var editor := get_active_note_editor()
+	if not editor:
+		return null
+	var pos := editor.make_canvas_position_local(global_pos)
+	# The visual under the mouse (a loop repeat, say), else the note's own.
+	var visual := editor.get_note_at_position(pos)
+	if not visual or visual.midi_note_data != hit.data:
+		visual = editor.visual_for(hit.instance, hit.data)
+	return visual
+
+
+## The release of a press on a note of another track (see _context_press).
+func _finish_context_press(mevent: InputEventMouseButton) -> void:
+	var hit := _context_press
+	_context_press = {}
+	var moved := mevent.global_position.distance_to(_context_press_pos) >= NoteEditor.DRAG_THRESHOLD
+	if moved:
+		return
+	var editor := get_active_note_editor()
+	if _context_press_ctrl:
+		editor.selection_manager.toggle_ref(NoteRef.new(hit.instance, hit.data, hit.get("pass", 0)))
+		return
+	var visual := _focus_context_note(hit, mevent.global_position)
+	if visual:
+		get_active_note_editor().selection_manager.select_note(visual)
+
+
 func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle left mouse button press for note editing."""
 	var active_editor = get_active_note_editor()
@@ -1120,24 +1176,25 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 		_update_selection_overlays()
 		return
 
-	# A note of another editable track switches to that track before the gesture starts: the
-	# note editor is rebound to it and the press carries on as a press on its note.
 	var hit := _note_hit(mevent.global_position)
 	var clicked_note: VisualNote = hit.get("visual") if not hit.is_empty() else null
 	if not hit.is_empty() and not hit.has("editor"):
-		focus_track = hit.track
-		note_track_picked.emit(focus_track)
-		active_editor = get_active_note_editor()
-		if not active_editor:
+		# A note of another editable track.
+		if mevent.ctrl_pressed or note_selection.has(hit.data):
+			# Ctrl+click adds or removes it without moving the focus. A plain press on a note
+			# that is already selected keeps the selection (dragging a selection across tracks
+			# is Phase 4); on release it becomes the whole selection, like any plain click.
+			_context_press = hit
+			_context_press_ctrl = mevent.ctrl_pressed
+			_context_press_pos = mevent.global_position
+			accept_event()
 			return
-		note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
-		# The visual under the mouse (a loop repeat, say), else the note's own.
-		clicked_note = active_editor.get_note_at_position(note_editor_pos)
-		if not clicked_note or clicked_note.midi_note_data != hit.data:
-			clicked_note = active_editor.visual_for(hit.instance, hit.data)
+		clicked_note = _focus_context_note(hit, mevent.global_position)
 		if not clicked_note:
 			accept_event()
 			return
+		active_editor = get_active_note_editor()
+		note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
 
 	if grid_helper:
 		var press_tick := grid_helper.pixels_to_ticks(note_editor_pos.x)
@@ -1182,7 +1239,11 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 	if not active_editor:
 		return
 
-	if _ctrl_press_note:
+	if not _context_press.is_empty():
+		_finish_context_press(mevent)
+		accept_event()
+
+	elif _ctrl_press_note:
 		# Ctrl+click without a drag: plain selection toggle.
 		if is_instance_valid(_ctrl_press_note):
 			active_editor.selection_manager.toggle_note_selection(_ctrl_press_note)
@@ -1196,7 +1257,7 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
-		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
+		var notes_in_box = _notes_in_box(active_editor, active_editor.selection_manager.box_selection_rect)
 		active_editor.selection_manager.end_box_selection(notes_in_box)
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		on_interaction_finished()
@@ -1314,7 +1375,7 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
 		active_editor.selection_manager.update_box_selection(note_editor_pos)
-		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
+		var notes_in_box = _notes_in_box(active_editor, active_editor.selection_manager.box_selection_rect)
 		active_editor.selection_manager.select_visuals(notes_in_box)
 		accept_event()
 		_update_selection_overlays()
@@ -1399,7 +1460,7 @@ func _update_ruler_box_selection() -> void:
 		return
 	var x := active_editor.get_local_mouse_position().x
 	active_editor.selection_manager.update_box_selection(Vector2(x, lane_layout.total_height()))
-	active_editor.selection_manager.select_visuals(active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect))
+	active_editor.selection_manager.select_visuals(_notes_in_box(active_editor, active_editor.selection_manager.box_selection_rect))
 	_update_selection_overlays()
 
 
@@ -1413,7 +1474,7 @@ func _input(event: InputEvent) -> void:
 		var active_editor := get_active_note_editor()
 		if active_editor:
 			var sm := active_editor.selection_manager
-			sm.end_box_selection(active_editor.get_notes_in_box(sm.box_selection_rect))
+			sm.end_box_selection(_notes_in_box(active_editor, sm.box_selection_rect))
 			active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 			on_interaction_finished()
 			_update_selection_overlays()
@@ -1593,6 +1654,8 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	editor.edits.context_layer = context_layer
 	if not note_selection.restored.is_connected(_update_selection_overlays):
 		note_selection.restored.connect(_update_selection_overlays)
+	if not editor.select_all_tracks_requested.is_connected(_select_all_tracks):
+		editor.select_all_tracks_requested.connect(_select_all_tracks)
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
 		editor.key_input_handled.connect(_update_selection_overlays)
 	if not editor.harmony_dialog_requested.is_connected(harmony_dialog_requested.emit):
@@ -1684,6 +1747,24 @@ func value_stems() -> Array[Dictionary]:
 	return out
 
 
+## The notes a box (in note editor coordinates) selects. Track mode: those of every editable
+## track, found in the data. Clip mode: the editor's own notes.
+func _notes_in_box(editor: NoteEditor, box: Rect2) -> Array:
+	if not track_mode:
+		return editor.get_notes_in_box(box)
+	var to_layer := context_layer.get_global_transform().affine_inverse() * editor.get_global_transform()
+	return context_layer.notes_in_rect(to_layer * box, selectable_tracks())
+
+
+## Ctrl+Shift+A: every note of every editable track.
+func _select_all_tracks() -> void:
+	var editor := get_active_note_editor()
+	if editor == null or not track_mode:
+		return
+	editor.selection_manager.select_all(context_layer.notes_of(selectable_tracks()))
+	_update_selection_overlays()
+
+
 func _on_row_select_requested(row: int, additive: bool) -> void:
 	var pitch := lane_layout.pitch_at_row(row)
 	if pitch >= 0:
@@ -1696,21 +1777,30 @@ func _select_pitch(pitch: int, additive: bool) -> void:
 	var editor := get_active_note_editor()
 	if editor == null:
 		return
-	var picked: Array[VisualNote] = []
+	var picked: Array = []
 	if additive:
-		picked.append_array(editor.selection_manager.selected_visuals())
-	for vn in editor.get_all_visual_notes():
-		if vn.midi_note_data.note == pitch and vn not in picked:
-			picked.append(vn)
+		picked.append_array(note_selection.refs)
+	if track_mode:
+		for ref in context_layer.notes_of(selectable_tracks()):
+			if ref.data.note == pitch and not note_selection.has(ref.data):
+				picked.append(ref)
+	else:
+		for vn in editor.get_all_visual_notes():
+			if vn.midi_note_data.note == pitch:
+				picked.append(vn)
 	editor.selection_manager.select_all(picked)
 	_update_selection_overlays()
 
 
-## The selected notes' data, once each.
+## The selected notes' data, once each, for the notes the value lanes show stems for (those of
+## the note editor; stems for selected notes of other tracks come with Phase 5 of
+## docs/multi-track-note-editing-plan.md).
 func selected_note_data() -> Array[MidiNoteData]:
 	var out: Array[MidiNoteData] = []
+	var editor := get_active_note_editor()
 	for ref in note_selection.refs:
-		out.append(ref.data)
+		if editor != null and editor.visual_of_ref(ref) != null:
+			out.append(ref.data)
 	return out
 
 

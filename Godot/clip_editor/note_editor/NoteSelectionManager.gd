@@ -14,6 +14,9 @@ var model: NoteSelectionModel
 
 ## NoteRef -> the VisualNote showing it (null when it has none), set by NoteEditor.
 var visual_of_ref: Callable = func(_ref: NoteRef) -> VisualNote: return null
+## NoteRef -> {"start_tick", "end_tick"} in editor ticks, set by NoteEditor. Works for notes of
+## tracks the editor shows no visual for.
+var span_of_ref: Callable = func(_ref: NoteRef) -> Dictionary: return {"start_tick": 0, "end_tick": 0}
 ## VisualNote -> the NoteRef that selects its note, set by NoteEditor.
 var ref_of_visual: Callable = func(_vn: VisualNote) -> NoteRef: return null
 
@@ -82,10 +85,13 @@ func selected_visuals() -> Array[VisualNote]:
 	return out
 
 
-func _refs_of(notes: Array[VisualNote]) -> Array[NoteRef]:
+## NoteRefs for `notes`, which are VisualNotes or NoteRefs.
+func _refs_of(notes: Array) -> Array[NoteRef]:
 	var out: Array[NoteRef] = []
 	for note in notes:
-		if is_instance_valid(note) and note.midi_note_data:
+		if note is NoteRef:
+			out.append(note)
+		elif is_instance_valid(note) and note.midi_note_data:
 			var ref: NoteRef = ref_of_visual.call(note)
 			if ref != null:
 				out.append(ref)
@@ -130,7 +136,7 @@ func update_box_selection(pos: Vector2) -> void:
 	box_selection_end_tick = max(start_tick, end_tick)
 
 
-func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
+func end_box_selection(notes_in_box: Array) -> void:
 	"""End box selection with the list of notes that were selected."""
 	if not is_box_selecting:
 		return
@@ -163,8 +169,8 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 
 
 func _grow_range_to_selected_notes() -> void:
-	for note in selected_visuals():
-		var pos: Dictionary = get_note_song_position.call(note)
+	for ref in model.refs:
+		var pos: Dictionary = span_of_ref.call(ref)
 		box_selection_start_tick = mini(box_selection_start_tick, pos["start_tick"])
 		box_selection_end_tick = maxi(box_selection_end_tick, pos["end_tick"])
 
@@ -178,8 +184,13 @@ func _snap_x_to_grid(x: float) -> float:
 
 ## Make exactly `notes` the selection (no range change; only `set_changed`). A note shown by
 ## several visuals counts once, through the first.
-func select_visuals(notes: Array[VisualNote]) -> void:
+func select_visuals(notes: Array) -> void:
 	model.select(_refs_of(notes), true)
+
+
+## Same, for NoteRefs.
+func select_refs(refs: Array) -> void:
+	model.select(_refs_of(refs), true)
 
 
 # caller should snap the position to the grid
@@ -219,13 +230,20 @@ func toggle_note_selection(note: VisualNote) -> void:
 	])
 
 
+## Ctrl+click on a note given as a ref (a note of any track): select it or unselect it.
+func toggle_ref(ref: NoteRef) -> void:
+	model.toggle(ref, true)
+	_update_selection_range()
+	model.changed.emit()
+
+
 func clear_selection() -> void:
 	"""Clear all selected notes."""
 	model.clear(true)
 
 
 ## Select every note in `notes` at once (Ctrl+A). The range covers them all.
-func select_all(notes: Array[VisualNote]) -> void:
+func select_all(notes: Array) -> void:
 	select_visuals(notes)
 	_update_selection_range()
 	model.changed.emit()
@@ -256,9 +274,9 @@ func _update_selection_range() -> void:
 		return
 
 	var first_note = true
-	for sel_note in selected_visuals():
+	for sel_note in model.refs:
 		# Use coordinate conversion callback to get song-relative position
-		var pos = get_note_song_position.call(sel_note)
+		var pos = span_of_ref.call(sel_note)
 		var note_start = pos["start_tick"]
 		var note_end = pos["end_tick"]
 
@@ -301,20 +319,19 @@ func set_range(start_tick: int, end_tick: int) -> void:
 func snapshot_selection() -> NoteSelection:
 	if model.is_empty():
 		return null
-	var visuals := selected_visuals()
 	var start_tick := box_selection_start_tick
 	var end_tick := box_selection_end_tick
 	if end_tick <= start_tick:
 		# No explicit range: use the notes' bounds in this editor's space.
 		var first := true
-		for n in visuals:
-			var pos: Dictionary = get_note_song_position.call(n)
+		for ref in model.refs:
+			var pos: Dictionary = span_of_ref.call(ref)
 			start_tick = pos["start_tick"] if first else mini(start_tick, pos["start_tick"])
 			end_tick = pos["end_tick"] if first else maxi(end_tick, pos["end_tick"])
 			first = false
 		if first or end_tick <= start_tick:
 			return null
-	return NoteSelection.from_positioned_notes(visuals, start_tick, end_tick, get_note_song_position)
+	return NoteSelection.from_positioned_refs(model.refs, start_tick, end_tick, span_of_ref)
 
 
 # Drawing removed - now handled by MidiEditor._draw()

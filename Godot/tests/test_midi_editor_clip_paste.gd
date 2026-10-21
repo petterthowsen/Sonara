@@ -109,7 +109,7 @@ func _test_copy_notes_paste_on_other_track() -> void:
 	var sm_b: Object = editor_b.selection_manager
 	_assert(sm_b.box_selection_start_tick == BAR and sm_b.box_selection_end_tick == BAR + 720,
 		"the range carried over to B: %d-%d" % [sm_b.box_selection_start_tick, sm_b.box_selection_end_tick])
-	_assert(sm_b.model.is_empty(), "no notes are selected on B")
+	_assert(not editor_b.has_selection_here(), "none of B's notes are selected (A's stay selected: the selection survives the focus switch)")
 	_assert(sm_b.clipboard == clipboard, "B's editor sees the same clipboard")
 	_assert(editor._song_to_ruler_ticks(BAR) == BAR, "track mode ruler is song ticks")
 

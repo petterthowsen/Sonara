@@ -106,6 +106,22 @@ static func from_positioned_notes(visual_notes: Array[VisualNote], p_start_tick:
 	return NoteSelection.new(p_start_tick, p_end_tick, relative_notes)
 
 
+## Like from_positioned_notes, for NoteRefs: `position_of(ref) -> {"start_tick", "end_tick"}`.
+static func from_positioned_refs(refs: Array, p_start_tick: int, p_end_tick: int, position_of: Callable) -> NoteSelection:
+	var relative_notes: Array[MidiNoteData] = []
+	for ref in refs:
+		var note_data: MidiNoteData = ref.data
+		var pos: Dictionary = position_of.call(ref)
+		var relative_note = MidiNoteData.new()
+		relative_note.id = -1  # Will be assigned when pasted
+		relative_note.note = note_data.note
+		relative_note.copy_values_from(note_data)
+		relative_note.start_tick = int(pos["start_tick"]) - p_start_tick
+		relative_note.duration_ticks = note_data.duration_ticks
+		relative_notes.append(relative_note)
+	return NoteSelection.new(p_start_tick, p_end_tick, relative_notes)
+
+
 ## Create a NoteSelection from an array of MidiNoteData instances
 static func from_midi_notes(midi_notes: Array[MidiNoteData]) -> NoteSelection:
 	if midi_notes.is_empty():

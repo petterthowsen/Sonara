@@ -232,6 +232,27 @@ func _run() -> void:
 	var switch_ms := await _time_with_frame(func(): midi.focus_track = tracks[tracks.size() / 2])
 	_report("7. switch active track", switch_ms)
 
+	# 8. A selection of ~5,000 notes on 10 tracks (the focus track is not one of them): select
+	# them, scroll with the selection drawn, then nudge them all as one edit.
+	var picked_tracks: Array = tracks.slice(0, 10)
+	var selected_refs: Array = []
+	var ref_script: GDScript = load("res://clip_editor/note_editor/NoteRef.gd")
+	var select_ms := await _time_with_frame(func():
+		selected_refs.append_array(midi.context_layer.notes_of(picked_tracks))
+		midi.note_selection.select(Array(selected_refs, TYPE_OBJECT, &"RefCounted", ref_script)))
+	_report("8a. select %d notes on 10 tracks" % selected_refs.size(), select_ms)
+	var sel_scroll: Array = []
+	for i in 20:
+		var x := 400.0 + 40.0 * i
+		sel_scroll.append(await _time_with_frame(func():
+			midi.target_scroll_horizontal = x
+			h_scroll.scroll_horizontal = int(x)
+			midi.grid_helper.scroll_position = h_scroll.scroll_horizontal))
+	_report("8b. scroll step with that selection (median of 20)", _median(sel_scroll))
+	var nudge_all_ms := await _time_with_frame(func(): active._move_selection_horizontal(step))
+	_report("8c. nudge the whole selection", nudge_all_ms)
+	midi.note_selection.clear()
+
 	_report_value("node count at end", _node_count())
 	clip_editor.queue_free()
 	await process_frame

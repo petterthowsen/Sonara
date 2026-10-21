@@ -17,6 +17,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Changed
 
+- Clip editor, track mode: notes of several editable tracks can be selected together. A box select (also the ruler's Ctrl+drag range) and the pitch header pick the notes of every editable track, Ctrl+click on a note of another track adds it to the selection without leaving your track, and Ctrl+Alt+A selects all notes of all editable tracks. Switching tracks keeps the selection; hiding a track or turning off its pencil takes its notes out. Delete, cut, the arrow-key edits and the selection tools (quantize, flip, strum, harmonize and the rest) act on all selected notes as one undo step. Transfer Notes and Split Voices need notes of a single track. Dragging and resizing a selection across tracks, and copy/paste of notes of several tracks, come later.
 - Track context menu: "Visible" and "Enabled" toggles sit side by side at the top (Visible replaces Hidden, inverted), every action has an icon of the same size, Delete is last, and the button labels are set in the scene.
 
 ### Fixed

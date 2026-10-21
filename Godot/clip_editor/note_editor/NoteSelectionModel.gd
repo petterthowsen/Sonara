@@ -108,6 +108,21 @@ func clear(silent := false) -> void:
 	_emit(silent)
 
 
+## Unselect the notes of every track not in `allowed` (a track that was hidden or stopped being
+## editable). Notes with no track (clip mode) stay.
+func retain_tracks(allowed: Array) -> void:
+	var gone: Array[MidiNoteData] = []
+	for ref in refs:
+		var t := ref.track
+		if t != null and t not in allowed:
+			gone.append(ref.data)
+	if gone.is_empty():
+		return
+	for data in gone:
+		_erase(data)
+	_emit(false)
+
+
 ## Set the range (editor ticks) and emit `changed`. An end at or before the start clears it.
 func set_range(start_tick: int, end_tick: int) -> void:
 	range = Vector2i(start_tick, end_tick) if end_tick > start_tick else Vector2i.ZERO

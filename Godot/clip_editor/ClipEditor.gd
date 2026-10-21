@@ -1016,6 +1016,7 @@ const HARMONY_VOICES := 20
 const VOICE_ID_BASE := 100
 const MAX_VOICE_MENU := 6
 const NEEDS_KEY_TIP := "Needs a key: set the project scale or a key change here."
+const ONE_TRACK_TIP := "The selected notes are on more than one track. Select notes of a single track."
 
 @onready var harmony_button: MenuButton = tools_group.find_child("Harmony", true, false) as MenuButton
 
@@ -1067,10 +1068,16 @@ func _sync_harmony_menu(editor: NoteEditor, has_selection: bool) -> void:
 			NEEDS_KEY_TIP if live and not keyed else "")
 	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_BASSLINE), can_run and keyed,
 			NEEDS_KEY_TIP if live and not keyed else "")
-	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_TRANSFER), can_run and editor.source_track() != null, "")
+	var spans := live and editor.selection_spans_tracks()
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_TRANSFER),
+			can_run and editor.source_track() != null and not spans, ONE_TRACK_TIP if spans else "")
 	var has_target := live and editor.has_split_targets()
-	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_SPLIT), has_notes and has_target,
-			"Select another instrument track in the arranger to split the voices onto." if live and not has_target else "")
+	var split_tip := ""
+	if spans:
+		split_tip = ONE_TRACK_TIP
+	elif live and not has_target:
+		split_tip = "Select another instrument track in the arranger to split the voices onto."
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_SPLIT), has_notes and has_target and not spans, split_tip)
 
 
 func _set_harmony_item(index: int, enabled: bool, tooltip: String) -> void:

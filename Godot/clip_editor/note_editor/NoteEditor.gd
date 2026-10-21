@@ -11,6 +11,9 @@ signal key_input_handled
 ## &"transfer". ClipEditor owns and opens the dialogs (spec 048).
 signal harmony_dialog_requested(tool: StringName)
 
+## Ctrl+Shift+A: select the notes of every editable track. MidiEditor owns that query.
+signal select_all_tracks_requested
+
 ## The user touched a note (selected it alone, started dragging or resizing it): its values
 ## become the starting values of the next note drawn.
 signal note_touched(note: MidiNoteData)
@@ -110,6 +113,7 @@ func _ready():
 	selection_manager.get_note_song_position = get_note_song_position
 	selection_manager.visual_of_ref = visual_of_ref
 	selection_manager.ref_of_visual = ref_of_visual
+	selection_manager.span_of_ref = span_of_ref
 	_connect_selection_model(selection_manager.model)
 	edits = NoteEdits.new(selection_manager.model)
 	edits.editor = self
@@ -182,6 +186,19 @@ func _visuals_showing(data: MidiNoteData, source_clip: Clip) -> Array[VisualNote
 	return out
 
 
+## Where `ref`'s note is in this editor's ticks (song ticks in track mode), whichever track it
+## is on: {"start_tick", "end_tick"}.
+func span_of_ref(ref: NoteRef) -> Dictionary:
+	if multi_clip_mode:
+		if ref.instance != null:
+			return {"start_tick": ref.song_start(), "end_tick": ref.song_end()}
+	else:
+		var vn := visual_of_ref(ref)
+		if vn != null:
+			return get_note_song_position(vn)
+	return {"start_tick": ref.data.start_tick, "end_tick": ref.data.start_tick + ref.data.duration_ticks}
+
+
 ## The ref that selects the note `vn` shows: its instance and loop pass.
 func ref_of_visual(vn: VisualNote) -> NoteRef:
 	if vn == null or vn.midi_note_data == null:
@@ -224,13 +241,10 @@ func unbind():
 # UNDO HISTORY HELPERS
 # ============================================================================
 
-## The selected refs this editor shows, which are the notes its edits act on. A ref left over
-## from another track (restored by undo, say) has no visual here and is not edited.
+## The notes the edits act on: the whole selection, on any editable track.
 func _edit_refs() -> Array[NoteRef]:
 	var out: Array[NoteRef] = []
-	for ref in selection_model.refs:
-		if visual_of_ref(ref) != null:
-			out.append(ref)
+	out.assign(selection_model.refs)
 	return out
 
 
@@ -296,6 +310,10 @@ func handle_key_input(event: InputEventKey) -> void:
 		# Clip mode: every note in the clip. Track mode: every note on the active track
 		# (the active editor is the one bound to it).
 		selection_manager.select_all(get_all_visual_notes())
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_select_all_tracks"):
+		select_all_tracks_requested.emit()
 		accept_event()
 
 	elif Hotkeys.pressed(event, "edit_copy"):
@@ -1094,9 +1112,18 @@ func select_edited_clips() -> bool:
 ## carried over from another track, or a ruler range over empty space), else the cursor.
 ## With notes selected the range is theirs, and pasting onto them would only replace them.
 func get_paste_tick() -> int:
-	if selection_model.is_empty() and selection_manager.has_range():
+	if not has_selection_here() and selection_manager.has_range():
 		return selection_manager.box_selection_start_tick
 	return cursor_position_ticks
+
+
+## True when a selected note is one this editor shows. Notes selected on other tracks do not
+## count: pasting here would not replace them.
+func has_selection_here() -> bool:
+	for ref in selection_model.refs:
+		if visual_of_ref(ref) != null:
+			return true
+	return false
 
 
 ## Ctrl+V: paste the shared note clipboard at get_paste_tick().
@@ -1232,7 +1259,7 @@ func _delete_selection() -> void:
 		if ref.clip:
 			ref.clip.remove_midi_note(ref.data)
 
-	selection_manager.select_visuals([] as Array[VisualNote])
+	selection_manager.select_visuals([])
 	selection_model.changed.emit()
 
 	update_container_width()
@@ -1401,10 +1428,7 @@ func _add_generated_notes(by_clip: Dictionary) -> int:
 			if live == null:
 				continue
 			added += 1
-			var through: ClipInstance = clip_instance
-			if multi_clip_mode:
-				var instances := _instances_of_clip(target_clip)
-				through = instances[0] if not instances.is_empty() else null
+			var through := _instance_for_clip(target_clip)
 			if through != null:
 				new_refs.append(NoteRef.new(through, live, 0))
 	if added > 0:
@@ -1457,10 +1481,10 @@ func quantize_selection(strength: float = -1.0, mode: int = -1) -> void:
 ## edit moves them, because the edit may move a start out of the loop.
 func _loop_owners() -> Dictionary:
 	var owners := {}
-	for vn in _selected_note_visuals():
-		var owner_ci := _instance_for_visual_note(vn) if multi_clip_mode else clip_instance
-		if owner_ci and owner_ci.in_loop_region(vn.midi_note_data.start_tick):
-			owners[vn.midi_note_data] = owner_ci
+	for ref in selection_model.refs:
+		var owner_ci := ref.instance
+		if owner_ci and owner_ci.in_loop_region(ref.data.start_tick):
+			owners[ref.data] = owner_ci
 	return owners
 
 
@@ -1532,8 +1556,8 @@ func strum_selection() -> void:
 	# Note ticks are clip ticks, so chords are only found inside one clip: notes of different
 	# clips that happen to share a clip tick are not a chord.
 	var clip_of := {}
-	for vn in _selected_note_visuals():
-		clip_of[vn.midi_note_data] = _clip_for_visual_note(vn)
+	for ref in selection_model.refs:
+		clip_of[ref.data] = ref.clip
 	var spread := strum_spread()
 	var direction := strum_direction()
 	var ramp := strum_velocity_ramp()
@@ -1663,7 +1687,13 @@ func _instance_for_clip(c: Clip) -> ClipInstance:
 	if not multi_clip_mode:
 		return clip_instance if clip_instance and clip_instance.clip == c else null
 	var list := _instances_of_clip(c)
-	return list[0] if not list.is_empty() else null
+	if not list.is_empty():
+		return list[0]
+	# A clip of another track: the instance the selection reaches it through.
+	for ref in selection_model.refs:
+		if ref.clip == c:
+			return ref.instance
+	return null
 
 
 ## The key in effect at clip tick `tick` of `c`: clip tick -> song tick -> Project key changes
@@ -1684,7 +1714,7 @@ func chords_use_range() -> bool:
 
 
 func has_note_selection() -> bool:
-	return not _selected_note_visuals().is_empty()
+	return not selection_model.is_empty()
 
 
 ## A key is set for the edited clip (the scale tools need one, REQ-002). Always false in Drum View.
@@ -1715,12 +1745,20 @@ func can_insert_chords() -> bool:
 
 ## Transfer Notes needs a selection and a track to move them off.
 func can_transfer() -> bool:
-	return not layout.is_drum() and has_note_selection() and source_track() != null
+	return not layout.is_drum() and has_note_selection() and source_track() != null \
+			and not selection_spans_tracks()
+
+
+## True when the selected notes sit on more than one track. Transfer Notes and Split Voices work
+## from a single source track, so they are off then.
+func selection_spans_tracks() -> bool:
+	return selection_model.tracks().size() > 1
 
 
 ## Split Voices needs notes (selected, or any in the edited clips) and a target track.
 func can_split_voices(selected_tracks: Array = []) -> bool:
-	return not layout.is_drum() and not get_all_visual_notes().is_empty() and has_split_targets(selected_tracks)
+	return not layout.is_drum() and not get_all_visual_notes().is_empty() and has_split_targets(selected_tracks) \
+			and not selection_spans_tracks()
 
 
 ## True when `candidate` can receive transferred notes: an instrument track other than the source.
@@ -1764,38 +1802,42 @@ func has_split_targets(selected_tracks: Array = []) -> bool:
 
 ## Selected notes per clip: { Clip: Array[MidiNoteData] }, each shared note once.
 func _selected_notes_by_clip() -> Dictionary:
-	return _notes_by_clip(_selected_note_visuals())
+	return _notes_by_clip(selection_model.refs)
 
 
-func _notes_by_clip(visuals: Array[VisualNote]) -> Dictionary:
+func _notes_by_clip(refs: Array) -> Dictionary:
 	var out := {}
-	for vn in visuals:
-		var c := _clip_for_visual_note(vn)
+	for ref: NoteRef in refs:
+		var c := ref.clip
 		if c == null:
 			continue
 		if not out.has(c):
 			var typed: Array[MidiNoteData] = []
 			out[c] = typed
-		out[c].append(vn.midi_note_data)
+		out[c].append(ref.data)
 	return out
 
 
-## One visual per note data among `visuals`: { MidiNoteData: VisualNote }.
-static func _first_visual_per_note(visuals: Array[VisualNote]) -> Dictionary:
-	var out := {}
-	for vn in visuals:
-		if vn.midi_note_data and not out.has(vn.midi_note_data):
-			out[vn.midi_note_data] = vn
-	return out
-
-
-## The notes a voice tool works on: the selected notes, or every shown note (one visual each)
-## when nothing is selected.
-func _voice_pool() -> Array[VisualNote]:
-	var pool := _selected_note_visuals()
+## The notes a voice tool works on: the selected notes, or every shown note of this editor
+## (one ref each) when nothing is selected.
+func _voice_pool() -> Array[NoteRef]:
+	var pool: Array[NoteRef] = []
+	pool.assign(selection_model.refs)
 	if pool.is_empty():
-		pool.assign(_first_visual_per_note(get_all_visual_notes()).values())
+		var seen := {}
+		for vn in get_all_visual_notes():
+			if not seen.has(vn.midi_note_data):
+				seen[vn.midi_note_data] = true
+				pool.append(ref_of_visual(vn))
 	return pool
+
+
+## { MidiNoteData: NoteRef } among `refs`.
+static func _ref_per_note(refs: Array) -> Dictionary:
+	var out := {}
+	for ref: NoteRef in refs:
+		out[ref.data] = ref
+	return out
 
 
 # --- Select Voices, Chord Inversion (REQ-020, REQ-021) ---
@@ -1808,13 +1850,13 @@ func select_voice(which: int) -> int:
 	if layout.is_drum():
 		return 0
 	var pool := _voice_pool()
-	var visual_of := _first_visual_per_note(pool)
-	var chosen: Array[VisualNote] = []
+	var ref_of := _ref_per_note(pool)
+	var chosen: Array[NoteRef] = []
 	var per_clip := _notes_by_clip(pool)
 	for c in per_clip.keys():
 		for nd in NoteVoices.select(per_clip[c], which):
-			chosen.append(visual_of[nd])
-	selection_manager.select_visuals(chosen)
+			chosen.append(ref_of[nd])
+	selection_manager.select_refs(chosen)
 	selection_model.changed.emit()
 	queue_redraw()
 	return chosen.size()
@@ -1826,8 +1868,8 @@ func invert_selection(up: bool) -> void:
 	if layout.is_drum():
 		return
 	var clip_of := {}
-	for vn in _selected_note_visuals():
-		clip_of[vn.midi_note_data] = _clip_for_visual_note(vn)
+	for ref in selection_model.refs:
+		clip_of[ref.data] = ref.clip
 	_apply_selection_edit("Chord Inversion Up" if up else "Chord Inversion Down", func(notes: Array[MidiNoteData]):
 		var per_clip := {}
 		for note_data in notes:
@@ -1952,20 +1994,20 @@ func insert_bassline(pattern: int = -1, bass_range: Vector2i = Vector2i(-1, -1))
 
 ## Copies of `candidates`' notes with SONG-tick starts:
 ## { "moves": { Clip: [MidiNoteData originals] }, "notes": { original: song-tick copy } }.
-func _song_copies(candidates: Array[VisualNote]) -> Dictionary:
+func _song_copies(candidates: Array) -> Dictionary:
 	var moves := {}
 	var copies := {}
-	for vn in candidates:
-		var ci := _instance_for_visual_note(vn)
-		var c := _clip_for_visual_note(vn)
-		if ci == null or c == null or copies.has(vn.midi_note_data):
+	for ref: NoteRef in candidates:
+		var ci := ref.instance
+		var c := ref.clip
+		if ci == null or c == null or copies.has(ref.data):
 			continue
-		var copy := vn.midi_note_data.duplicate_note()
-		copy.start_tick = ci.clip_to_song_ticks(vn.midi_note_data.start_tick)
-		copies[vn.midi_note_data] = copy
+		var copy := ref.data.duplicate_note()
+		copy.start_tick = ci.clip_to_song_ticks(ref.data.start_tick)
+		copies[ref.data] = copy
 		if not moves.has(c):
 			moves[c] = []
-		moves[c].append(vn.midi_note_data)
+		moves[c].append(ref.data)
 	return {"moves": moves, "notes": copies}
 
 
@@ -1975,7 +2017,7 @@ func plan_transfer(target: Track) -> Array:
 	var project := _project_of_editor()
 	if project == null or not is_transfer_target(target) or layout.is_drum():
 		return []
-	var copies: Dictionary = _song_copies(_selected_note_visuals()).notes
+	var copies: Dictionary = _song_copies(selection_model.refs).notes
 	return NoteTransfer.plan(project, target, copies.values())
 
 
@@ -1994,7 +2036,7 @@ func transfer_linked_clips(target: Track) -> Array:
 func transfer_selection(target: Track) -> int:
 	if not can_transfer() or not is_transfer_target(target):
 		return 0
-	var copies := _song_copies(_selected_note_visuals())
+	var copies := _song_copies(selection_model.refs)
 	return _run_transfer("Transfer Notes", copies.moves, {target: copies.notes.values()})
 
 
@@ -2003,14 +2045,14 @@ func transfer_selection(target: Track) -> int:
 ## a target, or whose target is the source track, stay. One undo step. Returns the number of
 ## notes moved to other tracks.
 func split_voices(selected_tracks: Array = []) -> int:
-	if layout.is_drum() or not has_split_targets(selected_tracks):
+	if layout.is_drum() or not has_split_targets(selected_tracks) or selection_spans_tracks():
 		return 0
 	var targets := split_target_tracks(selected_tracks)
 	var source := source_track()
 	var pool := _voice_pool()
-	var visual_of := _first_visual_per_note(pool)
+	var ref_of := _ref_per_note(pool)
 	var per_clip := _notes_by_clip(pool)
-	var leaving: Dictionary = {}  # Track -> Array[VisualNote]
+	var leaving: Dictionary = {}  # Track -> Array[NoteRef]
 	for c in per_clip.keys():
 		var ranks := NoteVoices.ranks(per_clip[c])
 		for nd: MidiNoteData in per_clip[c]:
@@ -2019,9 +2061,9 @@ func split_voices(selected_tracks: Array = []) -> int:
 				continue
 			var dest: Track = targets[voice - 1]
 			if not leaving.has(dest):
-				var typed: Array[VisualNote] = []
+				var typed: Array[NoteRef] = []
 				leaving[dest] = typed
-			leaving[dest].append(visual_of[nd])
+			leaving[dest].append(ref_of[nd])
 	if leaving.is_empty():
 		return 0
 	var moves := {}
