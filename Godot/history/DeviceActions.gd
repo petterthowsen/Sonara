@@ -17,6 +17,16 @@ static func rename(device: DeviceInstance, desired: String) -> String:
 	return device.get_display_name()
 
 
+## Command that removes `device`. The last device of a Layer's slot chain takes the (then empty)
+## layer with it, in the same undo step.
+static func remove_command(channel: Channel, device: DeviceInstance) -> Command:
+	var chain := device.get_parent_device()
+	if chain != null and chain.children.size() == 1 and SlotChain.is_slot_chain(chain) \
+			and AuxReturnSync.is_layer(chain.get_parent_device()):
+		return DeviceRemoveCommand.new(channel, chain, chain.position)
+	return DeviceRemoveCommand.new(channel, device, device.position)
+
+
 ## Serialized copies of the last copied devices (see `copy`), each with its original host's `parent` null-free.
 static var clipboard: Array[Dictionary] = []
 

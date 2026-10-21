@@ -37,5 +37,5 @@ func execute(args: Dictionary) -> Dictionary:
 		return fail("A device slot can't be removed; remove the devices inside it instead")
 	var snapshot := compact_device(project, inst)
 	var path: String = snapshot.path
-	HistoryUtil.execute(DeviceRemoveCommand.new(channel, inst))
+	HistoryUtil.execute(DeviceActions.remove_command(channel, inst))
 	return ok_text("Removed %s" % path, snapshot)

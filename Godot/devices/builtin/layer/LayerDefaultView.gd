@@ -25,6 +25,12 @@ func _ready() -> void:
 	mapping_button.pressed.connect(_on_mapping_pressed)
 	mix_knob.knob.value_changed.connect(_on_mix_changed)
 	mix_knob.knob.value_text_callback = _format_mix
+	
+	# rows
+	for row in rows_box.get_children():
+		row.queue_free()
+		rows_box.remove_child(row)
+	
 	if device != null:
 		_rebuild()
 

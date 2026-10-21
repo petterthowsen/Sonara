@@ -37,6 +37,9 @@ func _ready() -> void:
 	_name.label.gui_input.connect(_on_name_gui_input)
 	_out.toggled.connect(_on_out_toggled)
 	_knob.value_changed.connect(_on_knob_changed)
+	# The controls stop mouse events, so the right-click has to be picked up on each of them.
+	for control: Control in [_light, _name.label, _out, _knob]:
+		control.gui_input.connect(_on_control_gui_input)
 
 
 ## Bind this row to child `inst` of Layer `p_container`.
@@ -172,6 +175,12 @@ func _gui_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 			context_requested.emit()
 			accept_event()
+
+
+func _on_control_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		context_requested.emit()
+		accept_event()
 
 
 func _on_name_gui_input(event: InputEvent) -> void:

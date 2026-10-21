@@ -31,7 +31,7 @@ corner_radius_bottom_left = 3
 
 [sub_resource type="Gradient" id="Gradient_dqv1x"]
 interpolation_mode = 2
-offsets = PackedFloat32Array(0, 0.36585367, 1, 1.025)
+offsets = PackedFloat32Array(0.005, 0.40784314, 1, 1.025)
 colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 0.8235294, 1, 1, 1, 0.023529412, 1, 0.63390625, 0.33999997, 0)
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_j01qf"]
@@ -61,7 +61,16 @@ size_flags_horizontal = 4
 size_flags_vertical = 4
 tooltip_text = "Disabled & Inactive (Saving RAM. Ctrl-click to activate)"
 script = ExtResource("2_light")
+diameter = 20.0
+light_color_inactive_disabled = Color(0.2, 0.2, 0.2, 0)
+light_color_active_disabled = Color(0.38, 0.098799996, 0.098799996, 0)
+light_color_active_enabled = Color(0.8828125, 0.84832764, 0, 1)
 light_texture = SubResource("GradientTexture2D_j01qf")
+border_color_inactive = Color(0.73046875, 0, 0, 1)
+border_color_active = Color(0.82421875, 0.82421875, 0.82421875, 1)
+border_thickness = 1.5
+test_active = true
+test_enabled = true
 
 [node name="Name" parent="Row" unique_id=1404313972 instance=ExtResource("3_name")]
 unique_name_in_owner = true

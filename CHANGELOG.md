@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Layer rows: right-click a layer for Duplicate Layer / Remove Layer; the row light now matches the device panel light; removing the last device of a layer removes the layer too.
 - Chord has its own panel view: a keyboard of intervals around middle C. Click a key to add or remove that note from the chord; zoom shows up to three octaves and the arrows page between octaves. Enabled keys use the secondary color and light up in the primary color while notes are held.
 - EQ window: a vertical line follows the mouse and shows the frequency under it with its note and cents ("440 Hz  A3 +0¢"); the piano strip is taller and has a toggle in the header. In the companion band strips, the enabled and solo toggles sit side by side, a slope box (6 to 48 dB/oct) sits next to the type box for the Low Cut and High Cut types, and the knobs show their values.
 - Multiband FX shows a faint spectrum of its input behind the crossover strip, to help place the band splits.

@@ -84,7 +84,9 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	device = device_instance
 	label.set_value(device.get_display_name())
 	var slot_chain := DeviceSlots.is_slot_chain(device)
-	remove.text = "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else ("Clear Slot" if slot_chain else "Remove"))
+	var layer_chain := _is_layer_chain(device)
+	duplicate_button.text = "Duplicate Layer" if layer_chain else "Duplicate"
+	remove.text = "Remove Layer" if layer_chain else "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else ("Clear Slot" if slot_chain else "Remove"))
 	load_kit.visible = DrumKit.is_drum_machine(device)
 	paste_button.disabled = not DeviceActions.can_paste()
 	# Pads and band chains are fixed by their host; only plain devices copy.
@@ -144,7 +146,7 @@ func _on_remove_pressed() -> void:
 			if clear_slot:
 				HistoryUtil.execute(clear_slot)
 		elif channel:
-			HistoryUtil.execute(DeviceRemoveCommand.new(channel, device, device.position))
+			HistoryUtil.execute(DeviceActions.remove_command(channel, device))
 	ContextMenuPopup.close(self)
 
 
@@ -156,3 +158,8 @@ func _pad_return() -> Channel:
 	var project := channel.get_project() if channel else null
 	var ret := project.get_channel_by_id(device.return_channel_id) if project else null
 	return ret if ret and ret.is_pad_return() else null
+
+
+## True for a layer's slot chain (a direct child of a Layer).
+static func _is_layer_chain(inst: DeviceInstance) -> bool:
+	return inst != null and SlotChain.is_slot_chain(inst) and AuxReturnSync.is_layer(inst.get_parent_device())
