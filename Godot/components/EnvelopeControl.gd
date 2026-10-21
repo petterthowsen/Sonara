@@ -341,11 +341,7 @@ func get_handle_text(handle: Handle) -> String:
 
 
 static func format_time(seconds: float) -> String:
-	if seconds < 0.01:
-		return "%.1f ms" % (seconds * 1000.0)
-	if seconds < 1.0:
-		return "%d ms" % roundi(seconds * 1000.0)
-	return "%.2f s" % seconds
+	return TimeFormat.format_seconds(seconds)
 
 
 static func format_level(level: float) -> String:

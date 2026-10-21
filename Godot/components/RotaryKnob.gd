@@ -341,6 +341,8 @@ func get_value_text() -> String:
 	if value_text_callback.is_valid():
 		return str(value_text_callback.call(_value))
 	var text := value_format % _value
+	if TimeFormat.is_time_unit(unit.strip_edges()):
+		return TimeFormat.format(_value, unit.strip_edges())
 	return text if unit.is_empty() else "%s %s" % [text, unit]
 
 
@@ -490,6 +492,8 @@ func _on_edit_committed(text: String) -> void:
 	var parsed := NAN
 	if edit_parse_callback.is_valid():
 		parsed = float(edit_parse_callback.call(trimmed))
+	elif TimeFormat.is_time_unit(unit.strip_edges()):
+		parsed = TimeFormat.parse(trimmed, unit.strip_edges())
 	elif trimmed.is_valid_float():
 		parsed = float(trimmed)
 	if not is_nan(parsed):

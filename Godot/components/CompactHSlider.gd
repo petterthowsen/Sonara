@@ -205,6 +205,8 @@ func get_value_text() -> String:
 	# GDScript's % operator doesn't support "%g"; format it by hand: whole values drop the
 	# fractional part, everything else keeps `str()`'s shortest form.
 	var text := _format_g(_value) if value_format == "%g" else value_format % _value
+	if TimeFormat.is_time_unit(unit.strip_edges()):
+		return TimeFormat.format(_value, unit.strip_edges())
 	return text if unit.is_empty() else "%s %s" % [text, unit]
 
 

@@ -46,7 +46,7 @@ var _chain: DeviceInstance = null
 
 
 ## Show slot `p_key` of `p_container`.
-func setup(p_container: DeviceInstance, p_key: String, p_nested := false) -> void:
+func setup(p_container: DeviceInstance, p_key: String, p_nested := false, p_suspended := false) -> void:
 	container = p_container
 	nested = p_nested
 	key = p_key
@@ -61,6 +61,8 @@ func setup(p_container: DeviceInstance, p_key: String, p_nested := false) -> voi
 
 	row = DeviceRow.new()
 	row.in_slot = true
+	row.suspended = p_suspended
+	visible = not p_suspended
 	row.context_menu_requested.connect(context_menu_requested.emit)
 	row.selection_requested.connect(selection_requested.emit)
 	row.selection_released.connect(selection_released.emit)
@@ -115,6 +117,13 @@ func _watch_chain(chain: DeviceInstance) -> void:
 		_chain.child_removed.connect(_on_children_changed)
 		_chain.child_moved.connect(_on_children_changed)
 		_chain.slot_changed.connect(_on_children_changed)
+
+
+## Hide or show the group because its container's controls are hidden. Only the display and the
+## views' subscriptions change; the slot's devices keep their own state.
+func set_suspended(value: bool) -> void:
+	visible = not value
+	row.set_suspended(value)
 
 
 func slot_color() -> Color:

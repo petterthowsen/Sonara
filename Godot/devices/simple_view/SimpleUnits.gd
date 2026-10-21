@@ -23,9 +23,9 @@ static func format(param: DeviceParameter, normalized: float, unit_override: Str
 		"dB":
 			return "%.1f dB" % real
 		"ms":
-			return "%.1f ms" % _to_ms(param, real)
+			return TimeFormat.format_ms(_to_ms(param, real))
 		"s":
-			return "%.2f s" % real
+			return TimeFormat.format_seconds(real)
 		"Hz":
 			return _format_hz(real)
 		"note":

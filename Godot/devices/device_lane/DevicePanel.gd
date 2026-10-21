@@ -109,6 +109,9 @@ var _tabs_view: DeviceView = null
 ## True while the View is toggled off: the top header then shows only the device light and the
 ## name runs vertically in the left header.
 var _collapsed := false
+## True while an ancestor container hides this panel's controls (see DeviceLaneItem); its views
+## stay unsubscribed until the ancestor shows them again.
+var _suspended := false
 ## True while `header_tabs` is being filled from the view, so its signals don't echo back.
 var _syncing_tabs := false
 
@@ -119,6 +122,8 @@ signal request_child_context_menu(child: DeviceInstance)
 ## ctrl/cmd = additive, shift = range. Released without a drag collapses a multi-selection.
 signal select_requested(panel: DevicePanel, additive: bool, range_select: bool)
 signal select_released(panel: DevicePanel)
+## The View was closed or opened: the device's controls are hidden (header collapsed) or shown.
+signal controls_hidden_changed(hidden: bool)
 
 ## Stripe above the header, shown only for note effects (spec 027 REQ-036).
 var note_fx_stripe: ColorRect = null
@@ -865,12 +870,40 @@ func _update_view_pane_visibility() -> void:
 ## With the View closed the top header keeps only the device light; the name moves to the left
 ## header, written vertically. The chevron points left when closed, right when open.
 func _set_collapsed(collapsed: bool) -> void:
+	var changed := collapsed != _collapsed
 	_collapsed = collapsed
 	view_button.icon = ICON_VIEW_CLOSED if collapsed else ICON_VIEW_OPEN
 	preset_button.visible = not collapsed
 	name_label.visible = not collapsed
 	vertical_name_label.visible = collapsed
 	_update_mod_dot()
+	if changed:
+		controls_hidden_changed.emit(collapsed)
+
+
+## True while the device's controls are hidden (the View is closed). Slot children are hidden
+## with them, derived from this state; nothing is stored on the children.
+func controls_hidden() -> bool:
+	return _collapsed
+
+
+## Hide or show this panel's views for an ancestor that hides its controls. Only the view
+## subscriptions follow: the panel's own state (View toggle, tabs) is left as it was, so showing
+## it again brings it back unchanged.
+func set_suspended(suspended: bool) -> void:
+	if suspended == _suspended:
+		return
+	_suspended = suspended
+	for view in [_panel_view, _companion_view]:
+		if view and is_instance_valid(view) and view.visible and not view.is_queued_for_deletion() and view.is_node_ready():
+			if suspended:
+				view.hide_view()
+			else:
+				view.show_view()
+
+
+func is_suspended() -> bool:
+	return _suspended
 
 
 ## Show the CCs tab only when this device has unlabeled MIDI CCs.
@@ -1022,7 +1055,7 @@ func _load_panel_view(dev: DeviceInstance) -> void:
 
 func _clear_panel_view() -> void:
 	if _panel_view:
-		if _panel_view.has_method("hide_view"):
+		if _panel_view.has_method("hide_view") and not _suspended:
 			_panel_view.hide_view()
 		_panel_view.queue_free()
 		_panel_view = null
@@ -1042,7 +1075,7 @@ func _load_companion_view(dev: DeviceInstance) -> void:
 
 func _clear_companion_view() -> void:
 	if _companion_view:
-		if _companion_view.has_method("hide_view"):
+		if _companion_view.has_method("hide_view") and not _suspended:
 			_companion_view.hide_view()
 		_companion_view.queue_free()
 		_companion_view = null
@@ -1065,7 +1098,8 @@ func _show_panel_view() -> void:
 
 		logger.info("panel view is ready, calling _on_view_shown...")
 		_panel_view.show()
-		_panel_view.show_view()
+		if not _suspended:
+			_panel_view.show_view()
 	
 	if _companion_view and _companion_view.visible:
 		logger.info("hiding companion view")
@@ -1076,7 +1110,8 @@ func _show_panel_view() -> void:
 
 		logger.info("companion view is ready, calling _on_view_hidden...")
 		_companion_view.hide()
-		_companion_view.hide_view()
+		if not _suspended:
+			_companion_view.hide_view()
 	
 	_update_view_pane_visibility()
 
@@ -1088,7 +1123,8 @@ func _show_companion_view() -> void:
 
 		logger.info("companion view is ready, calling _on_view_shown...")
 		_companion_view.show()
-		_companion_view.show_view()
+		if not _suspended:
+			_companion_view.show_view()
 	
 	if _panel_view and _panel_view.visible:
 		if not _panel_view.is_node_ready():
@@ -1097,7 +1133,8 @@ func _show_companion_view() -> void:
 
 		logger.info("panel view is ready, calling _on_view_hidden...")
 		_panel_view.hide()
-		_panel_view.hide_view()
+		if not _suspended:
+			_panel_view.hide_view()
 	
 	_update_view_pane_visibility()
 

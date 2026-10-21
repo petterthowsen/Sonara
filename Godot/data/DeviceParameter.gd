@@ -211,12 +211,15 @@ func format_value(value: float) -> String:
 				return Midi.midi_to_note_name(whole)
 			"%":
 				return "%d%%" % whole
+			"ms", "s":
+				return TimeFormat.format(value, unit)
 			_:
 				return "%d %s" % [whole, unit]
 	if unit.is_empty():
 		return "%.2f" % value
-	else:
-		return "%.2f %s" % [value, unit]
+	if TimeFormat.is_time_unit(unit):
+		return TimeFormat.format(value, unit)
+	return "%.2f %s" % [value, unit]
 
 
 ## Units of built-in parameters that only make sense in whole steps (semitones, octaves, whole
@@ -239,6 +242,8 @@ func is_whole_number() -> bool:
 func edit_text(value: float) -> String:
 	if is_whole_number():
 		return "%d" % roundi(value)
+	if TimeFormat.is_time_unit(unit):
+		return TimeFormat.format(value, unit)
 	return "%.2f" % value
 
 
@@ -249,6 +254,8 @@ func parse_edit_text(text: String) -> float:
 	if unit == "key" and not trimmed.is_empty() and not trimmed[0] in "-0123456789.":
 		var note := Midi.note_name_to_midi(trimmed)
 		return float(note) if note >= 0 else NAN
+	if TimeFormat.is_time_unit(unit):
+		return TimeFormat.parse(trimmed, unit)
 	if not unit.is_empty() and trimmed.to_lower().ends_with(unit.to_lower()):
 		trimmed = trimmed.substr(0, trimmed.length() - unit.length()).strip_edges()
 	return float(trimmed) if trimmed.is_valid_float() else NAN
@@ -281,14 +288,13 @@ static func format_display(value: float, unit: String) -> String:
 		return "-"
 	if is_inf(value):
 		return ("-inf" if value < 0.0 else "inf") + ("" if unit.is_empty() else " " + unit)
+	if TimeFormat.is_time_unit(unit):
+		return TimeFormat.format(value, unit)
 	var shown := value
 	var shown_unit := unit
 	if unit == "Hz" and absf(value) >= 1000.0:
 		shown = value / 1000.0
 		shown_unit = "kHz"
-	elif unit == "ms" and absf(value) >= 1000.0:
-		shown = value / 1000.0
-		shown_unit = "s"
 	var size := absf(shown)
 	var text: String
 	if shown_unit == "dB":

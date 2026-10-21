@@ -133,7 +133,7 @@ func _test_format_display() -> void:
 	_assert(DeviceParameter.format_display(440.0, "Hz") == "440 Hz", "440 Hz")
 	_assert(DeviceParameter.format_display(1250.0, "Hz") == "1.25 kHz", "1.25 kHz")
 	_assert(DeviceParameter.format_display(-6.0, "dB") == "-6.0 dB", "-6.0 dB")
-	_assert(DeviceParameter.format_display(12.5, "ms") == "12.5 ms", "12.5 ms")
+	_assert(DeviceParameter.format_display(12.5, "ms") == "13 ms", "12.5 ms rounds to whole ms")
 	_assert(DeviceParameter.format_display(2500.0, "ms") == "2.50 s", "ms switches to s")
 	_assert(DeviceParameter.format_display(50.0, "%") == "50.0%", "percent has no space")
 	_assert(DeviceParameter.format_display(0.71, "") == "0.71", "unitless")

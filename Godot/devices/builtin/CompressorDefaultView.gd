@@ -91,8 +91,8 @@ func _build() -> void:
 
 	_add_slider(%KneeSlider, %KneeValue, CompressorData.P_KNEE, "%.1f dB")
 	_add_slider(%MixSlider, %MixValue, CompressorData.P_MIX, "%.0f %%")
-	_add_slider(%AttackSlider, %AttackValue, CompressorData.P_ATTACK, "%.2f ms")
-	_add_slider(%ReleaseSlider, %ReleaseValue, CompressorData.P_RELEASE, "%.0f ms")
+	_add_slider(%AttackSlider, %AttackValue, CompressorData.P_ATTACK, "ms")
+	_add_slider(%ReleaseSlider, %ReleaseValue, CompressorData.P_RELEASE, "ms")
 
 	_add_knob(%LinkKnob, CompressorData.P_STEREO_LINK, "%.0f", "%")
 	_add_knob(%ScCutKnob, CompressorData.P_SC_LOW_CUT, "%.0f", "Hz")
@@ -211,6 +211,13 @@ func _fader_text(value: float, entry: Dictionary) -> String:
 	return String(entry["format"]) % value
 
 
+## Slider value text: times ("ms" format) switch to seconds when large, others use the format string.
+func _slider_text(value: float, entry: Dictionary) -> String:
+	if entry["format"] == "ms":
+		return TimeFormat.format_ms(value)
+	return String(entry["format"]) % value
+
+
 func _refresh() -> void:
 	if device == null or not is_node_ready():
 		return
@@ -231,7 +238,7 @@ func _refresh() -> void:
 			continue
 		var real := device.get_parameter_real(int(entry["id"]))
 		(entry["slider"] as HorSlider).set_value_no_signal(param.value_to_normalized(real))
-		(entry["label"] as Label).text = String(entry["format"]) % real
+		(entry["label"] as Label).text = _slider_text(real, entry)
 	for entry in _knobs:
 		(entry["knob"] as LabeledKnob).knob.set_value_no_signal(device.get_parameter_real(int(entry["id"])))
 	style_control.set_selected_no_signal(int(device.get_parameter_real(CompressorData.P_STYLE)))

@@ -311,7 +311,7 @@ static func _knob_text(value: float, param_name: String) -> String:
 		"Volume":
 			return "-inf dB" if value <= 0.0001 else "%+.1f dB" % (20.0 * log(value) / log(10.0))
 		"Attack", "Decay", "Release":
-			return "%.1f ms" % (value * 1000.0) if value < 1.0 else "%.2f s" % value
+			return TimeFormat.format_seconds(value)
 	return "%.2f" % value
 
 

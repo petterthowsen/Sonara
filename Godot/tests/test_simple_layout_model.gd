@@ -193,7 +193,7 @@ func _test_simple_units() -> void:
 	attack.min_value = 0.0
 	attack.max_value = 2.0
 	var half_normalized := attack.value_to_normalized(0.5)
-	_assert(SimpleUnits.format(attack, half_normalized, "ms") == "500.0 ms", "s converts to ms: %s" % SimpleUnits.format(attack, half_normalized, "ms"))
+	_assert(SimpleUnits.format(attack, half_normalized, "ms") == "500 ms", "s converts to ms: %s" % SimpleUnits.format(attack, half_normalized, "ms"))
 
 	var cutoff := _param(2, "Cutoff")
 	cutoff.unit = "Hz"

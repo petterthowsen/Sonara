@@ -299,6 +299,8 @@ func get_value_text(v: float) -> String:
 	if value_text_callback.is_valid():
 		return str(value_text_callback.call(v))
 	var text := str(int(roundf(v))) if is_equal_approx(v, roundf(v)) else str(v)
+	if TimeFormat.is_time_unit(unit.strip_edges()):
+		return TimeFormat.format(v, unit.strip_edges())
 	return text if unit.is_empty() else "%s %s" % [text, unit]
 
 

@@ -20,6 +20,8 @@ var panel_top_inset := 0
 
 ## True for a row inside a container slot.
 var in_slot := false
+## True while an ancestor hides its controls (and so this row): new items start suspended too.
+var suspended := false
 
 
 func _init() -> void:
@@ -41,12 +43,19 @@ func sync(list: Array[DeviceInstance]) -> void:
 		var item: DeviceLaneItem = existing.get(list[i])
 		if item == null:
 			item = DeviceLaneItem.new()
-			item.setup(list[i], panel_top_inset, in_slot)
+			item.setup(list[i], panel_top_inset, in_slot, suspended)
 			item.context_menu_requested.connect(context_menu_requested.emit)
 			item.selection_requested.connect(selection_requested.emit)
 			item.selection_released.connect(selection_released.emit)
 			add_child(item)
 		move_child(item, i)
+
+
+## Suspend or resume the views of every panel in this row and its slots (see DeviceLaneItem).
+func set_suspended(value: bool) -> void:
+	suspended = value
+	for item in items():
+		item.set_suspended(value)
 
 
 func clear() -> void:

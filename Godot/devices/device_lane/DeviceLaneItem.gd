@@ -20,6 +20,8 @@ var header: Control:
 		return panel.header if panel else null
 
 var _in_slot := false
+## An ancestor container hides its controls, so this item is hidden with its slots.
+var _suspended := false
 var _groups := {}  # slot key -> DeviceSlotGroup
 
 
@@ -29,9 +31,10 @@ func _init() -> void:
 
 
 ## Build the panel for `inst`, `top_inset` pixels below the row's top, and its open slots.
-func setup(inst: DeviceInstance, top_inset: int, in_slot: bool) -> void:
+func setup(inst: DeviceInstance, top_inset: int, in_slot: bool, suspended := false) -> void:
 	device = inst
 	_in_slot = in_slot
+	_suspended = suspended
 	var margin := MarginContainer.new()
 	margin.name = "PanelMargin"
 	margin.add_theme_constant_override("margin_top", top_inset)
@@ -45,7 +48,9 @@ func setup(inst: DeviceInstance, top_inset: int, in_slot: bool) -> void:
 	panel.select_requested.connect(selection_requested.emit)
 	panel.select_released.connect(selection_released.emit)
 	margin.add_child(panel)
+	panel.set_suspended(suspended)
 	panel.bind_to_device(inst)
+	panel.controls_hidden_changed.connect(_apply_children_hidden.unbind(1))
 	if not inst.is_container():
 		return
 	inst.slots_changed.connect(_sync_groups)
@@ -75,9 +80,32 @@ func find_panel(inst: DeviceInstance) -> DevicePanel:
 	return null
 
 
-## Open slot groups in display order.
+## True while this device's slot children are hidden: its controls are hidden, or an ancestor's
+## are. Derived from those states, never stored on the children, so showing the controls again
+## brings every child back as it was (View toggle, open slots, nested slots).
+func children_hidden() -> bool:
+	return _suspended or (panel != null and panel.controls_hidden())
+
+
+## An ancestor hid or showed its controls: pass it on to this panel and the slots.
+func set_suspended(value: bool) -> void:
+	_suspended = value
+	if panel:
+		panel.set_suspended(value)
+	_apply_children_hidden()
+
+
+func _apply_children_hidden() -> void:
+	var hidden := children_hidden()
+	for group in _groups.values():
+		group.set_suspended(hidden)
+
+
+## Open slot groups in display order (none while the children are hidden).
 func slot_groups() -> Array[DeviceSlotGroup]:
 	var out: Array[DeviceSlotGroup] = []
+	if children_hidden():
+		return out
 	for key in device.open_slot_keys() if device else PackedStringArray():
 		if _groups.has(key):
 			out.append(_groups[key])
@@ -110,7 +138,7 @@ func _sync_groups() -> void:
 		var group: DeviceSlotGroup = _groups.get(keys[i])
 		if group == null:
 			group = DeviceSlotGroup.new()
-			group.setup(device, keys[i], _in_slot)
+			group.setup(device, keys[i], _in_slot, children_hidden())
 			group.context_menu_requested.connect(context_menu_requested.emit)
 			group.selection_requested.connect(selection_requested.emit)
 			group.selection_released.connect(selection_released.emit)
