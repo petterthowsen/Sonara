@@ -12,7 +12,7 @@ This plan comes from reading the code at `8b6d17e`. Nothing has been measured ye
 - [x] Phase 2: Edits run on refs (`NoteEdits`), not on `VisualNote`s
 - [x] Phase 3: Selecting across tracks (click, Ctrl+click, box, ruler range, Ctrl+A), drawn on the context layer
 - [x] Phase 4: Gestures across tracks (drag, resize, velocity drag, keyboard edits)
-- [ ] Phase 5: Value lanes, clipboard, tools and group scale across tracks
+- [x] Phase 5: Value lanes, clipboard, tools and group scale across tracks
 - [ ] Phase 6 (optional): `clip-editor-performance-plan.md` Phase 3, draw the focus track too and retire `VisualNote`
 
 Each phase ships on its own. After each one, run `Godot/tests/run_all.sh` and the
@@ -351,10 +351,35 @@ still works with another track in the selection.
   release.
 - `can_transfer` / `can_split_voices` are false for multi-track selections.
 
+**Outcome.** Done. Notes:
+
+- Value lane stems for off-focus notes are only built within a screen either side of the view; the lane
+  edits still reach every selected note (the stem area asks the selection for the clip of a note with
+  no stem, and snapshots the selection's clips).
+- Group scale now also scales the selection range in track mode (the range is in song ticks, like
+  the notes).
+- The group scale handle position is computed from ticks (`ref` start + duration), not from nodes.
+- Ctrl+press on an unselected note of another track still adds it and drags (Phase 4); only a selected
+  one duplicates when dragged with Ctrl.
+- `ClipNotesStateCommand._restore` now looks notes up through a map. That was not what made Esc
+  cancel slow: with 5,000 notes moved, every one has to be restored and re-synced, so the time (about
+  330 ms) is the 5,000 `update_midi_note` calls and the signals they fire.
+
 ### Phase 6 (optional)
 
 If the benchmark shows the focus track's `VisualNote`s are now the cost (dense drum clips), do the
 performance plan's Phase 3. After this refactor, `VisualNote` is display-only, so replacing it with
+
+Benchmark note (Phase 5, 100 tracks, 500 notes each): binding, scroll, zoom and track switch are
+unchanged from before the refactor (about 145 ms, 26 ms, 78 ms, 127 ms). The cost of a big
+cross-track selection is not the focus track's `VisualNote`s: a scroll step with 5,000 selected notes
+was 36 ms before the lanes got stems for off-focus notes and is about 80 ms now with the value lane
+pane open (`value_stems()` takes 31 ms per call and runs several times a frame); a drag frame is 60-95 ms
+and a group-scale frame about 90 ms. Those are the per-note work of the edit and the redraw of
+selected notes, which Phase 6 would not change. The focus track has at most ~500 nodes in the
+benchmark, so Phase 6 is not worth doing on these numbers; revisit only if dense single-track drum
+clips (thousands of notes on the focus track) bind or scroll slowly. A cheaper win is caching
+`value_stems()` per frame.
 the drawn layer is mostly a rendering change.
 
 ## Docs and specs

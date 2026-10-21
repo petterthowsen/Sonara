@@ -36,6 +36,10 @@ var edits: NoteEdits
 ## Drag, resize and velocity drag of the selection, on refs.
 var gestures: NoteGestures
 
+## Whether a note copied from a track may be pasted back onto it. MidiEditor sets this to its
+## editable tracks; a standalone editor allows every track.
+var paste_track_ok: Callable = func(_t: Track) -> bool: return true
+
 ## Notes whose visuals were last drawn as selected -> their clip.
 var _lit: Dictionary = {}
 
@@ -214,6 +218,7 @@ func set_grid_helper(gh: GridHelper) -> void:
 func unbind():
 	# The pending duplicates are children and go with the rest; forget them too.
 	_dup_origins.clear()
+	_dup_context.clear()
 	dup_anchor = null
 	# Every note node goes away, so no gesture can carry on with one.
 	_lit.clear()
@@ -782,12 +787,26 @@ func _paste_at_position(tick_position: int) -> void:
 	# clips lands in the matching clips of the target track (notes stay visible).
 	var targets: Array = []  # [MidiNoteData in clip-content ticks, Clip, ClipInstance, song tick]
 	var target_clips: Array = []
-	for note_data in source.get_notes_at_position(tick_position):
+	# A copy from several tracks goes back to each note's own track (the focus track when that
+	# one is gone or not editable); a copy from one track goes to the focus track.
+	var per_track := multi_clip_mode and source.spans_tracks()
+	var pasted_notes_list := source.get_notes_at_position(tick_position)
+	for i in pasted_notes_list.size():
+		var note_data := pasted_notes_list[i]
 		var target_clip: Clip = clip
 		var ci: ClipInstance = null
 		var song_tick := note_data.start_tick
 		if multi_clip_mode:
-			ci = get_or_create_clip_at_position(note_data.start_tick, span_end)
+			var dest_track: Track = track
+			if per_track:
+				var wanted: Track = source.source_tracks[i] if i < source.source_tracks.size() else null
+				if wanted != null and paste_track_ok.call(wanted):
+					dest_track = wanted
+			if dest_track == track:
+				ci = get_or_create_clip_at_position(note_data.start_tick, span_end)
+			else:
+				ci = TrackClips.get_or_create(dest_track, note_data.start_tick,
+					grid_helper.get_ticks_per_bar() if grid_helper else 3840, span_end)
 			if not ci:
 				logger.warn("Cannot paste note at tick %d - no clip there" % note_data.start_tick)
 				continue
@@ -828,11 +847,15 @@ func _paste_at_position(tick_position: int) -> void:
 			continue
 		pasted.append(target)
 
-	# Select newly pasted notes: the visuals where they were pasted (a loop repeat, or the
-	# instance the paste landed on)
-	var pasted_notes: Array[VisualNote] = []
+	# Select newly pasted notes: on the focus track the visuals where they were pasted (a loop
+	# repeat, or the instance the paste landed on); notes pasted onto another track by the
+	# instance they went into.
+	var pasted_notes: Array = []
 	for target in pasted:
 		var note_data: MidiNoteData = target[0]
+		if multi_clip_mode and target[2] and target[2].track != track:
+			pasted_notes.append(NoteRef.new(target[2], note_data, 0))
+			continue
 		var note_instance: VisualNote = visual_at_song_tick(target[2], note_data, target[3]) if target[2] else get_visual_note(note_data.id)
 		if note_instance and note_instance not in pasted_notes:
 			pasted_notes.append(note_instance)
@@ -1778,6 +1801,14 @@ func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 var _dup_origins: Dictionary = {}
 ## The duplicate of the note that was grabbed, which steers the pitch delta.
 var dup_anchor: VisualNote = null
+## The duplicate of the grabbed note and its track, whichever track that is (dup_anchor is null
+## when the note is on another track), and its pitch at the start.
+var dup_anchor_data: MidiNoteData = null
+var dup_anchor_track: Track = null
+var _dup_anchor_pitch := 0
+## Pending duplicates of notes of other tracks: {data (editor ticks), track, start_tick, note}.
+## The context layer draws them.
+var _dup_context: Array[Dictionary] = []
 var _dup_start_mouse_pos: Vector2 = Vector2.ZERO
 
 
@@ -1795,63 +1826,95 @@ func get_pending_duplicates() -> Array[VisualNote]:
 func start_duplicate_drag(grabbed: VisualNote, mouse_pos_local: Vector2) -> bool:
 	if not grabbed or not grabbed.midi_note_data:
 		return false
+	return start_duplicate_drag_ref(ref_of_visual(grabbed), mouse_pos_local)
+
+
+## Same, grabbing the note a ref points at, which may be on any track. Notes of the focus track
+## become pending VisualNotes; notes of other tracks become pending copies the context layer
+## draws translucent.
+func start_duplicate_drag_ref(grabbed: NoteRef, mouse_pos_local: Vector2) -> bool:
+	if grabbed == null or grabbed.data == null:
+		return false
 	cancel_duplicate_drag()
-	var sources: Array[VisualNote] = []
-	if selection_model.has(grabbed.midi_note_data):
-		sources.assign(selection_manager.selected_visuals())
+	var sources: Array[NoteRef] = []
+	if selection_model.has(grabbed.data):
+		sources.assign(selection_model.refs)
 	else:
 		sources.append(grabbed)
 
 	for src in sources:
-		if not is_instance_valid(src) or not src.midi_note_data:
-			continue
-		var nd: MidiNoteData = src.midi_note_data
+		var nd: MidiNoteData = src.data
 		var copy := MidiNoteData.new()
 		copy.copy_values_from(nd)
-		# Where this visual shows it: a loop repeat's pass, not the note's first one.
-		copy.start_tick = get_note_song_position(src).start_tick
-		var vn: VisualNote = visual_note_scene.instantiate()
-		vn.is_pending = true
-		add_child(vn)
-		vn.bind_to_note(copy)
-		vn.set_color(note_color)
-		vn.set_selected(true)
-		_update_single_note_position(vn)
-		_dup_origins[vn] = {"start_tick": copy.start_tick, "note": copy.note}
-		if nd == grabbed.midi_note_data:
-			dup_anchor = vn
+		# Where this note shows in the editor's ticks: a loop repeat's pass, not the note's first.
+		copy.start_tick = span_of_ref(src).start_tick
+		var is_anchor := nd == grabbed.data
+		var shown := visual_of_ref(src)
+		if shown != null:
+			var vn: VisualNote = visual_note_scene.instantiate()
+			vn.is_pending = true
+			add_child(vn)
+			vn.bind_to_note(copy)
+			vn.set_color(note_color)
+			vn.set_selected(true)
+			_update_single_note_position(vn)
+			_dup_origins[vn] = {"start_tick": copy.start_tick, "note": copy.note}
+			if is_anchor:
+				dup_anchor = vn
+		else:
+			_dup_context.append({"data": copy, "track": src.track, "start_tick": copy.start_tick, "note": copy.note})
+		if is_anchor:
+			dup_anchor_data = copy
+			dup_anchor_track = src.track
+			_dup_anchor_pitch = copy.note
 
-	if _dup_origins.is_empty():
+	if _dup_origins.is_empty() and _dup_context.is_empty():
 		return false
 	_dup_start_mouse_pos = mouse_pos_local
 	interaction_mode = InteractionMode.DUPLICATING
+	_sync_context_pending()
 	return true
 
 
 ## Move every duplicate by the snapped mouse delta, keeping their relative layout.
 func update_duplicate_drag(mouse_pos_local: Vector2) -> void:
-	if _dup_origins.is_empty() or not dup_anchor:
+	if (_dup_origins.is_empty() and _dup_context.is_empty()) or dup_anchor_data == null:
 		return
 	var delta_ticks := pixels_to_ticks(mouse_pos_local.x - _dup_start_mouse_pos.x)
 	delta_ticks = _snap_unless_shift(delta_ticks)
-	var anchor_pitch: int = _dup_origins[dup_anchor].note
-	var delta_steps := layout.row_of_pitch(anchor_pitch) - layout.y_to_row(mouse_pos_local.y)
+	var delta_steps := layout.row_of_pitch(_dup_anchor_pitch) - layout.y_to_row(mouse_pos_local.y)
 	for vn in get_pending_duplicates():
 		var origin: Dictionary = _dup_origins[vn]
 		vn.midi_note_data.start_tick = maxi(0, origin.start_tick + delta_ticks)
 		vn.midi_note_data.note = step_note(origin.note, delta_steps)
 		vn._update_visual()
 		_update_single_note_position(vn)
+	for entry in _dup_context:
+		var moved: MidiNoteData = entry.data
+		moved.start_tick = maxi(0, entry.start_tick + delta_ticks)
+		moved.note = step_note(entry.note, delta_steps)
+	_sync_context_pending()
+
+
+func _sync_context_pending() -> void:
+	var layer: Variant = edits.context_layer
+	if layer != null and layer.has_method("set_pending_notes"):
+		layer.set_pending_notes(_dup_context)
 
 
 ## Write the duplicates into their clips (one undo step) and select them. Dropping them
-## back exactly where they started is treated as a cancel.
+## back exactly where they started is treated as a cancel. A duplicate goes into its own
+## track's clip.
 func finish_duplicate_drag() -> void:
 	var pending := get_pending_duplicates()
 	var moved := false
 	for vn in pending:
 		var origin: Dictionary = _dup_origins[vn]
 		if vn.midi_note_data.start_tick != origin.start_tick or vn.midi_note_data.note != origin.note:
+			moved = true
+			break
+	for entry in _dup_context:
+		if entry.data.start_tick != entry.start_tick or entry.data.note != entry.note:
 			moved = true
 			break
 	if not moved:
@@ -1861,10 +1924,20 @@ func finish_duplicate_drag() -> void:
 	# Resolve every target first: creating a clip in track mode is its own undo step,
 	# and the note snapshots must be taken after it exists.
 	var targets: Array = []  # [MidiNoteData copy, ClipInstance or null, Clip]
+	var all_copies: Array = []  # [MidiNoteData, Track or null]
 	for vn in pending:
-		var nd: MidiNoteData = vn.midi_note_data
+		all_copies.append([vn.midi_note_data, track])
+	for entry in _dup_context:
+		all_copies.append([entry.data, entry.track])
+	for pair in all_copies:
+		var nd: MidiNoteData = pair[0]
 		if multi_clip_mode:
-			var ci := get_or_create_clip_at_position(nd.start_tick)
+			var dest_track: Track = pair[1] if pair[1] != null else track
+			var ci: ClipInstance
+			if dest_track == track:
+				ci = get_or_create_clip_at_position(nd.start_tick)
+			else:
+				ci = TrackClips.get_or_create(dest_track, nd.start_tick, grid_helper.get_ticks_per_bar() if grid_helper else 3840)
 			if ci and ci.clip:
 				targets.append([nd, ci, ci.clip])
 		elif clip:
@@ -1891,12 +1964,15 @@ func finish_duplicate_drag() -> void:
 
 	cancel_duplicate_drag()
 
-	var new_visuals: Array[VisualNote] = []
+	var new_selection: Array = []
 	for entry in added:
+		if multi_clip_mode and entry[1].track != track:
+			new_selection.append(NoteRef.new(entry[1], entry[0], 0))
+			continue
 		var vn: VisualNote = visual_at_song_tick(entry[1], entry[0], entry[2]) if multi_clip_mode else visual_for(clip_instance, entry[0])
-		if vn and vn not in new_visuals:
-			new_visuals.append(vn)
-	selection_manager.select_all(new_visuals)
+		if vn and vn not in new_selection:
+			new_selection.append(vn)
+	selection_manager.select_all(new_selection)
 	edits.commit("Duplicate Notes")
 	update_container_width()
 	logger.info("Ctrl+drag duplicated %d note(s)" % added.size())
@@ -1908,7 +1984,11 @@ func cancel_duplicate_drag() -> void:
 		remove_child(vn)
 		vn.queue_free()
 	_dup_origins.clear()
+	_dup_context.clear()
+	_sync_context_pending()
 	dup_anchor = null
+	dup_anchor_data = null
+	dup_anchor_track = null
 	if interaction_mode == InteractionMode.DUPLICATING:
 		interaction_mode = InteractionMode.NONE
 
@@ -1987,8 +2067,12 @@ const SCALE_HANDLE_GAP := 5.0
 const SCALE_HANDLE_ICON := preload("res://assets/icons/move-horizontal.svg")
 const SCALE_HANDLE_ICON_SIZE := 14.0
 
-var _scale_notes: Array[MidiNoteData] = []
-var _scale_visuals: Array[VisualNote] = []
+## The notes being scaled (refs of any track), and copies of them in editor ticks: scaling runs
+## on the copies, in song ticks about the earliest start, and each result is converted back to
+## its clip's ticks through the note's own instance.
+var _scale_refs: Array[NoteRef] = []
+var _scale_proxies: Array[MidiNoteData] = []
+var _scale_origins := PackedInt32Array()
 var _scale_starts := PackedInt32Array()
 var _scale_durations := PackedInt32Array()
 var _scale_anchor := 0
@@ -1999,36 +2083,37 @@ var _scale_had_range := false
 var _scale_loop_owners: Dictionary = {}
 
 
+## Where the clip tick 0 of `ref`'s note is in editor ticks: the instance's content origin in
+## track mode (song ticks), 0 in clip mode.
+func _editor_origin(ref: NoteRef) -> int:
+	return ref.instance.content_origin_ticks() if multi_clip_mode and ref.instance != null else 0
+
+
 ## The handle just past the end of the selection, in this editor's space; an empty Rect2 when
-## there is none. Needs two or more selected notes of one clip, outside Drum View (hits have
+## there is none. Needs two or more selected notes, on any tracks, outside Drum View (hits have
 ## no length). Among the notes that end last it sits on the one nearest the middle of their
 ## pitch range.
 func group_scale_handle_rect() -> Rect2:
-	if layout.is_drum():
+	if layout.is_drum() or grid_helper == null or selection_model.size() < 2:
 		return Rect2()
-	var visuals := _selected_note_visuals()
-	if visuals.size() < 2:
-		return Rect2()
-	var the_clip: Clip = _clip_for_visual_note(visuals[0])
-	var right := -INF
-	for vn in visuals:
-		if _clip_for_visual_note(vn) != the_clip:
-			return Rect2()
-		right = maxf(right, vn.position.x + vn.size.x)
-	var last_ending: Array[VisualNote] = []
+	var right := -1
+	for ref in selection_model.refs:
+		right = maxi(right, _editor_origin(ref) + ref.data.start_tick + ref.data.duration_ticks)
 	var lo := 127
 	var hi := 0
-	for vn in visuals:
-		if vn.position.x + vn.size.x >= right - 0.5:
-			last_ending.append(vn)
-			lo = mini(lo, vn.midi_note_data.note)
-			hi = maxi(hi, vn.midi_note_data.note)
-	var pick: VisualNote = last_ending[0]
-	for vn in last_ending:
-		if absf(vn.midi_note_data.note - (lo + hi) * 0.5) < absf(pick.midi_note_data.note - (lo + hi) * 0.5):
-			pick = vn
+	var last_ending: Array[NoteRef] = []
+	for ref in selection_model.refs:
+		if _editor_origin(ref) + ref.data.start_tick + ref.data.duration_ticks == right:
+			last_ending.append(ref)
+			lo = mini(lo, ref.data.note)
+			hi = maxi(hi, ref.data.note)
+	var pick: NoteRef = last_ending[0]
+	for ref in last_ending:
+		if absf(ref.data.note - (lo + hi) * 0.5) < absf(pick.data.note - (lo + hi) * 0.5):
+			pick = ref
 	var h := maxf(SCALE_HANDLE_SIZE.y, 0.0)
-	return Rect2(right + SCALE_HANDLE_GAP, pick.position.y + pick.size.y * 0.5 - h * 0.5, SCALE_HANDLE_SIZE.x, h)
+	var row_y := layout.pitch_to_y(pick.data.note)
+	return Rect2(grid_helper.ticks_to_pixels(right) + SCALE_HANDLE_GAP, row_y + layout.row_height * 0.5 - h * 0.5, SCALE_HANDLE_SIZE.x, h)
 
 
 func is_over_group_scale_handle(pos: Vector2) -> bool:
@@ -2066,20 +2151,25 @@ func _on_layout_changed() -> void:
 func begin_group_scale(mouse_x: float = 0.0) -> bool:
 	if group_scale_handle_rect().size == Vector2.ZERO:
 		return false
-	_scale_visuals = _selected_note_visuals()
-	_scale_notes.clear()
+	_scale_refs.assign(selection_model.refs)
+	_scale_proxies.clear()
+	_scale_origins = PackedInt32Array()
 	_scale_starts = PackedInt32Array()
 	_scale_durations = PackedInt32Array()
-	for vn in _scale_visuals:
-		_scale_notes.append(vn.midi_note_data)
-		_scale_starts.append(vn.midi_note_data.start_tick)
-		_scale_durations.append(vn.midi_note_data.duration_ticks)
-	var span := NoteTransforms.tick_bounds(_scale_notes)
+	for ref in _scale_refs:
+		var origin := _editor_origin(ref)
+		var proxy := ref.data.duplicate_note()
+		proxy.start_tick = origin + ref.data.start_tick
+		_scale_proxies.append(proxy)
+		_scale_origins.append(origin)
+		_scale_starts.append(proxy.start_tick)
+		_scale_durations.append(ref.data.duration_ticks)
+	var span := NoteTransforms.tick_bounds(_scale_proxies)
 	_scale_anchor = span.x
 	_scale_end = span.y
 	_scale_mouse_x = mouse_x
 	_scale_loop_owners = _loop_owners()
-	_scale_had_range = selection_manager.has_range() and not multi_clip_mode
+	_scale_had_range = selection_manager.has_range()
 	_scale_range = Vector2i(selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick)
 	edits.begin()
 	interaction_mode = InteractionMode.SCALING
@@ -2096,10 +2186,19 @@ func update_group_scale(new_end: int) -> void:
 	var span := _scale_end - _scale_anchor
 	var min_factor := NoteTransforms.min_scale_factor(_scale_durations)
 	new_end = maxi(new_end, _scale_anchor + ceili(span * min_factor))
-	NoteTransforms.scale(_scale_notes, _scale_anchor, float(new_end - _scale_anchor) / float(span),
+	NoteTransforms.scale(_scale_proxies, _scale_anchor, float(new_end - _scale_anchor) / float(span),
 			_scale_starts, _scale_durations)
+	_write_scaled_back()
 	edits.refresh()
 	queue_redraw()
+
+
+## The scaled copies back into the notes, in each note's clip ticks.
+func _write_scaled_back() -> void:
+	for i in _scale_refs.size():
+		var data := _scale_refs[i].data
+		data.start_tick = maxi(0, _scale_proxies[i].start_tick - _scale_origins[i])
+		data.duration_ticks = _scale_proxies[i].duration_ticks
 
 
 ## Same, from the mouse at editor position `pos`, snapped to the grid (Shift: free).
@@ -2112,10 +2211,13 @@ func end_group_scale() -> void:
 	if interaction_mode != InteractionMode.SCALING:
 		return
 	interaction_mode = InteractionMode.NONE
-	_fold_into_loops(_scale_notes, _scale_loop_owners)
+	var scaled: Array[MidiNoteData] = []
+	for ref in _scale_refs:
+		scaled.append(ref.data)
+	_fold_into_loops(scaled, _scale_loop_owners)
 	edits.refresh()
 	if _scale_had_range:
-		var new_end := NoteTransforms.tick_bounds(_scale_notes).y
+		var new_end := NoteTransforms.tick_bounds(_scale_proxies).y
 		var factor := float(new_end - _scale_anchor) / float(_scale_end - _scale_anchor)
 		selection_manager.box_selection_start_tick = _scaled_tick(_scale_range.x, factor)
 		selection_manager.box_selection_end_tick = _scaled_tick(_scale_range.y, factor)
@@ -2136,7 +2238,8 @@ func cancel_group_scale() -> void:
 	if interaction_mode != InteractionMode.SCALING:
 		return
 	interaction_mode = InteractionMode.NONE
-	NoteTransforms.scale(_scale_notes, _scale_anchor, 1.0, _scale_starts, _scale_durations)
+	NoteTransforms.scale(_scale_proxies, _scale_anchor, 1.0, _scale_starts, _scale_durations)
+	_write_scaled_back()
 	edits.refresh()
 	edits.discard()
 	_scale_clear()
@@ -2144,7 +2247,7 @@ func cancel_group_scale() -> void:
 
 
 func _scale_clear() -> void:
-	_scale_notes.clear()
-	_scale_visuals.clear()
+	_scale_refs.clear()
+	_scale_proxies.clear()
 	_scale_loop_owners.clear()
 	queue_redraw()

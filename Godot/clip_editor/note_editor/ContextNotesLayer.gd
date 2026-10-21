@@ -74,6 +74,16 @@ var selection: NoteSelectionModel = null:
 			selection.set_changed.connect(queue_redraw)
 		queue_redraw()
 
+## Ctrl+drag duplicates of notes of other tracks, not in any clip yet: {data (start in song
+## ticks), track}. Drawn translucent.
+var _pending: Array = []
+
+
+func set_pending_notes(pending: Array) -> void:
+	_pending = pending.duplicate()
+	queue_redraw()
+
+
 ## The track that is not drawn because a NoteEditor shows it (the active one).
 var excluded_track: Track = null:
 	set(t):
@@ -338,6 +348,13 @@ func _draw() -> void:
 				_draw_loop_repeats(ci, fills, alpha, first_tick, last_tick, top, bottom)
 	if selection != null and not selection.is_empty():
 		_draw_selected_refs(first_tick, last_tick, top, bottom)
+	for entry in _pending:
+		var rect := NotePlacement.note_rect(entry.data, 0, layout, grid_helper)
+		if rect.has_area() and rect.end.y >= top and rect.position.y <= bottom:
+			var fill := _fills_for(entry.track)[_shade_of(entry.data.velocity)]
+			fill.a = 0.55
+			draw_rect(rect, fill)
+			draw_rect(rect, SELECTED_OUTLINE, false, 1.0)
 
 
 func _draw_instance(ci: ClipInstance, fills: PackedColorArray, alpha: float,

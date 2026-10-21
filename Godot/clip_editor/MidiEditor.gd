@@ -1230,8 +1230,8 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 		# A note of another editable track (the gesture table in the plan, Design > Gestures).
 		var selected := note_selection.has(hit.data)
 		if mevent.ctrl_pressed and selected:
-			# Ctrl+click on a selected note takes it out on release (Ctrl+drag would duplicate
-			# it: Phase 5, so a drag does nothing).
+			# Ctrl+click on a selected note takes it out on release; Ctrl+drag duplicates the
+			# selection from it (see _handle_note_editing_mouse_motion).
 			_context_press = hit
 			_context_press_pos = mevent.global_position
 			accept_event()
@@ -1419,7 +1419,22 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 			_ctrl_press_note = null
 			var start_pos: Vector2 = active_editor.make_canvas_position_local(_ctrl_press_pos)
 			if active_editor.start_duplicate_drag(grabbed, start_pos):
-				_audition_visual_note(active_editor.dup_anchor)
+				_audition_note(active_editor.dup_anchor_data, active_editor.dup_anchor_track)
+				active_editor.update_duplicate_drag(note_editor_pos)
+			accept_event()
+			_update_selection_overlays()
+			return
+
+	# Ctrl held on a selected note of another track and dragged past the threshold: duplicate
+	# the selection from that note.
+	if not _context_press.is_empty():
+		if get_global_mouse_position().distance_to(_context_press_pos) >= active_editor.DRAG_THRESHOLD:
+			var hit := _context_press
+			_context_press = {}
+			var start_pos: Vector2 = active_editor.make_canvas_position_local(_context_press_pos)
+			var ref := NoteRef.new(hit.instance, hit.data, hit.get("pass", 0))
+			if active_editor.start_duplicate_drag_ref(ref, start_pos):
+				_audition_note(active_editor.dup_anchor_data, active_editor.dup_anchor_track)
 				active_editor.update_duplicate_drag(note_editor_pos)
 			accept_event()
 			_update_selection_overlays()
@@ -1428,7 +1443,7 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 	# Handle active interactions
 	if active_editor.interaction_mode == NoteEditor.InteractionMode.DUPLICATING:
 		active_editor.update_duplicate_drag(note_editor_pos)
-		_retrigger_audition_on_pitch_change(active_editor.dup_anchor)
+		_retrigger_audition_for(active_editor.dup_anchor_data, active_editor.dup_anchor_track)
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
@@ -1711,6 +1726,7 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	# range overlays are ours, so refresh them when that changed the selection.
 	editor.use_selection_model(note_selection)
 	editor.edits.context_layer = context_layer
+	editor.paste_track_ok = func(t: Track) -> bool: return selectable_tracks().has(t)
 	if not note_selection.restored.is_connected(_update_selection_overlays):
 		note_selection.restored.connect(_update_selection_overlays)
 	if not editor.select_all_tracks_requested.is_connected(_select_all_tracks):
@@ -1774,11 +1790,11 @@ func _emit_key_column_width() -> void:
 		key_column_width_changed.emit(w)
 
 
-## One entry per visible, editable note shown by the note editors, for the value lanes:
-## visual, note_data, clip, color, ghost, selected, x_start and x_end. x are in the
-## coordinates of the HScroll (its scrolled content is shifted, so the scroll is included).
-## Context notes (other tracks) are not in note_editors, so they get no stems. A stem is a
-## ghost when it is a loop repeat or another instance's visual of a note already listed.
+## One entry per visible, editable note shown by the note editors, plus one per selected note
+## the editors do not show (another track's), for the value lanes: visual (null for those),
+## note_data, clip, color, ghost, selected, x_start and x_end. x are in the coordinates of the
+## HScroll (its scrolled content is shifted, so the scroll is included). A stem is a ghost when
+## it is a loop repeat or another instance's visual of a note already listed.
 func value_stems() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var seen: Dictionary = {}
@@ -1803,7 +1819,75 @@ func value_stems() -> Array[Dictionary]:
 				"x_start": x0,
 				"x_end": x1,
 			})
+	_append_off_focus_stems(out)
 	return out
+
+
+## Stems for the selected notes of tracks the note editor does not show. The note itself is one
+## stem (through the instance it was selected on), its other instances and loop passes on the
+## drawn tracks are ghosts, as on the focus track.
+func _append_off_focus_stems(out: Array[Dictionary]) -> void:
+	var editor := get_active_note_editor()
+	if editor == null or not track_mode or note_selection.is_empty():
+		return
+	var folded := lane_layout.is_drum()
+	var off: Array[NoteRef] = []
+	var clips := {}
+	for ref in note_selection.refs:
+		if editor.visual_of_ref(ref) == null and ref.instance != null:
+			off.append(ref)
+			clips[ref.clip] = []
+	if off.is_empty():
+		return
+	for t in _view_tracks:
+		for ci in t.clip_instances:
+			if ci != null and clips.has(ci.clip):
+				clips[ci.clip].append(ci)
+	var first_tick := grid_helper.pixels_to_ticks(context_layer.view_rect.position.x)
+	var last_tick := grid_helper.pixels_to_ticks(context_layer.view_rect.end.x)
+	# Stems are only made a screen either side of the view: the lane draws what is on screen, and
+	# edits reach the selected notes beyond it through the selection (see ValueLaneStemArea).
+	var margin := last_tick - first_tick
+	var passes_of := {}  # ClipInstance -> Array[Vector3i]
+	for ref in off:
+		var nd := ref.data
+		var c := ref.clip
+		var ref_start := ref.instance.content_origin_ticks() + nd.start_tick
+		if ref_start > last_tick + margin or ref_start + nd.duration_ticks < first_tick - margin:
+			continue
+		for ci: ClipInstance in clips[c]:
+			var main: bool = ci == ref.instance
+			var rect := NotePlacement.note_rect(nd, ci.content_origin_ticks(), lane_layout, grid_helper)
+			if rect.has_area() and (main or ci.plays_clip_span(nd.start_tick, nd.start_tick + nd.duration_ticks)):
+				out.append(_off_focus_stem(editor, nd, c, ci.track, rect, not main, folded))
+			if not ci.loop_enabled:
+				continue
+			if not passes_of.has(ci):
+				var shown: Array[Vector3i] = []
+				var segments := ci.get_loop_segments()
+				for k in range(1, segments.size()):
+					var seg := segments[k]
+					if ci.start_ticks + seg.y >= first_tick and ci.start_ticks + seg.x <= last_tick:
+						shown.append(seg)
+				passes_of[ci] = shown
+			for seg: Vector3i in passes_of[ci]:
+				var repeat := NotePlacement.repeat_rect(nd, ci, seg, lane_layout, grid_helper)
+				if repeat.has_area():
+					out.append(_off_focus_stem(editor, nd, c, ci.track, repeat, true, folded))
+
+
+func _off_focus_stem(editor: NoteEditor, nd: MidiNoteData, c: Clip, t: Track, rect: Rect2, ghost: bool, folded: bool) -> Dictionary:
+	var x0 := editor.position.x + rect.position.x
+	return {
+		"visual": null,
+		"note_data": nd,
+		"clip": c,
+		"color": t.color if t != null else Color(0.3, 0.6, 0.9),
+		"ghost": ghost,
+		"selected": true,
+		"x_start": x0,
+		"x_end": x0 + (editor.ticks_to_pixels(nd.duration_ticks) if folded else rect.size.x),
+	}
 
 
 ## The notes a box (in note editor coordinates) selects. Track mode: those of every editable
@@ -1851,15 +1935,12 @@ func _select_pitch(pitch: int, additive: bool) -> void:
 	_update_selection_overlays()
 
 
-## The selected notes' data, once each, for the notes the value lanes show stems for (those of
-## the note editor; stems for selected notes of other tracks come with Phase 5 of
-## docs/multi-track-note-editing-plan.md).
+## The selected notes' data, once each, on any track. Value lane edits act on all of them
+## (value_stems has a stem for each).
 func selected_note_data() -> Array[MidiNoteData]:
 	var out: Array[MidiNoteData] = []
-	var editor := get_active_note_editor()
 	for ref in note_selection.refs:
-		if editor != null and editor.visual_of_ref(ref) != null:
-			out.append(ref.data)
+		out.append(ref.data)
 	return out
 
 

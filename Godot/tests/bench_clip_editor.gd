@@ -249,6 +249,9 @@ func _run() -> void:
 			h_scroll.scroll_horizontal = int(x)
 			midi.grid_helper.scroll_position = h_scroll.scroll_horizontal))
 	_report("8b. scroll step with that selection (median of 20)", _median(sel_scroll))
+	var t_stems := Time.get_ticks_usec()
+	var stem_count: int = midi.value_stems().size()
+	_report("8d. value_stems() with that selection (%d stems)" % stem_count, (Time.get_ticks_usec() - t_stems) / 1000.0)
 	var nudge_all_ms := await _time_with_frame(func(): active._move_selection_horizontal(step))
 	_report("8c. nudge the whole selection", nudge_all_ms)
 
@@ -268,6 +271,17 @@ func _run() -> void:
 	_report("9a. update_drag call alone", (Time.get_ticks_usec() - t_call) / 1000.0)
 	var end_ms := await _time_with_frame(func(): active.gestures.cancel())
 	_report("9b. Esc cancel of that drag", end_ms)
+
+	# 10. The group scale handle over that selection (asked on every hover and every draw of the
+	# note editor), and one frame of scaling it.
+	var t_handle := Time.get_ticks_usec()
+	var handle: Rect2 = active.group_scale_handle_rect()
+	_report("10a. group scale handle rect, 5,000 notes", (Time.get_ticks_usec() - t_handle) / 1000.0)
+	_assert(handle.size != Vector2.ZERO, "the handle exists for a selection across tracks")
+	active.begin_group_scale(handle.get_center().x)
+	var scale_ms := await _time_with_frame(func(): active.update_group_scale(active._scale_end + 960))
+	_report("10b. group scale frame, 5,000 notes", scale_ms)
+	active.cancel_group_scale()
 	midi.note_selection.clear()
 
 	_report_value("node count at end", _node_count())

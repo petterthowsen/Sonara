@@ -564,6 +564,10 @@ func _unique_clips() -> Array:
 	for c in _clip_by_note.values():
 		if c != null and c not in clips:
 			clips.append(c)
+	# Selected notes far off screen have no stem (value_stems skips them) but are edited too.
+	for c in midi_editor.note_selection.clips():
+		if c not in clips:
+			clips.append(c)
 	return clips
 
 
@@ -634,7 +638,11 @@ func _apply_line() -> void:
 ## Write a value to a note and remember it for the refresh and the sync.
 func _write_value(nd: MidiNoteData, v: float) -> void:
 	if not _touched.has(nd):
-		_touched[nd] = _clip_by_note.get(nd)
+		var owner_clip: Clip = _clip_by_note.get(nd)
+		if owner_clip == null:
+			var ref: NoteRef = midi_editor.note_selection.ref_of(nd)
+			owner_clip = ref.clip if ref != null else null
+		_touched[nd] = owner_clip
 		if not _originals.has(nd):
 			_originals[nd] = descriptor.get_value(nd)
 	descriptor.set_value(nd, v)

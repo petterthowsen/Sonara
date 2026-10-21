@@ -132,18 +132,17 @@ func _restore(state: Array) -> void:
 		if not desired_by_id.has(note.id):
 			clip.remove_midi_note(note)
 
-	# Add or update desired notes
+	# Add or update desired notes. The live notes by id, once, not a scan per snapshot.
+	var live_by_id: Dictionary = {}
+	for n in clip.midi_notes:
+		live_by_id[n.id] = n
 	for snap in state:
 		var note: MidiNoteData = snap["ref"]
 		# Ensure fields match snapshot (ref may have been mutated since capture)
 		note.id = snap["id"]
 		note.apply_values(snap)
 
-		var existing: MidiNoteData = null
-		for n in clip.midi_notes:
-			if n.id == note.id:
-				existing = n
-				break
+		var existing: MidiNoteData = live_by_id.get(note.id)
 
 		if existing == null:
 			clip.add_midi_note_data(note)

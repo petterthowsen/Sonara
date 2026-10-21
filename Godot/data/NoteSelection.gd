@@ -16,6 +16,11 @@ var duration_ticks: int:
 # Notes in the selection (stored with relative positions)
 var notes: Array[MidiNoteData] = []
 
+## The track each note was copied from (null where unknown), parallel to `notes`. A copy from one
+## track pastes onto the focus track; a copy from several tracks pastes each note back onto its
+## own track.
+var source_tracks: Array = []
+
 
 func _init(p_start_tick: int = 0, p_end_tick: int = 0, p_notes: Array[MidiNoteData] = []):
 	start_tick = p_start_tick
@@ -109,8 +114,10 @@ static func from_positioned_notes(visual_notes: Array[VisualNote], p_start_tick:
 ## Like from_positioned_notes, for NoteRefs: `position_of(ref) -> {"start_tick", "end_tick"}`.
 static func from_positioned_refs(refs: Array, p_start_tick: int, p_end_tick: int, position_of: Callable) -> NoteSelection:
 	var relative_notes: Array[MidiNoteData] = []
+	var tracks: Array = []
 	for ref in refs:
 		var note_data: MidiNoteData = ref.data
+		tracks.append(ref.track)
 		var pos: Dictionary = position_of.call(ref)
 		var relative_note = MidiNoteData.new()
 		relative_note.id = -1  # Will be assigned when pasted
@@ -119,7 +126,22 @@ static func from_positioned_refs(refs: Array, p_start_tick: int, p_end_tick: int
 		relative_note.start_tick = int(pos["start_tick"]) - p_start_tick
 		relative_note.duration_ticks = note_data.duration_ticks
 		relative_notes.append(relative_note)
-	return NoteSelection.new(p_start_tick, p_end_tick, relative_notes)
+	var result := NoteSelection.new(p_start_tick, p_end_tick, relative_notes)
+	result.source_tracks = tracks
+	return result
+
+
+## True when the notes come from more than one track.
+func spans_tracks() -> bool:
+	var first: Object = null
+	for t in source_tracks:
+		if t == null:
+			continue
+		if first == null:
+			first = t
+		elif t != first:
+			return true
+	return false
 
 
 ## Create a NoteSelection from an array of MidiNoteData instances
