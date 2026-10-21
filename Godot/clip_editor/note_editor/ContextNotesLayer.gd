@@ -17,6 +17,9 @@ signal content_extent_changed
 ## use may have moved. MidiEditor listens to rebuild Drum View's rows (REQ-016).
 signal notes_changed
 
+## A drawn track's colour changed.
+signal track_recolored
+
 const ALPHA_EDITABLE := 0.85
 const ALPHA_VIEW_ONLY := 0.5
 ## Outline of a selected note.
@@ -200,6 +203,7 @@ func _exit_tree() -> void:
 
 
 func _on_track_color_changed(_color: Color) -> void:
+	track_recolored.emit()
 	_shades.clear()
 	queue_redraw()
 

@@ -78,6 +78,7 @@ var note_editor: NoteEditor:
 var editable_tracks: Array[Track] = []:
 	set(value):
 		editable_tracks = value
+		mark_stems_dirty()
 		_update_note_editor_states()
 		_drop_unavailable_selection()
 
@@ -398,6 +399,11 @@ func _ready():
 	v_piano.scale_context = scale_context
 	note_lanes.scale_context = scale_context
 	scale_context.changed.connect(_on_scale_context_changed)
+	# Anything that changes what value_stems() returns marks the cache stale (see value_stems).
+	for sig: Signal in [note_selection.changed, note_selection.set_changed, lane_layout.changed, scale_context.changed,
+			context_layer.notes_changed, context_layer.content_extent_changed, context_layer.track_recolored,
+			h_scroll.get_h_scroll_bar().value_changed, focus_track_changed]:
+		sig.connect(mark_stems_dirty)
 	
 	context_layer.name = "ContextNotes"
 	context_layer.selection = note_selection
@@ -506,6 +512,7 @@ func _set_h_scroll(px: float, zooming := false) -> void:
 
 func unbind():
 	"""Unbind all clip instances and clear note editors."""
+	mark_stems_dirty()
 	_stop_preview_note()
 	_stop_chord_preview()
 	clip = null
@@ -527,6 +534,7 @@ func unbind():
 
 func bind_to_clip_instance(ci : ClipInstance):
 	"""Bind to a single clip instance (clip-mode)."""
+	mark_stems_dirty()
 	logger.info("bind_to_clip_instance called (clip-mode)")
 	logger.info("  - clip_instance: ", ci)
 	logger.info("  - clip_id: ", ci.clip_id if ci else "null")
@@ -562,6 +570,7 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 	Shows ALL clips of every given track: the first track in a NoteEditor, the rest in the
 	context layer. This gives a complete timeline view for each selected track.
 	"""
+	mark_stems_dirty()
 	logger.info("[MidiEditor] bind_to_clips called (track-mode)")
 	logger.info("  - %d clips across %d tracks" % [clips.size(), tracks.size()])
 
@@ -624,6 +633,7 @@ func set_track_views(tracks: Array[Track], edited_clips: Array[ClipInstance]) ->
 
 	_view_tracks = tracks.duplicate()
 	_edited_clips = edited_clips.duplicate()
+	mark_stems_dirty()
 	_sync_track_views()
 	_drop_unavailable_selection()
 
@@ -1604,6 +1614,7 @@ func _update_selection_overlays() -> void:
 
 func _on_grid_helper_changed() -> void:
 	"""Called when grid_helper properties change (zoom, scroll, time signature, etc.)"""
+	mark_stems_dirty()
 	_update_playhead_position()
 	_update_selection_overlays()
 	_check_scroll_growth()
@@ -1716,6 +1727,10 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	editor.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	editor.layout = lane_layout
 	editor.scale_context = scale_context
+	if not editor.notes_changed.is_connected(mark_stems_dirty):
+		editor.notes_changed.connect(mark_stems_dirty)
+		editor.notes_refreshed.connect(mark_stems_dirty)
+		editor.content_extent_changed.connect(mark_stems_dirty)
 	if not editor.notes_changed.is_connected(queue_row_rebuild):
 		editor.notes_changed.connect(queue_row_rebuild)
 	if not editor.content_extent_changed.is_connected(queue_content_width_update):
@@ -1796,6 +1811,32 @@ func _emit_key_column_width() -> void:
 ## HScroll (its scrolled content is shifted, so the scroll is included). A stem is a ghost when
 ## it is a loop repeat or another instance's visual of a note already listed.
 func value_stems() -> Array[Dictionary]:
+	# Built at most once per frame and per change: every lane asks several times a frame.
+	var frame := Engine.get_process_frames()
+	if not _stems_dirty and frame == _stems_frame:
+		return _stems_cache
+	stems_builds += 1
+	_stems_cache = _build_value_stems()
+	_stems_frame = frame
+	_stems_dirty = false
+	return _stems_cache
+
+
+var _stems_cache: Array[Dictionary] = []
+var _stems_frame := -1
+var _stems_dirty := true
+
+## Test hook: how many times the stems were built.
+var stems_builds := 0
+
+
+## The cached stems are out of date (the selection, the notes, the layout, the scroll, the
+## tracks or their colours changed). The frame stamp covers anything that is missed.
+func mark_stems_dirty(..._args) -> void:
+	_stems_dirty = true
+
+
+func _build_value_stems() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var seen: Dictionary = {}
 	var folded := lane_layout.is_drum()

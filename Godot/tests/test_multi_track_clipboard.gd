@@ -30,6 +30,7 @@ func run_tests() -> void:
 	await _test_source_track_not_editable_falls_back()
 	await _test_group_scale_across_tracks()
 	await _test_duplicate_across_tracks()
+	await _test_value_stems_cache()
 
 
 func _typed_tracks(items: Array) -> Array:
@@ -274,4 +275,45 @@ func _test_duplicate_across_tracks() -> void:
 	_assert(recorded.size() == 1, "one undo step: %d" % recorded.size())
 	recorded[0].undo()
 	_assert(_count(ctx, "a", 60) == 1 and _count(ctx, "b", 72) == 1, "undone on both tracks")
+	await _finish(ctx)
+
+
+func _test_value_stems_cache() -> void:
+	var ctx := await _setup()
+	var midi: Object = ctx.midi
+	_select(ctx, [_ref(ctx, "a", 60), _ref(ctx, "b", 72)])
+	var first: Array = midi.value_stems()
+	var builds: int = midi.stems_builds
+	var again: Array = midi.value_stems()
+	_assert(midi.stems_builds == builds and again == first, "two calls with no change build the stems once")
+	# A change between two calls in one frame is seen at once.
+	_select(ctx, [_ref(ctx, "a", 60)])
+	var after_select: Array = midi.value_stems()
+	_assert(midi.stems_builds == builds + 1 and not after_select.any(func(st): return st.note_data == _data(ctx, "b", 72)),
+		"a selection change rebuilds: B's note has no stem now")
+	_select(ctx, [_ref(ctx, "a", 60), _ref(ctx, "b", 72)])
+	var with_b: Array = midi.value_stems()
+	var b_stem: Dictionary = {}
+	for st in with_b:
+		if st.note_data == _data(ctx, "b", 72):
+			b_stem = st
+	var x_before: float = b_stem.x_start
+	_data(ctx, "b", 72).start_tick += 960
+	ctx.ci_b.clip.update_midi_note(_data(ctx, "b", 72))
+	for st in midi.value_stems():
+		if st.note_data == _data(ctx, "b", 72):
+			b_stem = st
+	_assert(b_stem.x_start > x_before, "a note change in the same frame moves its stem")
+	var count_before: int = midi.value_stems().size()
+	var extra: Object = ctx.ci_a.clip.add_midi_note(ctx.project.allocate_note_id(), 66, MidiNoteData.from_midi_velocity(100), 1920, 480)
+	_assert(midi.value_stems().size() == count_before + 1 and extra != null, "an added note has a stem straight away")
+	ctx.b.color = Color(0.9, 0.1, 0.1)
+	var recolored := false
+	for st in midi.value_stems():
+		if st.note_data == _data(ctx, "b", 72):
+			recolored = st.color == ctx.b.color
+	_assert(recolored, "a track colour change shows in the stems")
+	midi.focus_track = ctx.b
+	var focus_b: Array = midi.value_stems()
+	_assert(focus_b.any(func(st): return st.note_data == _data(ctx, "b", 62)), "a focus change rebuilds: B's own notes have stems")
 	await _finish(ctx)

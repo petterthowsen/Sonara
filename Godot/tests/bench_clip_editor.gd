@@ -241,6 +241,7 @@ func _run() -> void:
 		selected_refs.append_array(midi.context_layer.notes_of(picked_tracks))
 		midi.note_selection.select(Array(selected_refs, TYPE_OBJECT, &"RefCounted", ref_script)))
 	_report("8a. select %d notes on 10 tracks" % selected_refs.size(), select_ms)
+	var builds_before_scroll: int = midi.stems_builds if "stems_builds" in midi else 0
 	var sel_scroll: Array = []
 	for i in 20:
 		var x := 400.0 + 40.0 * i
@@ -249,6 +250,20 @@ func _run() -> void:
 			h_scroll.scroll_horizontal = int(x)
 			midi.grid_helper.scroll_position = h_scroll.scroll_horizontal))
 	_report("8b. scroll step with that selection (median of 20)", _median(sel_scroll))
+	if "stems_builds" in midi:
+		_report_value("value_stems builds during those 20 frames", midi.stems_builds - builds_before_scroll)
+	# Three value lanes open: each used to build the stems for itself every frame.
+	clip_editor.value_pane.add_lane("rel")
+	clip_editor.value_pane.add_lane("pan")
+	await process_frame
+	var lanes3: Array = []
+	for i in 20:
+		var x := 400.0 + 40.0 * i
+		lanes3.append(await _time_with_frame(func():
+			midi.target_scroll_horizontal = x
+			h_scroll.scroll_horizontal = int(x)
+			midi.grid_helper.scroll_position = h_scroll.scroll_horizontal))
+	_report("8e. scroll step, 3 value lanes open (median of 20)", _median(lanes3))
 	var t_stems := Time.get_ticks_usec()
 	var stem_count: int = midi.value_stems().size()
 	_report("8d. value_stems() with that selection (%d stems)" % stem_count, (Time.get_ticks_usec() - t_stems) / 1000.0)
