@@ -9,7 +9,7 @@ enum LabelPosition { TOP, BOTTOM }
 ## caption (normal font).
 enum DisplayMode { LABEL, VALUE, BOTH }
 
-const VALUE_FONT_SIZE := 10
+const VALUE_FONT_SIZE := 12
 
 @export var label_position := LabelPosition.BOTTOM:
 	set(p):
