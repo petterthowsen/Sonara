@@ -41,7 +41,7 @@ var scale_context: ScaleContext = null:
 		queue_redraw()
 
 ## How strongly in-scale lanes are tinted with the theme's secondary accent.
-@export_range(0.0, 1.0) var in_scale_tint_strength := 0.12:
+@export_range(0.0, 1.0) var in_scale_tint_strength := 0.07:
 	set(t):
 		in_scale_tint_strength = t
 		queue_redraw()
