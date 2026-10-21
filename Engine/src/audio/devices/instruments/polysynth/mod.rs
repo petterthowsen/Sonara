@@ -666,10 +666,12 @@ impl PolySynthDevice {
             .fill(&mut self.cutoff_buf[..sample_count]);
         retarget(&mut self.volume_smoothed, self.params.volume_gain);
 
-        // Sort queued MIDI by offset. Taken so voices can be borrowed while iterating; put back
-        // (cleared) at the end so the queue keeps its preallocated capacity.
+        // Sort queued MIDI by offset, note-offs (and chokes) before note-ons on the same frame:
+        // a repeat of the same key whose on arrives ahead of the previous note's off would
+        // otherwise be released at once. Taken so voices can be borrowed while iterating; put
+        // back (cleared) at the end so the queue keeps its preallocated capacity.
         let mut events = core::mem::take(&mut self.queued_midi);
-        events.sort_by_key(|e| e.0);
+        events.sort_by_key(|e| (e.0, e.3));
 
         self.mix_l[..sample_count].fill(0.0);
         self.mix_r[..sample_count].fill(0.0);
@@ -1427,6 +1429,29 @@ mod tests {
             let attacking = dev.voices[0].amp_env.state()
                 == crate::audio::modulation::envelope::AdsrState::Attack;
             assert_eq!(attacking, expect_attack, "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn back_to_back_same_note_keeps_the_repeat_gated() {
+        // The previous note's off and the repeat's on share a frame; the clip sequencer may
+        // send them in either order.
+        for on_first in [false, true] {
+            let mut dev = synth();
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+            render(&mut dev, 4);
+            let (off, on) = (NoteEvent::test_off(60), NoteEvent::test_on(60, 100));
+            let order = if on_first { [&on, &off] } else { [&off, &on] };
+            for e in order {
+                dev.send_note_event(e, 10);
+            }
+            render(&mut dev, 1);
+            assert!(
+                dev.voices
+                    .iter()
+                    .any(|v| v.active && v.gate && !v.is_fading() && v.note == 60),
+                "on_first={on_first}: the repeat should still be held"
+            );
         }
     }
 
