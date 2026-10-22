@@ -1454,7 +1454,7 @@ func split_target_tracks(selected_tracks: Array = []) -> Array[Track]:
 	var project := _project_of_editor()
 	var out: Array[Track] = []
 	if project:
-		for t in project.tracks:
+		for t in project.get_visual_track_list():
 			if t in picked and t.is_note_editor_track():
 				out.append(t)
 	else:
@@ -1667,32 +1667,13 @@ func insert_bassline(pattern: int = -1, bass_range: Vector2i = Vector2i(-1, -1))
 
 # --- Transfer Notes, Split Voices (REQ-040..043) ---
 
-## Copies of `candidates`' notes with SONG-tick starts:
-## { "moves": { Clip: [MidiNoteData originals] }, "notes": { original: song-tick copy } }.
-func _song_copies(candidates: Array) -> Dictionary:
-	var moves := {}
-	var copies := {}
-	for ref: NoteRef in candidates:
-		var ci := ref.instance
-		var c := ref.clip
-		if ci == null or c == null or copies.has(ref.data):
-			continue
-		var copy := ref.data.duplicate_note()
-		copy.start_tick = ci.clip_to_song_ticks(ref.data.start_tick)
-		copies[ref.data] = copy
-		if not moves.has(c):
-			moves[c] = []
-		moves[c].append(ref.data)
-	return {"moves": moves, "notes": copies}
-
-
 ## The plan Transfer Notes would run for the selected notes (NoteTransfer.plan entries), so a
 ## dialog can preview it. Empty when nothing can be transferred.
 func plan_transfer(target: Track) -> Array:
 	var project := _project_of_editor()
 	if project == null or not is_transfer_target(target) or layout.is_drum():
 		return []
-	var copies: Dictionary = _song_copies(selection_model.refs).notes
+	var copies: Dictionary = NoteSplitActions.song_copies(selection_model.refs).notes
 	return NoteTransfer.plan(project, target, copies.values())
 
 
@@ -1711,7 +1692,7 @@ func transfer_linked_clips(target: Track) -> Array:
 func transfer_selection(target: Track) -> int:
 	if not can_transfer() or not is_transfer_target(target):
 		return 0
-	var copies := _song_copies(selection_model.refs)
+	var copies := NoteSplitActions.song_copies(selection_model.refs)
 	return _run_transfer("Transfer Notes", copies.moves, {target: copies.notes.values()})
 
 
@@ -1734,66 +1715,70 @@ func split_voices_into_children() -> int:
 
 
 func _split_onto(targets: Array[Track]) -> int:
-	var source := source_track()
-	var pool := _voice_pool()
-	var ref_of := _ref_per_note(pool)
-	var per_clip := _notes_by_clip(pool)
-	var leaving: Dictionary = {}  # Track -> Array[NoteRef]
-	for c in per_clip.keys():
-		var ranks := NoteVoices.ranks(per_clip[c])
-		for nd: MidiNoteData in per_clip[c]:
-			var voice: int = ranks[nd].x
-			if voice > targets.size() or targets[voice - 1] == source:
-				continue
-			var dest: Track = targets[voice - 1]
-			if not leaving.has(dest):
-				var typed: Array[NoteRef] = []
-				leaving[dest] = typed
-			leaving[dest].append(ref_of[nd])
-	if leaving.is_empty():
-		return 0
-	var moves := {}
-	var per_target := {}
-	for dest: Track in leaving.keys():
-		var copies := _song_copies(leaving[dest])
-		for c in copies.moves.keys():
-			if not moves.has(c):
-				moves[c] = []
-			moves[c].append_array(copies.moves[c])
-		per_target[dest] = copies.notes.values()
-	return _run_transfer("Split Voices", moves, per_target)
+	var count := NoteSplitActions.split_refs(_project_of_editor(), _voice_pool(), targets, source_track(),
+			"Split Voices", selection_model)
+	if count > 0:
+		queue_redraw()
+		update_container_width()
+	return count
 
 
 ## Plan every target, apply it and record ONE undo step that also restores the selection.
 ## `per_target`: { Track: Array of song-tick notes }. Returns the number of notes moved.
 func _run_transfer(label: String, source_moves: Dictionary, per_target: Dictionary) -> int:
-	var project := _project_of_editor()
-	if project == null:
-		return 0
-	var plans: Array = []
-	var count := 0
-	for dest: Track in per_target.keys():
-		var entries := NoteTransfer.plan(project, dest, per_target[dest])
-		if entries.is_empty():
-			continue
-		plans.append({"track": dest, "entries": entries})
-		count += per_target[dest].size()
-	if plans.is_empty():
-		return 0
-	var selection_before := selection_model.capture()
-	var cmds := NoteTransfer.apply(project, source_moves, plans, label, false)
-	var selection_after := selection_model.capture()
-	var all: Array[Command] = []
-	var last: Array[Command] = []
-	if not NoteSelectionModel.same_state(selection_before, selection_after):
-		all.append(SelectionStateCommand.new(label, selection_model, selection_before, selection_after, true))
-		last.append(SelectionStateCommand.new(label, selection_model, selection_before, selection_after, false))
-	all.append_array(cmds)
-	all.append_array(last)
-	HistoryUtil.record_many(label, all)
-	queue_redraw()
-	update_container_width()
+	var count := NoteSplitActions.run_transfer(_project_of_editor(), label, source_moves, per_target, selection_model)
+	if count > 0:
+		queue_redraw()
+		update_container_width()
 	return count
+
+
+# --- Make Legato, Merge Same Notes (issue #169) ---
+
+## Make Legato and Merge Same Notes need selected notes outside the Drum View (hits have no length).
+func can_legato() -> bool:
+	return not layout.is_drum() and has_note_selection()
+
+
+## Extend each selected note to the start of the next chord of its clip so no gap is left
+## (NoteLegato). One undo step. Returns the number of notes lengthened.
+func make_legato_selection() -> int:
+	if not can_legato():
+		return 0
+	var changed := [0]
+	_apply_selection_edit("Make Legato", func(_notes: Array[MidiNoteData]):
+		for clip_notes: Array[MidiNoteData] in _notes_by_clip(_edit_refs()).values():
+			changed[0] += NoteLegato.make_legato(clip_notes))
+	return changed[0]
+
+
+## Merge selected notes of the same pitch that touch (end == next start) into one note spanning
+## both; it keeps the first note's velocity and release. One undo step. Returns the number of
+## notes absorbed.
+func merge_same_notes_selection() -> int:
+	if not can_legato():
+		return 0
+	var refs := _edit_refs()
+	edits.begin()
+	var absorbed := 0
+	var survivors: Array[NoteRef] = []
+	var gone := {}
+	var per_clip := _notes_by_clip(refs)
+	for clip: Clip in per_clip.keys():
+		var notes: Array[MidiNoteData] = per_clip[clip]
+		for n in NoteLegato.merge_same(notes):
+			gone[n] = true
+			clip.remove_midi_note(n)
+			absorbed += 1
+	for ref in refs:
+		if not gone.has(ref.data):
+			survivors.append(ref)
+	edits.refresh(survivors)
+	edits.sync(survivors)
+	update_container_width()
+	queue_redraw()
+	edits.commit("Merge Same Notes")
+	return absorbed
 
 
 func _adjust_selection_velocity(delta: float) -> void:

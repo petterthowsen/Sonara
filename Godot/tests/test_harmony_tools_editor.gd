@@ -452,7 +452,7 @@ func _test_toolbar_and_menu() -> void:
 	var texts := []
 	for i in popup.item_count:
 		texts.append("-" if popup.is_item_separator(i) else popup.get_item_text(i))
-	_assert(texts == ["Select Voices", "Harmonize...", "Insert Chords...", "Insert Bassline...", "-", "Transfer Notes...", "Split Voices", "Split Into Child Tracks"],
+	_assert(texts == ["Select Voices", "Harmonize...", "Insert Chords...", "Insert Bassline...", "-", "Transfer Notes...", "Split Voices", "Split Into Child Tracks", "-", "Make Legato", "Merge Same Notes"],
 			"the Harmony menu lists its items in order (got %s)" % [texts])
 	var sub: PopupMenu = popup.get_item_submenu_node(0)
 	var sub_texts := []
@@ -669,8 +669,8 @@ func _test_transfer_dialog() -> void:
 	extra.create_clip_instance(linked, 0, 4 * BAR)
 	ctx.bass.create_clip_instance(linked, 0, 4 * BAR)
 	ce.open_harmony_dialog(&"transfer")
-	dlg.target_option.select(1)
-	dlg.target_option.item_selected.emit(1)
+	dlg.select_target(extra)
+	dlg.target_tree.item_selected.emit()
 	_assert(dlg.warning_label.visible and dlg.warning_label.text.contains("Linked"), "the warning shows for a linked target (got '%s')" % dlg.warning_label.text)
 	var before_selected: int = ed._selected_note_visuals().size()
 	_record_start()

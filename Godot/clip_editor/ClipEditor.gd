@@ -1013,6 +1013,8 @@ const HARMONY_BASSLINE := 12
 const HARMONY_TRANSFER := 13
 const HARMONY_SPLIT := 14
 const HARMONY_SPLIT_CHILDREN := 15
+const HARMONY_LEGATO := 16
+const HARMONY_MERGE_SAME := 17
 const HARMONY_VOICES := 20
 const VOICE_ID_BASE := 100
 const MAX_VOICE_MENU := 6
@@ -1050,6 +1052,13 @@ func _setup_harmony_menu() -> void:
 	_harmony_popup.add_item("Transfer Notes...", HARMONY_TRANSFER)
 	_harmony_popup.add_item("Split Voices", HARMONY_SPLIT)
 	_harmony_popup.add_item("Split Into Child Tracks", HARMONY_SPLIT_CHILDREN)
+	_harmony_popup.add_separator()
+	_harmony_popup.add_item("Make Legato", HARMONY_LEGATO)
+	_harmony_popup.set_item_tooltip(_harmony_popup.get_item_index(HARMONY_LEGATO),
+			"Extend each selected note to the start of the next one so no gap is left.")
+	_harmony_popup.add_item("Merge Same Notes", HARMONY_MERGE_SAME)
+	_harmony_popup.set_item_tooltip(_harmony_popup.get_item_index(HARMONY_MERGE_SAME),
+			"Join selected notes of the same pitch that touch into one longer note.")
 	_harmony_popup.id_pressed.connect(_on_harmony_menu_pressed)
 
 
@@ -1087,6 +1096,8 @@ func _sync_harmony_menu(editor: NoteEditor, has_selection: bool) -> void:
 		children_tip = "Only for a group track with child tracks that can play notes."
 	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_SPLIT_CHILDREN),
 			live and editor.can_split_into_children(), children_tip)
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_LEGATO), can_run, "")
+	_set_harmony_item(_harmony_popup.get_item_index(HARMONY_MERGE_SAME), can_run, "")
 
 
 func _set_harmony_item(index: int, enabled: bool, tooltip: String) -> void:
@@ -1128,6 +1139,12 @@ func _on_harmony_menu_pressed(id: int) -> void:
 			editor.split_voices()
 		HARMONY_SPLIT_CHILDREN:
 			editor.split_voices_into_children()
+		HARMONY_LEGATO:
+			_prepare_selection(editor)
+			editor.make_legato_selection()
+		HARMONY_MERGE_SAME:
+			_prepare_selection(editor)
+			editor.merge_same_notes_selection()
 
 
 ## Open the option dialog of a harmony tool (&"harmonize", &"chords", &"bassline", &"transfer"),

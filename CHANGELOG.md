@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Note Editor Harmony menu: Make Legato (extend each selected note to the start of the next) and Merge Same Notes (join touching notes of the same pitch). The clip context menu in the arranger gets Make Legato, Merge Same and Split to Tracks for all notes of the selected MIDI clips. The Transfer Notes target list is now a small scrollable tree in arranger order with foldable groups that highlights the track being edited (#169).
 - MIDI Send, a new note device: it forwards the notes reaching a channel to other channels in the same block, either to the channels nested under it (Children) or to a list you choose, with a Thru/Consume switch. Rows for targets that would make a MIDI loop are marked and ignored. Notes it started always end when a target is removed, the mode changes or the send is bypassed or removed.
 - Group tracks can hold MIDI clips (draw, move, copy, paste, open in the MIDI editor); audio clips are refused on a group. Add a MIDI Send to the group to play its clips on the tracks inside it.
 - New group record-arm choice "Record arm the group if it has a note device" for both group-arm settings.

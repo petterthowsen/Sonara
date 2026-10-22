@@ -171,6 +171,33 @@ tooltip_text = "Double the clip's length: notes play half as fast. Applies to ev
 focus_mode = 0
 text = "Scale Double"
 
+[node name="Legato" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="MakeLegato" type="Button" parent="VBoxContainer/Legato"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Extend every note to the start of the next one so no gaps are left. Applies to every instance of the clip."
+focus_mode = 0
+text = "Make Legato"
+
+[node name="MergeSame" type="Button" parent="VBoxContainer/Legato"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Join notes of the same pitch that touch into one longer note. Applies to every instance of the clip."
+focus_mode = 0
+text = "Merge Same"
+
+[node name="SplitToTracks" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+tooltip_text = "Spread the voices of the clip's chords over the selected instrument tracks: the top voice to the first, and so on."
+focus_mode = 0
+text = "Split to Tracks"
+
 [node name="MakeUnique" type="Button" parent="VBoxContainer" unique_id=1599534461]
 layout_mode = 2
 focus_mode = 0

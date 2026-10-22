@@ -19,6 +19,9 @@ static var logger := Log.make("ClipContextMenu")
 @onready var transpose_up: Button = $VBoxContainer/Transpose/OctaveUp
 @onready var scale_half: Button = $VBoxContainer/TimeScale/ScaleHalf
 @onready var scale_double: Button = $VBoxContainer/TimeScale/ScaleDouble
+@onready var make_legato: Button = $VBoxContainer/Legato/MakeLegato
+@onready var merge_same: Button = $VBoxContainer/Legato/MergeSame
+@onready var split_to_tracks: Button = $VBoxContainer/SplitToTracks
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
 @onready var make_unique_per_track: Button = $VBoxContainer/MakeUniquePerTrack
 @onready var delete: Button = $VBoxContainer/Delete
@@ -59,6 +62,12 @@ func _ready() -> void:
 		scale_half.pressed.connect(_on_scale_pressed.bind(0.5))
 	if is_instance_valid(scale_double):
 		scale_double.pressed.connect(_on_scale_pressed.bind(2.0))
+	if is_instance_valid(make_legato):
+		make_legato.pressed.connect(_on_legato_pressed.bind(true, false))
+	if is_instance_valid(merge_same):
+		merge_same.pressed.connect(_on_legato_pressed.bind(false, true))
+	if is_instance_valid(split_to_tracks):
+		split_to_tracks.pressed.connect(_on_split_to_tracks_pressed)
 	if is_instance_valid(cut):
 		cut.pressed.connect(_on_cut_pressed)
 	if is_instance_valid(copy):
@@ -142,6 +151,18 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 		transpose_down.disabled = not all_midi
 	if transpose_up:
 		transpose_up.disabled = not all_midi
+
+	# Legato, Merge Same and Split to Tracks edit the notes of MIDI clips.
+	if make_legato:
+		make_legato.disabled = not all_midi
+	if merge_same:
+		merge_same.disabled = not all_midi
+	if split_to_tracks:
+		var targets := split_target_tracks()
+		var ok := all_midi and not targets.is_empty()
+		for inst in selected_instances:
+			ok = ok and (targets.size() > 1 or inst.track not in targets)
+		split_to_tracks.disabled = not ok
 
 	# Scaling rewrites note timing too, so it needs MIDI clips only.
 	if scale_half:
@@ -310,6 +331,44 @@ func scale_selected(factor: float, tracks: Array) -> bool:
 	ClipScaleActions.scale_clips("Scale Clip %s" % ("Half" if factor < 1.0 else "Double"),
 			clips, pool, factor)
 	return true
+
+
+## Make Legato or Merge Same Notes on every note of the selected MIDI clips as one undo step. The
+## edit is destructive like Transpose: every instance of a shared clip changes.
+func _on_legato_pressed(legato: bool, merge: bool) -> void:
+	if legato_selected(legato, merge) > 0:
+		ContextMenuPopup.close(self)
+
+
+## Run the legato / merge tool on the bound MIDI clips. Returns the number of notes changed.
+func legato_selected(legato: bool, merge: bool) -> int:
+	return NoteLegato.apply_to_clips(_midi_clips_of(selected_instances), legato, merge,
+			"Make Legato" if legato else "Merge Same Notes")
+
+
+## The arranger's selected tracks that can receive notes, in arranger order.
+func split_target_tracks() -> Array[Track]:
+	var out: Array[Track] = []
+	if not (Sonara and Sonara.editor and Sonara.editor.project):
+		return out
+	for t in Sonara.editor.project.get_visual_track_list():
+		if t in Sonara.editor.selected_tracks and t.is_note_editor_track():
+			out.append(t)
+	return out
+
+
+## Split Voices for the selected MIDI clips onto the selected tracks (see NoteSplitActions).
+func _on_split_to_tracks_pressed() -> void:
+	if split_selected(split_target_tracks()) > 0:
+		ContextMenuPopup.close(self)
+
+
+## Spread the voices of every note of the bound MIDI clips over `targets` as one undo step.
+## Returns the number of notes moved to other tracks.
+func split_selected(targets: Array[Track]) -> int:
+	if not (Sonara and Sonara.editor and Sonara.editor.project):
+		return 0
+	return NoteSplitActions.split_instances(Sonara.editor.project, selected_instances, targets)
 
 
 ## The distinct MIDI source clips of `instances`, in selection order.
