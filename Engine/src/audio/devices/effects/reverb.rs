@@ -199,6 +199,10 @@ const FREEZE_RAMP_MS: f32 = 50.0;
 type Taps = &'static [(f32, f32)];
 
 /// Room: dense and short.
+///
+/// Mirrored in `Godot/devices/builtin/reverb/ReverbData.gd` (`EARLY_ROOM`, `EARLY_HALL`,
+/// `EARLY_PLATE`, `EARLY_RMS_GAIN`, `SIZE_MIN_SCALE`, `SIZE_MAX_SCALE`) for the decay map
+/// (spec 050). Keep the two in step.
 const EARLY_ROOM: [Taps; 2] = [
     &[
         (3.2, 0.80),
@@ -362,6 +366,8 @@ fn whole_samples(seconds: f32, sample_rate: f32) -> usize {
 /// the band decay rates can be set independently without leaking into the 1 kHz tail. `low_db`
 /// is the low-frequency gain relative to the mid band, `high_db` the high-frequency one. Two
 /// cascaded first-order sections reach the shelf asymptote fast enough for the band T60 to match.
+///
+/// `ReverbData.gd` (`band_t60`, spec 050) mirrors this filter's magnitude to draw the decay map.
 #[derive(Clone, Copy)]
 struct Absorbent {
     low_lp: [OnePole; 2],
@@ -908,6 +914,79 @@ struct Settings {
     mix: f32,
 }
 
+/// Frames per `"envelope"` record (spec 050).
+const ENVELOPE_RECORD_FRAMES: usize = 256;
+/// Records the envelope ring holds between polls. Records past this are dropped.
+const ENVELOPE_RING_CAPACITY: usize = 256;
+/// How often the `"envelope"` stream is polled, in Hz.
+const ENVELOPE_RATE_HZ: f32 = 20.0;
+
+/// The `"envelope"` data stream (spec 050): per `ENVELOPE_RECORD_FRAMES` frames, the peak of the
+/// reverb's input and of its wet signal (after tone, ducking and width, before Wet FX and Mix),
+/// in dB. Everything is preallocated; nothing is collected while unsubscribed.
+struct EnvelopeScope {
+    subscribed: bool,
+    ring: [[f32; 2]; ENVELOPE_RING_CAPACITY],
+    ring_len: usize,
+    /// Frames accumulated into the current record.
+    record_frames: usize,
+    in_peak: f32,
+    wet_peak: f32,
+    frames_since_poll: usize,
+    poll_interval: usize,
+    record_seconds: f32,
+}
+
+impl EnvelopeScope {
+    fn new(sample_rate: f32) -> Self {
+        let mut scope = Self {
+            subscribed: false,
+            ring: [[0.0; 2]; ENVELOPE_RING_CAPACITY],
+            ring_len: 0,
+            record_frames: 0,
+            in_peak: 0.0,
+            wet_peak: 0.0,
+            frames_since_poll: 0,
+            poll_interval: 0,
+            record_seconds: 0.0,
+        };
+        scope.prepare(sample_rate);
+        scope
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        self.poll_interval = (sample_rate / ENVELOPE_RATE_HZ) as usize;
+        self.record_seconds = ENVELOPE_RECORD_FRAMES as f32 / sample_rate.max(1.0);
+    }
+
+    fn clear(&mut self) {
+        self.ring_len = 0;
+        self.record_frames = 0;
+        self.in_peak = 0.0;
+        self.wet_peak = 0.0;
+        self.frames_since_poll = 0;
+    }
+
+    /// Fold one frame in; stores a record when the window is full. Audio thread: array writes
+    /// and compares only (the dB conversion happens once per 256 frames).
+    #[inline]
+    fn push_frame(&mut self, in_peak: f32, wet_peak: f32) {
+        self.in_peak = self.in_peak.max(in_peak);
+        self.wet_peak = self.wet_peak.max(wet_peak);
+        self.record_frames += 1;
+        if self.record_frames < ENVELOPE_RECORD_FRAMES {
+            return;
+        }
+        if self.ring_len < ENVELOPE_RING_CAPACITY {
+            self.ring[self.ring_len] = [gain_to_db(self.in_peak), gain_to_db(self.wet_peak)];
+            self.ring_len += 1;
+        }
+        self.record_frames = 0;
+        self.in_peak = 0.0;
+        self.wet_peak = 0.0;
+    }
+}
+
 pub struct ReverbDevice {
     sample_rate: f32,
     params: ParamValues<PARAM_COUNT>,
@@ -961,6 +1040,8 @@ pub struct ReverbDevice {
     mix_gains: (f32, f32),
 
     sleep: TailSleep,
+    /// The `"envelope"` stream (spec 050). Never touches the sleep state.
+    scope: EnvelopeScope,
     is_active: bool,
     is_enabled: bool,
 
@@ -1056,6 +1137,7 @@ impl ReverbDevice {
             mix_last: f32::NAN,
             mix_gains: (1.0, 0.0),
             sleep: TailSleep::new(sr),
+            scope: EnvelopeScope::new(sr),
             is_active: true,
             is_enabled: true,
             slots: DeviceSlots::new(&REVERB_SLOTS, DEFAULT_SLOT_FRAMES),
@@ -1333,6 +1415,10 @@ impl ReverbDevice {
             wl = m + s * width;
             wr = m - s * width;
         }
+        if self.scope.subscribed {
+            self.scope
+                .push_frame(in_l.abs().max(in_r.abs()), wl.abs().max(wr.abs()));
+        }
         (wl, wr)
     }
 
@@ -1592,6 +1678,9 @@ impl AudioDevice for ReverbDevice {
         }
         let frames = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
         self.render(inputs, outputs, frames);
+        if self.scope.subscribed {
+            self.scope.frames_since_poll += frames;
+        }
         self.sleep.on_block(frames);
     }
 
@@ -1694,6 +1783,7 @@ impl AudioDevice for ReverbDevice {
             self.clear_engine(algo);
         }
         self.lfo_phase = 0.0;
+        self.scope.clear();
         // Snap the smoothers to their targets so a reset starts from the current settings.
         let s = self.settings;
         self.size_s.snap(s.size);
@@ -1759,6 +1849,7 @@ impl AudioDevice for ReverbDevice {
             p.set_ramp(sample_rate, PARAM_RAMP_MS);
         }
         self.sleep.set_sample_rate(sample_rate);
+        self.scope.prepare(sample_rate);
     }
 
     fn is_active(&self) -> bool {
@@ -1820,7 +1911,49 @@ impl AudioDevice for ReverbDevice {
     }
 
     fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
+        // The envelope stream deliberately does not keep the reverb awake (spec 050 REQ-010).
         self.sleep.update(has_audio_activity)
+    }
+
+    fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
+        if data_type != "envelope" {
+            return Err(format!("Reverb does not support '{data_type}' data"));
+        }
+        if !self.scope.subscribed {
+            self.scope.clear();
+            self.scope.subscribed = true;
+        }
+        Ok(())
+    }
+
+    fn unsubscribe_data(&mut self, data_type: &str) {
+        if data_type == "envelope" {
+            self.scope.subscribed = false;
+        }
+    }
+
+    /// `u32 count`, `f32 record_seconds`, then `count` records of `in_peak_db, wet_peak_db`
+    /// (little-endian, floor -120 dB).
+    fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
+        let scope = &mut self.scope;
+        if !scope.subscribed || scope.frames_since_poll < scope.poll_interval {
+            return None;
+        }
+        scope.frames_since_poll = 0;
+        if scope.ring_len == 0 {
+            return None;
+        }
+        let count = scope.ring_len;
+        let mut bytes = Vec::with_capacity(8 + count * 8);
+        bytes.extend_from_slice(&(count as u32).to_le_bytes());
+        bytes.extend_from_slice(&scope.record_seconds.to_le_bytes());
+        for record in &scope.ring[..count] {
+            for value in record {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        scope.ring_len = 0;
+        Some(("envelope".to_string(), bytes))
     }
 }
 
@@ -2060,6 +2193,144 @@ mod tests {
             input.fill(0.0);
         }
         assert!(slept, "never slept after the tail died");
+    }
+
+    // === Envelope stream (spec 050) ===
+
+    /// Render `input` in `block`-frame blocks, polling after each; returns the decoded records
+    /// as (count-weighted) `[in_db, wet_db]` pairs plus the header's `record_seconds`.
+    fn render_polled(d: &mut ReverbDevice, input: &[f32], block: usize) -> (Vec<[f32; 2]>, f32) {
+        let frames = input.len() / 2;
+        let mut out = vec![0.0f32; block * 2];
+        let mut records = Vec::new();
+        let mut record_seconds = 0.0;
+        let mut pos = 0;
+        while pos < frames {
+            let n = block.min(frames - pos);
+            d.process_block(&input[pos * 2..(pos + n) * 2], &mut out[..n * 2], n);
+            pos += n;
+            while let Some((kind, bytes)) = d.poll_device_data() {
+                assert_eq!(kind, "envelope");
+                let count = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+                record_seconds = f32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                assert_eq!(bytes.len(), 8 + count * 8);
+                for r in 0..count {
+                    let at = 8 + r * 8;
+                    records.push([
+                        f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()),
+                        f32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()),
+                    ]);
+                }
+            }
+        }
+        (records, record_seconds)
+    }
+
+    #[test]
+    fn envelope_stream_is_silent_until_subscribed() {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        assert!(d.subscribe_data("spectrum").is_err());
+        let input = stereo(&impulse(sr as usize));
+        let (records, _) = render_polled(&mut d, &input, 512);
+        assert!(records.is_empty(), "collected while unsubscribed");
+
+        d.subscribe_data("envelope").unwrap();
+        let (records, _) = render_polled(&mut d, &input, 512);
+        assert!(!records.is_empty());
+
+        d.unsubscribe_data("envelope");
+        assert!(d.poll_device_data().is_none());
+        let (records, _) = render_polled(&mut d, &input, 512);
+        assert!(records.is_empty(), "collected after unsubscribing");
+    }
+
+    #[test]
+    fn envelope_blob_layout() {
+        let sr = 44_100.0;
+        let mut d = make(sr);
+        d.subscribe_data("envelope").unwrap();
+        let mut input = stereo(&vec![0.0; 8192]);
+        input[0] = 0.5;
+        let mut out = vec![0.0f32; 8192 * 2];
+        d.process_block(&input, &mut out, 8192);
+        d.process_block(&input[..1024 * 2], &mut out[..1024 * 2], 1024);
+        let (kind, bytes) = d.poll_device_data().expect("a poll is due");
+        assert_eq!(kind, "envelope");
+        let count = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        assert_eq!(count, (8192 + 1024) / ENVELOPE_RECORD_FRAMES);
+        let seconds = f32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        assert!((seconds - 256.0 / sr).abs() < 1e-9);
+        assert_eq!(bytes.len(), 8 + count * 8);
+        // The first record holds the 0.5 impulse: -6 dB.
+        let first_in = f32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        assert!((first_in + 6.02).abs() < 0.1, "input peak {first_in}");
+    }
+
+    #[test]
+    fn envelope_records_follow_the_impulse_decay() {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        set_real(&mut d, MIX, 100.0);
+        set_real(&mut d, DECAY, 2.0);
+        // A flat Decay EQ, so the broadband envelope has one slope.
+        set_real(&mut d, LOW_MULT, 1.0);
+        set_real(&mut d, HIGH_MULT, 1.0);
+        render(&mut d, &vec![0.0; 4096 * 2], &[512]);
+        d.subscribe_data("envelope").unwrap();
+        let input = stereo(&impulse((sr * 6.0) as usize));
+        let (records, seconds) = render_polled(&mut d, &input, 512);
+        assert!(records.len() > 100);
+        // Fit a line to the wet level between -50 and -100 dB, past the early reflections and
+        // the diffusion build-up (the first 30 dB fall faster than the late tail).
+        let points: Vec<(f32, f32)> = records
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r[1] < -50.0 && r[1] > -100.0)
+            .map(|(i, r)| (i as f32 * seconds, r[1]))
+            .collect();
+        assert!(points.len() > 20, "too few points: {}", points.len());
+        let n = points.len() as f32;
+        let (sx, sy) = points
+            .iter()
+            .fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+        let (mx, my) = (sx / n, sy / n);
+        let num: f32 = points.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
+        let den: f32 = points.iter().map(|p| (p.0 - mx) * (p.0 - mx)).sum();
+        let slope = num / den; // dB per second, negative
+        let t60 = -60.0 / slope;
+        assert!(
+            (t60 - 2.0).abs() / 2.0 < 0.1,
+            "envelope T60 {t60:.3} s vs 2.0"
+        );
+    }
+
+    #[test]
+    fn subscribed_reverb_still_sleeps() {
+        let sr = 48_000.0;
+        const BLOCK: usize = 512;
+        let mut d = make(sr);
+        set_real(&mut d, MIX, 100.0);
+        set_real(&mut d, DECAY, 0.3);
+        d.subscribe_data("envelope").unwrap();
+        let mut input = vec![0.0f32; BLOCK * 2];
+        input[0] = 1.0;
+        input[1] = 1.0;
+        let mut output = vec![0.0f32; BLOCK * 2];
+        let mut slept = false;
+        for _ in 0..((sr as usize * 20) / BLOCK) {
+            let in_activity = peak(&input) > 0.001;
+            d.process_block(&input, &mut output, BLOCK);
+            let out_activity = peak(&output) > 0.001;
+            d.update_sleep_state(in_activity || out_activity);
+            d.poll_device_data();
+            if d.is_sleeping() {
+                slept = true;
+                break;
+            }
+            input.fill(0.0);
+        }
+        assert!(slept, "a subscribed reverb never slept");
     }
 
     #[test]

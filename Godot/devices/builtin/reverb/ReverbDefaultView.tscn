@@ -1,0 +1,357 @@
+[gd_scene format=3 uid="uid://bn8otuvxodo7m"]
+
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="knob"]
+[ext_resource type="Script" uid="uid://bg734ej3kqqea" path="res://devices/builtin/reverb/ReverbDecayMap.gd" id="map"]
+[ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="seg"]
+[ext_resource type="Script" uid="uid://bh1iweki3wxe2" path="res://devices/builtin/reverb/ReverbEnvelopeStrip.gd" id="strip"]
+[ext_resource type="Script" uid="uid://vtc0k8s63n4t" path="res://components/DeviceSlotButton.gd" id="tile"]
+[ext_resource type="Script" uid="uid://c5oxjn2kue3i4" path="res://devices/builtin/reverb/ReverbDefaultView.gd" id="view"]
+
+[node name="ReverbDefaultView" type="Control" unique_id=324148]
+custom_minimum_size = Vector2(833, 270)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 840.0
+offset_bottom = 317.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("view")
+
+[node name="MainPage" type="VBoxContainer" parent="." unique_id=200915801]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="Body" type="HBoxContainer" parent="MainPage" unique_id=70331578]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="Left" type="VBoxContainer" parent="MainPage/Body" unique_id=1864231504]
+layout_mode = 2
+
+[node name="AlgorithmControl" type="HBoxContainer" parent="MainPage/Body/Left" unique_id=195017243]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("seg")
+font_size = 12
+items = PackedStringArray("Room", "Hall", "Plate")
+metadata/param = "Algorithm"
+
+[node name="Freeze" type="CheckBox" parent="MainPage/Body/Left" unique_id=1244525386]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Freeze"
+alignment = 1
+metadata/param = "Freeze"
+
+[node name="Input" type="VBoxContainer" parent="MainPage/Body/Left" unique_id=823210144]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Body/Left/Input" unique_id=727013048]
+modulate = Color(1, 1, 1, 0.5)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "INPUT"
+horizontal_alignment = 1
+
+[node name="HFlowContainer" type="HFlowContainer" parent="MainPage/Body/Left/Input" unique_id=1276563452]
+layout_mode = 2
+size_flags_vertical = 6
+theme_override_constants/v_separation = 10
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="PreDelay" type="VBoxContainer" parent="MainPage/Body/Left/Input/HFlowContainer" unique_id=1126727185]
+layout_mode = 2
+size_flags_horizontal = 7
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 58.315
+knob_size = Vector2(30, 30)
+text = "Pre-Delay"
+metadata/param = "Pre-Delay"
+
+[node name="Early" type="VBoxContainer" parent="MainPage/Body/Left/Input/HFlowContainer" unique_id=722988275]
+layout_mode = 2
+size_flags_horizontal = 7
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 46.0
+knob_size = Vector2(30, 30)
+text = "Early"
+metadata/param = "Early"
+
+[node name="Diffusion" type="VBoxContainer" parent="MainPage/Body/Left/Input/HFlowContainer" unique_id=1022660824]
+layout_mode = 2
+size_flags_horizontal = 7
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 46.0
+knob_size = Vector2(30, 30)
+text = "Diffusion"
+metadata/param = "Diffusion"
+
+[node name="Space" type="VBoxContainer" parent="MainPage/Body/Left" unique_id=1553626744]
+layout_mode = 2
+size_flags_vertical = 8
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Body/Left/Space" unique_id=1034235028]
+modulate = Color(1, 1, 1, 0.5)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "SPACE"
+horizontal_alignment = 1
+
+[node name="HFlowContainer" type="HFlowContainer" parent="MainPage/Body/Left/Space" unique_id=328214078]
+layout_mode = 2
+alignment = 1
+
+[node name="Size" type="VBoxContainer" parent="MainPage/Body/Left/Space/HFlowContainer" unique_id=1218517]
+layout_mode = 2
+size_flags_horizontal = 7
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 46.0
+knob_size = Vector2(30, 30)
+text = "Size"
+metadata/param = "Size"
+
+[node name="Decay" type="VBoxContainer" parent="MainPage/Body/Left/Space/HFlowContainer" unique_id=444923972]
+layout_mode = 2
+size_flags_horizontal = 7
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 46.0
+knob_size = Vector2(30, 30)
+text = "Decay"
+metadata/param = "Decay"
+
+[node name="Centre" type="VBoxContainer" parent="MainPage/Body" unique_id=2072647365]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 3
+
+[node name="Display" type="PanelContainer" parent="MainPage/Body/Centre" unique_id=671268450]
+layout_mode = 2
+size_flags_vertical = 3
+theme_type_variation = &"Well"
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MainPage/Body/Centre/Display" unique_id=779595768]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="DecayMap" type="Control" parent="MainPage/Body/Centre/Display/VBoxContainer" unique_id=582932611]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 120)
+clip_contents = true
+layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("map")
+
+[node name="EnvelopeStrip" type="Control" parent="MainPage/Body/Centre/Display/VBoxContainer" unique_id=479523863]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 36)
+clip_contents = true
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("strip")
+
+[node name="Lower" type="HBoxContainer" parent="MainPage/Body/Centre" unique_id=822786455]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="DecayEq" type="HBoxContainer" parent="MainPage/Body/Centre/Lower" unique_id=1886647028]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_override_constants/separation = 2
+
+[node name="LowMult" type="VBoxContainer" parent="MainPage/Body/Centre/Lower/DecayEq" unique_id=519623474]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 75.02
+knob_size = Vector2(30, 30)
+text = "Low Mult"
+metadata/param = "Low Mult"
+
+[node name="LowFreq" type="VBoxContainer" parent="MainPage/Body/Centre/Lower/DecayEq" unique_id=1075636855]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 75.02
+knob_size = Vector2(30, 30)
+text = "Low Freq"
+metadata/param = "Low Freq"
+
+[node name="HighMult" type="VBoxContainer" parent="MainPage/Body/Centre/Lower/DecayEq" unique_id=1675226912]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 75.02
+knob_size = Vector2(30, 30)
+text = "High Mult"
+metadata/param = "High Mult"
+
+[node name="HighFreq" type="VBoxContainer" parent="MainPage/Body/Centre/Lower/DecayEq" unique_id=1261390475]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 75.02
+knob_size = Vector2(30, 30)
+text = "High Freq"
+metadata/param = "High Freq"
+
+[node name="Modulation" type="HBoxContainer" parent="MainPage/Body/Centre/Lower" unique_id=1073002166]
+layout_mode = 2
+size_flags_horizontal = 6
+size_flags_vertical = 4
+theme_override_constants/separation = 2
+
+[node name="Rate" type="VBoxContainer" parent="MainPage/Body/Centre/Lower/Modulation" unique_id=178056445]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 46.0
+knob_size = Vector2(30, 30)
+text = "Rate"
+metadata/param = "Rate"
+
+[node name="Depth" type="VBoxContainer" parent="MainPage/Body/Centre/Lower/Modulation" unique_id=1089428913]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 46.0
+knob_size = Vector2(30, 30)
+text = "Depth"
+metadata/param = "Depth"
+
+[node name="TankFxTile" type="Control" parent="MainPage/Body/Centre/Lower" unique_id=488798739]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 64)
+layout_mode = 2
+size_flags_horizontal = 8
+size_flags_vertical = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("tile")
+font_size = 11
+show_count = true
+metadata/slot = "tank_fx"
+
+[node name="Right" type="VBoxContainer" parent="MainPage/Body" unique_id=648845121]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Tone" type="VBoxContainer" parent="MainPage/Body/Right" unique_id=1289147125]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Body/Right/Tone" unique_id=1883841331]
+modulate = Color(1, 1, 1, 0.5)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "TONE"
+horizontal_alignment = 1
+
+[node name="HFlowContainer" type="HFlowContainer" parent="MainPage/Body/Right/Tone" unique_id=1192439967]
+layout_mode = 2
+alignment = 1
+
+[node name="LowCut" type="VBoxContainer" parent="MainPage/Body/Right/Tone/HFlowContainer" unique_id=1005950882]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 59.135
+knob_size = Vector2(30, 30)
+text = "Low Cut"
+metadata/param = "Low Cut"
+
+[node name="HighCut" type="VBoxContainer" parent="MainPage/Body/Right/Tone/HFlowContainer" unique_id=574037443]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 70.0
+knob_size = Vector2(30, 30)
+text = "High Cut"
+metadata/param = "High Cut"
+
+[node name="WetFx" type="VBoxContainer" parent="MainPage/Body/Right" unique_id=247211391]
+layout_mode = 2
+size_flags_vertical = 6
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Body/Right/WetFx" unique_id=672040874]
+modulate = Color(1, 1, 1, 0.5)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "WET"
+horizontal_alignment = 1
+
+[node name="WetFxTile" type="Control" parent="MainPage/Body/Right/WetFx" unique_id=1332624519]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 64)
+layout_mode = 2
+size_flags_vertical = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("tile")
+font_size = 11
+show_count = true
+metadata/slot = "wet_fx"
+
+[node name="Out" type="VBoxContainer" parent="MainPage/Body/Right" unique_id=778627613]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Body/Right/Out" unique_id=1397433311]
+modulate = Color(1, 1, 1, 0.5)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "OUT"
+horizontal_alignment = 1
+
+[node name="HFlowContainer" type="HFlowContainer" parent="MainPage/Body/Right/Out" unique_id=921104581]
+layout_mode = 2
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="Ducking" type="VBoxContainer" parent="MainPage/Body/Right/Out/HFlowContainer" unique_id=1424732581]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 58.565
+knob_size = Vector2(30, 30)
+text = "Ducking"
+metadata/param = "Ducking"
+
+[node name="Width" type="VBoxContainer" parent="MainPage/Body/Right/Out/HFlowContainer" unique_id=64882692]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 58.565
+knob_size = Vector2(30, 30)
+text = "Width"
+metadata/param = "Width"
+
+[node name="Mix" type="VBoxContainer" parent="MainPage/Body/Right/Out/HFlowContainer" unique_id=791543032]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+script = ExtResource("knob")
+label_width = 88.08
+knob_size = Vector2(48, 48)
+text = "Mix"
+metadata/param = "Mix"

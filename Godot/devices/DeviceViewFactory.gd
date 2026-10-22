@@ -15,6 +15,7 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.chord": preload("res://devices/builtin/chord/ChordDefaultView.tscn"),
 	"sonara.builtin.midi_send": preload("res://devices/builtin/midi_send/MidiSendDefaultView.tscn"),
 	"sonara.builtin.saturator": preload("res://devices/builtin/saturator/SaturatorDefaultView.tscn"),
+	"sonara.builtin.reverb": preload("res://devices/builtin/reverb/ReverbDefaultView.tscn"),
 	"sonara.builtin.step_sequencer": preload("res://devices/builtin/step_sequencer/StepSequencerDefaultView.tscn"),
 }
 const BUILTIN_WINDOW_SCENES := {

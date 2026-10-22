@@ -1,7 +1,7 @@
 ## Shows or hides one container slot in the device lane. Drawn as a small tile: a strip in the
 ## slot color along the top and the slot title in the middle. Open slots get a colored border and
 ## a brighter title. Bind it with `bind_to_slot`; it follows the container's `slots_changed`.
-class_name DeviceSlotButton extends Control
+@tool class_name DeviceSlotButton extends Control
 
 const STRIP_HEIGHT := 8.0
 const BG_COLOR := Color(0.11, 0.11, 0.11)
@@ -22,8 +22,10 @@ func _init() -> void:
 	custom_minimum_size = Vector2(120, 64)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	mouse_entered.connect(_set_hover.bind(true))
-	mouse_exited.connect(_set_hover.bind(false))
+	
+	if not Engine.is_editor_hint():
+		mouse_entered.connect(_set_hover.bind(true))
+		mouse_exited.connect(_set_hover.bind(false))
 
 
 ## Show slot `p_key` of `p_container` (null unbinds).
@@ -62,7 +64,7 @@ func _on_slots_changed() -> void:
 
 
 func _title() -> String:
-	return container.slot_title(key) if container else ""
+	return container.slot_title(key) if container else "Slot"
 
 
 func _set_hover(on: bool) -> void:

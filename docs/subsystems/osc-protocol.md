@@ -794,6 +794,7 @@ after subscribing.
   `ModulatedDevice` wrapper; see the sidechain stream below
 - `"curve"` - Saturator transfer curve, operating point and harmonics (spec 031, one
   fixed-size 584-byte record per poll; see the Saturator curve stream below)
+- `"envelope"` - Reverb input and wet level (spec 050; see the Reverb envelope stream below)
 
 **Sidechain stream** (spec 044, data type `"sidechain"`, owned by the `ModulatedDevice` wrapper).
 Subscribe with `data/subscribe "sidechain"`, then select the modulator with
@@ -986,6 +987,19 @@ operating-point dot moves live. Nothing is built while unsubscribed. While subsc
 saturator never sleeps, so the curve keeps its operating point in silence. Unknown data-type
 names are rejected by the engine (like the compressor's); `SaturatorData.decode()` in Godot
 splits the blob into `{valid, effective_drive_db, env_db, curve, harmonics}`.
+
+#### Reverb envelope stream (`sonara.builtin.reverb`) (spec 050)
+
+Data type `"envelope"`, no `data/configure` options. It feeds the strip under the Reverb's decay
+map. The blob is little-endian: `u32 count`, `f32 record_seconds`, then `count` records of
+`f32 in_peak_db, f32 wet_peak_db`. Each record covers 256 frames (`record_seconds` = 256 / sample
+rate); `in_peak_db` is the peak of the reverb's input, `wet_peak_db` the peak of the wet signal
+after tone, ducking and width, before Wet FX and Mix (so the tail shows at Mix 0 %). Silence
+reads the -160 dB floor. Rate: one blob per poll, about 20 Hz while subscribed and awake; the
+ring holds 256 records between polls and drops the rest. Nothing is collected while unsubscribed,
+and the stream does **not** keep the reverb awake: a sleeping reverb sends nothing, and the view
+scrolls silence on its own clock. `ReverbData.decode_envelope()` in Godot splits the blob into
+`{valid, record_seconds, in_db, wet_db}`.
 
 #### Sampler playheads stream (`sonara.builtin.sampler`)
 
