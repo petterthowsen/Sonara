@@ -31,7 +31,7 @@ func run_tests() -> void:
 	await _test_drum_view_rows()
 	await _test_row_stepping()
 	await _test_drum_insert_ignores_piano_roll_length()
-	await _test_drum_placement_rounds_to_nearest_line()
+	await _test_drum_placement_uses_clicked_cell()
 	await _test_mode_switch_keeps_selection()
 	await _test_empty_drum_view()
 	await _test_hit_markers_do_not_overlap()
@@ -228,9 +228,9 @@ func _test_drum_insert_ignores_piano_roll_length() -> void:
 	ne.last_note_length = 0
 
 
-## Issue #118: placement rounds to the nearest grid line (not the one before the cursor),
-## and the step is the finest line drawn.
-func _test_drum_placement_rounds_to_nearest_line() -> void:
+## Issues #118, #170: a hit lands in the grid cell that was clicked (the line at or before
+## the cursor), and the step is the finest line drawn.
+func _test_drum_placement_uses_clicked_cell() -> void:
 	var editor := _get_editor()
 	var setup := _drum_project([36], [])
 	editor.midi_editor.bind_to_clip_instance(setup.clip_instance)
@@ -244,21 +244,21 @@ func _test_drum_placement_rounds_to_nearest_line() -> void:
 	var gh = midi.grid_helper
 	var snap: int = gh.get_snap_interval()
 	var y: float = midi.lane_layout.pitch_to_y_center(36)
-	# 70% of the way from line 4 to line 5: nearest is line 5 (flooring gave line 4).
+	# 70% of the way from line 4 to line 5: still the cell starting at line 4.
 	var tick := int(snap * 4.7)
 	var placed = ne._place_note_at_position(Vector2(gh.ticks_to_pixels(tick), y))
 	await process_frame
 	_assert(placed != null and placed.midi_note_data != null, "a hit is placed")
 	if placed and placed.midi_note_data:
-		_assert(placed.midi_note_data.start_tick == snap * 5,
-			"placement rounds up to the nearer line (%d, want %d)" % [placed.midi_note_data.start_tick, snap * 5])
+		_assert(placed.midi_note_data.start_tick == snap * 4,
+			"a click in the right half of a cell stays in that cell (%d, want %d)" % [placed.midi_note_data.start_tick, snap * 4])
 		_assert(placed.midi_note_data.start_tick % snap == 0, "start is on the visible grid step")
 		ne.delete_note(placed) if ne.has_method("delete_note") else null
 	var below = ne._place_note_at_position(Vector2(gh.ticks_to_pixels(int(snap * 8.3)), y))
 	await process_frame
 	if below and below.midi_note_data:
 		_assert(below.midi_note_data.start_tick == snap * 8,
-			"placement rounds down when nearer the left line (%d, want %d)" % [below.midi_note_data.start_tick, snap * 8])
+			"a click in the left half of a cell stays in that cell (%d, want %d)" % [below.midi_note_data.start_tick, snap * 8])
 	midi.drum_view = false
 	await process_frame
 	ne.last_note_length = 0

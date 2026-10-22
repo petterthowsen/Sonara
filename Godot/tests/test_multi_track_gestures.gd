@@ -27,6 +27,7 @@ func run_tests() -> void:
 	_ref_script = load("res://clip_editor/note_editor/NoteRef.gd")
 	_clip_editor_scene = load("res://clip_editor/ClipEditor.tscn")
 	await _test_drag_selection_over_two_tracks()
+	await _test_drag_snaps_an_off_grid_note()
 	await _test_drag_from_a_context_note()
 	await _test_resize_from_a_context_note()
 	await _test_velocity_drag_across_tracks()
@@ -167,6 +168,29 @@ func _test_drag_selection_over_two_tracks() -> void:
 	recorded[0].undo()
 	_assert(a60.start_tick == 0 and a60.note == 60 and b72.start_tick == 960 and b72.note == 72, "which undoes both tracks")
 	_assert(ctx.midi.note_selection.size() == 2, "and keeps the selection")
+	await _finish(ctx)
+
+
+## #170: dragging a note that sits off the grid puts it on the grid; the rest of the selection
+## moves by the same delta, so offsets between notes are kept.
+func _test_drag_snaps_an_off_grid_note() -> void:
+	var ctx := await _setup()
+	var editor: Object = ctx.editor
+	var gh: Object = ctx.midi.grid_helper
+	var snap: int = gh.get_snap_interval()
+	var a60 := _data(ctx, "a", 60)
+	var b72 := _data(ctx, "b", 72)
+	a60.start_tick = 100
+	await process_frame
+	_select(ctx, [_ref(ctx, "a", 60), _ref(ctx, "b", 72)])
+	var grabbed: Object = editor.get_visual_note(a60.id)
+	var start: Vector2 = grabbed.position + Vector2(2, 2)
+	editor._on_drag_started(grabbed, start)
+	editor._on_drag_updated(grabbed, start + Vector2(gh.ticks_to_pixels(snap * 2), 0))
+	editor._on_drag_ended(grabbed)
+	_assert(a60.start_tick % snap == 0, "the grabbed note lands on the grid (%d, step %d)" % [a60.start_tick, snap])
+	_assert(a60.start_tick == gh.snap_ticks(100 + snap * 2), "at the line nearest where it was dragged (%d)" % a60.start_tick)
+	_assert(b72.start_tick - 960 == a60.start_tick - 100, "the other note moved by the same delta (%d)" % b72.start_tick)
 	await _finish(ctx)
 
 

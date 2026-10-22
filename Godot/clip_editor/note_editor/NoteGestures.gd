@@ -35,6 +35,8 @@ var resize_start_durations: Dictionary = {}
 ## Clip -> its content length when the drag (or mode) started: the bound a note is clamped to.
 ## Taken once, since asking a clip scans all its notes.
 var _content_lengths: Dictionary = {}
+## Start of the grabbed note when the drag (or its current mode) began; see _grabbed_start_ticks.
+var _anchor_start: int = 0
 
 ## The press that began the drag held Ctrl (to add a note to the selection): that Ctrl is not the
 ## length modifier until it is released once.
@@ -105,6 +107,17 @@ func _snapshot() -> void:
 			"clip_instance": ref.instance,
 		}
 		resize_start_durations[data] = data.duration_ticks
+	_anchor_start = _grabbed_start_ticks()
+
+
+## Where the grabbed note starts, in the ticks the grid is laid out in: song ticks in track
+## mode, clip-content ticks when the editor shows one clip.
+func _grabbed_start_ticks() -> int:
+	if grabbed == null or grabbed.data == null:
+		return 0
+	if editor.multi_clip_mode and grabbed.instance != null:
+		return grabbed.song_start()
+	return grabbed.data.start_tick
 
 
 ## While Alt (length or velocity) or Ctrl (length) is held, a drag changes more than position.
@@ -148,8 +161,9 @@ func update_drag(pos: Vector2) -> void:
 
 	var refs := editor.selection_model.refs
 	var delta_ticks := editor.pixels_to_ticks(pos.x - drag_start_mouse_pos.x)
-	# Snap the drag delta, not each note, so notes keep their offsets from each other.
-	var snapped_delta_ticks: int = editor._snap_unless_shift(delta_ticks)
+	# The grabbed note lands on the grid (even if it started off it, #170) and every other
+	# note moves by the same delta, so notes keep their offsets from each other.
+	var snapped_delta_ticks: int = editor._snap_unless_shift(_anchor_start + delta_ticks) - _anchor_start
 
 	if current_mode == DragMode.VELOCITY:
 		# Dragging up raises it, 2 px per 1/127 step.
