@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use super::routing::chain_start;
-use crate::audio::channel::Channel;
+use crate::audio::channel::{elapsed_ns, Channel};
 use crate::audio::devices::container::ChainStep;
 use crate::audio::ipc::futex;
 use crate::audio::realtime::{self, RealtimeState};
@@ -46,6 +46,32 @@ fn pack_claim(generation: u32, count: usize, index: usize) -> u64 {
     ((generation as u64) << 32) | ((count as u64) << COUNT_SHIFT) | index as u64
 }
 
+/// What the jobs of one generation do. A generation holds one kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobKind {
+    /// Begin (or resume) the channel's device chain. May park at a plugin.
+    Chain,
+    /// Place the channel in the room (`Channel::render_stage`, spec 051). Self-contained; never
+    /// parks.
+    Stage,
+}
+
+impl JobKind {
+    fn as_u8(self) -> u8 {
+        match self {
+            JobKind::Chain => 0,
+            JobKind::Stage => 1,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => JobKind::Stage,
+            _ => JobKind::Chain,
+        }
+    }
+}
+
 /// State shared by the callback and the workers.
 ///
 /// # Safety invariant
@@ -66,6 +92,8 @@ pub struct PoolShared {
     generation: AtomicU32,
     /// Frames of the current pass.
     frames: AtomicUsize,
+    /// `JobKind` of the current generation.
+    kind: AtomicU8,
     shutdown: AtomicBool,
     /// Per worker: 0 until it asked for realtime, then `RealtimeState::as_u32`.
     realtime: Box<[AtomicU8]>,
@@ -85,6 +113,7 @@ impl PoolShared {
             done_count: AtomicU32::new(0),
             generation: AtomicU32::new(0),
             frames: AtomicUsize::new(0),
+            kind: AtomicU8::new(0),
             shutdown: AtomicBool::new(false),
             realtime: (0..workers).map(|_| AtomicU8::new(0)).collect(),
             #[cfg(test)]
@@ -136,17 +165,19 @@ impl PoolShared {
         let mut job_count = 0;
         let mut frames = 0;
         while let Some((index, count)) = self.claim(generation) {
-            // The claim's acquire makes this generation's frames visible.
+            // The claim's acquire makes this generation's frames and kind visible.
             job_count = count;
             frames = self.frames.load(Ordering::Relaxed);
-            if self.step(index, frames, false, on_worker) {
+            let kind = JobKind::from_u8(self.kind.load(Ordering::Relaxed));
+            if self.step(index, kind, frames, false, on_worker) {
                 parked.push_back(index);
             } else {
                 self.finish_one(count, on_worker);
             }
         }
         while let Some(index) = parked.pop_front() {
-            if self.step(index, frames, true, on_worker) {
+            // Only chains park.
+            if self.step(index, JobKind::Chain, frames, true, on_worker) {
                 parked.push_back(index);
             } else {
                 self.finish_one(job_count, on_worker);
@@ -155,12 +186,27 @@ impl PoolShared {
     }
 
     /// Begin (or resume) job `index`'s chain. True when it parked at a plugin.
-    fn step(&self, index: usize, frames: usize, resume: bool, on_worker: bool) -> bool {
+    fn step(
+        &self,
+        index: usize,
+        kind: JobKind,
+        frames: usize,
+        resume: bool,
+        on_worker: bool,
+    ) -> bool {
         let address = self.jobs[index].load(Ordering::Relaxed);
         // SAFETY: this thread claimed `index` for the current generation and hasn't finished it
         // (see the invariant on `PoolShared`).
         let channel = unsafe { &mut *(address as *mut Channel) };
         let mut run = || {
+            if kind == JobKind::Stage {
+                let started = channel.mix.timing.then(Instant::now);
+                channel.render_stage(frames);
+                if let Some(started) = started {
+                    channel.mix.timer.add(elapsed_ns(started));
+                }
+                return false;
+            }
             let step = if resume {
                 channel.resume_device_chain(frames)
             } else {
@@ -174,7 +220,7 @@ impl PoolShared {
         match catch_unwind(AssertUnwindSafe(run)) {
             Ok(parked) => parked,
             Err(_) => {
-                error!("A device chain panicked on a processing thread; its block is dropped");
+                error!("A channel job panicked on a processing thread; its block is dropped");
                 false
             }
         }
@@ -258,6 +304,17 @@ impl ChannelPool {
     /// Callback thread only, under the state lock, and the caller doesn't touch the channels
     /// until it returns. Device events are left for the caller to forward.
     pub fn run_jobs(&self, jobs: &[usize], parked: &mut VecDeque<usize>, frames: usize) {
+        self.run_jobs_of(JobKind::Chain, jobs, parked, frames);
+    }
+
+    /// `run_jobs` for a pass of `kind`.
+    pub fn run_jobs_of(
+        &self,
+        kind: JobKind,
+        jobs: &[usize],
+        parked: &mut VecDeque<usize>,
+        frames: usize,
+    ) {
         debug_assert!(
             jobs.iter()
                 .enumerate()
@@ -272,12 +329,12 @@ impl ChannelPool {
         if self.workers.is_empty() || jobs.len() > MAX_JOBS {
             // Same steps through the claim counter, all on this thread.
             for chunk in jobs.chunks(MAX_JOBS) {
-                let generation = Self::publish(shared, chunk, frames, false);
+                let generation = Self::publish(shared, chunk, kind, frames, false);
                 shared.work(generation, parked, false);
             }
             return;
         }
-        let generation = Self::publish(shared, jobs, frames, true);
+        let generation = Self::publish(shared, jobs, kind, frames, true);
         shared.work(generation, parked, false);
 
         // Wait for jobs the workers started.
@@ -297,7 +354,13 @@ impl ChannelPool {
     }
 
     /// Store a pass's jobs and open its generation. Returns the generation.
-    fn publish(shared: &PoolShared, jobs: &[usize], frames: usize, wake: bool) -> u32 {
+    fn publish(
+        shared: &PoolShared,
+        jobs: &[usize],
+        kind: JobKind,
+        frames: usize,
+        wake: bool,
+    ) -> u32 {
         let count = jobs.len();
         debug_assert!(count <= MAX_JOBS);
         for (slot, &job) in shared.jobs.iter().zip(jobs) {
@@ -305,6 +368,7 @@ impl ChannelPool {
         }
         shared.done_count.store(0, Ordering::Relaxed);
         shared.frames.store(frames, Ordering::Relaxed);
+        shared.kind.store(kind.as_u8(), Ordering::Relaxed);
         let generation = shared.generation.load(Ordering::Relaxed).wrapping_add(1);
         // Release: a thread that claims through this word sees the jobs and frames above.
         shared
@@ -650,6 +714,96 @@ mod tests {
                 "channel {id}'s device was timed"
             );
         }
+    }
+
+    /// Twelve stage sources at different spots feeding a Stage return, plus a group that is a
+    /// stage source itself, so both the pooled and the routed placement run.
+    fn stage_graph(pool: Option<ChannelPool>) -> crate::audio::state::EngineState {
+        use crate::audio::channel::PanMode;
+        use crate::audio::stage::source::StageSource;
+        use crate::audio::stage::tail::StageTail;
+        use crate::audio::stage::RoomModel;
+
+        let room = RoomModel::default();
+        let mut channels = vec![graph_channel(1, 1000, 0.0)];
+        let mut ret = graph_channel(2, 1, 0.0);
+        let mut tail = StageTail::new(SAMPLE_RATE, GRAPH_FRAMES);
+        tail.configure(&room);
+        ret.stage_tail = Some(Box::new(tail));
+        channels.push(ret);
+        for i in 0..12u32 {
+            let mut source = graph_channel(3 + i as ChannelId, 1, -(i as f32));
+            source.pan_mode = PanMode::Stage;
+            source.stage = Some(Box::new(StageSource::new(SAMPLE_RATE, GRAPH_FRAMES)));
+            source.stage_feed = Some(2);
+            source.stage_params.x = 2.0 + 1.5 * i as f32;
+            source.stage_params.y = 1.0 + (i % 5) as f32;
+            source.stage_params.size = if i % 3 == 0 { 3.0 } else { 0.0 };
+            source.stage_params.has_room = i % 4 == 3;
+            channels.push(source);
+        }
+        let mut state = state_with(channels);
+        state.stage.room = room;
+        for channel in state.channels.values_mut() {
+            if let Some(source) = channel.stage.as_mut() {
+                source.set_room(room);
+            }
+        }
+        state.pool = pool;
+        state
+    }
+
+    fn render_stage_graph(
+        mut state: crate::audio::state::EngineState,
+    ) -> (Vec<f32>, crate::audio::state::EngineState) {
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut rendered = Vec::new();
+        let mut output = vec![0.0f32; GRAPH_FRAMES * 2];
+        for block in 0..30 {
+            for channel in state.channels.values_mut() {
+                channel.clear_buffers();
+            }
+            for id in 3..15 {
+                let channel = state.channels.get_mut(&id).unwrap();
+                let mut seed = (block as u32 + 1).wrapping_mul(2_654_435_761) ^ id as u32;
+                for i in 0..GRAPH_FRAMES {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let sample = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                    channel.buffer_left[i] = sample;
+                    channel.buffer_right[i] = sample * (0.5 + id as f32 * 0.01);
+                }
+            }
+            crate::audio::mixing::mix_and_output(
+                &mut state,
+                &mut output,
+                2,
+                GRAPH_FRAMES,
+                &status_tx,
+            );
+            rendered.extend_from_slice(&output);
+        }
+        (rendered, state)
+    }
+
+    #[test]
+    fn stage_pass_pooled_matches_serial() {
+        let (single, _) = render_stage_graph(stage_graph(None));
+        assert!(
+            single.iter().any(|&s| s.abs() > 1e-3),
+            "the stage graph makes sound"
+        );
+        let pool = ChannelPool::spawn(4, None);
+        let shared = Arc::clone(&pool.shared);
+        let (pooled, _) = render_stage_graph(stage_graph(Some(pool)));
+        assert!(
+            shared.worker_jobs.load(Ordering::Relaxed) > 0,
+            "the workers took part"
+        );
+        let first_difference = single
+            .iter()
+            .zip(&pooled)
+            .position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(first_difference, None, "4 workers changed the output");
     }
 
     #[test]

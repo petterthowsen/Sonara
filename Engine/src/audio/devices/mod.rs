@@ -22,8 +22,9 @@ pub use containers::{
 };
 pub use device::*;
 pub use effects::{
-    compressor, effect, eq, ChorusDevice, DelayDevice, EqDevice, FilterDevice, MultibandDevice,
-    PhaserDevice, PitchShifterDevice, ReverbDevice, SaturatorDevice, UtilityDevice,
+    compressor, effect, eq, reverb, ChorusDevice, DelayDevice, EqDevice, FilterDevice,
+    MultibandDevice, PhaserDevice, PitchShifterDevice, ReverbDevice, SaturatorDevice,
+    UtilityDevice,
 };
 pub use factory::{
     create_drum, create_effect, create_note_effect, DeviceFactory, DRUM_IDS, EFFECT_IDS,

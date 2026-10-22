@@ -40,6 +40,7 @@ const MODULATORS := "modulators"
 const DEVICE_SLOTS := "device_slots"              # devices inside a slotted device (spec 040) travel only in its Sonara state
 const MIDI_SEND := "midi_send"                    # MIDI Send forwards notes between channels; no DAWproject mapping (spec 049)
 const GROUP_CLIP := "group_clip"                  # MIDI clips on a group track (spec 049)
+const STAGE := "stage"                            # Virtual Stage (spec 051): sources export with X as pan; the room has no DAWproject mapping
 const DRUM_CHOKE := "drum_choke"                  # Drum Machine pad choke targets have no DAWproject mapping
 
 ## Text per kind. `{n}` is the count, `{detail}` the distinct details joined by ", ".
@@ -79,6 +80,7 @@ const TEMPLATES: Dictionary = {
 	DEVICE_SLOTS: "{detail}: devices in its slots are kept only in Sonara's own state; other applications ignore them",
 	MIDI_SEND: "MIDI Send is kept only in Sonara's own state; other applications ignore it, so the notes it forwards to other channels are not played there",
 	GROUP_CLIP: "{n} MIDI clips on a group track are written on the group's lane; other applications may ignore them",
+	STAGE: "Virtual Stage not exported: {n} stage sources exported with their left-right position as pan; depth, height and the room are kept only in Sonara's own project",
 	DRUM_CHOKE: "{detail}: Drum Machine choke targets are kept only in Sonara's own state; other applications ignore them",
 }
 

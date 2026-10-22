@@ -12,7 +12,7 @@ mod filter;
 mod multiband;
 mod phaser;
 mod pitch_shifter;
-mod reverb;
+pub mod reverb;
 mod saturator;
 pub mod split;
 mod utility;

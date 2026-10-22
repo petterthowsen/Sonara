@@ -7,7 +7,7 @@ use crate::audio::channel::Channel;
 use crate::audio::render_scratch::SoloRole;
 use crate::audio::types::*;
 
-use super::routing::{is_valid_route, output_target};
+use super::routing::{is_valid_route, output_target, stage_target};
 use super::{MASTER_CHANNEL_ID, SOLO_WALK_LIMIT};
 
 /// True if this channel contributes no audio this buffer (muted or excluded by solo).
@@ -46,7 +46,8 @@ pub(super) fn output_reaches_soloed(
     false
 }
 
-/// True if `source` has a route or unmuted send into a channel for which `pred` holds.
+/// True if `source` has a route, an unmuted send or a stage edge into a channel for which
+/// `pred` holds.
 pub(super) fn any_output(
     channel_map: &HashMap<ChannelId, Channel>,
     source: &Channel,
@@ -57,13 +58,15 @@ pub(super) fn any_output(
             && channel_map.get(&target_id).is_some_and(&pred)
     };
     output_target(source).is_some_and(|id| target_holds(id))
+        || stage_target(source).is_some_and(|id| target_holds(id))
         || source
             .send_channels
             .iter()
             .any(|send| !send.muted && target_holds(send.target_channel_id))
 }
 
-/// Mark the unmuted targets of `source`'s route and unmuted sends as carrying soloed audio.
+/// Mark the unmuted targets of `source`'s route, unmuted sends and stage edge as carrying
+/// soloed audio.
 /// Returns true if any target changed.
 pub(super) fn spread_solo_up(
     channel_map: &mut HashMap<ChannelId, Channel>,
@@ -75,7 +78,8 @@ pub(super) fn spread_solo_up(
     // Move the sends out (no allocation) so targets can be borrowed mutably
     let sends = std::mem::take(&mut source.send_channels);
     let output = output_target(source);
-    let targets = output.into_iter().chain(
+    let stage = stage_target(source);
+    let targets = output.into_iter().chain(stage).chain(
         sends
             .iter()
             .filter(|send| !send.muted)

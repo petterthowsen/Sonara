@@ -5,6 +5,7 @@ use rosc::OscType;
 use tracing::info;
 
 use super::RouteCtx;
+use crate::audio::stage::StageParams;
 use crate::audio::AudioCommand;
 use crate::osc::parse::{segment, Args};
 use std::time::Instant;
@@ -58,6 +59,23 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
             cx.commands.send(AudioCommand::SetChannelPanWidth {
                 id,
                 width: a.float(0)?,
+            })?;
+        }
+        ["channel", id_str, "stage"] => {
+            let id: usize = segment(cx.addr, id_str)?;
+            // x, y, z, size, rotation_deg, sum_mode (0 L+R, 1 Mid), has_room
+            a.exactly(7)?;
+            cx.commands.send(AudioCommand::SetChannelStage {
+                id,
+                params: StageParams {
+                    x: a.float_or_int(0)?,
+                    y: a.float_or_int(1)?,
+                    z: a.float_or_int(2)?,
+                    size: a.float_or_int(3)?,
+                    rotation_deg: a.float_or_int(4)?,
+                    sum_mode: a.int(5)?.into(),
+                    has_room: a.bool(6)?,
+                },
             })?;
         }
         ["channel", id_str, "mute"] => {

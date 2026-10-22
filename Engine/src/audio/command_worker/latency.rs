@@ -129,6 +129,12 @@ fn install(
             .unwrap_or(0) as usize;
         keep_ring(&mut old.post, &mut latency.post, needed, max_block);
         keep_ring(&mut old.pre, &mut latency.pre, needed, max_block);
+        keep_ring(
+            &mut old.stage,
+            &mut latency.stage,
+            latency.stage_delay as usize,
+            max_block,
+        );
         if old.aux.frames() == latency.aux.frames() {
             std::mem::swap(&mut old.aux, &mut latency.aux);
         }

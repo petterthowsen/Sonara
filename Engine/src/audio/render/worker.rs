@@ -754,6 +754,13 @@ fn reset_engine_devices(state: &mut EngineState) {
         while channel.midi_queue.pop().is_some() {}
         channel.scheduled_midi_events.clear();
         container::visit_devices_mut(&mut channel.devices, &mut |_, device| device.reset());
+        // Stage delay lines and the room tail carry history like a device does (spec 051).
+        if let Some(stage) = channel.stage.as_mut() {
+            stage.reset();
+        }
+        if let Some(tail) = channel.stage_tail.as_mut() {
+            tail.reset();
+        }
     }
     for track in state.tracks.values_mut() {
         for instance in &mut track.clip_instances {
@@ -962,6 +969,106 @@ mod tests {
         let b = read_wav(&render(&state, &second).unwrap()[0]);
         assert_eq!(a.len(), b.len());
         assert!(a == b, "renders differ");
+    }
+
+    /// The polysynth project with channel 2 as a stage source (off center, size 3 m, with a
+    /// wide room) feeding a Stage return, channel 3, that routes to master.
+    fn stage_project(length: Tick) -> Mutex<EngineState> {
+        use crate::audio::channel::PanMode;
+        use crate::audio::stage::source::StageSource;
+        use crate::audio::stage::tail::StageTail;
+        use crate::audio::stage::RoomModel;
+
+        let state = project(&[(0, 960, 60), (960, 960, 67), (2880, 480, 72)], length);
+        {
+            let mut guard = state.lock().unwrap();
+            let room = RoomModel::default();
+            guard.stage.room = room;
+            guard.stage.return_channel_id = Some(3);
+            let mut stage_return = Channel::new(3, "Stage".to_string(), MAX_BLOCK_FRAMES, SR);
+            stage_return.output_channel_id = Some(1);
+            let mut tail = StageTail::new(SR, MAX_BLOCK_FRAMES);
+            tail.configure(&room);
+            stage_return.stage_tail = Some(Box::new(tail));
+            guard.channels.insert(3, stage_return);
+
+            let source = guard.channels.get_mut(&2).unwrap();
+            source.output_channel_id = Some(1);
+            source.pan_mode = PanMode::Stage;
+            let mut stage = StageSource::new(SR, MAX_BLOCK_FRAMES);
+            stage.set_room(room);
+            source.stage = Some(Box::new(stage));
+            source.stage_feed = Some(3);
+            source.stage_params.x = 4.0;
+            source.stage_params.y = 8.0;
+            source.stage_params.size = 3.0;
+        }
+        state
+    }
+
+    /// REQ-029: the stage renders the same offline as through the real-time block loop, with
+    /// stale stage history from earlier playback reset first.
+    #[test]
+    fn stage_offline_matches_realtime() {
+        const BLOCK: usize = 512;
+        let dir = tempfile::tempdir().unwrap();
+
+        // The real-time path: the callback's sequence of calls, one block at a time.
+        let live = stage_project(BAR);
+        let mut expected = Vec::new();
+        {
+            let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+            let mut state = live.lock().unwrap();
+            state.set_current_tick(0);
+            state.set_is_playing(true);
+            state.request_playhead_midi_dispatch();
+            let mut out = vec![0.0f32; BLOCK * 2];
+            for _ in 0..120 {
+                for channel in state.channels.values_mut() {
+                    channel.clear_buffers();
+                    container::visit_devices_mut(&mut channel.devices, &mut |_, device| {
+                        device.mark_activity()
+                    });
+                }
+                process_audio(&mut state, BLOCK, SR, Instant::now());
+                mix_and_output(&mut state, &mut out, 2, BLOCK, &status_tx);
+                expected.extend_from_slice(&out);
+            }
+        }
+        assert!(
+            expected.iter().any(|s| s.abs() > 0.01),
+            "the stage project is audible"
+        );
+
+        // The offline path, on a project that already played (so the stage has history).
+        let offline = stage_project(BAR);
+        {
+            let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+            let mut state = offline.lock().unwrap();
+            state.set_current_tick(0);
+            state.set_is_playing(true);
+            state.request_playhead_midi_dispatch();
+            let mut out = vec![0.0f32; BLOCK * 2];
+            for _ in 0..20 {
+                for channel in state.channels.values_mut() {
+                    channel.clear_buffers();
+                }
+                process_audio(&mut state, BLOCK, SR, Instant::now());
+                mix_and_output(&mut state, &mut out, 2, BLOCK, &status_tx);
+            }
+            state.set_is_playing(false);
+        }
+        let mut job = master_job(dir.path(), "stage", 0, BAR, RenderTail::Seconds(0.0));
+        job.block_frames = BLOCK;
+        let rendered = read_wav(&render(&offline, &job).unwrap()[0]);
+
+        let len = expected.len().min(rendered.len());
+        assert!(len >= 60 * BLOCK * 2, "compared {len} samples");
+        let first_difference = expected[..len]
+            .iter()
+            .zip(&rendered[..len])
+            .position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(first_difference, None, "offline and real-time differ");
     }
 
     #[test]

@@ -195,6 +195,17 @@ impl Channel {
                 self.dispatch_notes(sample_count)
             });
         }
+        // The Stage return adds the late tail to the reflections that mixed in, ahead of its
+        // own devices (spec 051). A chain that starts later ran its first device in the aux pass.
+        if start == 0 {
+            if let Some(tail) = self.stage_tail.as_mut() {
+                tail.process(
+                    &mut self.buffer_left[..sample_count],
+                    &mut self.buffer_right[..sample_count],
+                    sample_count,
+                );
+            }
+        }
         let step = self.begin_chain_from(start, sample_count);
         if let Some(started) = started {
             self.mix.timer.add(elapsed_ns(started));
@@ -685,6 +696,90 @@ mod tests {
             "{:?}",
             channel.sleep_changes
         );
+    }
+
+    /// Effect that records the loudest input sample it is given and passes audio through.
+    struct InputProbe {
+        peak: Arc<Mutex<f32>>,
+    }
+
+    impl AudioDevice for InputProbe {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            let n = sample_count * 2;
+            outputs[..n].copy_from_slice(&inputs[..n]);
+            let mut peak = self.peak.lock().unwrap();
+            *peak = inputs[..n].iter().fold(*peak, |m, s| m.max(s.abs()));
+        }
+        fn send_note_event(&mut self, _event: &NoteEvent, _frame_offset: usize) {}
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.input_probe"
+        }
+        fn device_name(&self) -> &str {
+            "Input Probe"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn stage_tail_runs_before_the_first_device() {
+        use crate::audio::stage::tail::StageTail;
+        const SR: f32 = 48_000.0;
+        const BLOCK: usize = 512;
+        let peak = Arc::new(Mutex::new(0.0f32));
+        let mut channel = Channel::new(2, "Stage return".to_string(), BLOCK, SR);
+        channel.stage_tail = Some(Box::new(StageTail::new(SR, BLOCK)));
+        channel
+            .devices
+            .push(Box::new(InputProbe { peak: peak.clone() }));
+
+        // One impulse in the first block, then silence: the probe only sees signal in the
+        // later blocks if the tail rang into its input.
+        channel.buffer_left[0] = 1.0;
+        channel.buffer_right[0] = 1.0;
+        channel.process_device_chain(BLOCK);
+        *peak.lock().unwrap() = 0.0;
+        for _ in 0..40 {
+            channel.buffer_left.fill(0.0);
+            channel.buffer_right.fill(0.0);
+            channel.process_device_chain(BLOCK);
+        }
+        assert!(
+            *peak.lock().unwrap() > 1e-4,
+            "the device saw no tail: {}",
+            peak.lock().unwrap()
+        );
+
+        // Without a tail the same sequence is silent at the device.
+        let peak = Arc::new(Mutex::new(0.0f32));
+        let mut plain = Channel::new(3, "Plain".to_string(), BLOCK, SR);
+        plain
+            .devices
+            .push(Box::new(InputProbe { peak: peak.clone() }));
+        plain.buffer_left[0] = 1.0;
+        plain.process_device_chain(BLOCK);
+        *peak.lock().unwrap() = 0.0;
+        for _ in 0..40 {
+            plain.buffer_left.fill(0.0);
+            plain.buffer_right.fill(0.0);
+            plain.process_device_chain(BLOCK);
+        }
+        assert_eq!(*peak.lock().unwrap(), 0.0);
     }
 
     #[test]

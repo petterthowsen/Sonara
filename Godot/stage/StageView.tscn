@@ -1,0 +1,275 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://stage/StageView.gd" id="1_view"]
+[ext_resource type="Script" path="res://stage/StageCanvas.gd" id="2_canvas"]
+
+[node name="StageView" type="HSplitContainer"]
+custom_minimum_size = Vector2(760, 440)
+offset_right = 760.0
+offset_bottom = 440.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_view")
+
+[node name="Canvas" type="Control" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+script = ExtResource("2_canvas")
+
+[node name="SideScroll" type="ScrollContainer" parent="."]
+custom_minimum_size = Vector2(290, 0)
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="Side" type="VBoxContainer" parent="SideScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="RoomLabel" type="Label" parent="SideScroll/Side"]
+layout_mode = 2
+text = "Room"
+
+[node name="PresetOption" type="OptionButton" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+fit_to_longest_item = false
+tooltip_text = "Room preset. Editing any value marks it modified."
+
+[node name="RoomGrid" type="GridContainer" parent="SideScroll/Side"]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 4
+columns = 2
+[node name="WidthLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Width"
+
+[node name="Width" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 2
+max_value = 60
+step = 0.5
+value = 2
+suffix = " m"
+
+[node name="DepthLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Depth"
+
+[node name="Depth" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 2
+max_value = 40
+step = 0.5
+value = 2
+suffix = " m"
+
+[node name="HeightLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Height"
+
+[node name="Height" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 2
+max_value = 25
+step = 0.5
+value = 2
+suffix = " m"
+
+[node name="ListenerXLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Listener X"
+
+[node name="ListenerX" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0
+max_value = 60
+step = 0.5
+value = 0
+suffix = " m"
+
+[node name="ListenerYLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Listener Y"
+
+[node name="ListenerY" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0
+max_value = 40
+step = 0.5
+value = 0
+suffix = " m"
+
+[node name="ListenerZLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Listener Z"
+
+[node name="ListenerZ" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0
+max_value = 25
+step = 0.1
+value = 0
+suffix = " m"
+
+[node name="DecayLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Decay"
+
+[node name="Decay" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.1
+max_value = 30
+step = 0.1
+value = 0.1
+suffix = " s"
+
+[node name="TailGainLabel" type="Label" parent="SideScroll/Side/RoomGrid"]
+layout_mode = 2
+text = "Tail level"
+
+[node name="TailGain" type="SpinBox" parent="SideScroll/Side/RoomGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -60
+max_value = 12
+step = 0.5
+value = -60
+suffix = " dB"
+
+[node name="DistanceDelay" type="CheckButton" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Delay each source by its distance from the listener. Off keeps only the delays between reflections."
+text = "Distance delay"
+
+[node name="OutputRow" type="HBoxContainer" parent="SideScroll/Side"]
+layout_mode = 2
+
+[node name="OutputLabel" type="Label" parent="SideScroll/Side/OutputRow"]
+layout_mode = 2
+text = "Output"
+
+[node name="OutputOption" type="OptionButton" parent="SideScroll/Side/OutputRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Full: reflections and tail. Reflections only: for an external reverb on the Stage return. Direct only: nothing reaches the Stage return."
+fit_to_longest_item = false
+selected = 0
+item_count = 3
+popup/item_0/text = "Full"
+popup/item_0/id = 0
+popup/item_1/text = "Reflections only"
+popup/item_1/id = 1
+popup/item_2/text = "Direct only"
+popup/item_2/id = 2
+
+[node name="MaterialsLabel" type="Label" parent="SideScroll/Side"]
+layout_mode = 2
+text = "Surfaces"
+
+[node name="MaterialGrid" type="GridContainer" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 4
+columns = 2
+
+[node name="SourceSeparator" type="HSeparator" parent="SideScroll/Side"]
+layout_mode = 2
+
+[node name="SourceLabel" type="Label" parent="SideScroll/Side"]
+layout_mode = 2
+text = "Source"
+
+[node name="SourceSummary" type="Label" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "No source selected"
+text_overrun_behavior = 3
+clip_text = true
+
+[node name="SourceGrid" type="GridContainer" parent="SideScroll/Side"]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 4
+columns = 2
+
+[node name="SourceHeightLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+layout_mode = 2
+text = "Height"
+
+[node name="SourceHeight" type="SpinBox" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+max_value = 25.0
+step = 0.1
+suffix = " m"
+
+[node name="SourceSizeLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+layout_mode = 2
+text = "Size"
+
+[node name="SourceSize" type="SpinBox" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Width of the stereo source in meters. 0 is a point."
+max_value = 50.0
+step = 0.1
+suffix = " m"
+
+[node name="SourceRotationLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+layout_mode = 2
+text = "Rotation"
+
+[node name="SourceRotation" type="SpinBox" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -180.0
+max_value = 180.0
+step = 1.0
+suffix = " °"
+
+[node name="SumLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+layout_mode = 2
+text = "Size 0 sum"
+
+[node name="SumOption" type="OptionButton" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "How a stereo source becomes one point at size 0: L+R sums both channels, Mid uses the centre only."
+fit_to_longest_item = false
+selected = 0
+item_count = 2
+popup/item_0/text = "L + R"
+popup/item_0/id = 0
+popup/item_1/text = "Mid"
+popup/item_1/id = 1
+
+[node name="HasRoom" type="CheckButton" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "The source already contains its own room (a wet library): no reflections or tail are added."
+text = "Has room"

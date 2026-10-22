@@ -5,7 +5,7 @@ class_name AutomationTarget extends RefCounted
 ## match the engine's `Display` / `AutomationTarget::parse` spelling byte-for-byte, since the
 ## string is what travels over OSC and is persisted in the project file.
 
-enum Kind { CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM, DEVICE_MODULATOR_PARAM, MIDI_CC }
+enum Kind { CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM, DEVICE_MODULATOR_PARAM, MIDI_CC, STAGE_PARAM }
 
 var kind: Kind = Kind.CHANNEL_VOLUME
 var send_index: int = -1          # SEND_AMOUNT only
@@ -13,6 +13,10 @@ var cc: int = -1                  # MIDI_CC only: controller number 0..=119
 var device_path: Array = []       # DEVICE_PARAM / DEVICE_MODULATOR_PARAM: indices into channel.devices / .children
 var param_id: int = -1            # DEVICE_PARAM / DEVICE_MODULATOR_PARAM only
 var mod_id: int = -1              # DEVICE_MODULATOR_PARAM only
+var stage_param: String = ""      # STAGE_PARAM only: one of STAGE_PARAMS
+
+## The automatable placement parameters of a stage source (spec 051), in menu order.
+const STAGE_PARAMS: Array[String] = ["x", "y", "z", "size", "rotation"]
 
 
 static func channel_volume() -> AutomationTarget:
@@ -44,6 +48,17 @@ static func midi_cc(cc: int) -> AutomationTarget:
 	return t
 
 
+## One placement parameter of a stage source (spec 051): `x`, `y`, `z`, `size` or `rotation`.
+## An unknown name is returned as null.
+static func stage(param: String) -> AutomationTarget:
+	if not STAGE_PARAMS.has(param):
+		return null
+	var t := AutomationTarget.new()
+	t.kind = Kind.STAGE_PARAM
+	t.stage_param = param
+	return t
+
+
 static func device_param(path: Array, p_param_id: int) -> AutomationTarget:
 	var t := AutomationTarget.new()
 	t.kind = Kind.DEVICE_PARAM
@@ -63,7 +78,7 @@ static func device_modulator_param(path: Array, p_mod_id: int, p_param_id: int) 
 
 
 ## Wire spelling: `channel/volume`, `channel/pan`, `channel/send/{index}`,
-## `device/{i0}[/{i1}...]/param/{param_id}`.
+## `channel/stage/{x|y|z|size|rotation}`, `device/{i0}[/{i1}...]/param/{param_id}`.
 func _to_string() -> String:
 	match kind:
 		Kind.CHANNEL_VOLUME:
@@ -78,6 +93,8 @@ func _to_string() -> String:
 			return "device/%s/mod/%d/param/%d" % [_path_string(), mod_id, param_id]
 		Kind.MIDI_CC:
 			return "channel/cc/%d" % cc
+		Kind.STAGE_PARAM:
+			return "channel/stage/%s" % stage_param
 	return ""
 
 
@@ -109,6 +126,8 @@ static func parse(s: String) -> AutomationTarget:
 		if cc_value < 0 or cc_value > Midi.CC_LANE_MAX:
 			return null
 		return AutomationTarget.midi_cc(cc_value)
+	if parts.size() == 3 and parts[0] == "channel" and parts[1] == "stage":
+		return AutomationTarget.stage(parts[2])  # null for an unknown parameter
 	if parts.size() == 3 and parts[0] == "channel" and parts[1] == "send":
 		if not (parts[2] as String).is_valid_int():
 			return null
@@ -166,7 +185,7 @@ func is_resolvable(channel: Object) -> bool:
 	if channel == null:
 		return false
 	match kind:
-		Kind.CHANNEL_VOLUME, Kind.CHANNEL_PAN, Kind.MIDI_CC:
+		Kind.CHANNEL_VOLUME, Kind.CHANNEL_PAN, Kind.MIDI_CC, Kind.STAGE_PARAM:
 			return true
 		Kind.SEND_AMOUNT:
 			return send_index >= 0 and send_index < channel.send_channels.size()
@@ -215,6 +234,8 @@ func display_name(channel: Object) -> String:
 			return "%s / %s / %s" % [instance.name, modulator.name, param_name]
 		Kind.MIDI_CC:
 			return cc_label(channel, cc)
+		Kind.STAGE_PARAM:
+			return "Stage " + STAGE_LABELS.get(stage_param, stage_param)
 	return "Unknown"
 
 
@@ -284,10 +305,70 @@ static func pan_to_normalized(pan: float) -> float:
 	return (clampf(pan, -1.0, 1.0) + 1.0) * 0.5
 
 
+# Stage parameters (spec 051). The 0..1 value spans the room as it is when the block renders
+# (`Engine/src/audio/automation.rs::StageParam::denormalize`): x 0..width, y 0..depth, z 0..height,
+# size 0..max(width, depth) in meters, rotation -180..180 degrees.
+
+const STAGE_LABELS := {"x": "X", "y": "Y", "z": "Z", "size": "Size", "rotation": "Rotation"}
+
+
+## Span of stage parameter `param` for `room` (a Stage): meters, or 360 degrees for rotation.
+static func stage_span(param: String, room: Object) -> float:
+	match param:
+		"x":
+			return room.width
+		"y":
+			return room.depth
+		"z":
+			return room.height
+		"size":
+			return maxf(room.width, room.depth)
+	return 360.0
+
+
+## Real value (meters, or degrees for rotation) of normalized `normalized` in `room`.
+static func stage_denormalize(param: String, normalized: float, room: Object) -> float:
+	var n := clampf(normalized, 0.0, 1.0)
+	if param == "rotation":
+		return n * 360.0 - 180.0
+	return n * stage_span(param, room)
+
+
+static func stage_normalize(param: String, value: float, room: Object) -> float:
+	if param == "rotation":
+		return clampf((value + 180.0) / 360.0, 0.0, 1.0)
+	var span := stage_span(param, room)
+	return clampf(value / span, 0.0, 1.0) if span > 0.0 else 0.0
+
+
+## The channel's base value of a stage parameter, in meters or degrees.
+static func stage_base_value(param: String, channel: Object) -> float:
+	match param:
+		"x":
+			return channel.stage_x
+		"y":
+			return channel.stage_y
+		"z":
+			return channel.stage_z
+		"size":
+			return channel.stage_size
+	return channel.stage_rotation
+
+
+## The room of `channel`'s project, or a default one.
+static func _stage_of(channel: Object) -> Object:
+	var project: Object = channel.get_project() if channel else null
+	return project.stage if project else load("res://data/Stage.gd").new()
+
+
 ## The target's current *base* value on `channel`, normalized 0.0..1.0. Used to seed a new lane's
 ## first point so creating a lane doesn't jump the parameter. Returns 0.5 when unresolvable.
 func current_normalized_value(channel: Object) -> float:
 	match kind:
+		Kind.STAGE_PARAM:
+			if channel == null:
+				return 0.5
+			return stage_normalize(stage_param, stage_base_value(stage_param, channel), _stage_of(channel))
 		Kind.CHANNEL_VOLUME:
 			return db_to_normalized(channel.volume) if channel else 0.5
 		Kind.CHANNEL_PAN:
@@ -323,6 +404,9 @@ func current_normalized_value(channel: Object) -> float:
 ## or the device parameter's own formatting. Used by the lane row's value readout.
 func format_value(channel: Object, normalized: float) -> String:
 	match kind:
+		Kind.STAGE_PARAM:
+			var real := stage_denormalize(stage_param, normalized, _stage_of(channel))
+			return "%.0f\u00b0" % real if stage_param == "rotation" else "%.1f m" % real
 		Kind.CHANNEL_VOLUME, Kind.SEND_AMOUNT:
 			return "%.1f dB" % normalized_to_db(normalized)
 		Kind.CHANNEL_PAN:
@@ -352,6 +436,8 @@ func format_value(channel: Object, normalized: float) -> String:
 ## (dB, pan as -100..100 percent, or the device parameter's own edit text).
 func edit_text(channel: Object, normalized: float) -> String:
 	match kind:
+		Kind.STAGE_PARAM:
+			return "%.1f" % stage_denormalize(stage_param, normalized, _stage_of(channel))
 		Kind.CHANNEL_VOLUME, Kind.SEND_AMOUNT:
 			return "%.1f" % normalized_to_db(normalized)
 		Kind.CHANNEL_PAN:
@@ -370,6 +456,14 @@ func parse_edit_text(channel: Object, text: String) -> float:
 	if trimmed.is_empty():
 		return NAN
 	match kind:
+		Kind.STAGE_PARAM:
+			if trimmed.to_lower().ends_with("m"):
+				trimmed = trimmed.substr(0, trimmed.length() - 1).strip_edges()
+			elif trimmed.ends_with("\u00b0"):
+				trimmed = trimmed.substr(0, trimmed.length() - 1).strip_edges()
+			if not trimmed.is_valid_float():
+				return NAN
+			return stage_normalize(stage_param, trimmed.to_float(), _stage_of(channel))
 		Kind.CHANNEL_VOLUME, Kind.SEND_AMOUNT:
 			if trimmed.to_lower().ends_with("db"):
 				trimmed = trimmed.substr(0, trimmed.length() - 2).strip_edges()

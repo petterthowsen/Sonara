@@ -12,6 +12,7 @@ mod plugin;
 mod preview;
 mod project;
 mod render;
+mod stage;
 mod track;
 mod transport;
 
@@ -124,6 +125,7 @@ impl OscServer {
             }
             Some("audio" | "engine") => warn_on_arg_error(audio::route(&parts, args, &mut cx))?,
             Some("render") => warn_on_arg_error(render::route(&parts, args, &mut cx))?,
+            Some("stage") => warn_on_arg_error(stage::route(&parts, args, &mut cx))?,
             Some("audiofile") => warn_on_arg_error(audiofile::route(&parts, args, &cx))?,
             Some("preview") => warn_on_arg_error(preview::route(&parts, args, &cx))?,
             _ => false,
@@ -269,6 +271,106 @@ mod tests {
                 pan_right: None,
                 ..
             }]
+        ));
+    }
+
+    /// The 22 arguments of a `/stage/set` for a 30 x 20 x 12 m room.
+    fn stage_set_args() -> Vec<OscType> {
+        let mut args = vec![
+            Float(30.0),
+            Float(20.0),
+            Float(12.0),
+            Float(15.0),
+            Float(14.0),
+            Float(1.6),
+            Float(2.5),
+            Float(-4.0),
+            Int(1),
+            Int(1),
+        ];
+        for surface in 0..6 {
+            args.push(Float(0.5 + surface as f32 * 0.05));
+            args.push(Float(0.1 * surface as f32));
+        }
+        args
+    }
+
+    #[test]
+    fn stage_set_reads_the_room() {
+        let mut h = Harness::new();
+        let sent = h.send("/stage/set", stage_set_args());
+        let [AudioCommand::SetStage { room }] = sent.as_slice() else {
+            panic!("expected SetStage, got {sent:?}");
+        };
+        assert_eq!((room.width, room.depth, room.height), (30.0, 20.0, 12.0));
+        assert_eq!(
+            (room.listener.x, room.listener.y, room.listener.z),
+            (15.0, 14.0, 1.6)
+        );
+        assert_eq!((room.decay_s, room.tail_db), (2.5, -4.0));
+        assert!(room.distance_delay);
+        assert_eq!(
+            room.output_mode,
+            crate::audio::stage::OutputMode::ReflectionsOnly
+        );
+        assert_eq!(room.surfaces[0].gain, 0.5);
+        assert_eq!(room.surfaces[5].hf_damping, 0.5);
+        assert_eq!(room.surfaces[3].gain, 0.65);
+
+        // A short or mistyped message is dropped.
+        let mut short = stage_set_args();
+        short.pop();
+        assert!(h.send("/stage/set", short).is_empty());
+        let mut bad = stage_set_args();
+        bad[8] = Float(1.0);
+        assert!(h.send("/stage/set", bad).is_empty());
+    }
+
+    #[test]
+    fn stage_return_takes_a_channel_id() {
+        let mut h = Harness::new();
+        let sent = h.send("/stage/return", vec![Int(7)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetStageReturn { id: 7 }]
+        ));
+        let sent = h.send("/stage/return", vec![Int(0)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetStageReturn { id: 0 }]
+        ));
+        assert!(h.send("/stage/return", vec![Int(-1)]).is_empty());
+        assert!(h.send("/stage/return", vec![]).is_empty());
+        assert!(h.send("/stage/other", vec![Int(1)]).is_empty());
+    }
+
+    #[test]
+    fn channel_stage_reads_the_placement_and_pan_mode_accepts_stage() {
+        use crate::audio::stage::SumMode;
+        let mut h = Harness::new();
+        let args = vec![
+            Float(3.0),
+            Float(8.0),
+            Int(2),
+            Float(4.5),
+            Float(-30.0),
+            Int(1),
+            Int(1),
+        ];
+        let sent = h.send("/channel/5/stage", args);
+        let [AudioCommand::SetChannelStage { id: 5, params }] = sent.as_slice() else {
+            panic!("expected SetChannelStage, got {sent:?}");
+        };
+        assert_eq!((params.x, params.y, params.z), (3.0, 8.0, 2.0));
+        assert_eq!((params.size, params.rotation_deg), (4.5, -30.0));
+        assert_eq!(params.sum_mode, SumMode::Mid);
+        assert!(params.has_room);
+        assert!(h.send("/channel/5/stage", vec![Float(3.0)]).is_empty());
+
+        let sent = h.send("/channel/5/pan_mode", vec![Int(4)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetChannelPanMode { id: 5, mode: 4 }]
         ));
     }
 

@@ -22,7 +22,14 @@ enum PanMode {
 	STEREO_COMBINED,  # Cubase-style: position moves the L/R handles together, width spreads them
 	STEREO_DUAL,      # Separate L/R handles
 	STEREO_BALANCE,   # Position attenuates the opposite side (default)
-	MONO              # Sums to mono, then pans the sum
+	MONO,             # Sums to mono, then pans the sum
+	STAGE,            # Placed in the project's virtual stage (spec 051); instrument and audio channels only
+}
+
+## How a stereo stage source becomes one point at size 0. The numbers are the OSC values.
+enum StageSumMode {
+	LEFT_PLUS_RIGHT,
+	MID,
 }
 
 ## Send effects: added to a BUS channel they default to 100 % wet (the send/aux workflow, spec
@@ -42,6 +49,8 @@ signal color_changed(color : Color)
 signal volume_changed(value: float)
 signal pan_changed(pan_left: float, pan_right: float)
 signal pan_mode_changed(pan_mode: PanMode)
+## Placement of a stage source changed (spec 051): position, size, rotation, sum mode or Has room.
+signal stage_changed
 signal mute_changed(value: bool)
 signal solo_changed(value: bool)
 signal hidden_changed(value: bool)
@@ -90,6 +99,23 @@ var pan_width: float = 1.0  # -1.0..1.0, STEREO_COMBINED only (negative swaps th
 var pan_left: float = 0.0   # STEREO_DUAL handles
 var pan_right: float = 0.0
 var pan_mode: PanMode = PanMode.STEREO_BALANCE
+
+# Stage source placement (spec 051), in meters from the room's front-left floor corner. Kept while
+# the channel is in another pan mode, so switching back to Stage puts it where it was.
+var stage_x: float = 0.0
+var stage_y: float = 0.0
+var stage_z: float = 0.0
+var stage_size: float = 0.0       # Width of a stereo source; 0 = one point
+var stage_rotation: float = 0.0   # Degrees, -180..180; 0 = parallel to the front wall
+var stage_sum_mode: StageSumMode = StageSumMode.LEFT_PLUS_RIGHT
+var stage_has_room: bool = false  # Recorded with its own room: no reflections or tail
+## False until the channel first enters Stage, which places it from its pan (REQ-002).
+var stage_placed: bool = false
+## The pan mode in effect before Stage, so leaving Stage converts from it and restores the pan.
+var stage_prev_pan_mode: PanMode = PanMode.STEREO_BALANCE
+## True for the project's Stage return (a bus). It can't be a stage source or be deleted while
+## stage sources exist.
+var is_stage_return: bool = false
 
 var mute: bool = false
 var solo: bool = false
@@ -403,18 +429,34 @@ func get_pan_state() -> Dictionary:
 	return {"mode": pan_mode, "pan": pan, "width": pan_width, "left": pan_left, "right": pan_right}
 
 
-## Apply a snapshot from get_pan_state() or convert_pan_state().
+## Apply a snapshot from get_pan_state() or convert_pan_state(). Stage is refused where
+## can_use_stage() is false (the mode stays as it was).
 func set_pan_state(state: Dictionary) -> void:
-	var mode_changed: bool = state.get("mode", pan_mode) != pan_mode
-	pan_mode = state.get("mode", pan_mode)
+	var new_mode: PanMode = state.get("mode", pan_mode)
+	if new_mode == PanMode.STAGE and pan_mode != PanMode.STAGE and not can_use_stage():
+		logger.warn("[%d] Stage pan mode refused: only instrument and audio channels can be stage sources" % id)
+		new_mode = pan_mode
+	var mode_changed: bool = new_mode != pan_mode
+	var entering_stage: bool = mode_changed and new_mode == PanMode.STAGE
+	if entering_stage:
+		stage_prev_pan_mode = pan_mode
+	pan_mode = new_mode
 	pan = clampf(state.get("pan", pan), -1.0, 1.0)
 	pan_width = clampf(state.get("width", pan_width), -1.0, 1.0)
 	pan_left = clampf(state.get("left", pan_left), -1.0, 1.0)
 	pan_right = clampf(state.get("right", pan_right), -1.0, 1.0)
+	if entering_stage:
+		if not stage_placed:
+			place_in_stage_from_pan()
+		var project := get_project()
+		if project:
+			project.ensure_stage_return()  # REQ-017: the first stage source creates the return
 	if _is_connected:
 		_send_pan_to_engine()
 	if mode_changed:
 		pan_mode_changed.emit(pan_mode)
+	if entering_stage:
+		stage_changed.emit()
 	pan_changed.emit(pan_left, pan_right)
 
 
@@ -441,7 +483,11 @@ static func convert_pan_state(state: Dictionary, mode: PanMode) -> Dictionary:
 
 
 func set_pan_mode(mode : PanMode) -> void:
-	set_pan_state(convert_pan_state(get_pan_state(), mode))
+	var state := get_pan_state()
+	if pan_mode == PanMode.STAGE and mode != PanMode.STAGE:
+		# Leaving Stage restores what the pan was before it (REQ-003): convert from that mode.
+		state["mode"] = stage_prev_pan_mode
+	set_pan_state(convert_pan_state(state, mode))
 
 
 ## Position for Balance, Combined and Mono.
@@ -475,6 +521,121 @@ func _send_pan_to_engine() -> void:
 	AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
 	AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
 	AudioEngineOSC.send("/channel/%d/pan_width" % id, [pan_width])
+	if stage_placed:
+		_send_stage_to_engine()
+
+
+# ----------------------------------------------------------------------------
+# Stage source (spec 051)
+# ----------------------------------------------------------------------------
+
+## Instrument, audio and group channels can be stage sources. Other buses (folder buses, returns
+## and the Stage return) and master are spatialized elsewhere or not at all (REQ-001).
+func can_use_stage() -> bool:
+	return (channel_type == ChannelType.INSTRUMENT or channel_type == ChannelType.AUDIO \
+			or channel_type == ChannelType.GROUP) \
+			and not is_master and not is_stage_return
+
+
+## True while the channel is a stage source.
+func is_stage_source() -> bool:
+	return pan_mode == PanMode.STAGE
+
+
+## The stage of the owning project, or a default room when the channel has none (tests).
+func _stage_room() -> VirtualStage:
+	var project := get_project()
+	return project.stage if project else VirtualStage.new()
+
+
+## Place the channel from its pan on first entry (REQ-002): X from the pan across the room's
+## half width, the room's default source depth and height, size 3 m for a stereo input and 0 for
+## a mono one. Godot doesn't know the input width of a plugin, so stereo is the default.
+func place_in_stage_from_pan(stereo: bool = true) -> void:
+	var room := _stage_room()
+	stage_x = room.width * 0.5 + pan * room.width * 0.5
+	stage_y = room.default_source_depth()
+	stage_z = room.default_source_height()
+	stage_size = VirtualStage.DEFAULT_STEREO_SIZE if stereo else 0.0
+	stage_rotation = 0.0
+	stage_placed = true
+	stage_x = clampf(stage_x, 0.0, room.width)
+
+
+## Snapshot of the placement: `{x, y, z, size, rotation, sum_mode, has_room, placed, prev_pan_mode}`.
+func get_stage_state() -> Dictionary:
+	return {
+		"x": stage_x, "y": stage_y, "z": stage_z, "size": stage_size, "rotation": stage_rotation,
+		"sum_mode": int(stage_sum_mode), "has_room": stage_has_room, "placed": stage_placed,
+		"prev_pan_mode": int(stage_prev_pan_mode),
+	}
+
+
+## Apply a snapshot from get_stage_state(). Keys that are missing keep their value.
+func set_stage_state(state: Dictionary) -> void:
+	stage_x = float(state.get("x", stage_x))
+	stage_y = float(state.get("y", stage_y))
+	stage_z = float(state.get("z", stage_z))
+	stage_size = maxf(float(state.get("size", stage_size)), 0.0)
+	stage_rotation = wrap_stage_rotation(float(state.get("rotation", stage_rotation)))
+	stage_sum_mode = clampi(int(state.get("sum_mode", stage_sum_mode)), StageSumMode.LEFT_PLUS_RIGHT, StageSumMode.MID) as StageSumMode
+	stage_has_room = bool(state.get("has_room", stage_has_room))
+	stage_placed = bool(state.get("placed", stage_placed))
+	stage_prev_pan_mode = clampi(int(state.get("prev_pan_mode", stage_prev_pan_mode)), PanMode.STEREO_COMBINED, PanMode.MONO) as PanMode
+	_stage_edited(false)
+
+
+## Move the source (meters). Clamped into the room.
+func set_stage_position(position: Vector3) -> void:
+	var p := _stage_room().clamp_point(position)
+	stage_x = p.x
+	stage_y = p.y
+	stage_z = p.z
+	_stage_edited()
+
+
+## Width of a stereo source in meters; 0 = one point.
+func set_stage_size(meters: float) -> void:
+	var room := _stage_room()
+	stage_size = clampf(meters, 0.0, maxf(room.width, room.depth))
+	_stage_edited()
+
+
+## Angle of the source's line in degrees (wrapped into -180..180).
+func set_stage_rotation(degrees: float) -> void:
+	stage_rotation = wrap_stage_rotation(degrees)
+	_stage_edited()
+
+
+func set_stage_sum_mode(mode: int) -> void:
+	stage_sum_mode = clampi(mode, StageSumMode.LEFT_PLUS_RIGHT, StageSumMode.MID) as StageSumMode
+	_stage_edited()
+
+
+func set_stage_has_room(value: bool) -> void:
+	stage_has_room = value
+	_stage_edited()
+
+
+static func wrap_stage_rotation(degrees: float) -> float:
+	var r := fposmod(degrees + 180.0, 360.0) - 180.0
+	return r
+
+
+func _stage_edited(mark_placed: bool = true) -> void:
+	if mark_placed:
+		stage_placed = true
+	if _is_connected:
+		_send_stage_to_engine()
+	stage_changed.emit()
+
+
+## `/channel/{id}/stage`: x, y, z, size, rotation, sum mode, has room.
+func _send_stage_to_engine() -> void:
+	AudioEngineOSC.send("/channel/%d/stage" % id, [
+		stage_x, stage_y, stage_z, stage_size, stage_rotation,
+		int(stage_sum_mode), 1 if stage_has_room else 0,
+	])
 
 
 func set_mute(value: bool) -> void:
@@ -1133,6 +1294,8 @@ func to_json() -> Dictionary:
 		"send_channels": send_channels.map(func(s): return s.to_json()),
 		"devices": devices.map(func(d): return d.to_json()),
 	})
+	if stage_placed:
+		data["stage"] = get_stage_state()
 	return data
 
 
@@ -1141,7 +1304,7 @@ const JSON_FIELDS: Array[String] = [
 	"name", "order", "device_output_id", "volume", "pan", "pan_width", "pan_left", "pan_right",
 	"mute", "solo", "hidden", "sends_hidden", "enabled", "phase_invert", "output_channel_id", "parent_channel_id",
 	"is_children_expanded", "aux_bus_index", "aux_pad_note", "midi_input_device", "record_armed",
-	"drum_view",
+	"drum_view", "is_stage_return",
 ]
 
 
@@ -1158,6 +1321,8 @@ static func from_json(data: Dictionary) -> Channel:
 	# those projects lack `pan_width`, which every newer save writes.
 	if channel.pan_mode == PanMode.STEREO_COMBINED and not data.has("pan_width"):
 		channel.pan_mode = PanMode.STEREO_BALANCE
+	if data.get("stage") is Dictionary:
+		channel.set_stage_state(data["stage"])
 	# A project saved before note maps existed has no key, so it lands on AUTO (REQ-012).
 	channel.note_map_mode = NoteMapMode.get(str(data.get("note_map_mode", "")), channel.note_map_mode)
 	if data.get("note_map") is Dictionary:

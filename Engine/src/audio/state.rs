@@ -12,6 +12,7 @@ use crate::audio::preview::PreviewPlayer;
 use crate::audio::project::ProjectSettings;
 use crate::audio::render_scratch::RenderScratch;
 use crate::audio::scale_map::ScaleMap;
+use crate::audio::stage::StageState;
 use crate::audio::tempo_map::TempoMap;
 use crate::audio::time_signature_map::TimeSignatureMap;
 use crate::audio::track::Track;
@@ -118,6 +119,9 @@ pub struct EngineState {
     pub latency_over_limit: u32,
     /// Browser sample preview (spec 037), mixed into the hardware output after the master.
     pub preview: PreviewPlayer,
+    /// The project's virtual stage (spec 051): the room and the Stage return. Written only by
+    /// the command thread; the callback reads it under the lock.
+    pub stage: StageState,
 }
 
 impl EngineState {
@@ -271,6 +275,7 @@ impl Default for EngineState {
             output_latency_frames: 0,
             latency_over_limit: 0,
             preview: PreviewPlayer::default(),
+            stage: StageState::default(),
         }
     }
 }

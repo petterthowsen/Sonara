@@ -50,13 +50,14 @@ Code on the audio callback must never allocate, block, do I/O, or wait on a lock
 2. Clear buffers.
 3. Compute `(tick, frame_offset)` pairs so MIDI is sample-accurate. Devices must use `frame_offset` directly and never convert it back to ticks.
 4. Render tracks and device chains.
-5. `mix_and_output` first runs the MIDI pre-pass (spec 049, ADR 0023: serial; each channel holding a MIDI Send runs its note phase early and forwards the events to its targets at the same frame), then four passes:
+5. `mix_and_output` first runs the MIDI pre-pass (spec 049, ADR 0023: serial; each channel holding a MIDI Send runs its note phase early and forwards the events to its targets at the same frame), then five passes:
    - Device pre-pass. Route targets (buses, master) are skipped here.
    - Fader and pan.
+   - Stage pass (spec 051, ADR 0024): each Stage source's direct sound replaces its buffer and its reflections go to the Stage return. Pooled (`JobKind::Stage`).
    - Routing and sends in dependency order. Each channel finishes once, after every channel routing or sending into it. Route targets then run their devices (even with no input, so tails ring) and pan.
    - Master output. The callback computes meters afterward.
 
-Pan is applied only in pass 2 and once per route target in pass 3, never while routing. The audio callback is the master clock.
+Pan is applied only in pass 2 and once per route target in pass 3, never while routing. For a Stage source (pan mode 4) that pan is the identity and the stage pass does the placing. `audio/stage/` holds the room model, image-source reflections and tail; the Stage return is fed by a stage edge (`Channel::stage_feed`) beside the route and sends. The audio callback is the master clock.
 
 ### Channels and devices
 - Channel types are `INSTRUMENT`, `AUDIO` and `BUS` (`Channel.ChannelType` in Godot). The master channel is identified by ID 1, not by a type.
@@ -79,7 +80,7 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `EngineProcess` (the UI attaches to a running engine or starts one from its install folder, and stops the one it started on quit; ADR 0022), `AudioConfig` (output device, sample rate and buffer size: engine device list, running config, applies the settings live), `AssetService` (browser asset providers) `MidiManager` (MIDI input and virtual keyboard, routed to armed channels) and `Hotkeys` (action registry with rebindable chords, plus the help-bar context and interaction states) and `UiTheme` (builds the theme from the `appearance/theme/*` settings and merges it into the project theme; `Sonara_Theme.tres` is generated).
 - `core/AppPaths.gd` is the only place that knows where files live: user content in `<Documents>/Sonara/{projects,presets,note_maps}`, settings in `~/.config/sonara`, caches in `~/.cache/sonara`, logs in `~/.local/state/sonara/logs` (see `godot-config-system.md`). `core/BuildInfo.gd` holds the version (root `VERSION` file) and release channel.
 - `editor/Editor.gd` is the entry point. It wires up the self-contained systems: `arranger/`, `mixer/`, `clip_editor/`, `browser/` and `devices/`.
-- The `data/` models (`Project`, `Track`, `Channel`, `Clip`, `DeviceInstance`, …) sync themselves with the engine. The UI calls a setter such as `channel.set_volume()`. The model updates its state, sends OSC, and emits a signal, and the UI updates from that signal. To add a synced property, add the signal and setter and wire it into `sync_to_engine()`. UI code never sends OSC directly.
+- The `data/` models (`Project`, `Track`, `Channel`, `Clip`, `DeviceInstance`, `VirtualStage` in `data/Stage.gd`, …) sync themselves with the engine. The UI calls a setter such as `channel.set_volume()`. The model updates its state, sends OSC, and emits a signal, and the UI updates from that signal. To add a synced property, add the signal and setter and wire it into `sync_to_engine()`. UI code never sends OSC directly.
 - `components/GridHelper.gd` handles tempo, zoom, scroll and snapping, and converts between ticks and pixels. Views share one instance.
 - Device visuals extend `devices/DeviceView.gd`. Subscribe to device data streams in `_on_view_shown` and unsubscribe in `_on_view_hidden`.
 

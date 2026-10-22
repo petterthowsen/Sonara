@@ -18,6 +18,7 @@ func run_tests() -> void:
 	_test_undo()
 	_test_json_round_trip()
 	_test_migration()
+	_test_stage_item()
 
 
 func _test_defaults() -> void:
@@ -103,3 +104,65 @@ func _test_migration() -> void:
 	_assert(old.pan_mode == _ch.PanMode.STEREO_BALANCE and is_equal_approx(old.pan, 0.3), "old combined -> balance")
 	var dual = _ch.from_json({"id": 2, "pan_mode": "STEREO_DUAL", "pan_left": -1.0, "pan_right": 0.2})
 	_assert(dual.pan_mode == _ch.PanMode.STEREO_DUAL and is_equal_approx(dual.pan_right, 0.2), "old dual stays dual")
+
+
+## A PanControl (load()ed: it needs the autoloads) built like the one in MixerChannel.tscn.
+func _make_pan() -> Control:
+	var pan := PanelContainer.new()
+	var single := HorSlider.new()
+	single.name = "HSlider"
+	pan.add_child(single)
+	var dual := HDualSlider.new()
+	dual.name = "DualPanSlider"
+	pan.add_child(dual)
+	var popup := PopupMenu.new()
+	popup.name = "PanModePopup"
+	for i in 4:
+		popup.add_check_item("mode", i)
+	pan.add_child(popup)
+	pan.set_script(load("res://mixer/PanControl.gd"))
+	root.add_child(pan)
+	return pan
+
+
+## The Stage item is in the pan mode menu only for instrument, audio and group channels; in Stage mode the
+## sliders give way to the Stage button, and the menu change is one undo step.
+func _test_stage_item() -> void:
+	var project = load("res://data/Project.gd").new()
+	var pan = _make_pan()
+	var inst = project.create_channel("Inst", _ch.ChannelType.INSTRUMENT)
+	pan.bind_to_channel(inst)
+	_assert(pan.offers_stage(), "instrument channel offers Stage")
+	var bus = project.create_channel("Bus", _ch.ChannelType.BUS)
+	pan.bind_to_channel(bus)
+	_assert(not pan.offers_stage(), "bus channel hides Stage")
+	var group = project.create_channel("Group", _ch.ChannelType.GROUP)
+	pan.bind_to_channel(group)
+	_assert(pan.offers_stage(), "group channel offers Stage")
+	pan.bind_to_channel(inst)
+	_assert(pan.offers_stage(), "Stage item comes back for an instrument channel")
+	var button: Button = pan.get_node("StageButton")
+	_assert(not button.visible, "no Stage button outside Stage mode")
+	var recorded: Array = []
+	var history_util = load("res://history/HistoryUtil.gd")  # references an autoload: load()ed
+	history_util.set("test_recorder", func(cmd): recorded.append(cmd))
+	pan.get_node("PanModePopup").id_pressed.emit(_ch.PanMode.STAGE)
+	_assert(recorded.size() == 1, "the mode change is one command")
+	_assert(inst.pan_mode == _ch.PanMode.STAGE, "choosing Stage makes the channel a stage source")
+	_assert(button.visible and not pan.get_node("HSlider").visible, "Stage mode shows the button, not the slider")
+	recorded[0].undo()
+	_assert(inst.pan_mode == _ch.PanMode.STEREO_BALANCE and not button.visible, "undo leaves Stage")
+	recorded[0].do()
+	_assert(inst.pan_mode == _ch.PanMode.STAGE, "redo re-enters Stage")
+	pan.get_node("PanModePopup").id_pressed.emit(_ch.PanMode.MONO)
+	_assert(inst.pan_mode == _ch.PanMode.MONO, "leaving Stage to Mono")
+	# Right-click menu on the Stage button: Leave Stage is one undoable command.
+	inst.set_pan_mode(_ch.PanMode.STAGE)
+	recorded.clear()
+	pan.get_node("StageMenu").id_pressed.emit(pan.STAGE_MENU_LEAVE)
+	_assert(recorded.size() == 1 and inst.pan_mode == _ch.PanMode.MONO, "Leave Stage restores the previous mode in one command")
+	recorded[0].undo()
+	_assert(inst.pan_mode == _ch.PanMode.STAGE, "undo returns to Stage")
+	history_util.set("test_recorder", Callable())
+	button.pressed.emit()  # harmless while the Stage view doesn't exist
+	pan.queue_free()

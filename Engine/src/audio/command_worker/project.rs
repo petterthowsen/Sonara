@@ -17,6 +17,8 @@ impl CommandWorker {
             // Whatever its MIDI Sends forwarded ends first (spec 049 REQ-010).
             crate::audio::mixing::midi_send::release_channel_sends(&mut state, id);
             let removed = state.channels.remove(&id);
+            // It may have been the Stage return (spec 051).
+            crate::audio::commands::stage::forget_removed_channel(&mut state, id);
             // The channel may be a tap source or host subscribers (spec 036).
             let old_taps = crate::audio::mixing::sidechain::rebuild_taps(&mut state);
             // It may have been a sender, or a target other senders listed.
@@ -69,6 +71,7 @@ impl CommandWorker {
             state.set_fractional_tick_accumulator(0.0);
             let _ = state.take_playhead_midi_dispatch();
             state.loop_region = None;
+            state.stage = crate::audio::stage::StageState::default();
             (
                 std::mem::take(&mut state.channels),
                 std::mem::take(&mut state.tracks),

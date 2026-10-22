@@ -101,6 +101,11 @@ pub struct MixBuffers {
     pub pre_fader_right: Vec<f32>,
     /// `pre_fader_*` hold this buffer's audio.
     pub has_pre_fader_copy: bool,
+    /// The reflections a stage source renders this buffer (spec 051), left. Mixed into the Stage
+    /// return by `route_channel`; silent for a channel that isn't a stage source.
+    pub stage_left: Vec<f32>,
+    /// The reflections a stage source renders this buffer, right.
+    pub stage_right: Vec<f32>,
     /// Routes and sends into this channel that have not mixed in yet this buffer.
     pub pending_inputs: usize,
     /// Another channel routes or sends here (or this is master), so this channel's devices run
@@ -143,5 +148,7 @@ impl MixBuffers {
     pub fn resize(&mut self, buffer_size: usize) {
         self.pre_fader_left.resize(buffer_size, 0.0);
         self.pre_fader_right.resize(buffer_size, 0.0);
+        self.stage_left.resize(buffer_size, 0.0);
+        self.stage_right.resize(buffer_size, 0.0);
     }
 }

@@ -54,6 +54,8 @@ const REORDER_MARKER_WIDTH := 3.0
 var channel: Channel = null
 ## Device this frame belongs to (its own frame, or a torn-off tab), or null.
 var owner_device: DeviceInstance = null
+## Set on a page frame (see set_page): names the page (e.g. "stage"), remembers its attach mode.
+var page_id := ""
 var floating := true
 
 var _devices: Array[DeviceInstance] = []
@@ -62,6 +64,10 @@ var _active: DeviceInstance = null
 var _pages: Dictionary = {}
 ## DeviceView -> true while show_view() is in effect, so show/hide stay balanced
 var _shown_views: Dictionary = {}
+## The page of a page frame (no channel, no devices), or null. Shown instead of device pages; may
+## implement show_view() / hide_view(), called like a DeviceView's.
+var _custom_page: Control = null
+var _custom_shown := false
 ## DeviceInstance -> true: its tab stays here but it shows in another frame
 var _elsewhere: Dictionary = {}
 var _syncing_tabs := false
@@ -558,6 +564,41 @@ func is_elsewhere(dev: DeviceInstance) -> bool:
 # Pages
 # ============================================================================
 
+## Turn this into a page frame: it shows `page` under `title` and has no channel or devices, so
+## the channel header and tab strip stay hidden. `id` names the page for the window manager.
+func set_page(id: String, page: Control, title: String) -> void:
+	_clear_custom_page()
+	page_id = id
+	_tabs.visible = false
+	_channel_header.visible = false
+	_custom_page = page
+	if page:
+		page.visible = false
+		_content.add_child(page)
+	set_title(title)
+	_queue_refresh()
+
+
+func is_page_frame() -> bool:
+	return page_id != ""
+
+
+func get_custom_page() -> Control:
+	return _custom_page
+
+
+func _clear_custom_page() -> void:
+	if _custom_page == null:
+		return
+	if _custom_shown and _custom_page.has_method("hide_view"):
+		_custom_page.hide_view()
+	_custom_shown = false
+	if _custom_page.get_parent() == _content:
+		_content.remove_child(_custom_page)
+	_custom_page.queue_free()
+	_custom_page = null
+
+
 func _ensure_page(dev: DeviceInstance) -> Control:
 	if _pages.has(dev):
 		return _pages[dev]
@@ -635,6 +676,7 @@ func close_all() -> Array[DeviceInstance]:
 		if _dispose_page(dev):
 			closed.append(dev)
 	_active = null
+	_clear_custom_page()
 	return closed
 
 
@@ -673,6 +715,16 @@ func refresh_visibility() -> void:
 	var window := get_window() if is_inside_tree() else null
 	var frame_shown := is_inside_tree() and is_visible_in_tree() and window != null and window.visible
 	var shown_dev := get_shown_device()
+	if _custom_page:
+		_custom_page.visible = true
+		if frame_shown and not _custom_shown:
+			_custom_shown = true
+			if _custom_page.has_method("show_view"):
+				_custom_page.show_view()
+		elif not frame_shown and _custom_shown:
+			_custom_shown = false
+			if _custom_page.has_method("hide_view"):
+				_custom_page.hide_view()
 	for dev in _pages:
 		var page: Control = _pages[dev]
 		page.visible = dev == shown_dev

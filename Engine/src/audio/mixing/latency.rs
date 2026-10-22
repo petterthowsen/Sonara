@@ -13,7 +13,7 @@ use crate::audio::channel::{Channel, ChannelLatency};
 use crate::audio::dsp::block_delay::{AlignDelay, StereoBlockDelay};
 use crate::audio::types::{ChannelId, HARDWARE_OUTPUT_BASE};
 
-use super::routing::{is_valid_route, output_target};
+use super::routing::{is_valid_route, output_target, stage_target};
 
 /// What the plan depends on for one channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +21,9 @@ pub struct ChannelSignature {
     pub id: ChannelId,
     /// The channel it routes into, if that route is valid (`output_target` + `is_valid_route`).
     pub route: Option<ChannelId>,
+    /// The Stage return its reflections go to (spec 051), if that edge is valid. An edge like the
+    /// route: the Stage return is aligned to its latest source.
+    pub stage: Option<ChannelId>,
     /// Hardware pair it writes to, as its output id (1000 and up).
     pub hardware: Option<ChannelId>,
     /// Each send in `send_channels` order: the target (`None` when the send isn't valid or is at
@@ -76,6 +79,7 @@ impl LatencySignature {
                 ChannelSignature {
                     id,
                     route: output_target(channel).filter(|&t| valid(t)),
+                    stage: stage_target(channel).filter(|&t| valid(t)),
                     hardware: channel
                         .output_channel_id
                         .filter(|&t| t >= HARDWARE_OUTPUT_BASE),
@@ -113,6 +117,8 @@ pub struct ChannelPlan {
     pub out_frames: u32,
     /// Delay on the route into the target channel.
     pub route_delay: u32,
+    /// Delay on the stage edge (the reflections into the Stage return).
+    pub stage_delay: u32,
     /// Delay on each send, in `send_channels` order (0 for an invalid send).
     pub send_delays: Vec<u32>,
     /// Delay on the hardware write.
@@ -170,6 +176,12 @@ impl ChannelPlan {
             in_frames: self.in_frames,
             out_frames: self.out_frames,
             route_delay: self.route_delay,
+            stage_delay: self.stage_delay,
+            stage: (self.stage_delay > 0).then(|| {
+                let mut ring = StereoBlockDelay::new();
+                ring.prepare(self.stage_delay as usize, max_block);
+                ring
+            }),
             send_delays: self.send_delays.clone(),
             hw_delay: self.hw_delay,
             aux_delay: self.aux_delay,
@@ -221,6 +233,7 @@ pub fn plan(signature: &LatencySignature, max_frames: u32) -> LatencyPlan {
     let targets = |c: &ChannelSignature| -> Vec<usize> {
         c.route
             .into_iter()
+            .chain(c.stage)
             .chain(c.sends.iter().filter_map(|&(target, _)| target))
             .filter_map(|t| index.get(&t).copied())
             .collect()
@@ -311,6 +324,7 @@ pub fn plan(signature: &LatencySignature, max_frames: u32) -> LatencyPlan {
             in_frames: in_frames[i],
             out_frames: out_frames[i],
             route_delay: edge_delay(i, c.route),
+            stage_delay: edge_delay(i, c.stage),
             send_delays: c
                 .sends
                 .iter()
@@ -344,6 +358,7 @@ mod tests {
         ChannelSignature {
             id,
             route,
+            stage: None,
             hardware: None,
             sends: Vec::new(),
             device_frames,
@@ -402,6 +417,23 @@ mod tests {
         assert_eq!(plan.channel(MASTER).unwrap().out_frames, 512);
         assert_eq!(plan.output_frames, 512);
         assert!(plan.over_limit.is_empty());
+    }
+
+    #[test]
+    fn plan_delays_the_stage_edge_to_the_slowest_source() {
+        // Sources 3 (300 frames) and 4 (0) feed the Stage return 2 through the stage edge.
+        let mut slow = channel(3, Some(MASTER), 300);
+        slow.stage = Some(2);
+        let mut fast = channel(4, Some(MASTER), 0);
+        fast.stage = Some(2);
+        let plan = plan(
+            &signature(vec![master(), channel(2, Some(MASTER), 0), slow, fast]),
+            48_000,
+        );
+        assert_eq!(plan.channel(2).unwrap().in_frames, 300);
+        assert_eq!(plan.channel(3).unwrap().stage_delay, 0);
+        assert_eq!(plan.channel(4).unwrap().stage_delay, 300);
+        assert_eq!(plan.channel(4).unwrap().route_delay, 300);
     }
 
     #[test]

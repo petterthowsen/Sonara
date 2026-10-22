@@ -30,6 +30,8 @@ signal playhead_moved(ticks: int)
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)  # Emitted when clip selection changes
 
 signal channel_focused(channel : Channel)
+## Channel selection changed through the arranger, the mixer or the Stage view (spec 051, REQ-024).
+signal channel_selection_synced(channels: Array[Channel])
 signal track_focused(track : Track)
 signal tracks_selected(tracks: Array[Track])
 
@@ -322,6 +324,7 @@ func _on_track_list_selection_changed(tracks: Array[Track], active: Track) -> vo
 	var mapped := SelectionSync.channels_for_tracks(project, tracks, active)
 	mixer.set_selection_silent(mapped["channels"], mapped["focused"])
 	_syncing_selection = false
+	channel_selection_synced.emit(mixer.selection)
 
 
 ## Mirror mixer channel selection onto the arranger (and DeviceLane / record-arm through it).
@@ -336,6 +339,18 @@ func _on_mixer_selection_changed(channels: Array[Channel]) -> void:
 		set_track_selection(mapped["tracks"], mapped["active"], false)
 		_apply_record_arm(mapped["active"], "mixer/record_arm_follows_channel_selection")
 	_syncing_selection = false
+	channel_selection_synced.emit(mixer.selection)
+
+
+## Select `channels` as the mixer and arranger selection (the Stage view picked them). `focused`
+## becomes the focused channel.
+func apply_channel_selection(channels: Array[Channel], focused: Channel) -> void:
+	if _syncing_selection or mixer == null:
+		return
+	mixer.set_selection_silent(channels, focused)
+	_on_mixer_selection_changed(channels)
+	if focused:
+		focus_channel(focused)
 
 
 func _on_mixer_channel_focused(channel : Channel):

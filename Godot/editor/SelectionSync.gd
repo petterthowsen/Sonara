@@ -32,3 +32,20 @@ static func tracks_for_channels(project: Project, channels: Array[Channel], acti
 	if active_track == null and not tracks.is_empty():
 		active_track = tracks.back()
 	return {"tracks": tracks, "active": active_track}
+
+
+## The stage sources among `channels` (a Stage view selection shows only those), in order.
+static func stage_selection_for_channels(project: Project, channels: Array[Channel]) -> Array[Channel]:
+	var out: Array[Channel] = []
+	if project:
+		var sources := project.stage_sources()
+		for ch in channels:
+			if sources.has(ch) and not out.has(ch):
+				out.append(ch)
+	return out
+
+
+## Channels to select in the editor for a Stage view selection, and the focused one (the last).
+static func channels_for_stage_selection(project: Project, selected: Array[Channel]) -> Dictionary:
+	var channels := stage_selection_for_channels(project, selected)
+	return {"channels": channels, "focused": channels.back() if not channels.is_empty() else null}

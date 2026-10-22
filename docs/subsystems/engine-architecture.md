@@ -229,7 +229,7 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 - Offline render (`render/worker.rs`) calls the same `process_audio`, so export and analysis use these paths. A tempo-map change during playback does not re-seat Raw instances; they keep their position until the next seat.
 
 ### Audio Mixing Implementation
-**`mixing/mod.rs::mix_and_output` orchestrates four passes, keeping the audio thread real-time safe:**
+**`mixing/mod.rs::mix_and_output` orchestrates five passes, keeping the audio thread real-time safe:**
 
 -1. **MIDI pre-pass** (spec 049, ADR 0023, `mixing/midi_send.rs::forward`)
    - Runs first, serially on the callback. For each channel holding a MIDI Send, in `EngineState::midi_sends` order (every sender after anything that sends to it), it runs `dispatch_notes` early (live MIDI plus the note phase), marks the channel `notes_dispatched` so the render does not run it again, then copies each MIDI Send's outbox into `RenderScratch::midi_forward` and delivers it to every effective target with `send_note_event_to_devices` at the same frame (CC through `route_cc`). Targets get the events before their own note phase, so forwarding is same block, same frame, and chains of sends (A to B to C) work.
@@ -247,6 +247,12 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
    - Applies smoothed gain and pan to every audible channel (muted or solo-excluded channels are cleared).
    - This establishes the "post-fader" buffer used for metering and post-fader sends.
 
+2b. **Stage Pass** (spec 051, ADR 0024, `mixing/mod.rs::stage_pass`, `audio/stage/`, `channel/stage.rs`)
+   - Runs between the fader/pan pass and routing. For each channel with `Channel::stage` (pan mode 4, `PanMode::Stage`), `Channel::render_stage` places it in the project's room: the direct sound (distance gain and delay, listener-relative direction) replaces the channel buffer, and image-source reflections go to `mix.stage_left/right`. The fader is already applied (the render is linear). Stage pan is the identity, so pass 2 applies only the fader gain.
+   - Pooled with `JobKind::Stage` (`mixing/pool.rs`): stage jobs are self-contained and never park, and the output is sample-identical with any thread count. With no pool it runs serially. A stage source that is also a route target skips this pass and renders in `route_finished` after its inputs and fader. A silenced source still renders so its delay lines stay in step.
+   - **Stage edge**: the Stage return (a bus registered with `/stage/return`) is fed through `Channel::stage_feed`, a third outgoing edge beside the route and sends (not a hidden `Send`, which would shift Godot's send indices). It is counted in `count_route_inputs` (the return finishes after every source), walked by `any_output` / `spread_solo_up` in `solo.rs` (a soloed source keeps its room, a muted one is silent), mixed in `route_channel`, and part of `LatencySignature` and the plan (`mixing/latency.rs`) with its own `stage_delay` ring; `max_delay()` excludes it. The plan is rebuilt when a `stage_feed` changes. The return bus runs a `stage_tail` (Hall reverb) before its devices every block, so the tail rings out.
+   - `StageSource` and `StageTail` allocate their delay lines on the command thread and are swapped in under the lock. Placement automation (`channel/stage/{x|y|z|size|rotation}`) is applied inside `render_stage` (`automation_stage`). Export runs the same `mix_and_output`.
+
 3. **Routing in Dependency Order**
    - A channel finishes once `pending_inputs` reaches 0, so each channel processes exactly once per buffer, after everything routing into it (bus → bus → master).
    - Finishing a route target runs its device chain **even with no input** (reverb/delay tails keep ringing), then applies its pan. Silenced targets are cleared.
@@ -256,7 +262,7 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 4. **Hardware Output**
    - The CPAL buffer is cleared, then every channel routed to a hardware output (master included) is written to its pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. Channels on the same pair accumulate; a pair the device lacks plays on 1/2. A channel routed straight to a pair skips master's effects (reference track) and is never silenced by another channel's solo. Peaks are computed by the callback afterward.
 
-**Channel worker pool** (spec 042, `mixing/pool.rs`, ADR 0020). Two of the passes treat channels as independent, and only those use the pool: the device pre-pass (channels nothing routes into) and each sweep of `route_in_dependency_order` (the `ready` list). `PooledPass::run` collects the eligible channels' addresses into `RenderScratch::jobs` (`usize`, so `EngineState` stays `Send`) and calls `ChannelPool::run_jobs` when the pool has workers and there are at least 2 jobs; otherwise the existing loop runs unchanged.
+**Channel worker pool** (spec 042, `mixing/pool.rs`, ADR 0020). Three of the passes treat channels as independent, and only those use the pool: the device pre-pass (channels nothing routes into), the stage pass (`JobKind::Stage`, ADR 0024) and each sweep of `route_in_dependency_order` (the `ready` list). `PooledPass::run` collects the eligible channels' addresses into `RenderScratch::jobs` (`usize`, so `EngineState` stays `Send`) and calls `ChannelPool::run_jobs` when the pool has workers and there are at least 2 jobs; otherwise the existing loop runs unchanged.
 - `run_jobs` publishes a generation and the job list (`PoolShared`, one packed claim word of generation, count and next index), rings a futex, claims jobs itself and then waits (spin about 20 us, then futex) for `done_count` to reach the number of *started* jobs. A job no worker reached is claimed by the callback, so a late or paused worker can't stall the block.
 - A job runs `begin_device_chain`. A chain that parks at a plugin goes into the claiming thread's own park queue (`RenderScratch::job_parks` on the callback), drained once no jobs are left, so plugins on different channels still overlap (Phase 8a per thread).
 - Order-dependent work stays serial on the callback thread in `ready` order: device events, fader and pan, routing and summing, aux sources, hardware output. `channel_ids` is sorted every block (`sort_unstable`), so summation order, and with it the output, is the same with 1 or N threads.
@@ -284,7 +290,7 @@ path or modulator rather than failing, so a removed source decays to 0.
 
 **Invariants:**
 - Never allocate during any pass; all temporary buffers are pre-sized at initialization.
-- Pan occurs once per audible channel in pass 2 and once per route target in pass 3.
+- Pan occurs once per audible channel in pass 2 and once per route target in pass 3. For a Stage source it is the identity matrix and the stage pass does the placing (ADR 0024).
 - Routes and sends ignore invalid targets (none, self, missing channels; sends also ignore IDs ≥1000). Master never routes onward and is never silenced by another channel's solo; a channel routed straight to a hardware pair (1000+) is not silenced by solo either.
 
 ### Channel Routing and IO

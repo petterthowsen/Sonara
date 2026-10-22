@@ -14,6 +14,9 @@ pub enum PanMode {
     StereoBalance = 2,
     /// Sums the inputs as (L+R)/2 and constant-power pans the sum.
     Mono = 3,
+    /// Virtual Stage source (spec 051): the matrix is the identity and the stage pass places the
+    /// channel in the room instead.
+    Stage = 4,
 }
 
 impl Default for PanMode {
@@ -29,6 +32,7 @@ impl From<i32> for PanMode {
             1 => PanMode::StereoDual,
             2 => PanMode::StereoBalance,
             3 => PanMode::Mono,
+            4 => PanMode::Stage,
             _ => PanMode::StereoCombined,
         }
     }
@@ -60,6 +64,12 @@ impl Channel {
         let pan = self.effective_pan();
 
         match self.pan_mode {
+            PanMode::Stage => PanCoefficients {
+                left_to_left: 1.0,
+                right_to_right: 1.0,
+                left_to_right: 0.0,
+                right_to_left: 0.0,
+            },
             PanMode::StereoCombined => {
                 let left = (pan - self.pan_width).clamp(-1.0, 1.0);
                 let right = (pan + self.pan_width).clamp(-1.0, 1.0);
@@ -247,5 +257,29 @@ mod tests {
         );
         assert_eq!(c.pan_width, 0.5, "width must not be written");
         assert_eq!(c.pan, 0.0, "base pan must not be written");
+    }
+
+    #[test]
+    fn stage_mode_is_identity() {
+        // The stage pass spatializes the channel, so the fader pass must not pan it.
+        for pan in [-1.0, 0.0, 0.7] {
+            assert_matrix(
+                &channel(PanMode::Stage, pan, 1.0).get_pan_coefficients(),
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+            );
+        }
+        let mut c = channel(PanMode::Stage, 0.0, 1.0);
+        c.automation_pan = Some(1.0);
+        assert_matrix(&c.get_pan_coefficients(), 1.0, 1.0, 0.0, 0.0);
+    }
+
+    #[test]
+    fn pan_mode_from_osc_value() {
+        assert_eq!(PanMode::from(4), PanMode::Stage);
+        assert_eq!(PanMode::Stage as i32, 4);
+        assert_eq!(PanMode::from(3), PanMode::Mono);
     }
 }

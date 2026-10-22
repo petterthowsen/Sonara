@@ -18,6 +18,7 @@ signal parameter_chosen(track: Track, target: AutomationTarget)
 ## own ids; their targets travel as item metadata.
 const ID_VOLUME := 0
 const ID_PAN := 1
+const ID_STAGE_BASE := 50  # + index into AutomationTarget.STAGE_PARAMS
 const ID_SEND_BASE := 100
 
 var track: Track = null
@@ -61,6 +62,7 @@ func _rebuild() -> void:
 	if not _has_lane(AutomationTarget.channel_pan()):
 		add_item("Pan", ID_PAN)
 
+	_add_stage_items()
 	_add_cc_menu()
 
 	var send_items := 0
@@ -75,6 +77,21 @@ func _rebuild() -> void:
 
 	for i in range(channel.devices.size()):
 		_add_device(channel.devices[i], [i])
+
+
+## Placement parameters of a stage source (spec 051); nothing for channels in another pan mode.
+func _add_stage_items() -> void:
+	if channel.pan_mode != Channel.PanMode.STAGE:
+		return
+	var added := 0
+	for i in range(AutomationTarget.STAGE_PARAMS.size()):
+		var target := AutomationTarget.stage(AutomationTarget.STAGE_PARAMS[i])
+		if _has_lane(target):
+			continue
+		if added == 0:
+			add_separator("Stage")
+		added += 1
+		add_item(target.display_name(channel), ID_STAGE_BASE + i)
 
 
 ## The top-level `MIDI CC` submenu (spec 030): instrument-labelled controllers first (an SFZ
@@ -203,6 +220,8 @@ func _on_root_id_pressed(id: int) -> void:
 		target = AutomationTarget.channel_volume()
 	elif id == ID_PAN:
 		target = AutomationTarget.channel_pan()
+	elif id >= ID_STAGE_BASE and id < ID_STAGE_BASE + AutomationTarget.STAGE_PARAMS.size():
+		target = AutomationTarget.stage(AutomationTarget.STAGE_PARAMS[id - ID_STAGE_BASE])
 	elif id >= ID_SEND_BASE:
 		target = AutomationTarget.send_amount(id - ID_SEND_BASE)
 	if target:

@@ -6,6 +6,9 @@
 # frame with a tab each; per device, every device gets its own frame. Nested devices (pads, layer
 # slots) always get their own frame. A tab torn off its channel frame becomes a frame of its own.
 #
+# Page frames: open_stage() / close_stage() host the Stage view (a page that is no device) in a
+# frame with no channel and no devices, with the same window, attach and detach behaviour.
+#
 # Public API (DevicePanel, CompactDevicePanel): is_open / toggle / open / close and
 # state_changed(device). A device is "open" when it owns a frame, is the shown tab of a frame, or
 # its plugin GUI is open in its own window without a frame.
@@ -151,6 +154,75 @@ func reorder_tab(dev: DeviceInstance, target: DeviceInstance) -> void:
 	HistoryUtil.execute(DeviceMoveCommand.new(ch, dev.position, target.position, null))
 
 
+## Page id of the Stage view's frame.
+const STAGE_PAGE := "stage"
+## Scene of the Stage view page (T-022); until it exists open_stage() does nothing.
+const STAGE_VIEW_SCENE := "res://stage/StageView.tscn"
+
+
+## Open the Stage view: raise its frame, or create it (attached when it was attached last time).
+## Returns the frame, or null while the Stage view doesn't exist yet.
+func open_stage() -> DeviceFrame:
+	var existing := get_stage_frame()
+	if existing:
+		_raise(existing)
+		return existing
+	if not ResourceLoader.exists(STAGE_VIEW_SCENE):
+		logger.info("Stage view is not available yet")
+		return null
+	var scene := load(STAGE_VIEW_SCENE) as PackedScene
+	var page := scene.instantiate() as Control if scene else null
+	if page == null:
+		return null
+	return open_page(STAGE_PAGE, page, "Stage")
+
+
+func close_stage() -> void:
+	var frame := get_stage_frame()
+	if frame:
+		close_frame(frame)
+
+
+func is_stage_open() -> bool:
+	return get_stage_frame() != null
+
+
+func get_stage_frame() -> DeviceFrame:
+	return get_page_frame(STAGE_PAGE)
+
+
+func toggle_stage() -> void:
+	if is_stage_open():
+		close_stage()
+	else:
+		open_stage()
+
+
+## Open a frame that hosts `page` and no devices. Raises the frame of `id` when it exists (the
+## page is then freed). Attached when it was attached last time; first time it floats.
+func open_page(id: String, page: Control, title: String) -> DeviceFrame:
+	var existing := get_page_frame(id)
+	if existing:
+		page.queue_free()
+		_raise(existing)
+		return existing
+	var frame := DeviceFrame.new()
+	frame.set_page(id, page, title)
+	_register_frame(frame)
+	if attach_host != null and _last_attached.get(id, false):
+		attach(frame)
+	_raise(frame)
+	_after_change()
+	return frame
+
+
+func get_page_frame(id: String) -> DeviceFrame:
+	for frame in _frames:
+		if frame.page_id == id:
+			return frame
+	return null
+
+
 ## Close a frame and everything in it (REQ-004, REQ-023).
 func close_frame(frame: DeviceFrame) -> void:
 	if not _frames.has(frame):
@@ -276,7 +348,9 @@ func tear_off(from: DeviceFrame, dev: DeviceInstance, screen_pos: Vector2i) -> D
 # Frames
 # ============================================================================
 
-func _memory_key(frame: DeviceFrame) -> Object:
+func _memory_key(frame: DeviceFrame) -> Variant:
+	if frame.is_page_frame():
+		return frame.page_id
 	return frame.owner_device if frame.owner_device else frame.channel
 
 
@@ -284,7 +358,7 @@ func _memory_key(frame: DeviceFrame) -> Object:
 func _wants_attached(frame: DeviceFrame, dev: DeviceInstance) -> bool:
 	if attach_host == null or not frame.can_attach():
 		return false
-	var key := _memory_key(frame)
+	var key = _memory_key(frame)
 	if _last_attached.has(key):
 		return _last_attached[key]
 	return not dev.device.has_gui()
@@ -346,6 +420,13 @@ func _create_frame(ch: Channel, owner: DeviceInstance, devs: Array, page: Contro
 	for dev in devs:
 		if dev != owner and _own_frame(dev) != null:
 			frame.set_elsewhere(dev, true)
+	_register_frame(frame)
+	_update_title(frame)
+	return frame
+
+
+## Wire a new frame's signals, give it a window and host it there (not shown yet).
+func _register_frame(frame: DeviceFrame) -> void:
 	frame.close_requested.connect(close_frame.bind(frame))
 	frame.attach_requested.connect(attach.bind(frame))
 	frame.detach_requested.connect(detach.bind(frame))
@@ -357,11 +438,9 @@ func _create_frame(ch: Channel, owner: DeviceInstance, devs: Array, page: Contro
 		if other:
 			_raise(other))
 	_frames.append(frame)
-	_update_title(frame)
 	var window := _new_window()
 	_windows[frame] = window
 	window.host(frame)
-	return frame
 
 
 func _raise(frame: DeviceFrame) -> void:
@@ -416,6 +495,8 @@ func _try_finish_vacate(wait: Dictionary) -> bool:
 
 
 func _update_title(frame: DeviceFrame) -> void:
+	if frame.is_page_frame():
+		return  # the page's title was set with the page
 	var text := ""
 	if frame.owner_device:
 		text = _device_title(frame.owner_device)

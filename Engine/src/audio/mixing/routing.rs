@@ -26,6 +26,16 @@ pub(super) fn output_target(channel: &Channel) -> Option<ChannelId> {
     }
 }
 
+/// The Stage return this channel feeds its reflections to (spec 051): set while the channel is
+/// a stage source. Master never feeds the stage.
+pub(super) fn stage_target(channel: &Channel) -> Option<ChannelId> {
+    if channel.id == MASTER_CHANNEL_ID || channel.stage.is_none() {
+        None
+    } else {
+        channel.stage_feed
+    }
+}
+
 /// True if `source_id` can mix into `target_id`: another existing channel, not a hardware output.
 pub(super) fn is_valid_route(
     channels: &HashMap<ChannelId, Channel>,
@@ -87,9 +97,11 @@ pub(super) fn count_route_inputs(
         // Move the sends out (no allocation) so targets can be borrowed mutably
         let sends = std::mem::take(&mut source.send_channels);
         let output = output_target(source);
+        let stage = stage_target(source);
 
-        // A send at -inf is no edge, so a route can close a loop through it.
-        let targets = output.into_iter().chain(
+        // A send at -inf is no edge, so a route can close a loop through it. A stage source's
+        // reflections are a third kind of edge, into the Stage return.
+        let targets = output.into_iter().chain(stage).chain(
             sends
                 .iter()
                 .filter(|send| send.is_live())
@@ -115,7 +127,8 @@ pub(super) fn count_route_inputs(
     }
 }
 
-/// Mix a finished channel into its output and send targets and release their pending inputs.
+/// Mix a finished channel into its output, send and stage targets and release their pending
+/// inputs.
 ///
 /// Routed audio isn't scaled by the target's fader: that applies after the target's devices
 /// (`route_finished`). The source's pan was already applied.
@@ -133,6 +146,7 @@ pub(super) fn route_channel(
     let audible = frames > 0 && role != SoloRole::Silent;
     let send_only = role == SoloRole::SendOnly;
     let output = output_target(source);
+    let stage = stage_target(source);
     let has_pre_fader_copy = source.mix.has_pre_fader_copy;
     let pan = source.get_pan_coefficients();
 
@@ -142,12 +156,16 @@ pub(super) fn route_channel(
     let right = std::mem::take(&mut source.buffer_right);
     let pre_left = std::mem::take(&mut source.mix.pre_fader_left);
     let pre_right = std::mem::take(&mut source.mix.pre_fader_right);
+    let stage_left = std::mem::take(&mut source.mix.stage_left);
+    let stage_right = std::mem::take(&mut source.mix.stage_right);
     // Edge delays and their rings (spec 042 D), moved out like the buffers. An edge whose delay
     // is 0, or whose ring is missing, takes the plain path.
     let route_delay = source.latency.route_delay as usize;
     let send_delays = std::mem::take(&mut source.latency.send_delays);
     let post_ring = source.latency.post.take();
     let pre_ring = source.latency.pre.take();
+    let stage_delay = source.latency.stage_delay as usize;
+    let stage_ring = source.latency.stage.take();
 
     if let Some(target_id) = output.filter(|&id| is_valid_route(channel_map, source_id, id)) {
         if let Some(target) = channel_map.get_mut(&target_id) {
@@ -157,6 +175,20 @@ pub(super) fn route_channel(
                 match post_ring.as_ref().filter(|_| route_delay > 0) {
                     Some(ring) => add_delayed(target, ring, route_delay, frames, 1.0),
                     None => add_scaled(target, &left, &right, frames, 1.0),
+                }
+            }
+        }
+    }
+
+    // The reflections go to the Stage return like a send, at unity: the source's fader already
+    // set their level, and its direct sound went to the route above.
+    if let Some(target_id) = stage.filter(|&id| is_valid_route(channel_map, source_id, id)) {
+        if let Some(target) = channel_map.get_mut(&target_id) {
+            target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
+            if audible && (!send_only || target.mix.solo_down) && !target.mix.done {
+                match stage_ring.as_ref().filter(|_| stage_delay > 0) {
+                    Some(ring) => add_delayed(target, ring, stage_delay, frames, 1.0),
+                    None => add_scaled(target, &stage_left, &stage_right, frames, 1.0),
                 }
             }
         }
@@ -204,10 +236,13 @@ pub(super) fn route_channel(
         source.latency.send_delays = send_delays;
         source.latency.post = post_ring;
         source.latency.pre = pre_ring;
+        source.latency.stage = stage_ring;
         source.buffer_left = left;
         source.buffer_right = right;
         source.mix.pre_fader_left = pre_left;
         source.mix.pre_fader_right = pre_right;
+        source.mix.stage_left = stage_left;
+        source.mix.stage_right = stage_right;
     }
 }
 
@@ -284,6 +319,9 @@ fn write_latency_rings(channel: &mut Channel, frames: usize) {
         }
         pre.write(&mix.pre_fader_left, &mix.pre_fader_right, frames);
     }
+    if let Some(stage) = channel.latency.stage.as_mut() {
+        stage.write(&channel.mix.stage_left, &channel.mix.stage_right, frames);
+    }
 }
 
 /// Complete a channel after its device chain finished: route targets apply their fader and pan
@@ -304,6 +342,11 @@ pub(super) fn route_finished(
         }
         if is_silenced(channel) {
             channel.clear_buffers();
+        }
+        // A stage source that others route into places itself in the room once its inputs
+        // have mixed in and its fader has applied (the stage pass skips route targets).
+        if channel.stage.is_some() {
+            channel.render_stage(frames);
         }
     }
     write_latency_rings(channel, frames);
@@ -1161,5 +1204,386 @@ mod tests {
         for (e, a) in expected.iter().flatten().zip(actual.iter().flatten()) {
             assert_eq!(e.to_bits(), a.to_bits());
         }
+    }
+
+    // Virtual Stage (spec 051): the stage pass and the stage edge.
+
+    use crate::audio::channel::PanMode;
+    use crate::audio::dsp::test_util::white_noise;
+    use crate::audio::stage::source::StageSource;
+    use crate::audio::stage::tail::StageTail;
+    use crate::audio::stage::RoomModel;
+
+    /// Frames per block in the stage tests (the shared fixtures use 4).
+    const BLOCK: usize = 256;
+
+    fn block_channel(id: ChannelId, output: Option<ChannelId>) -> Channel {
+        let mut channel = Channel::new(id, format!("Channel {id}"), BLOCK, SAMPLE_RATE);
+        channel.output_channel_id = output;
+        channel.volume_db = 0.0;
+        channel.pan_mode = PanMode::StereoBalance;
+        for _ in 0..GAIN_SETTLE_SAMPLES {
+            let _ = channel.get_smoothed_gain();
+        }
+        channel
+    }
+
+    /// A stage source feeding `feed` (if any), with the default placement.
+    fn stage_source(id: ChannelId, output: Option<ChannelId>, feed: Option<ChannelId>) -> Channel {
+        let mut channel = block_channel(id, output);
+        channel.pan_mode = PanMode::Stage;
+        channel.stage = Some(Box::new(StageSource::new(SAMPLE_RATE, BLOCK)));
+        channel.stage_feed = feed;
+        channel
+    }
+
+    /// A Stage return with its tail.
+    fn stage_return(id: ChannelId, output: Option<ChannelId>, room: &RoomModel) -> Channel {
+        let mut channel = block_channel(id, output);
+        let mut tail = StageTail::new(SAMPLE_RATE, BLOCK);
+        tail.configure(room);
+        channel.stage_tail = Some(Box::new(tail));
+        channel
+    }
+
+    fn stage_state(channels: Vec<Channel>, room: RoomModel) -> EngineState {
+        let mut state = state_with(channels);
+        state.stage.room = room;
+        for channel in state.channels.values_mut() {
+            if let Some(source) = channel.stage.as_mut() {
+                source.set_room(room);
+            }
+        }
+        state
+    }
+
+    /// Mix one block of `BLOCK` frames; `input` (mono) is written to every stage source first
+    /// because the stage pass overwrites their buffers.
+    fn stage_block(state: &mut EngineState, sources: &[ChannelId], input: &[f32]) {
+        // The callback clears every buffer before a block; the mix adds into them.
+        for channel in state.channels.values_mut() {
+            channel.clear_buffers();
+        }
+        for id in sources {
+            let channel = state.channels.get_mut(id).unwrap();
+            channel.buffer_left[..BLOCK].copy_from_slice(input);
+            channel.buffer_right[..BLOCK].copy_from_slice(input);
+        }
+        let (status_tx, _status_rx) = unbounded();
+        let mut output = vec![0.0f32; BLOCK * 2];
+        mix_and_output(state, &mut output, 2, BLOCK, &status_tx);
+    }
+
+    fn block_peak(channel: &Channel) -> f32 {
+        channel.buffer_left[..BLOCK]
+            .iter()
+            .chain(&channel.buffer_right[..BLOCK])
+            .fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn stage_source_direct_follows_route() {
+        let room = RoomModel::default();
+        let build = |bus_muted: bool| {
+            let mut bus = block_channel(2, Some(1));
+            bus.mute = bus_muted;
+            stage_state(
+                vec![
+                    block_channel(1, Some(1000)),
+                    bus,
+                    stage_source(3, Some(2), None),
+                ],
+                room,
+            )
+        };
+        let noise = white_noise(BLOCK, 0.5, 11);
+
+        let mut state = build(false);
+        for _ in 0..4 {
+            stage_block(&mut state, &[3], &noise);
+        }
+        let bus = block_peak(&state.channels[&2]);
+        let master = block_peak(&state.channels[&1]);
+        assert!(bus > 0.05, "the bus received no direct sound: {bus}");
+        assert!(
+            (master - bus).abs() < 1e-5,
+            "master should carry what the bus does: {master} vs {bus}"
+        );
+
+        // With the bus muted nothing reaches master: the source doesn't route there directly.
+        let mut state = build(true);
+        for _ in 0..4 {
+            stage_block(&mut state, &[3], &noise);
+        }
+        assert_eq!(block_peak(&state.channels[&1]), 0.0);
+    }
+
+    #[test]
+    fn stage_return_receives_reflections() {
+        let room = RoomModel::default();
+        let noise = white_noise(BLOCK, 0.5, 5);
+        let build = |has_room: bool, feed: Option<ChannelId>| {
+            let mut source = stage_source(3, Some(1), feed);
+            source.stage_params.has_room = has_room;
+            stage_state(
+                vec![
+                    block_channel(1, Some(1000)),
+                    stage_return(2, Some(1), &room),
+                    source,
+                ],
+                room,
+            )
+        };
+        let run = |state: &mut EngineState| {
+            let mut peak = 0.0f32;
+            for _ in 0..20 {
+                stage_block(state, &[3], &noise);
+                peak = peak.max(block_peak(&state.channels[&2]));
+            }
+            peak
+        };
+
+        let with_room = run(&mut build(false, Some(2)));
+        assert!(
+            with_room > 0.01,
+            "the return got no reflections: {with_room}"
+        );
+        // Has room: the direct sound alone, nothing for the return.
+        assert_eq!(run(&mut build(true, Some(2))), 0.0);
+        // No stage edge: the return stays empty too.
+        assert_eq!(run(&mut build(false, None)), 0.0);
+    }
+
+    #[test]
+    fn stage_return_orders_after_its_sources() {
+        // The return is ready only once every source fed it, whichever side of it the
+        // channel ids fall on.
+        let room = RoomModel::default();
+        let noise = white_noise(BLOCK, 0.5, 9);
+        let mut state = stage_state(
+            vec![
+                block_channel(1, Some(1000)),
+                stage_source(2, Some(1), Some(9)),
+                stage_return(9, Some(1), &room),
+            ],
+            room,
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..20 {
+            stage_block(&mut state, &[2], &noise);
+            peak = peak.max(block_peak(&state.channels[&9]));
+            assert!(state.channels[&9].mix.done);
+        }
+        assert!(peak > 0.01, "{peak}");
+    }
+
+    #[test]
+    fn stage_source_that_is_a_route_target_places_itself_after_its_inputs() {
+        // A stage source that another channel routes into (a group) renders in the routing
+        // pass, after the fader: its direct sound still reaches master.
+        let room = RoomModel::default();
+        let noise = white_noise(BLOCK, 0.5, 3);
+        let mut state = stage_state(
+            vec![
+                block_channel(1, Some(1000)),
+                stage_source(2, Some(1), None),
+                block_channel(3, Some(2)),
+            ],
+            room,
+        );
+        assert!(state.channels[&2].stage.is_some());
+        for _ in 0..4 {
+            stage_block(&mut state, &[3], &noise);
+        }
+        assert!(state.channels[&2].mix.is_route_target);
+        let master = block_peak(&state.channels[&1]);
+        assert!(master > 0.05, "{master}");
+        // It was placed (panned into the room), not just passed through: at the default
+        // placement the level is the distance law and a centered constant-power pan, so it
+        // differs from the input.
+        let input_peak = noise.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!((master - input_peak).abs() > 0.01);
+    }
+
+    /// The Stage return's left buffer after each of 12 blocks. `sources` are (id, solo, mute).
+    fn return_blocks(sources: &[(ChannelId, bool, bool)], fed: &[ChannelId]) -> Vec<Vec<f32>> {
+        let room = RoomModel::default();
+        let noise = white_noise(BLOCK, 0.5, 21);
+        let mut channels = vec![
+            block_channel(1, Some(1000)),
+            stage_return(2, Some(1), &room),
+        ];
+        for &(id, solo, mute) in sources {
+            let mut source = stage_source(id, Some(1), Some(2));
+            // Different spots, so each source's reflections differ.
+            source.stage_params.x = 4.0 + id as f32;
+            source.solo = solo;
+            source.mute = mute;
+            channels.push(source);
+        }
+        let mut state = stage_state(channels, room);
+        (0..12)
+            .map(|_| {
+                stage_block(&mut state, fed, &noise);
+                state.channels[&2].buffer_left[..BLOCK].to_vec()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn solo_keeps_soloed_source_room_only() {
+        // Source 3 soloed, 4 not: the return carries source 3's room and nothing of 4's.
+        let both = return_blocks(&[(3, true, false), (4, false, false)], &[3, 4]);
+        let alone = return_blocks(&[(3, true, false)], &[3]);
+        let peak = alone.iter().flatten().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "the soloed source's room is silent: {peak}");
+        assert_eq!(both, alone);
+        // Without the solo both rooms play, so the return differs.
+        let unsoloed = return_blocks(&[(3, false, false), (4, false, false)], &[3, 4]);
+        assert_ne!(unsoloed, alone);
+    }
+
+    #[test]
+    fn solo_on_the_return_keeps_every_source_room() {
+        // Soloing the Stage return itself keeps what feeds it, as for a soloed bus.
+        let room = RoomModel::default();
+        let noise = white_noise(BLOCK, 0.5, 4);
+        let mut ret = stage_return(2, Some(1), &room);
+        ret.solo = true;
+        let mut state = stage_state(
+            vec![
+                block_channel(1, Some(1000)),
+                ret,
+                stage_source(3, Some(1), Some(2)),
+            ],
+            room,
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..12 {
+            stage_block(&mut state, &[3], &noise);
+            peak = peak.max(block_peak(&state.channels[&2]));
+        }
+        assert!(peak > 0.01, "{peak}");
+    }
+
+    #[test]
+    fn muted_source_feeds_no_room() {
+        let muted = return_blocks(&[(3, false, false), (4, false, true)], &[3, 4]);
+        let alone = return_blocks(&[(3, false, false)], &[3]);
+        let peak = alone.iter().flatten().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "{peak}");
+        assert_eq!(muted, alone);
+    }
+
+    use crate::audio::mixing::latency::{plan, LatencySignature};
+
+    #[test]
+    fn stage_edge_aligns_with_plugin_latency() {
+        // Source 3 sits behind a device that delays by 300 frames, source 4 doesn't. Both feed
+        // the Stage return from the same spot with the same input, so compensation must make
+        // source 4 arrive 300 frames late. The reference gives both sources the device: the
+        // same sound, aligned by construction.
+        const DELAY: usize = 300;
+        let room = RoomModel::default();
+        let run = |plain_source_has_device: bool| {
+            let mut channels = vec![
+                block_channel(1, Some(1000)),
+                stage_return(2, Some(1), &room),
+            ];
+            for id in [3, 4] {
+                let mut source = stage_source(id, Some(1), Some(2));
+                if id == 3 || plain_source_has_device {
+                    source
+                        .devices
+                        .push(Box::new(LatencyDevice::new(DELAY, 1.0)));
+                }
+                channels.push(source);
+            }
+            let mut state = stage_state(channels, room);
+            // `install_latency` sizes its rings for the 4-frame fixtures; these blocks are larger.
+            let signature = LatencySignature::build(&state.channels);
+            let plan = plan(&signature, SAMPLE_RATE as u32);
+            for (sig, channel_plan) in signature.channels.iter().zip(&plan.channels) {
+                let channel = state.channels.get_mut(&sig.id).unwrap();
+                channel.latency = channel_plan.to_latency(sig, BLOCK);
+            }
+            let source_plan = plan.channel(4).unwrap();
+            let burst = white_noise(BLOCK, 0.5, 8);
+            let silence = vec![0.0f32; BLOCK];
+            // Let the room crossfade that starts with the first block finish, so the sources
+            // are time-invariant when the burst arrives.
+            for _ in 0..24 {
+                stage_block(&mut state, &[3, 4], &silence);
+            }
+            let mut returns = Vec::new();
+            let mut masters = Vec::new();
+            for block in 0..10 {
+                let input = if block == 0 { &burst } else { &silence };
+                stage_block(&mut state, &[3, 4], input);
+                returns.push(state.channels[&2].buffer_left[..BLOCK].to_vec());
+                masters.push(state.channels[&1].buffer_left[..BLOCK].to_vec());
+            }
+            (source_plan.stage_delay, returns, masters)
+        };
+        let (aligned_delay, returns, masters) = run(false);
+        let (reference_delay, reference_returns, reference_masters) = run(true);
+        assert_eq!(aligned_delay as usize, DELAY);
+        assert_eq!(reference_delay, 0);
+        let peak = reference_returns
+            .iter()
+            .flatten()
+            .fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "the reference return is silent: {peak}");
+        for (name, actual, expected) in [
+            ("return", &returns, &reference_returns),
+            ("master", &masters, &reference_masters),
+        ] {
+            for (i, (a, e)) in actual
+                .iter()
+                .flatten()
+                .zip(expected.iter().flatten())
+                .enumerate()
+            {
+                assert!((a - e).abs() < 1e-4, "{name} frame {i}: {a} vs {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn stage_return_rings_out() {
+        let room = RoomModel {
+            decay_s: 0.6,
+            ..RoomModel::default()
+        };
+        let mut state = stage_state(
+            vec![
+                block_channel(1, Some(1000)),
+                stage_return(2, Some(1), &room),
+                stage_source(3, Some(1), Some(2)),
+            ],
+            room,
+        );
+        let noise = white_noise(BLOCK, 0.5, 21);
+        let silence = vec![0.0f32; BLOCK];
+        // Half a second of sound, then the source falls silent.
+        for _ in 0..(0.5 * SAMPLE_RATE) as usize / BLOCK {
+            stage_block(&mut state, &[3], &noise);
+        }
+        // The return must keep producing signal (above -120 dB) for the room's decay time
+        // after that.
+        let mut elapsed = 0.0f32;
+        let mut last_audible = 0.0f32;
+        while elapsed < room.decay_s {
+            stage_block(&mut state, &[3], &silence);
+            elapsed += BLOCK as f32 / SAMPLE_RATE;
+            if block_peak(&state.channels[&2]) > 1e-6 {
+                last_audible = elapsed;
+            }
+        }
+        assert!(
+            last_audible >= room.decay_s,
+            "the return went quiet {last_audible} s after the source stopped (decay {} s)",
+            room.decay_s
+        );
     }
 }

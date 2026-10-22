@@ -42,6 +42,7 @@ func run_tests() -> void:
 	await _test_devices()
 	await _test_export_reports_slot_devices()
 	await _test_export_reports_midi_send_and_group_clips()
+	await _test_export_stage()
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +112,8 @@ func _test_enum_mirrors() -> void:
 	_assert(channel.ChannelType.INSTRUMENT == DawEnums.CHANNEL_INSTRUMENT and channel.ChannelType.AUDIO == DawEnums.CHANNEL_AUDIO \
 		and channel.ChannelType.BUS == DawEnums.CHANNEL_BUS and channel.ChannelType.GROUP == DawEnums.CHANNEL_GROUP, "DawEnums channel types match Channel.ChannelType")
 	_assert(channel.PanMode.STEREO_COMBINED == DawEnums.PAN_COMBINED and channel.PanMode.STEREO_DUAL == DawEnums.PAN_DUAL \
-		and channel.PanMode.STEREO_BALANCE == DawEnums.PAN_BALANCE and channel.PanMode.MONO == DawEnums.PAN_MONO, "DawEnums pan modes match Channel.PanMode")
+		and channel.PanMode.STEREO_BALANCE == DawEnums.PAN_BALANCE and channel.PanMode.MONO == DawEnums.PAN_MONO \
+		and channel.PanMode.STAGE == DawEnums.PAN_STAGE, "DawEnums pan modes match Channel.PanMode")
 	var clip: GDScript = load("res://data/Clip.gd")
 	_assert(clip.ClipType.AUDIO == DawEnums.CLIP_AUDIO and clip.ClipType.MIDI == DawEnums.CLIP_MIDI, "DawEnums clip types match Clip.ClipType")
 	var device: GDScript = load("res://data/Device.gd")
@@ -544,3 +546,27 @@ func _test_export_reports_midi_send_and_group_clips() -> void:
 	var lane := _lane_for(exported.xml, _find_track(exported.xml, "Choir"))
 	_assert(lane != null and lane.child("Clips") != null and lane.child("Clips").children_named("Clip").size() == 2,
 		"the group's clips are written on the group's lane")
+
+
+## Spec 051 REQ-030: a stage source is written with its X mapped to pan, and the stage is one
+## report entry counting the sources.
+func _test_export_stage() -> void:
+	var project: Object = _project_script.new()
+	project.stage.set_room_size(20.0, 30.0, 10.0)
+	var left: Dictionary = project.create_instrument_track("Left")
+	var right: Dictionary = project.create_instrument_track("Right")
+	var plain: Dictionary = project.create_instrument_track("Plain")
+	plain.channel.set_pan(0.25)
+	for pair in [[left, 5.0], [right, 20.0]]:
+		pair[0].channel.set_pan_mode(left.channel.PanMode.STAGE)
+		pair[0].channel.set_stage_position(Vector3(pair[1], 10.0, 1.2))
+	var exported := await _export(project, "stage.dawproject")
+	_assert(exported.result.ok, "export with stage sources succeeds: %s" % exported.result.error)
+	var pan_l := _find_track(exported.xml, "Left").child("Channel").child("Pan")
+	var pan_r := _find_track(exported.xml, "Right").child("Channel").child("Pan")
+	_assert(is_equal_approx(pan_l.get_float("value"), 0.25), "X = 5 m of 20 m -> pan -0.5 -> 0.25, got %s" % pan_l.get_float("value"))
+	_assert(is_equal_approx(pan_r.get_float("value"), 1.0), "X at the right wall -> pan 1 -> 1.0, got %s" % pan_r.get_float("value"))
+	var report = exported.result.report
+	var entries: Array = report.entries().filter(func(e): return e.kind == TransferReport.STAGE)
+	_assert(entries.size() == 1 and entries[0].count == 2, "one stage entry counting both sources")
+	_assert(report.to_text().contains("Virtual Stage"), "the report names the stage")

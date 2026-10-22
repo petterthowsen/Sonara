@@ -22,6 +22,7 @@ const PAN_COMBINED := 0
 const PAN_DUAL := 1
 const PAN_BALANCE := 2
 const PAN_MONO := 3
+const PAN_STAGE := 4
 
 # Clip.ClipType
 const CLIP_AUDIO := 0

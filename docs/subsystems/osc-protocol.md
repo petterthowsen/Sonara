@@ -84,7 +84,8 @@ plugin and host (`Plugin Dragonfly Room Reverb (instance 3, host instance-3 (pid
 | `/channel/{id}/remove` | - | Remove channel by ID |
 | `/channel/{id}/volume` | `f:db` | Set channel volume in dB |
 | `/channel/{id}/pan` | `f:pan, f:pan_right?` | Set pan (-1.0 to 1.0). The second value is the right pan in `STEREO_DUAL` mode |
-| `/channel/{id}/pan_mode` | `i:mode` | 0 = stereo combined (default), 1 = stereo dual (separate L/R), 2 = stereo balance, 3 = mono |
+| `/channel/{id}/pan_mode` | `i:mode` | 0 = stereo combined (default), 1 = stereo dual (separate L/R), 2 = stereo balance, 3 = mono, 4 = stage (spec 051: the channel is placed in the project's virtual stage; the engine refuses it, with a warning and the mode unchanged, on master and on the Stage return) |
+| `/channel/{id}/stage` | `f:x, f:y, f:z, f:size, f:rotation_deg, i:sum_mode, i:has_room` | Placement of a stage source (spec 051), in meters with the origin at the room's front-left floor corner. `size` is the width of a stereo source (0 = one point), `rotation_deg` the angle of its line in the top-down view, `sum_mode` how a stereo source becomes one point at size 0 (0 = L+R, 1 = Mid), `has_room` 1 for a source that already carries its own room (no reflections reach the Stage return). Takes effect while the pan mode is 4. Exactly 7 arguments; floats may also arrive as `i` |
 | `/channel/{id}/mute` | `i:0_or_1` | Set mute state |
 | `/channel/{id}/enabled` | `i:0_or_1` | Enable (1, default) or deactivate (0) a channel: silent and its device chain is skipped |
 | `/channel/{id}/solo` | `i:0_or_1` | Set solo state |
@@ -101,6 +102,17 @@ outputs 1/2, 1001 is 3/4, and so on. Any channel may route there, not just maste
 (`/channel/2/route [1001]` plays channel 2 straight on outputs 3/4, skipping master's effects —
 a reference track). Channels sharing a pair accumulate. A pair the device doesn't have plays on
 1/2, and the engine logs a warning; the route is kept for a device that has it.
+
+### Virtual Stage (Godot -> Rust, spec 051)
+
+One room per project. Channels in pan mode 4 are stage sources: the engine renders each one's
+direct sound, early reflections and, on the Stage return, a shared late tail. No new statuses:
+Godot knows every value it sent.
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/stage/set` | `f:width, f:depth, f:height, f:listener_x, f:listener_y, f:listener_z, f:decay_s, f:tail_db, i:distance_delay, i:output_mode`, then 6 × (`f:gain, f:hf_damping`) | Replace the room (meters; at most 60 × 40 × 25, other values are clamped). `decay_s` is the tail's RT60, `tail_db` its level against the reflections. `distance_delay` 1 delays the direct sound by its distance to the listener. `output_mode`: 0 = Full (reflections and tail), 1 = Reflections only (no tail), 2 = Direct only (nothing reaches the Stage return). The six (gain, damping) pairs are the surfaces in the order front, back, left, right, floor, ceiling; damping 0 is bright, 1 is dull. Exactly 22 arguments; floats may also arrive as `i`. Sources crossfade to the new room over 50 ms |
+| `/stage/return` | `i:channel_id` | Register the Stage return, a bus that receives every source's reflections and adds the tail before its own devices; 0 clears it. Every stage source gets an edge to it (the Stage return is ordered, solo'd and latency-compensated like a send target). Refused, with a warning, for master, a missing channel or a stage source |
 
 ### Channel Metering (Rust -> Godot)
 
@@ -144,6 +156,7 @@ Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
 - `target` is relative to the track's channel (`AutomationTarget::parse` in `audio/automation.rs`):
   - `channel/volume`
   - `channel/pan`
+  - `channel/stage/{x|y|z|size|rotation}`: one placement parameter of a stage source (spec 051). The 0–1 value spans the room at the time the block renders: x 0–width, y 0–depth, z 0–height (m), size 0–max(width, depth) (m), rotation −180–180°. Overrides the value from `/channel/{id}/stage` while the lane drives it; the base value is never written. Only has an effect while the channel is in pan mode 4
   - `channel/cc/{n}`: MIDI controller `n` on the channel (spec 030); `n` is an integer 0–119 — 120–127 and non-integers are rejected. Same `/track/{id}/automation/create` address as other targets.
   - `device/{i0}[/{i1}…]/param/{param_id}`: device path indices, then the parameter
 

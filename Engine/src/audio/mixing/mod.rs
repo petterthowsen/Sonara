@@ -23,6 +23,7 @@ use super::state::EngineState;
 use super::types::*;
 
 pub use pool::ChannelPool;
+use pool::JobKind;
 
 use routing::{
     begin_finish, chain_start, copy_pre_fader, count_route_inputs, drain_parked, mark_aux_sources,
@@ -181,6 +182,8 @@ pub fn mix_and_output(
 
     apply_fader_and_pan(channel_map, frames);
 
+    stage_pass(channel_map, channel_ids, &mut pooled, frames);
+
     route_in_dependency_order(
         channel_map,
         channel_ids,
@@ -227,6 +230,27 @@ impl PooledPass<'_> {
         frames: usize,
         status_tx: &Sender<EngineStatus>,
     ) -> bool {
+        self.run_kind(
+            JobKind::Chain,
+            channel_map,
+            ids,
+            runs,
+            frames,
+            Some(status_tx),
+        )
+    }
+
+    /// `run` for a pass of `kind`. Device events are forwarded only when `status_tx` is given
+    /// (chain passes).
+    fn run_kind(
+        &mut self,
+        kind: JobKind,
+        channel_map: &mut HashMap<ChannelId, Channel>,
+        ids: &[ChannelId],
+        runs: impl Fn(&Channel) -> bool,
+        frames: usize,
+        status_tx: Option<&Sender<EngineStatus>>,
+    ) -> bool {
         let Some(pool) = self.pool else {
             return false;
         };
@@ -240,10 +264,12 @@ impl PooledPass<'_> {
             return false;
         }
         // The map isn't touched until `run_jobs` returns (see `PoolShared`).
-        pool.run_jobs(self.jobs, self.job_parks, frames);
-        for id in ids {
-            if let Some(channel) = channel_map.get_mut(id).filter(|c| runs(c)) {
-                forward_device_events(channel, status_tx);
+        pool.run_jobs_of(kind, self.jobs, self.job_parks, frames);
+        if let Some(status_tx) = status_tx {
+            for id in ids {
+                if let Some(channel) = channel_map.get_mut(id).filter(|c| runs(c)) {
+                    forward_device_events(channel, status_tx);
+                }
             }
         }
         true
@@ -300,6 +326,41 @@ fn apply_fader_and_pan(channel_map: &mut HashMap<ChannelId, Channel>, frames: us
             // Route targets apply their fader after their devices (`route_finished`).
             fader_and_pan(channel, frames);
         }
+        if let Some(started) = started {
+            channel.mix.timer.add(elapsed_ns(started));
+        }
+    }
+}
+
+/// Stage pass (spec 051): place every stage source in the room. Runs after the fader, which is
+/// equivalent because the stage render is linear, and it means the fader sets the level into
+/// the room too. The direct sound replaces the channel buffer; the reflections go to
+/// `mix.stage_left/right` for the Stage return.
+///
+/// Route targets are skipped: they fade after their devices and place themselves in
+/// `route_finished`. A silenced source still renders (its buffer is silent) so its delay lines
+/// stay in step with the stream; `route_channel` keeps its reflections out of the mix.
+///
+/// Reads: `mix.is_route_target`, `stage`, `stage_params`. Writes: channel buffers and
+/// `mix.stage_*`.
+fn stage_pass(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    channel_ids: &[ChannelId],
+    pooled: &mut PooledPass,
+    frames: usize,
+) {
+    let runs = |channel: &Channel| channel.stage.is_some() && !channel.mix.is_route_target;
+    // Each source writes only its own buffers, so the order doesn't matter and the pool's output
+    // is sample-identical to the serial loop.
+    if pooled.run_kind(JobKind::Stage, channel_map, channel_ids, runs, frames, None) {
+        return;
+    }
+    for channel in channel_map.values_mut() {
+        if !runs(channel) {
+            continue;
+        }
+        let started = channel.mix.timing.then(Instant::now);
+        channel.render_stage(frames);
         if let Some(started) = started {
             channel.mix.timer.add(elapsed_ns(started));
         }
@@ -669,5 +730,116 @@ mod tests {
             modulation >= 3,
             "the wrapper's modulation stream starved: {modulation}"
         );
+    }
+
+    /// Per-block cost of the stage pass with 64 stereo sources (spec 051, NF performance).
+    /// Run with `cargo test --release stage_64_sources_budget -- --ignored --nocapture`.
+    ///
+    /// Each source is a plain channel (no devices) in Stage mode feeding a Stage return, in the
+    /// default room, with a 3 m stereo size (12 first-order taps, the dearest case) and at size
+    /// 0. The same graph without `StageSource`s is timed too, and the difference is the stage
+    /// pass. The budget is 15 % of a block's duration at 48 kHz / 128 frames.
+    #[test]
+    #[ignore]
+    fn stage_64_sources_budget() {
+        use crate::audio::channel::PanMode;
+        use crate::audio::dsp::test_util::white_noise;
+        use crate::audio::mixing::pool::ChannelPool;
+        use crate::audio::stage::source::StageSource;
+        use crate::audio::stage::tail::StageTail;
+        use crate::audio::stage::RoomModel;
+        use std::time::Instant;
+
+        const FRAMES: usize = 128;
+        const SOURCES: usize = 64;
+        const WARM_UP: usize = 200;
+        const BLOCKS: usize = 3000;
+
+        let room = RoomModel::default();
+        let build = |staged: bool, size: f32, workers: Option<usize>| {
+            let new_channel = |id: ChannelId, output: ChannelId| {
+                let mut channel = Channel::new(id, format!("Channel {id}"), FRAMES, SAMPLE_RATE);
+                channel.output_channel_id = Some(output);
+                channel
+            };
+            let mut channels = vec![new_channel(1, 1000)];
+            let mut stage_return = new_channel(2, 1);
+            let mut tail = StageTail::new(SAMPLE_RATE, FRAMES);
+            tail.configure(&room);
+            stage_return.stage_tail = Some(Box::new(tail));
+            channels.push(stage_return);
+            for i in 0..SOURCES {
+                let mut source = new_channel(3 + i, 1);
+                if staged {
+                    source.pan_mode = PanMode::Stage;
+                    let mut stage = StageSource::new(SAMPLE_RATE, FRAMES);
+                    stage.set_room(room);
+                    source.stage = Some(Box::new(stage));
+                    source.stage_feed = Some(2);
+                    source.stage_params.x = 2.0 + (i % 16) as f32 * 1.5;
+                    source.stage_params.y = 2.0 + (i / 16) as f32 * 4.0;
+                    source.stage_params.size = size;
+                }
+                channels.push(source);
+            }
+            let mut state = state_with(channels);
+            state.stage.room = room;
+            state.pool = workers.map(|n| ChannelPool::spawn(n, None));
+            state
+        };
+
+        // Mean and 99th percentile microseconds per block, input written each block.
+        let measure = |mut state: EngineState| -> (f64, f64) {
+            let noise = white_noise(FRAMES, 0.3, 7);
+            let (status_tx, _status_rx) = unbounded();
+            let mut output = vec![0.0f32; FRAMES * 2];
+            let mut micros = Vec::with_capacity(BLOCKS);
+            for block in 0..WARM_UP + BLOCKS {
+                let started = Instant::now();
+                for channel in state.channels.values_mut() {
+                    channel.clear_buffers();
+                    if channel.id >= 3 {
+                        let offset = (channel.id as usize * 5) % FRAMES;
+                        for i in 0..FRAMES {
+                            let sample = noise[(i + offset) % FRAMES];
+                            channel.buffer_left[i] = sample;
+                            channel.buffer_right[i] = sample * 0.8;
+                        }
+                    }
+                }
+                mix_and_output(&mut state, &mut output, 2, FRAMES, &status_tx);
+                if block >= WARM_UP {
+                    micros.push(started.elapsed().as_secs_f64() * 1e6);
+                }
+            }
+            micros.sort_by(|a, b| a.total_cmp(b));
+            let mean = micros.iter().sum::<f64>() / micros.len() as f64;
+            (mean, micros[micros.len() * 99 / 100])
+        };
+
+        let block_us = FRAMES as f64 / SAMPLE_RATE as f64 * 1e6;
+        let budget_us = block_us * 0.15;
+        println!(
+            "stage pass, {SOURCES} sources, {FRAMES} frames at 48 kHz: block {block_us:.0} us, \
+             15 % budget {budget_us:.0} us"
+        );
+        let workers = 3;
+        for (label, pool) in [
+            ("1 thread", None),
+            ("pooled (3 workers + callback)", Some(workers)),
+        ] {
+            let (base_mean, base_p99) = measure(build(false, 0.0, pool));
+            for size in [0.0, 3.0] {
+                let (mean, p99) = measure(build(true, size, pool));
+                println!(
+                    "{label}, size {size} m: mean {mean:.0} us, p99 {p99:.0} us; without the \
+                     stage {base_mean:.0} / {base_p99:.0} us; stage cost {:.0} us mean ({:.1} % \
+                     of a block), p99 {:.0} us",
+                    mean - base_mean,
+                    (mean - base_mean) / block_us * 100.0,
+                    p99 - base_p99
+                );
+            }
+        }
     }
 }

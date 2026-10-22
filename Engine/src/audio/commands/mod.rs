@@ -13,6 +13,7 @@ mod modulation;
 mod plugin;
 mod preview;
 mod sampler;
+pub(crate) mod stage;
 mod status;
 mod track;
 mod transport;
@@ -95,6 +96,20 @@ pub enum AudioCommand {
     SetChannelPanWidth {
         id: ChannelId,
         width: f32,
+    },
+    /// Place a stage source in the room (spec 051). Takes effect once the channel is in the
+    /// Stage pan mode.
+    SetChannelStage {
+        id: ChannelId,
+        params: crate::audio::stage::StageParams,
+    },
+    /// Replace the project's room (spec 051).
+    SetStage {
+        room: crate::audio::stage::RoomModel,
+    },
+    /// Register the Stage return channel (spec 051); 0 clears it.
+    SetStageReturn {
+        id: ChannelId,
     },
     SetChannelMute {
         id: ChannelId,
@@ -803,8 +818,10 @@ fn dispatch(
             pan_right,
         } => channel::set_channel_pan(state, id, pan_left, pan_right),
         AudioCommand::SetChannelPanMode { id, mode } => {
-            channel::set_channel_pan_mode(state, id, mode)
+            stage::set_pan_mode(state, id, mode, effects)
         }
+        AudioCommand::SetChannelStage { id, params } => stage::set_channel_stage(state, id, params),
+        AudioCommand::SetStage { room } => stage::set_stage(state, room),
         AudioCommand::SetChannelPanWidth { id, width } => {
             channel::set_channel_pan_width(state, id, width)
         }
@@ -1386,6 +1403,7 @@ fn dispatch(
         | AudioCommand::SetTempoMap(_)
         | AudioCommand::SetTimeSignatureMap(_)
         | AudioCommand::SetScaleMap(_)
+        | AudioCommand::SetStageReturn { .. }
         | AudioCommand::ReloadDevice { .. }
         | AudioCommand::SetPluginHosting { .. }
         | AudioCommand::SetAudioConfig { .. }

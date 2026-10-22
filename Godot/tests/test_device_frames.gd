@@ -79,7 +79,20 @@ func run_tests() -> void:
 	await _test_tear_off()
 	await _test_close_frees_window()
 	await _test_window_min_size()
+	await _test_page_frame()
 	await _test_plugin_tab_without_embedding()
+
+
+## Stands in for the Stage view: counts show_view / hide_view.
+class FakePage extends Control:
+	var shown := 0
+	var hide_count := 0
+
+	func show_view() -> void:
+		shown += 1
+
+	func hide_view() -> void:
+		hide_count += 1
 
 
 # ============================================================================
@@ -603,3 +616,38 @@ func _test_plugin_tab_without_embedding() -> void:
 	var slot: Object = frame.get_page(plugin)
 	_assert(slot != null and slot.get_note_text().contains("own window"), "the tab says it's in its own window (got '%s')" % (slot.get_note_text() if slot else ""))
 	await _close_all_frames()
+
+
+## A frame with a page and no channel or devices (the Stage view, spec 051): opens, attaches,
+## detaches and closes like a device frame.
+func _test_page_frame() -> void:
+	_assert(_manager.open_stage() == null or _manager.is_stage_open(), "open_stage is harmless without a Stage view")
+	await _close_all_frames()
+	var page := FakePage.new()
+	var frame: Object = _manager.open_page("test_page", page, "Test page")
+	await process_frame
+	await process_frame
+	_assert(frame != null and frame.is_page_frame() and frame.channel == null, "page frame has no channel")
+	_assert(frame.get_devices().is_empty() and frame.get_title() == "Test page", "no devices, titled by the page")
+	_assert(not frame._channel_header.visible and not frame.is_tab_strip_visible(), "channel header and tabs hidden")
+	_assert(_manager.get_page_frame("test_page") == frame, "found by id")
+	_assert(_manager.open_page("test_page", FakePage.new(), "again") == frame, "opening again raises the same frame")
+	var window: Window = _manager.get_window_for(frame)
+	_assert(window != null and window.visible and window.title == "Test page", "floating in a titled window")
+	_assert(page.shown == 1, "the page is told it is shown")
+	_manager.attach(frame)
+	await process_frame
+	_assert(_host.attached == frame and _manager.get_attached_frame() == frame, "attaches to the host")
+	_assert(page.get_parent().get_parent() == frame, "same page instance after attach")
+	_manager.detach(frame)
+	await process_frame
+	_assert(frame.floating and window.visible and frame.get_custom_page() == page, "detaches back into its window")
+	_manager.close_frame(frame)
+	await process_frame
+	await process_frame
+	_assert(_manager.get_page_frame("test_page") == null and not is_instance_valid(window), "closing frees frame and window")
+	_manager.open_page("test_page", FakePage.new(), "Test page")
+	await process_frame
+	_manager.close_frame(_manager.get_page_frame("test_page"))
+	await process_frame
+	await process_frame

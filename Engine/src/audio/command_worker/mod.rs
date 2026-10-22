@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::block_clock::BlockClock;
+use super::channel::PanMode;
 use super::commands::{process_command, AudioCommand, CommandEffects, EngineStatus};
 use super::devices::clap_host::PluginScanner;
 use super::devices::{DeviceFactory, DevicePath};
@@ -35,6 +36,7 @@ mod perf;
 mod plugins;
 mod project;
 mod render;
+mod stage;
 
 /// How often the command thread services devices between commands: plugin parameter changes,
 /// queued automation writes, plugin crash checks and SFZ parameter lists. This is work the audio
@@ -263,6 +265,12 @@ impl CommandWorker {
             AudioCommand::SetTempoMap(points) => self.set_tempo_map(points),
             AudioCommand::SetTimeSignatureMap(changes) => self.set_time_signature_map(changes),
             AudioCommand::SetScaleMap(changes) => self.set_scale_map(changes),
+            AudioCommand::SetStageReturn { id } => self.set_stage_return(id),
+            AudioCommand::SetChannelPanMode { id, mode }
+                if PanMode::from(mode) == PanMode::Stage =>
+            {
+                self.set_stage_pan_mode(id)
+            }
             AudioCommand::SetDeviceActive {
                 channel_id,
                 device_path,

@@ -8,6 +8,7 @@ var logger : Log = Log.make("MainMenu")
 const VIEW_TOGGLE_INFO_PANEL := 1000
 const VIEW_TOGGLE_LEFT_DOCK := 1001
 const VIEW_TOGGLE_RIGHT_DOCK := 1002
+const VIEW_TOGGLE_STAGE := 1003
 
 enum MENU { File, Edit, View, AI, Help }
 
@@ -322,6 +323,9 @@ func _rebuild_view_menu() -> void:
 	_view_menu.add_separator()
 	_view_menu.add_check_item("Toggle Info Panel", VIEW_TOGGLE_INFO_PANEL)
 	_view_menu.set_item_checked(_view_menu.get_item_index(VIEW_TOGGLE_INFO_PANEL), Sonara.editor.bottom.visible)
+	_view_menu.add_separator()
+	_view_menu.add_check_item("Stage", VIEW_TOGGLE_STAGE)
+	_view_menu.set_item_checked(_view_menu.get_item_index(VIEW_TOGGLE_STAGE), DeviceWindowManager.is_stage_open())
 
 
 ## Toggle the dock panel behind the pressed View item.
@@ -329,6 +333,10 @@ func _on_view_item_pressed(item_id: int) -> void:
 	item_pressed.emit(MENU.View, item_id)
 	if item_id == VIEW_TOGGLE_INFO_PANEL:
 		Sonara.editor.toggle_info_panel()
+		_rebuild_view_menu()
+		return
+	if item_id == VIEW_TOGGLE_STAGE:
+		DeviceWindowManager.toggle_stage()
 		_rebuild_view_menu()
 		return
 	var dock_host := _get_dock_host()

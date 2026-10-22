@@ -322,10 +322,16 @@ func _destination_of(ch: Object) -> String:
 func _pan_position(ch: Object) -> float:
 	if ch.pan_mode == DawEnums.PAN_DUAL:
 		return (ch.pan_left + ch.pan_right) * 0.5
+	if ch.pan_mode == DawEnums.PAN_STAGE:
+		# Stage X across the room's width: the front-left corner is hard left, the centre is 0.
+		var width: float = maxf(_project.stage.width, 0.001)
+		return clampf((ch.stage_x / width) * 2.0 - 1.0, -1.0, 1.0)
 	return ch.pan
 
 
 func _report_channel_quirks(ch: Object) -> void:
+	if ch.pan_mode == DawEnums.PAN_STAGE:
+		_report.add(TransferReport.STAGE, "Stage")  # one entry; the count is the number of sources
 	if ch.pan_mode == DawEnums.PAN_COMBINED or ch.pan_mode == DawEnums.PAN_DUAL:
 		_report.add(TransferReport.PAN_MODE, ch.name, "dual" if ch.pan_mode == DawEnums.PAN_DUAL else "combined")
 	if ch.phase_invert:

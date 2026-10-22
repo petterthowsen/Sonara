@@ -8,6 +8,7 @@ mod meter;
 mod pan;
 mod perf;
 mod send;
+mod stage;
 
 pub(crate) use meter::fader_gain;
 pub use pan::{PanCoefficients, PanMode};
@@ -19,6 +20,9 @@ use crate::audio::devices::AudioDevice;
 use crate::audio::dsp::block_delay::{AlignDelay, StereoBlockDelay};
 use crate::audio::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
 use crate::audio::render_scratch::MixBuffers;
+use crate::audio::stage::source::StageSource;
+use crate::audio::stage::tail::StageTail;
+use crate::audio::stage::StageParams;
 use crate::audio::types::ChannelId;
 use meter::gain_smoothing_alpha;
 
@@ -112,6 +116,20 @@ pub struct Channel {
     /// `LatencyPlan`. All zero and no rings in a project without latency.
     pub latency: ChannelLatency,
 
+    /// Placement in the virtual stage (spec 051), used while `pan_mode` is `PanMode::Stage`.
+    pub stage_params: StageParams,
+    /// Normalized 0.0-1.0 automation overrides for the stage parameters (x, y, z, size,
+    /// rotation), with the same ownership as `automation_pan`.
+    pub automation_stage: [Option<f32>; 5],
+    /// Renders this channel into the stage. Built by the command thread outside the lock and
+    /// swapped in under it; present exactly while the channel is a stage source.
+    pub stage: Option<Box<StageSource>>,
+    /// The Stage return this source's reflections go to: a third kind of outgoing edge next to
+    /// the route and the sends. Set by the command thread.
+    pub stage_feed: Option<ChannelId>,
+    /// The late tail, on the Stage return only. Runs before the channel's first device.
+    pub stage_tail: Option<Box<StageTail>>,
+
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
 
@@ -131,6 +149,8 @@ pub struct ChannelLatency {
     pub out_frames: u32,
     /// Delay on the route into the target channel.
     pub route_delay: u32,
+    /// Delay on the stage edge (spec 051).
+    pub stage_delay: u32,
     /// Delay on each send, in `send_channels` order.
     pub send_delays: Vec<u32>,
     /// Delay on the hardware write.
@@ -142,6 +162,8 @@ pub struct ChannelLatency {
     pub post: Option<StereoBlockDelay>,
     /// The pre-fader block, for delayed pre-fader sends.
     pub pre: Option<StereoBlockDelay>,
+    /// The reflections (`mix.stage_*`), for a delayed stage edge.
+    pub stage: Option<StereoBlockDelay>,
     /// Delays the aux-source device's main output by `aux_delay`.
     pub aux: AlignDelay,
 }
@@ -198,14 +220,33 @@ impl Channel {
             sleep_changes: Vec::with_capacity(MAX_SLEEP_CHANGES),
             device_timers: [DeviceTimer::default(); MAX_TIMED_DEVICES],
             latency: ChannelLatency::default(),
+            stage_params: StageParams::default(),
+            automation_stage: [None; 5],
+            stage: None,
+            stage_feed: None,
+            stage_tail: None,
             mix: MixBuffers::new(buffer_size),
             notes_dispatched: false,
         }
     }
 
     /// Adopt a new device sample rate (the stream is stopped while this runs).
+    ///
+    /// The stage source and the stage tail are rebuilt for the new rate (their delay lines and
+    /// reverb are sized in samples). This allocates, which is fine: the stream is stopped.
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.smoothing_alpha = gain_smoothing_alpha(sample_rate);
+        let max_frames = self.buffer_left.len();
+        if let Some(old) = self.stage.as_ref() {
+            let mut source = StageSource::new(sample_rate, max_frames);
+            source.set_room(*old.room());
+            self.stage = Some(Box::new(source));
+        }
+        if let Some(old) = self.stage_tail.as_ref() {
+            let mut tail = StageTail::new(sample_rate, max_frames);
+            tail.configure(old.room());
+            self.stage_tail = Some(Box::new(tail));
+        }
     }
 
     /// Clear the channel buffers

@@ -17,6 +17,7 @@ use tracing::warn;
 use super::channel::Channel;
 use super::devices::DevicePath;
 use super::midi_types::{cc14_from_unit, cc14_to_unit};
+use super::stage::RoomModel;
 use super::state::EngineState;
 use super::track::Track;
 use super::types::{ChannelId, Tick, TrackId};
@@ -153,6 +154,57 @@ pub enum AutomationTarget {
     /// One MIDI controller on the channel (`channel/cc/{n}`, n in 0..=119). Appended for
     /// saved-project compatibility (spec 030).
     MidiCc { cc: u8 },
+    /// One stage placement parameter of a Stage source (`channel/stage/{x|y|z|size|rotation}`,
+    /// spec 051). The normalized value spans the room (see `StageParam::denormalize`).
+    StageParam { param: StageParam },
+}
+
+/// The automatable placement parameters of a stage source. The discriminant is the index into
+/// `Channel::automation_stage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageParam {
+    X = 0,
+    Y = 1,
+    Z = 2,
+    Size = 3,
+    Rotation = 4,
+}
+
+impl StageParam {
+    /// The spelling after `channel/stage/`.
+    pub fn name(self) -> &'static str {
+        match self {
+            StageParam::X => "x",
+            StageParam::Y => "y",
+            StageParam::Z => "z",
+            StageParam::Size => "size",
+            StageParam::Rotation => "rotation",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "x" => StageParam::X,
+            "y" => StageParam::Y,
+            "z" => StageParam::Z,
+            "size" => StageParam::Size,
+            "rotation" => StageParam::Rotation,
+            _ => return None,
+        })
+    }
+
+    /// Map a normalized 0–1 value onto the parameter's span in `room`: X, Y and Z cover the
+    /// room's width, depth and height, size 0–max(width, depth) and rotation −180–180°.
+    pub fn denormalize(self, value: f32, room: &RoomModel) -> f32 {
+        let value = value.clamp(0.0, 1.0);
+        match self {
+            StageParam::X => value * room.width,
+            StageParam::Y => value * room.depth,
+            StageParam::Z => value * room.height,
+            StageParam::Size => value * room.width.max(room.depth),
+            StageParam::Rotation => value * 360.0 - 180.0,
+        }
+    }
 }
 
 impl AutomationTarget {
@@ -169,6 +221,9 @@ impl AutomationTarget {
                 .parse::<usize>()
                 .ok()
                 .map(|index| AutomationTarget::SendAmount { index }),
+            ["channel", "stage", param] => {
+                StageParam::from_name(param).map(|param| AutomationTarget::StageParam { param })
+            }
             ["channel", "cc", cc] => {
                 // Controllers 120–127 are channel-mode messages, never lanes (REQ-002).
                 match cc.parse::<u8>() {
@@ -223,6 +278,7 @@ impl fmt::Display for AutomationTarget {
             AutomationTarget::ChannelPan => write!(f, "channel/pan"),
             AutomationTarget::SendAmount { index } => write!(f, "channel/send/{}", index),
             AutomationTarget::MidiCc { cc } => write!(f, "channel/cc/{}", cc),
+            AutomationTarget::StageParam { param } => write!(f, "channel/stage/{}", param.name()),
             AutomationTarget::DeviceParam {
                 device_path,
                 param_id,
@@ -469,6 +525,9 @@ fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32
         AutomationTarget::ChannelPan => {
             channel.automation_pan = Some(value);
         }
+        AutomationTarget::StageParam { param } => {
+            channel.automation_stage[*param as usize] = Some(value);
+        }
         AutomationTarget::SendAmount { index } => {
             let Some(send) = channel.send_channels.get_mut(*index) else {
                 return false;
@@ -557,6 +616,7 @@ pub fn release_lane(lane: &mut AutomationLane, channel: &mut Channel) {
     match target {
         AutomationTarget::ChannelVolume => channel.automation_volume = None,
         AutomationTarget::ChannelPan => channel.automation_pan = None,
+        AutomationTarget::StageParam { param } => channel.automation_stage[*param as usize] = None,
         AutomationTarget::SendAmount { index } => {
             if let Some(base) = captured_base.take() {
                 if let Some(send) = channel.send_channels.get_mut(*index) {
@@ -678,6 +738,7 @@ mod tests {
     };
     use crate::audio::modulation::kinds::ENV_ATTACK;
     use crate::audio::modulation::{wrap_at_path, ModulatorKind};
+    use crate::audio::stage::StageParams;
     use crate::audio::track::Track;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -795,6 +856,18 @@ mod tests {
         let cases = [
             ("channel/volume", AutomationTarget::ChannelVolume),
             ("channel/pan", AutomationTarget::ChannelPan),
+            (
+                "channel/stage/x",
+                AutomationTarget::StageParam {
+                    param: StageParam::X,
+                },
+            ),
+            (
+                "channel/stage/rotation",
+                AutomationTarget::StageParam {
+                    param: StageParam::Rotation,
+                },
+            ),
             ("channel/send/2", AutomationTarget::SendAmount { index: 2 }),
             ("channel/cc/74", AutomationTarget::MidiCc { cc: 74 }),
             (
@@ -1622,5 +1695,98 @@ mod tests {
         assert_eq!(log[0], (73, 14745, 0), "0.9 quantizes to 14745");
         drop(log);
         assert_eq!(state.channels[&2].cc_lane_mask & (1u128 << 73), 0);
+    }
+
+    /// Render `blocks` blocks of BUFFER_SIZE frames of noise through the channel's stage and return
+    /// the last block's direct-sound RMS (left, right). The first ~48 blocks of 128 frames cover the source's
+    /// 50 ms room crossfade.
+    fn stage_balance(channel: &mut Channel, blocks: usize) -> (f32, f32) {
+        let noise = crate::audio::dsp::test_util::white_noise(BUFFER_SIZE, 0.5, 3);
+        let mut last = (0.0, 0.0);
+        for _ in 0..blocks {
+            channel.buffer_left[..BUFFER_SIZE].copy_from_slice(&noise);
+            channel.buffer_right[..BUFFER_SIZE].copy_from_slice(&noise);
+            channel.render_stage(BUFFER_SIZE);
+            let rms = |b: &[f32]| (b.iter().map(|s| s * s).sum::<f32>() / b.len() as f32).sqrt();
+            last = (
+                rms(&channel.buffer_left[..BUFFER_SIZE]),
+                rms(&channel.buffer_right[..BUFFER_SIZE]),
+            );
+        }
+        last
+    }
+
+    #[test]
+    fn stage_target_roundtrip() {
+        for name in ["x", "y", "z", "size", "rotation"] {
+            let text = format!("channel/stage/{name}");
+            let target = AutomationTarget::parse(&text).expect(&text);
+            assert_eq!(target.to_string(), text);
+        }
+        assert_eq!(AutomationTarget::parse("channel/stage/w"), None);
+        assert_eq!(AutomationTarget::parse("channel/stage"), None);
+    }
+
+    #[test]
+    fn stage_param_denormalizes_onto_the_room() {
+        let room = RoomModel::default();
+        assert_eq!(StageParam::X.denormalize(0.5, &room), room.width * 0.5);
+        assert_eq!(StageParam::Y.denormalize(1.0, &room), room.depth);
+        assert_eq!(StageParam::Z.denormalize(0.0, &room), 0.0);
+        assert_eq!(StageParam::Rotation.denormalize(0.5, &room), 0.0);
+        assert_eq!(StageParam::Rotation.denormalize(0.0, &room), -180.0);
+        assert_eq!(
+            StageParam::Size.denormalize(1.0, &room),
+            room.width.max(room.depth)
+        );
+    }
+
+    #[test]
+    fn stage_x_automation_moves_balance() {
+        let (mut state, _sets, _wakes) = state_with_track();
+        let room = RoomModel::default();
+        let mut source = crate::audio::stage::source::StageSource::new(SAMPLE_RATE, BUFFER_SIZE);
+        source.set_room(room);
+        {
+            let channel = state.channels.get_mut(&2).unwrap();
+            channel.pan_mode = PanMode::Stage;
+            channel.stage = Some(Box::new(source));
+            channel.stage_params.y = 5.0;
+        }
+        add_lane(
+            &mut state,
+            "stage_x",
+            AutomationTarget::StageParam {
+                param: StageParam::X,
+            },
+            &[(0, 0.0), (960, 1.0)],
+        );
+
+        // Hard left, then centre, then hard right.
+        let mut balance = Vec::new();
+        for tick in [0, 480, 960] {
+            apply_automation(&mut state.tracks, &mut state.channels, tick);
+            let channel = state.channels.get_mut(&2).unwrap();
+            let (l, r) = stage_balance(channel, 60);
+            balance.push((l, r));
+        }
+        assert!(balance[0].0 > balance[0].1 * 1.5, "left: {:?}", balance[0]);
+        assert!(
+            (balance[1].0 - balance[1].1).abs() < 0.1 * balance[1].0,
+            "centre: {:?}",
+            balance[1]
+        );
+        assert!(balance[2].1 > balance[2].0 * 1.5, "right: {:?}", balance[2]);
+
+        // Releasing the lane returns the source to its base position.
+        let channel = state.channels.get_mut(&2).unwrap();
+        assert_eq!(channel.automation_stage[0], Some(1.0));
+        let target = AutomationTarget::StageParam {
+            param: StageParam::X,
+        };
+        let mut lane = AutomationLane::new("x".to_string(), target);
+        release_lane(&mut lane, channel);
+        assert_eq!(channel.automation_stage[0], None);
+        assert_eq!(channel.stage_params.x, StageParams::default().x);
     }
 }

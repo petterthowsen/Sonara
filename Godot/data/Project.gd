@@ -75,6 +75,10 @@ var loop_follows_selection: bool = false
 
 # Project data
 var channels: Array[Channel] = []
+
+## The project's one virtual stage (spec 051). Always present; it is saved, and sent to the
+## engine, only once the project uses it (see `uses_stage`).
+var stage: VirtualStage = VirtualStage.new()
 var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 var markers: Array[SongMarker] = []
@@ -213,6 +217,8 @@ func _init():
 	tempo_map.changed.connect(_sync_tempo_map_to_engine)  # the initializer doesn't run the setter
 	time_signature_map.changed.connect(_sync_time_signature_map_to_engine)
 	key_change_map.changed.connect(_sync_key_change_map_to_engine)  # the initializer doesn't run the setter
+	stage.set_project(self)
+	stage.changed.connect(_on_stage_changed)
 	var master = Channel.new(1)  # Master is always ID 1
 	master.name = "Master"
 	master.output_channel_id = 1000  # Master routes to default output device (ID 1000)
@@ -336,12 +342,31 @@ func _on_engine_confirmed_connected() -> void:
 	_sync_time_signature_map_to_engine()
 	_sync_key_change_map_to_engine()
 	_sync_loop_to_engine()
+	_sync_stage_to_engine()
 
 	# Tracks are linked to channels now, so effective enabled states are final.
 	notify_item_visibility_changed()
 
 	logger.info("[Project] Connected to audio engine")
 	_schedule_device_state_resync()
+
+
+## Send the stage and the Stage return, once the project uses the stage. Channels are connected
+## first, so the return and the sources exist in the engine.
+func _sync_stage_to_engine() -> void:
+	if _connection_state != ConnectionState.CONNECTED or not uses_stage():
+		return
+	stage.sync_to_engine()
+	var stage_return := get_stage_return()
+	AudioEngineOSC.send("/stage/return", [stage_return.id if stage_return else 0])
+
+
+## Edits to the room can move source positions out of bounds: keep every source inside it.
+func _on_stage_changed() -> void:
+	for source in stage_sources():
+		var inside := stage.clamp_point(Vector3(source.stage_x, source.stage_y, source.stage_z))
+		if inside != Vector3(source.stage_x, source.stage_y, source.stage_z):
+			source.set_stage_position(inside)
 
 
 ## Above this many tempo points the OSC packet gets uncomfortably large for UDP.
@@ -853,6 +878,65 @@ func get_master_channel() -> Channel:
 	return channels[0] if not channels.is_empty() else null
 
 
+# ----------------------------------------------------------------------------
+# Virtual Stage (spec 051)
+# ----------------------------------------------------------------------------
+
+## Channels in the Stage pan mode.
+func stage_sources() -> Array[Channel]:
+	var out: Array[Channel] = []
+	for channel in channels:
+		if channel.pan_mode == Channel.PanMode.STAGE:
+			out.append(channel)
+	return out
+
+
+## The Stage return channel, or null before the first stage source.
+func get_stage_return() -> Channel:
+	for channel in channels:
+		if channel.is_stage_return:
+			return channel
+	return null
+
+
+## True once the project has stage sources or a Stage return, or the room was changed. Only then
+## are the stage settings saved and sent to the engine.
+func uses_stage() -> bool:
+	return get_stage_return() != null or not stage.is_default() or not stage_sources().is_empty()
+
+
+## The Stage return, created (a bus routed to master) if the project has none. Call it when a
+## channel enters Stage (REQ-017); there is never more than one.
+func ensure_stage_return() -> Channel:
+	var existing := get_stage_return()
+	if existing:
+		return existing
+	var stage_return := _new_channel(unique_name("Stage", null, null, "Channel"), Channel.ChannelType.BUS)
+	stage_return.is_stage_return = true
+	stage_return.color = Color.from_string("#6b7f99", Color.WHITE)
+	if _connection_state == ConnectionState.CONNECTED:
+		stage.sync_to_engine()
+		AudioEngineOSC.send("/stage/return", [stage_return.id])
+	return stage_return
+
+
+## False for the Stage return while stage sources exist (REQ-018). The caller shows `why`.
+func can_remove_channel(channel_id: int) -> bool:
+	return stage_return_removal_blocker(channel_id) == ""
+
+
+## Why the Stage return can't be deleted now, or "" when it can (or `channel_id` is not it).
+func stage_return_removal_blocker(channel_id: int) -> String:
+	var channel := get_channel_by_id(channel_id)
+	if channel == null or not channel.is_stage_return:
+		return ""
+	var count := stage_sources().size()
+	if count == 0:
+		return ""
+	return "The Stage return is in use by %d stage source%s. Switch them to another pan mode first." % [
+		count, "" if count == 1 else "s"]
+
+
 func get_channel_by_id(channel_id: int) -> Channel:
 	"""Find channel by ID."""
 	for channel in channels:
@@ -902,6 +986,11 @@ func remove_channel(channel_id: int) -> bool:
 	if channel.is_master:
 		logger.warn("[Project] Cannot remove master channel")
 		return false
+
+	var blocker := stage_return_removal_blocker(channel_id)
+	if blocker != "":
+		logger.warn("[Project] Cannot remove the Stage return: %s" % blocker)
+		return false
 	
 	# Reroute any tracks that were using this channel to the master channel
 	for track in channel.routed_tracks.duplicate():
@@ -940,6 +1029,8 @@ func remove_channel(channel_id: int) -> bool:
 	if _connection_state == ConnectionState.CONNECTED and channel.is_engine_connected():
 		channel.disconnect_from_engine()
 		# Tell engine to remove the channel
+		if channel.is_stage_return:
+			AudioEngineOSC.send("/stage/return", [0])
 		AudioEngineOSC.send("/channel/%d/remove" % channel_id, [])
 	
 	# Remove from channels array
@@ -2062,7 +2153,7 @@ func to_json() -> Dictionary:
 		logger.info("[Project] Serializing clip: %s" % clip_id)
 		clips_array.append(clips[clip_id].to_json())
 
-	return {
+	var data := {
 		"format_version": FORMAT_VERSION,
 		"tempo": tempo,
 		"time_numerator": time_numerator,
@@ -2092,6 +2183,9 @@ func to_json() -> Dictionary:
 		"channels": channels.map(func(c): return c.to_json()),
 		"tracks": tracks.map(func(t): return t.to_json())
 	}
+	if uses_stage():
+		data["stage"] = stage.to_json()
+	return data
 
 
 # Deserialize from JSON
@@ -2160,6 +2254,8 @@ static func from_json(data: Dictionary) -> Project:
 
 	# Clear default master and load channels
 	project.channels.clear()
+	if data.get("stage") is Dictionary:
+		project.stage.load_json(data["stage"])
 	var migrate_scales: bool = project.format_version < 3
 	for channel_data in data.get("channels", []):
 		if migrate_scales:
