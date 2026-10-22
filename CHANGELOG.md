@@ -45,6 +45,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- MIDI editor: the track list no longer shows disabled tracks (or tracks inside a disabled folder), unless the arranger is set to show disabled tracks (#171).
 - MIDI editor: clicking inside a grid cell places the note in that cell again, in the piano roll and Drum View. It used to land on the next grid line when you clicked in the right half of a cell (#170).
 - MIDI editor: dragging a note that sits off the grid now snaps it to the current grid; the rest of the selection moves by the same amount and keeps its spacing. Hold Shift to move freely (#170).
 - Reverb: changing the Algorithm crossfades smoothly instead of clicking, and switching back to an algorithm no longer brings back its old tail. Freeze engages and releases without a click. Mix, Width, Early and Ducking glide smoothly under automation and modulation at large buffer sizes. Re-enabling a bypassed reverb starts clean instead of resuming the tail it was cut off with.

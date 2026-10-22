@@ -187,9 +187,9 @@ func _rebuild() -> void:
 	tracks_changed.emit()
 
 
-## Hidden tracks (own or through a folder) are skipped unless the arranger shows hidden tracks.
+## Hidden or disabled tracks (own or through a folder) are skipped unless the arranger shows them.
 func _is_listed(t: Track) -> bool:
-	return ItemVisibility.is_listed(project.arranger_view, ItemVisibility.track_hidden(project, t), false)
+	return ItemVisibility.is_listed(project.arranger_view, ItemVisibility.track_hidden(project, t), ItemVisibility.track_disabled(project, t))
 
 
 func _refresh_toggles() -> void:
