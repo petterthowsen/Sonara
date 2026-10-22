@@ -7,6 +7,14 @@ custom_minimum_size = Vector2(0, 24)
 theme_override_constants/separation = 6
 script = ExtResource("1_row")
 
+[node name="SendCheck" type="CheckBox" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Send to this channel"
+button_pressed = true
+
 [node name="Swatch" type="ColorRect" parent="."]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(4, 0)

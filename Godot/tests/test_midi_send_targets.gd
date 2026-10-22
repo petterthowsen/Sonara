@@ -42,6 +42,7 @@ func run_tests() -> void:
 	_device(CHAIN_ID, _device_script.DeviceCategory.Effect, true)
 	_device(LAYER_ID, _device_script.DeviceCategory.Instrument, true)
 	_test_children_mode_follows_nesting()
+	_test_child_toggles()
 	_test_channel_removal()
 	_test_list_filtering()
 	_test_targets_are_sent()
@@ -121,6 +122,26 @@ func _test_children_mode_follows_nesting() -> void:
 		"nesting a channel adds it")
 	var sent: Variant = _last_targets(s.send)
 	_assert(sent != null and sent.has(s.d.id) and sent.has(s.b.id), "a nesting change re-sends the targets: %s" % [sent])
+	_osc._pending_sends.clear()
+
+
+func _test_child_toggles() -> void:
+	var s := _setup()
+	s.send.toggle_midi_send_child(s.b.id, false)
+	_assert(Array(s.send.resolved_midi_send_targets()) == [s.c.id], "a switched-off child is left out")
+	_assert(_last_targets(s.send) == [s.c.id], "toggling a child re-sends the targets")
+	s.project.nest_channel(s.d, s.group)
+	_assert(Array(s.send.resolved_midi_send_targets()).has(s.d.id), "a child nested later sends by default")
+	var data: Dictionary = JSON.parse_string(JSON.stringify(s.project.to_json()))
+	var send: Object = _project_script.from_json(data).get_channel_by_id(s.group.id).devices[0]
+	_assert(Array(send.midi_send_excluded) == [s.b.id], "the switched-off children survive save and load")
+	var preset: Object = _preset_script.capture_now(s.send, "Test")
+	_assert(not preset.device.has("midi_send_excluded"), "a preset leaves out the excluded ids")
+	s.send.toggle_midi_send_child(s.b.id, true)
+	_assert(Array(s.send.resolved_midi_send_targets()).has(s.b.id), "switching a child back on sends to it")
+	s.send.toggle_midi_send_child(s.c.id, false)
+	s.project.remove_channel(s.c.id)
+	_assert(s.send.midi_send_excluded.is_empty(), "a removed child leaves the exclusion list")
 	_osc._pending_sends.clear()
 
 

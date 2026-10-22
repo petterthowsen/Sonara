@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- MIDI Send in Children mode: a checkbox beside each child lets you send to only some of the children. Children nested later send by default.
 - Saturator: new Flutter and Drift controls beside Wow in the Tape group. Flutter is a fast, slightly irregular flutter and Drift a slow random pitch wander. Wow, Flutter and Drift use a curved taper, so subtle settings get most of the knob (saved Wow settings sound subtler).
 - Reverb has its own panel view: a decay map (time against frequency, with Pre-Delay, early reflections that blur into the tail as Diffusion rises, the Decay EQ contour, the cuts and Freeze) whose handles you can drag to edit Decay, Decay EQ, Pre-Delay and the cuts, a live input and wet level strip underneath, and all controls and both slot tiles laid out in signal order. The Simple toggle still gives the generated view (spec 050).
 - Note Editor Harmony menu: Make Legato (extend each selected note to the start of the next) and Merge Same Notes (join touching notes of the same pitch). The clip context menu in the arranger gets Make Legato, Merge Same and Split to Tracks for all notes of the selected MIDI clips. The Transfer Notes target list is now a small scrollable tree in arranger order with foldable groups that highlights the track being edited (#169).

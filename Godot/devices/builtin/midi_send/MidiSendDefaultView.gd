@@ -1,6 +1,6 @@
 ## Panel view of the built-in MIDI Send (spec 049): the mode switch (Children / List), the Thru
 ## switch (parameter 0) and the targets by channel name. Children mode shows the channels nested
-## directly under the sender; List mode lets you add and remove targets from the valid channels.
+## directly under the sender, each with a toggle to leave it out; List mode lets you add and remove targets from the valid channels.
 ## A target the engine refused (it would close a MIDI loop) is marked on its row. Names follow
 ## renames and a deleted channel disappears. The static nodes live in `MidiSendDefaultView.tscn`;
 ## only the target rows, one per target, are made here.
@@ -106,9 +106,19 @@ func _refresh_thru() -> void:
 	thru_check.set_pressed_no_signal(on)
 
 
-## The ids shown: what the model sends to the engine (a refused one stays, marked as looping).
+## The ids shown: what the model sends to the engine (a refused one stays, marked as looping). In
+## children mode every valid child is shown, with its send toggle, so a switched-off one can be
+## switched back on.
 func shown_target_ids() -> PackedInt32Array:
-	return device.resolved_midi_send_targets() if device != null else PackedInt32Array()
+	if device == null:
+		return PackedInt32Array()
+	if device.midi_send_mode == DeviceInstance.MIDI_SEND_CHILDREN:
+		var out := PackedInt32Array()
+		for child_id in device.midi_send_children():
+			if device.midi_send_can_target(int(child_id)) and not out.has(int(child_id)):
+				out.append(int(child_id))
+		return out
+	return device.resolved_midi_send_targets()
 
 
 func _rebuild_rows(list_mode: bool) -> void:
@@ -124,8 +134,10 @@ func _rebuild_rows(list_mode: bool) -> void:
 			continue
 		var row: RowScript = ROW_SCENE.instantiate()
 		target_list.add_child(row)
-		row.setup(channel, list_mode, device.midi_send_blocked.has(target_id))
+		row.setup(channel, list_mode, device.midi_send_blocked.has(target_id), not list_mode,
+				not device.midi_send_excluded.has(target_id))
 		row.remove_pressed.connect(_on_remove_pressed)
+		row.send_toggled.connect(_on_send_toggled)
 		_watch_name(channel)
 	empty_label.visible = ids.is_empty()
 	empty_label.text = "No channels nested under this one" if not list_mode else "No targets"
@@ -175,6 +187,11 @@ func _on_thru_toggled(on: bool) -> void:
 func _on_remove_pressed(channel_id: int) -> void:
 	if device != null:
 		device.toggle_midi_send_target(channel_id, false)
+
+
+func _on_send_toggled(channel_id: int, on: bool) -> void:
+	if device != null:
+		device.toggle_midi_send_child(channel_id, on)
 
 
 func _fill_picker() -> void:

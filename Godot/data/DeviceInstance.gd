@@ -124,6 +124,9 @@ const MIDI_SEND_CHILDREN := "children"
 const MIDI_SEND_LIST := "list"
 var midi_send_mode: String = MIDI_SEND_CHILDREN
 var midi_send_targets: PackedInt32Array = PackedInt32Array()
+## Children mode: direct children switched off, so they get nothing. Kept as an exclusion list so a
+## child nested later sends by default.
+var midi_send_excluded: PackedInt32Array = PackedInt32Array()
 var midi_send_blocked: PackedInt32Array = PackedInt32Array()
 var _midi_send_watched_channel: Channel = null
 var _midi_send_watched_project: Project = null
@@ -2760,15 +2763,45 @@ func resolved_midi_send_targets() -> PackedInt32Array:
 	var out := PackedInt32Array()
 	var candidates: Array = []
 	if midi_send_mode == MIDI_SEND_CHILDREN:
-		var sender := get_channel()
-		if sender != null:
-			candidates = sender.child_channel_ids
+		for child_id in midi_send_children():
+			if not midi_send_excluded.has(int(child_id)):
+				candidates.append(child_id)
 	else:
 		candidates = Array(midi_send_targets)
 	for target_id in candidates:
 		if midi_send_can_target(int(target_id)) and not out.has(int(target_id)):
 			out.append(int(target_id))
 	return out
+
+
+## The sender's direct child channels, whether switched on or off (children mode).
+func midi_send_children() -> Array:
+	var sender := get_channel()
+	return Array(sender.child_channel_ids) if sender != null else []
+
+
+func set_midi_send_excluded(ids: PackedInt32Array) -> void:
+	var clean := PackedInt32Array()
+	for child_id in ids:
+		if child_id >= 0 and not clean.has(child_id):
+			clean.append(child_id)
+	if clean == midi_send_excluded:
+		return
+	midi_send_excluded = clean
+	_send_midi_send_targets()
+	midi_send_changed.emit()
+
+
+## Switch a child on or off in children mode as one undo step.
+func toggle_midi_send_child(child_id: int, on: bool) -> void:
+	if midi_send_excluded.has(child_id) != on:
+		return
+	var next := midi_send_excluded.duplicate()
+	if on:
+		next.remove_at(next.find(child_id))
+	else:
+		next.append(child_id)
+	HistoryUtil.execute_property("Set MIDI Send Child", self, "set_midi_send_excluded", midi_send_excluded.duplicate(), next)
 
 
 func set_midi_send_mode(mode: String) -> void:
@@ -2873,6 +2906,11 @@ func _on_midi_send_channel_removed(removed: Channel) -> void:
 	if removed.id == channel_id:
 		_unwatch_midi_send_sources()
 		return
+	var excluded_at := midi_send_excluded.find(removed.id)
+	if excluded_at >= 0:
+		var kept := midi_send_excluded.duplicate()
+		kept.remove_at(excluded_at)
+		midi_send_excluded = kept
 	var at := midi_send_targets.find(removed.id)
 	if at >= 0:
 		var next := midi_send_targets.duplicate()
@@ -3044,6 +3082,7 @@ func to_json() -> Dictionary:
 	if is_midi_send():
 		data["midi_send_mode"] = midi_send_mode
 		data["midi_send_targets"] = Array(midi_send_targets)
+		data["midi_send_excluded"] = Array(midi_send_excluded)
 	if not preset_name.is_empty():
 		data["preset_name"] = preset_name
 		data["preset_path"] = preset_path
@@ -3240,6 +3279,9 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	for target in data.get("midi_send_targets", []):
 		if int(target) >= 0 and not instance.midi_send_targets.has(int(target)):
 			instance.midi_send_targets.append(int(target))
+	for excluded in data.get("midi_send_excluded", []):
+		if int(excluded) >= 0 and not instance.midi_send_excluded.has(int(excluded)):
+			instance.midi_send_excluded.append(int(excluded))
 	instance.slot_note_map = LayerNoteMap.from_json(data.get("slot_note_map", null))
 	instance.slot_separate_out = bool(data.get("slot_separate_out", false))
 	instance.return_channel_id = int(data.get("return_channel_id", -1))
