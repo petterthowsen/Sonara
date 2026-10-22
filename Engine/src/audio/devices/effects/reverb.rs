@@ -8,12 +8,17 @@
 //!   Decay, the band multipliers and the band frequencies (after Jot), so the 1 kHz tail decays at
 //!   `Decay` and each band at `Decay × Mult`. Room uses short, dense prime-millisecond lengths;
 //!   Hall uses longer, sparser ones.
-//! - **Plate**: the Dattorro topology — four input all-passes into two cross-coupled tanks — with
-//!   the same Decay EQ, modulation and Pre-Delay interface.
+//! - **Plate**: the Dattorro figure-eight tank. Input all-passes feed two cross-coupled halves,
+//!   each a modulated all-pass, a delay, the absorbent filter, a second all-pass and a second
+//!   delay, and the output taps are spread over both halves. Same Decay EQ as the FDN.
 //!
-//! Size glides every tank length with smoothed fractional reads; a few lines are modulated slowly
-//! to break up metallic ringing; Freeze sets the loop gain to one with the damping and the input
-//! off, bounded by a soft clip; Ducking follows the dry input.
+//! Every line inside a decay loop is read with all-pass interpolation, which is lossless at any
+//! fraction: Size glides the lengths and the modulation sweeps them without the interpolation
+//! adding its own high-frequency damping on every pass. All FDN lines and the first all-pass of
+//! each plate half are modulated slowly to break up metallic ringing. Freeze fades the loop gain
+//! to one and the damping, the modulation and the input out over `FREEZE_RAMP_MS`, bounded by a
+//! soft clip. An algorithm change crossfades the whole wet signal (early reflections included) at
+//! equal power. Ducking follows the dry input.
 
 use super::effect::{pass_through, TailSleep};
 use crate::audio::devices::param_table::{
@@ -27,10 +32,11 @@ use crate::audio::dsp::block_delay::AlignDelay;
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};
+use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 use crate::audio::dsp::smoothing::SmoothedParam;
-use crate::audio::modulation::lfo::{Lfo, LfoShape};
 use crate::audio::stream::MAX_BLOCK_FRAMES;
+use std::f32::consts::{FRAC_1_SQRT_2, TAU};
 
 // === Parameter table ===
 
@@ -139,6 +145,8 @@ impl Algorithm {
             _ => Algorithm::Hall,
         }
     }
+
+    const ALL: [Algorithm; 3] = [Algorithm::Room, Algorithm::Hall, Algorithm::Plate];
 }
 
 // === Engineering constants ===
@@ -154,7 +162,6 @@ const FDN_HALL_MS: [f32; 8] = [53.0, 59.0, 67.0, 71.0, 79.0, 83.0, 89.0, 97.0];
 
 /// Modulation depth as a fraction of a line's length at Depth 100 %.
 const FDN_MOD_FRACTION: f32 = 0.03;
-const PLATE_MOD_FRACTION: f32 = 0.02;
 
 /// Output and input tap patterns. The two output patterns are orthogonal (a Hadamard pair), so a
 /// mono input — which excites the all-ones mode most — still gives decorrelated L and R.
@@ -163,40 +170,102 @@ const FDN_OUT_R: [f32; 8] = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
 const FDN_IN_A: [f32; 8] = [1.0, 0.7, -0.5, 0.6, -0.8, 0.9, 0.3, -0.6];
 const FDN_IN_B: [f32; 8] = [0.4, -0.7, 0.8, -0.3, 0.6, -0.9, 0.5, 0.7];
 
+/// The eight modulation sines are one LFO at phase offsets `i·π/4`, as (cos, sin) of the offset:
+/// `sin(θ + φ) = sin θ·cos φ + cos θ·sin φ` costs one `sin_cos` per sample for all eight.
+const MOD_ROTATION: [(f32, f32); 8] = [
+    (1.0, 0.0),
+    (FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+    (0.0, 1.0),
+    (-FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+    (-1.0, 0.0),
+    (-FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
+    (0.0, -1.0),
+    (FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
+];
+
 /// Algorithm crossfade on a change, in seconds.
 const ALGORITHM_CROSSFADE_S: f32 = 0.030;
 
-/// Room early reflections (ms, left gain, right gain): dense and short.
-const EARLY_ROOM: &[(f32, f32, f32)] = &[
-    (3.2, 0.80, 0.70),
-    (5.7, 0.60, 0.55),
-    (8.3, 0.75, 0.50),
-    (11.1, 0.50, 0.70),
-    (14.7, 0.65, 0.60),
-    (18.3, 0.45, 0.55),
-    (23.1, 0.50, 0.40),
-    (28.7, 0.35, 0.45),
-    (34.1, 0.40, 0.30),
-    (41.3, 0.30, 0.35),
+/// Smoothing ramps. Gains (Early, Ducking, Width, Mix) glide per sample, the coefficients once
+/// per block.
+const PARAM_RAMP_MS: f32 = 20.0;
+const SIZE_RAMP_MS: f32 = 120.0;
+const PREDELAY_RAMP_MS: f32 = 40.0;
+/// Freeze fades in and out over this, so the modulation and the input never step.
+const FREEZE_RAMP_MS: f32 = 50.0;
+
+/// The early reflections of one channel: (ms at Size 50 %, gain). Left and right use different
+/// times, so they are decorrelated on their own and don't comb when summed to mono.
+type Taps = &'static [(f32, f32)];
+
+/// Room: dense and short.
+const EARLY_ROOM: [Taps; 2] = [
+    &[
+        (3.2, 0.80),
+        (5.7, 0.60),
+        (8.3, 0.75),
+        (11.1, 0.50),
+        (14.7, 0.65),
+        (18.3, 0.45),
+        (23.1, 0.50),
+        (28.7, 0.35),
+        (34.1, 0.40),
+        (41.3, 0.30),
+    ],
+    &[
+        (4.1, 0.70),
+        (6.9, 0.55),
+        (9.7, 0.50),
+        (12.9, 0.70),
+        (16.3, 0.60),
+        (20.9, 0.55),
+        (25.3, 0.40),
+        (31.3, 0.45),
+        (37.9, 0.30),
+        (44.3, 0.35),
+    ],
 ];
-/// Hall early reflections: sparse and wide.
-const EARLY_HALL: &[(f32, f32, f32)] = &[
-    (17.3, 0.60, 0.35),
-    (23.7, 0.45, 0.55),
-    (31.1, 0.55, 0.30),
-    (41.7, 0.40, 0.50),
-    (53.3, 0.50, 0.35),
-    (67.7, 0.35, 0.45),
-    (83.1, 0.40, 0.30),
+/// Hall: sparse and wide.
+const EARLY_HALL: [Taps; 2] = [
+    &[
+        (17.3, 0.60),
+        (23.7, 0.45),
+        (31.1, 0.55),
+        (41.7, 0.40),
+        (53.3, 0.50),
+        (67.7, 0.35),
+        (83.1, 0.40),
+    ],
+    &[
+        (19.9, 0.35),
+        (27.1, 0.55),
+        (35.9, 0.30),
+        (47.3, 0.50),
+        (59.9, 0.35),
+        (73.1, 0.45),
+        (89.3, 0.30),
+    ],
 ];
-/// Plate early reflections.
-const EARLY_PLATE: &[(f32, f32, f32)] = &[
-    (11.3, 0.50, 0.40),
-    (19.7, 0.40, 0.50),
-    (29.3, 0.45, 0.35),
-    (43.1, 0.35, 0.45),
-    (61.7, 0.30, 0.35),
+/// Plate.
+const EARLY_PLATE: [Taps; 2] = [
+    &[
+        (11.3, 0.50),
+        (19.7, 0.40),
+        (29.3, 0.45),
+        (43.1, 0.35),
+        (61.7, 0.30),
+    ],
+    &[
+        (13.7, 0.40),
+        (23.3, 0.50),
+        (34.9, 0.35),
+        (49.3, 0.45),
+        (67.1, 0.35),
+    ],
 ];
+/// Every tap set is scaled to this RMS gain, so the algorithms' early reflections are equally
+/// loud.
+const EARLY_RMS_GAIN: f32 = 1.25;
 
 /// Four diffuser stages, four mutually prime lengths (ms) each.
 const DIFFUSER_MS: [[f32; 4]; 4] = [
@@ -206,20 +275,46 @@ const DIFFUSER_MS: [[f32; 4]; 4] = [
     [10.3, 11.7, 13.3, 15.1],
 ];
 
+/// Diffusion at which the plate's input all-passes have the paper's gains.
+const DIFFUSION_NOMINAL: f32 = 0.8;
+
 /// Dattorro input-diffusion all-pass lengths in samples at the paper's 29761 Hz, with gains.
-/// The last two are the tank all-passes, folded into the input path so the decay loop is a clean
-/// two-delay cross-coupling.
-const PLATE_IN_AP: [(f32, f32); 6] = [
-    (142.0, 0.75),
-    (107.0, 0.75),
-    (379.0, 0.625),
-    (277.0, 0.625),
-    (672.0, 0.7),
-    (908.0, 0.7),
-];
-/// The two Dattorro tank delay lengths (samples at 29761 Hz) that set the plate's decay.
-const PLATE_TANK: [f32; 2] = [4453.0, 4217.0];
+const PLATE_IN_AP: [(f32, f32); 4] = [(142.0, 0.75), (107.0, 0.75), (379.0, 0.625), (277.0, 0.625)];
 const PLATE_REF_RATE: f32 = 29_761.0;
+/// The two tank halves (samples at 29761 Hz): modulated all-pass, delay, all-pass, delay.
+const PLATE_HALF: [[f32; 4]; 2] = [
+    [672.0, 4453.0, 1800.0, 3720.0],
+    [908.0, 4217.0, 2656.0, 3163.0],
+];
+/// Tank all-pass gains: the paper's decay diffusion 1 (with its sign) and 2.
+const PLATE_AP1_G: f32 = -0.7;
+const PLATE_AP2_G: f32 = 0.5;
+/// Peak sweep of the first tank all-passes at Depth 100 %, samples at 29761 Hz.
+const PLATE_MOD_EXCURSION: f32 = 32.0;
+/// Output taps per channel (Dattorro's table): (half, line, samples at 29761 Hz, sign), where line
+/// 1 is the first delay, 2 the second all-pass and 3 the second delay.
+const PLATE_TAPS: [[(usize, usize, f32, f32); 7]; 2] = [
+    [
+        (1, 1, 266.0, 1.0),
+        (1, 1, 2974.0, 1.0),
+        (1, 2, 1913.0, -1.0),
+        (1, 3, 1996.0, 1.0),
+        (0, 1, 1990.0, -1.0),
+        (0, 2, 187.0, -1.0),
+        (0, 3, 1066.0, -1.0),
+    ],
+    [
+        (0, 1, 353.0, 1.0),
+        (0, 1, 3627.0, 1.0),
+        (0, 2, 1228.0, -1.0),
+        (0, 3, 2673.0, 1.0),
+        (1, 1, 2111.0, -1.0),
+        (1, 2, 335.0, -1.0),
+        (1, 3, 121.0, -1.0),
+    ],
+];
+/// Output level of the plate taps: the plate's wet level matches Room's and Hall's.
+const PLATE_OUT_SCALE: f32 = 0.36;
 
 /// Feedback gain of a delay line of `delay_seconds` for a 60 dB decay of `t60` seconds.
 #[inline]
@@ -246,21 +341,21 @@ fn soft_clip(x: f32) -> f32 {
     }
 }
 
-/// Advance a block-rate smoother by a whole block of samples.
+/// One Schroeder all-pass of a whole-sample length: `y = d − g·x`, fed back with `x + g·y`.
+/// Fixed lengths are rounded, never interpolated: a fractional read would low-pass the signal and
+/// the filter would no longer be all-pass.
 #[inline]
-fn advance(p: &mut SmoothedParam, frames: usize) {
-    for _ in 0..frames {
-        p.next();
-    }
-}
-
-/// One Schroeder all-pass: `y = d − g·x`, fed back with `x + g·y`.
-#[inline]
-fn allpass(line: &mut DelayLine, x: f32, delay: f32, g: f32) -> f32 {
-    let d = line.read_linear(delay);
+fn allpass(line: &mut DelayLine, x: f32, delay: usize, g: f32) -> f32 {
+    let d = line.read(delay);
     let y = d - g * x;
     line.push(x + g * y);
     y
+}
+
+/// A fixed length in whole samples.
+#[inline]
+fn whole_samples(seconds: f32, sample_rate: f32) -> usize {
+    (seconds * sample_rate).round().max(1.0) as usize
 }
 
 /// Jot-style absorbent filter: a second-order low shelf and high shelf, flat in the mid band, so
@@ -330,28 +425,80 @@ impl Absorbent {
     }
 }
 
+/// Per-sample values every algorithm reads.
+#[derive(Clone, Copy)]
+struct Frame {
+    /// The diffused input.
+    dl: f32,
+    dr: f32,
+    size_scale: f32,
+    mods: [f32; 8],
+    /// Modulation depth 0..1, faded out by Freeze.
+    depth: f32,
+    /// Input level into the loop, faded out by Freeze.
+    inject: f32,
+    /// Freeze 0..1: blends each loop gain toward one and each absorbent toward flat, per
+    /// sample so neither steps.
+    freeze: f32,
+    diffusion: f32,
+}
+
+/// A loop stage's output with Freeze applied: `filtered` (the absorbent's output) fades to the
+/// unfiltered `x` and the gain to one.
+#[inline]
+fn frozen(x: f32, filtered: f32, gain: f32, freeze: f32) -> f32 {
+    (filtered + (x - filtered) * freeze) * (gain + (1.0 - gain) * freeze)
+}
+
+impl Frame {
+    /// The plate's all-pass sweep in samples.
+    #[inline]
+    fn plate_mod(&self, sample_rate: f32) -> f32 {
+        self.mods[0] * self.depth * PLATE_MOD_EXCURSION * sample_rate / PLATE_REF_RATE
+    }
+}
+
+/// What the plate's write phase needs from a sample's `Frame`, held for Tank FX.
+#[derive(Clone, Copy, Default)]
+struct PlateHeld {
+    size_scale: f32,
+    sweep: f32,
+    freeze: f32,
+}
+
+impl PlateHeld {
+    #[inline]
+    fn of(f: &Frame, sample_rate: f32) -> Self {
+        Self {
+            size_scale: f.size_scale,
+            sweep: f.plate_mod(sample_rate),
+            freeze: f.freeze,
+        }
+    }
+}
+
 // === Diffuser ===
 
 /// Four stages of four all-pass delays with a Hadamard mix and a Diffusion crossfade between the
 /// plain tap and the mixed tap.
 struct Diffuser {
     lines: [[DelayLine; 4]; 4],
-    len: [[f32; 4]; 4],
+    len: [[usize; 4]; 4],
 }
 
 impl Diffuser {
     fn new() -> Self {
         Self {
             lines: std::array::from_fn(|_| std::array::from_fn(|_| DelayLine::new())),
-            len: [[0.0; 4]; 4],
+            len: [[1; 4]; 4],
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
         for (stage, lengths) in DIFFUSER_MS.iter().enumerate() {
             for (i, &ms) in lengths.iter().enumerate() {
-                self.len[stage][i] = ms * 0.001 * sample_rate;
-                self.lines[stage][i].prepare_seconds(ms * 0.001 * 2.0, sample_rate);
+                self.len[stage][i] = whole_samples(ms * 0.001, sample_rate);
+                self.lines[stage][i].prepare(self.len[stage][i]);
             }
         }
     }
@@ -364,14 +511,15 @@ impl Diffuser {
         }
     }
 
+    /// All four channels out; the reverb uses the first two.
     #[inline]
-    fn process(&mut self, l: f32, r: f32, diffusion: f32) -> (f32, f32) {
-        let mut x = [l, r, l, -r];
+    fn process4(&mut self, x: [f32; 4], diffusion: f32) -> [f32; 4] {
+        let mut x = x;
         let g = diffusion * 0.7;
         for stage in 0..4 {
             let mut d = [0.0f32; 4];
             for i in 0..4 {
-                d[i] = self.lines[stage][i].read_linear(self.len[stage][i]);
+                d[i] = self.lines[stage][i].read(self.len[stage][i]);
             }
             let h = [
                 0.5 * (d[0] + d[1] + d[2] + d[3]),
@@ -388,7 +536,13 @@ impl Diffuser {
             }
             x = y;
         }
-        (x[0], x[1])
+        x
+    }
+
+    #[inline]
+    fn process(&mut self, l: f32, r: f32, diffusion: f32) -> (f32, f32) {
+        let y = self.process4([l, r, l, -r], diffusion);
+        (y[0], y[1])
     }
 }
 
@@ -398,6 +552,8 @@ impl Diffuser {
 /// low/high shelves.
 struct Fdn {
     lines: [DelayLine; 8],
+    /// All-pass interpolation state of each line's read.
+    state: [f32; 8],
     absorb: [Absorbent; 8],
     gain: [f32; 8],
     base_ms: [f32; 8],
@@ -409,6 +565,7 @@ impl Fdn {
     fn new(base_ms: [f32; 8], inject: f32, out_scale: f32) -> Self {
         Self {
             lines: std::array::from_fn(|_| DelayLine::new()),
+            state: [0.0; 8],
             absorb: [Absorbent::new(); 8],
             gain: [0.0; 8],
             base_ms,
@@ -418,9 +575,9 @@ impl Fdn {
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        let scale = SIZE_MAX_SCALE / SIZE_MIN_SCALE;
+        let longest = SIZE_MAX_SCALE * (1.0 + FDN_MOD_FRACTION);
         for (i, line) in self.lines.iter_mut().enumerate() {
-            line.prepare_seconds(self.base_ms[i] * 0.001 * scale, sample_rate);
+            line.prepare_seconds(self.base_ms[i] * 0.001 * longest, sample_rate);
         }
     }
 
@@ -428,6 +585,7 @@ impl Fdn {
         for line in self.lines.iter_mut() {
             line.clear();
         }
+        self.state = [0.0; 8];
         for a in self.absorb.iter_mut() {
             a.reset();
         }
@@ -438,23 +596,15 @@ impl Fdn {
         &mut self,
         sample_rate: f32,
         size_scale: f32,
-        frozen: bool,
         decay: f32,
         low: (f32, f32),
         high: (f32, f32),
     ) {
         for i in 0..8 {
             let len_s = self.base_ms[i] * 0.001 * size_scale;
-            let (gain, low_db, high_db) = if frozen {
-                (1.0, 0.0, 0.0)
-            } else {
-                (
-                    feedback_gain(len_s, decay),
-                    shelf_db(len_s, decay, low.0),
-                    shelf_db(len_s, decay, high.0),
-                )
-            };
-            self.gain[i] = gain;
+            self.gain[i] = feedback_gain(len_s, decay);
+            let low_db = shelf_db(len_s, decay, low.0);
+            let high_db = shelf_db(len_s, decay, high.0);
             self.absorb[i].update(low.1, high.1, low_db, high_db, sample_rate);
         }
     }
@@ -466,27 +616,23 @@ impl Fdn {
     #[inline]
     fn read(
         &mut self,
-        size_scale: f32,
-        mods: &[f32; 8],
-        mod_depth: f32,
-        frozen: bool,
+        f: &Frame,
         sample_rate: f32,
         pending: f32,
         floor: f32,
     ) -> ([f32; 8], f32, f32) {
         let mut d = [0.0f32; 8];
         for i in 0..8 {
-            let base = self.base_ms[i] * 0.001 * sample_rate * size_scale;
-            let delay = if frozen {
-                base.round().max(2.0)
-            } else {
-                (base * (1.0 + FDN_MOD_FRACTION * mod_depth * mods[i])).max(2.0)
-            };
-            d[i] = self.lines[i].read_hermite(delay.max(floor) - pending);
+            let base = self.base_ms[i] * 0.001 * sample_rate * f.size_scale;
+            let delay = (base * (1.0 + FDN_MOD_FRACTION * f.depth * f.mods[i]))
+                .max(2.0)
+                .max(floor);
+            d[i] = self.lines[i].read_allpass(delay - pending, &mut self.state[i]);
         }
         let mut y = [0.0f32; 8];
         for i in 0..8 {
-            y[i] = self.absorb[i].process(d[i]) * self.gain[i];
+            let filtered = self.absorb[i].process(d[i]);
+            y[i] = frozen(d[i], filtered, self.gain[i], f.freeze);
         }
         let mut ol = 0.0;
         let mut or = 0.0;
@@ -505,163 +651,154 @@ impl Fdn {
 
     /// What the input injects into line `i`.
     #[inline]
-    fn injection(&self, i: usize, dl: f32, dr: f32, frozen: bool) -> f32 {
-        if frozen {
-            0.0
-        } else {
-            (dl * FDN_IN_A[i] + dr * FDN_IN_B[i]) * self.inject
-        }
+    fn injection(&self, i: usize, f: &Frame) -> f32 {
+        (f.dl * FDN_IN_A[i] + f.dr * FDN_IN_B[i]) * self.inject * f.inject
     }
 
     /// Write phase: push the feedback vector plus the injection into the lines.
     #[inline]
-    fn write(&mut self, y: &[f32; 8], dl: f32, dr: f32, frozen: bool) {
+    fn write(&mut self, y: &[f32; 8], f: &Frame) {
         let mean = Self::householder_mean(y);
         for i in 0..8 {
-            let injection = self.injection(i, dl, dr, frozen);
+            let injection = self.injection(i, f);
             self.lines[i].push(soft_clip(y[i] - mean + injection));
         }
     }
 
     #[inline]
-    fn process(
-        &mut self,
-        dl: f32,
-        dr: f32,
-        size_scale: f32,
-        mods: &[f32; 8],
-        mod_depth: f32,
-        frozen: bool,
-        sample_rate: f32,
-    ) -> (f32, f32) {
-        let (y, ol, or) = self.read(size_scale, mods, mod_depth, frozen, sample_rate, 0.0, 0.0);
-        self.write(&y, dl, dr, frozen);
+    fn process(&mut self, f: &Frame, sample_rate: f32) -> (f32, f32) {
+        let (y, ol, or) = self.read(f, sample_rate, 0.0, 0.0);
+        self.write(&y, f);
         (ol, or)
     }
 }
 
 // === Plate ===
 
-/// One plate tank: a modulated delay with damping and decay, cross-coupled with the other tank.
-struct PlateTank {
-    line: DelayLine,
+/// One half of the Dattorro tank: modulated all-pass, delay, absorbent filter and gain, all-pass,
+/// delay and gain. Its decayed output crosses into the other half.
+struct PlateHalf {
+    /// Modulated all-pass, first delay, second all-pass, second delay.
+    lines: [DelayLine; 4],
+    /// All-pass interpolation state of each line's loop read.
+    state: [f32; 4],
     absorb: Absorbent,
-    gain: f32,
-    /// Nominal delay in seconds at Size 50 %.
-    len_seconds: f32,
-    /// The previous output, cross-coupled into the other tank.
-    last: f32,
+    /// Gains after the first delay and after the second.
+    gain: [f32; 2],
+    /// Line lengths in seconds at Size 50 %.
+    len: [f32; 4],
 }
 
-impl PlateTank {
-    fn new(len_seconds: f32) -> Self {
+impl PlateHalf {
+    fn new(half: usize) -> Self {
         Self {
-            line: DelayLine::new(),
+            lines: std::array::from_fn(|_| DelayLine::new()),
+            state: [0.0; 4],
             absorb: Absorbent::new(),
-            gain: 0.0,
-            len_seconds,
-            last: 0.0,
+            gain: [0.0; 2],
+            len: std::array::from_fn(|i| PLATE_HALF[half][i] / PLATE_REF_RATE),
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        self.line
-            .prepare_seconds(self.len_seconds * SIZE_MAX_SCALE, sample_rate);
+        let excursion = PLATE_MOD_EXCURSION / PLATE_REF_RATE;
+        for (i, line) in self.lines.iter_mut().enumerate() {
+            let sweep = if i == 0 { excursion } else { 0.0 };
+            line.prepare_seconds(self.len[i] * SIZE_MAX_SCALE + sweep, sample_rate);
+        }
     }
 
     fn reset(&mut self) {
-        self.line.clear();
+        for line in self.lines.iter_mut() {
+            line.clear();
+        }
+        self.state = [0.0; 4];
         self.absorb.reset();
-        self.last = 0.0;
     }
 
-    /// Read phase: the tank's output and its decayed (damped, gained) output. See
-    /// [`Fdn::read`] for `pending` and `floor`.
-    #[inline]
-    fn read(
+    fn update_coefs(
         &mut self,
-        size_scale: f32,
-        mod_val: f32,
-        mod_depth: f32,
-        frozen: bool,
         sample_rate: f32,
-        pending: f32,
-        floor: f32,
-    ) -> (f32, f32) {
-        let base = self.len_seconds * size_scale * sample_rate;
-        let delay = if frozen {
-            base.round().max(2.0)
-        } else {
-            (base * (1.0 + PLATE_MOD_FRACTION * mod_depth * mod_val)).max(2.0)
-        };
-        let out = self.line.read_hermite(delay.max(floor) - pending);
-        let decayed = self.absorb.process(out) * self.gain;
-        (out, decayed)
-    }
-
-    /// Write phase. Only the coupled signal (the other tank's decayed output plus the input) is
-    /// stored; the tank's own decayed output travels through the cross-coupling, so the loop is
-    /// a clean orthogonal two-delay network.
-    #[inline]
-    fn write(&mut self, stored: f32) {
-        self.line.push(soft_clip(stored));
-    }
-
-    #[inline]
-    fn process(
-        &mut self,
-        inx: f32,
         size_scale: f32,
-        mod_val: f32,
-        mod_depth: f32,
-        frozen: bool,
-        sample_rate: f32,
-    ) -> (f32, f32) {
-        let (out, decayed) = self.read(
-            size_scale,
-            mod_val,
-            mod_depth,
-            frozen,
+        decay: f32,
+        low: (f32, f32),
+        high: (f32, f32),
+    ) {
+        // Each gain covers the all-pass and delay before it (an all-pass delays energy by its
+        // length on average); the absorbent covers the whole half.
+        let segments = [
+            (self.len[0] + self.len[1]) * size_scale,
+            (self.len[2] + self.len[3]) * size_scale,
+        ];
+        for (gain, &seconds) in self.gain.iter_mut().zip(&segments) {
+            *gain = feedback_gain(seconds, decay);
+        }
+        let half = segments[0] + segments[1];
+        self.absorb.update(
+            low.1,
+            high.1,
+            shelf_db(half, decay, low.0),
+            shelf_db(half, decay, high.0),
             sample_rate,
-            0.0,
-            0.0,
         );
-        self.write(if frozen { decayed } else { inx });
-        (out, decayed)
+    }
+
+    /// Read phase: the decayed output that crosses into the other half. `scale` is samples per
+    /// second at the current Size; see [`Fdn::read`] for `pending` and `floor`.
+    #[inline]
+    fn cross(&mut self, scale: f32, freeze: f32, pending: f32, floor: f32) -> f32 {
+        let delay = (self.len[3] * scale).max(floor);
+        let d = self.lines[3].read_allpass(delay - pending, &mut self.state[3]);
+        frozen(d, d, self.gain[1], freeze)
+    }
+
+    /// Read phase: an output tap `at` samples (at 29761 Hz) into `line`.
+    #[inline]
+    fn tap(&self, line: usize, at: f32, scale_ref: f32, pending: f32, floor: f32) -> f32 {
+        self.lines[line].read_hermite((at * scale_ref).max(floor) - pending)
+    }
+
+    /// Write phase: run `x` (the input plus the other half's cross signal) through the half up
+    /// to its second delay. `sweep` is the first all-pass's modulation in samples.
+    #[inline]
+    fn write(&mut self, x: f32, scale: f32, sweep: f32, freeze: f32) {
+        let [ap1, d1, ap2, d2] = &mut self.lines;
+        let d = ap1.read_allpass(self.len[0] * scale + sweep, &mut self.state[0]);
+        let y = d - PLATE_AP1_G * x;
+        ap1.push(x + PLATE_AP1_G * y);
+        let a = d1.read_allpass(self.len[1] * scale, &mut self.state[1]);
+        d1.push(soft_clip(y));
+        let a = frozen(a, self.absorb.process(a), self.gain[0], freeze);
+        let d = ap2.read_allpass(self.len[2] * scale, &mut self.state[2]);
+        let y = d - PLATE_AP2_G * a;
+        ap2.push(a + PLATE_AP2_G * y);
+        d2.push(soft_clip(y));
     }
 }
 
-/// Dattorro-derived plate: the input diffusion all-passes feed two cross-coupled tanks, each a
-/// modulated delay with an absorbent filter and a decay gain.
+/// Dattorro plate: the input diffusion all-passes feed both halves of the figure-eight tank.
 struct Plate {
-    in_ap: [DelayLine; 6],
-    in_len: [f32; 6],
-    in_g: [f32; 6],
-    tanks: [PlateTank; 2],
-    out_scale: f32,
+    in_ap: [DelayLine; 4],
+    in_len: [usize; 4],
+    halves: [PlateHalf; 2],
 }
 
 impl Plate {
-    fn new(sample_rate: f32) -> Self {
-        let ratio = sample_rate / PLATE_REF_RATE;
+    fn new() -> Self {
         Self {
             in_ap: std::array::from_fn(|_| DelayLine::new()),
-            in_len: std::array::from_fn(|i| PLATE_IN_AP[i].0 * ratio),
-            in_g: std::array::from_fn(|i| PLATE_IN_AP[i].1),
-            tanks: [
-                PlateTank::new(PLATE_TANK[0] / PLATE_REF_RATE),
-                PlateTank::new(PLATE_TANK[1] / PLATE_REF_RATE),
-            ],
-            out_scale: 0.6,
+            in_len: [1; 4],
+            halves: [PlateHalf::new(0), PlateHalf::new(1)],
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
         for i in 0..self.in_ap.len() {
-            self.in_ap[i].prepare_seconds((self.in_len[i] / PLATE_REF_RATE) * 2.0, sample_rate);
+            self.in_len[i] = whole_samples(PLATE_IN_AP[i].0 / PLATE_REF_RATE, sample_rate);
+            self.in_ap[i].prepare(self.in_len[i]);
         }
-        for tank in self.tanks.iter_mut() {
-            tank.prepare(sample_rate);
+        for half in self.halves.iter_mut() {
+            half.prepare(sample_rate);
         }
     }
 
@@ -669,8 +806,8 @@ impl Plate {
         for line in self.in_ap.iter_mut() {
             line.clear();
         }
-        for tank in self.tanks.iter_mut() {
-            tank.reset();
+        for half in self.halves.iter_mut() {
+            half.reset();
         }
     }
 
@@ -678,82 +815,73 @@ impl Plate {
         &mut self,
         sample_rate: f32,
         size_scale: f32,
-        frozen: bool,
         decay: f32,
         low: (f32, f32),
         high: (f32, f32),
     ) {
-        // A signal crosses both tanks in one loop; each tank applies the square root of the
-        // round-trip gain, so the shelf dB halves too.
-        let total_loop =
-            (self.tanks[0].len_seconds + self.tanks[1].len_seconds) * size_scale.max(0.01);
-        let (product, low_db, high_db) = if frozen {
-            (1.0, 0.0, 0.0)
-        } else {
-            (
-                feedback_gain(total_loop, decay),
-                shelf_db(total_loop, decay, low.0) * 0.5,
-                shelf_db(total_loop, decay, high.0) * 0.5,
-            )
-        };
-        for tank in self.tanks.iter_mut() {
-            tank.gain = product.sqrt();
-            tank.absorb
-                .update(low.1, high.1, low_db, high_db, sample_rate);
+        for half in self.halves.iter_mut() {
+            half.update_coefs(sample_rate, size_scale, decay, low, high);
         }
     }
 
-    /// The input diffusion all-passes: the mono signal both tanks are fed.
+    /// The input diffusion all-passes: the mono signal both halves are fed. Diffusion scales
+    /// their gains around the paper's.
     #[inline]
-    fn input(&mut self, dl: f32, dr: f32) -> f32 {
-        let x = (dl + dr) * 0.5;
-        let mut v = x;
+    fn input(&mut self, dl: f32, dr: f32, diffusion: f32) -> f32 {
+        let scale = (diffusion / DIFFUSION_NOMINAL).min(1.15);
+        let mut v = (dl + dr) * 0.5;
         for i in 0..self.in_ap.len() {
-            v = allpass(&mut self.in_ap[i], v, self.in_len[i].max(2.0), self.in_g[i]);
+            v = allpass(
+                &mut self.in_ap[i],
+                v,
+                self.in_len[i],
+                PLATE_IN_AP[i].1 * scale,
+            );
         }
         v
     }
 
-    /// The stereo output tap from the two tanks' outputs.
+    /// Read phase: the two halves' cross signals and the stereo output.
     #[inline]
-    fn taps(&self, y0: f32, y1: f32) -> (f32, f32) {
-        (
-            (y0 * 0.7 + y1 * 0.4) * self.out_scale,
-            (y1 * 0.7 + y0 * 0.4) * self.out_scale,
-        )
+    fn read(
+        &mut self,
+        f: &Frame,
+        sample_rate: f32,
+        pending: f32,
+        floor: f32,
+    ) -> ([f32; 2], f32, f32) {
+        let scale = sample_rate * f.size_scale;
+        let cross = [
+            self.halves[0].cross(scale, f.freeze, pending, floor),
+            self.halves[1].cross(scale, f.freeze, pending, floor),
+        ];
+        let scale_ref = scale / PLATE_REF_RATE;
+        let mut out = [0.0f32; 2];
+        for (o, taps) in out.iter_mut().zip(&PLATE_TAPS) {
+            for &(half, line, at, sign) in taps {
+                *o += sign * self.halves[half].tap(line, at, scale_ref, pending, floor);
+            }
+        }
+        (cross, out[0] * PLATE_OUT_SCALE, out[1] * PLATE_OUT_SCALE)
+    }
+
+    /// Write phase: each half takes the input plus the other half's cross signal (after Tank FX
+    /// when it is live).
+    #[inline]
+    fn write(&mut self, v: f32, cross: [f32; 2], held: &PlateHeld, sample_rate: f32) {
+        let scale = sample_rate * held.size_scale;
+        self.halves[0].write(v + cross[1], scale, held.sweep, held.freeze);
+        self.halves[1].write(v + cross[0], scale, -held.sweep, held.freeze);
     }
 
     #[inline]
-    fn process(
-        &mut self,
-        dl: f32,
-        dr: f32,
-        size_scale: f32,
-        mod_val: f32,
-        mod_depth: f32,
-        frozen: bool,
-        sample_rate: f32,
-    ) -> (f32, f32) {
-        let v = self.input(dl, dr);
-        let (y0, d0) = self.tanks[0].process(
-            v + self.tanks[1].last,
-            size_scale,
-            mod_val,
-            mod_depth,
-            frozen,
-            sample_rate,
-        );
-        let (y1, d1) = self.tanks[1].process(
-            v + self.tanks[0].last,
-            size_scale,
-            -mod_val,
-            mod_depth,
-            frozen,
-            sample_rate,
-        );
-        self.tanks[0].last = d0;
-        self.tanks[1].last = d1;
-        self.taps(y0, y1)
+    fn process(&mut self, f: &Frame, sample_rate: f32) -> (f32, f32) {
+        // Scaled ahead of the input all-passes: their delayed taps would switch on as steps when
+        // the plate fades in from empty lines.
+        let v = self.input(f.dl * f.inject, f.dr * f.inject, f.diffusion);
+        let (cross, ol, or) = self.read(f, sample_rate, 0.0, 0.0);
+        self.write(v, cross, &PlateHeld::of(f, sample_rate), sample_rate);
+        (ol, or)
     }
 }
 
@@ -789,22 +917,25 @@ pub struct ReverbDevice {
     predelay_r: DelayLine,
     early_l: DelayLine,
     early_r: DelayLine,
-    decor_r: DelayLine,
-    early_taps: &'static [(f32, f32, f32)],
+    /// Per algorithm, the left and right tap gain scale that sets `EARLY_RMS_GAIN`.
+    early_norm: [[f32; 2]; 3],
 
     diffuser: Diffuser,
     fdn: [Fdn; 2],
     plate: Plate,
 
-    lfo: Lfo,
+    /// Phase of the modulation LFO, 0..1.
+    lfo_phase: f64,
     duck: EnvFollower,
-    tone_low: [OnePole; 2],
-    tone_high: [OnePole; 2],
-    tone_low_g: f32,
-    tone_high_g: f32,
+    /// Wet tone filters, 12 dB/oct: Low Cut high-passes, High Cut low-passes.
+    tone_hp: [LinearSvf; 2],
+    tone_lp: [LinearSvf; 2],
+    tone_hp_coefs: SvfCoefs,
+    tone_lp_coefs: SvfCoefs,
 
     algorithm: Algorithm,
     prev_algorithm: Option<Algorithm>,
+    /// Frames into the crossfade from `prev_algorithm` to `algorithm`.
     xfade: usize,
     xfade_frames: usize,
 
@@ -822,8 +953,12 @@ pub struct ReverbDevice {
     low_cut_s: SmoothedParam,
     high_cut_s: SmoothedParam,
     ducking_s: SmoothedParam,
+    freeze_s: SmoothedParam,
     width_s: SmoothedParam,
     mix_s: SmoothedParam,
+    /// The Mix value `mix_gains` were computed for (they only change while Mix glides).
+    mix_last: f32,
+    mix_gains: (f32, f32),
 
     sleep: TailSleep,
     is_active: bool,
@@ -843,11 +978,11 @@ pub struct ReverbDevice {
     /// Shortest line read in samples: `LOOP_MIN_DELAY` while Tank FX is live, else 0.
     loop_floor: f32,
     /// Tank FX scratch for one sub-block: the FDN feedback vectors and injections, the plate's
-    /// input and decayed outputs.
+    /// input and write-phase values.
     fdn_f: [[f32; 8]; LOOP_BLOCK],
     fdn_inj: [[f32; 8]; LOOP_BLOCK],
     plate_v: [f32; LOOP_BLOCK],
-    plate_d: [[f32; 2]; LOOP_BLOCK],
+    plate_held: [PlateHeld; LOOP_BLOCK],
 }
 
 impl ReverbDevice {
@@ -875,6 +1010,7 @@ impl ReverbDevice {
             mix: real(MIX) / 100.0,
         };
         let sr = sample_rate;
+        let smoothed = |value: f32| SmoothedParam::new(value, sr, PARAM_RAMP_MS);
         let mut device = Self {
             sample_rate: sr,
             params,
@@ -883,40 +1019,42 @@ impl ReverbDevice {
             predelay_r: DelayLine::new(),
             early_l: DelayLine::new(),
             early_r: DelayLine::new(),
-            decor_r: DelayLine::new(),
-            early_taps: early_taps(algorithm),
+            early_norm: early_norms(),
             diffuser: Diffuser::new(),
             fdn: [
                 Fdn::new(FDN_ROOM_MS, 0.35, 0.35),
                 Fdn::new(FDN_HALL_MS, 0.35, 0.35),
             ],
-            plate: Plate::new(sr),
-            lfo: Lfo::default(),
+            plate: Plate::new(),
+            lfo_phase: 0.0,
             duck: EnvFollower::new(5.0, 200.0, sr, Detection::Peak),
-            tone_low: [OnePole::new(); 2],
-            tone_high: [OnePole::new(); 2],
-            tone_low_g: 0.0,
-            tone_high_g: 0.0,
+            tone_hp: [LinearSvf::new(); 2],
+            tone_lp: [LinearSvf::new(); 2],
+            tone_hp_coefs: tone_coefs(SvfShape::HighPass, settings.low_cut, sr),
+            tone_lp_coefs: tone_coefs(SvfShape::LowPass, settings.high_cut, sr),
             algorithm,
             prev_algorithm: None,
             xfade: 0,
-            xfade_frames: (ALGORITHM_CROSSFADE_S * sr) as usize,
-            size_s: SmoothedParam::new(settings.size, sr, 120.0),
-            predelay_s: SmoothedParam::new(settings.predelay_ms, sr, 40.0),
-            decay_s: SmoothedParam::new(settings.decay, sr, 20.0),
-            low_mult_s: SmoothedParam::new(settings.low_mult, sr, 20.0),
-            low_freq_s: SmoothedParam::new(settings.low_freq, sr, 20.0),
-            high_mult_s: SmoothedParam::new(settings.high_mult, sr, 20.0),
-            high_freq_s: SmoothedParam::new(settings.high_freq, sr, 20.0),
-            diffusion_s: SmoothedParam::new(settings.diffusion, sr, 20.0),
-            early_s: SmoothedParam::new(settings.early, sr, 20.0),
-            rate_s: SmoothedParam::new(settings.rate_hz, sr, 20.0),
-            depth_s: SmoothedParam::new(settings.mod_depth, sr, 20.0),
-            low_cut_s: SmoothedParam::new(settings.low_cut, sr, 20.0),
-            high_cut_s: SmoothedParam::new(settings.high_cut, sr, 20.0),
-            ducking_s: SmoothedParam::new(settings.ducking, sr, 20.0),
-            width_s: SmoothedParam::new(settings.width, sr, 20.0),
-            mix_s: SmoothedParam::new(settings.mix, sr, 20.0),
+            xfade_frames: 1,
+            size_s: SmoothedParam::new(settings.size, sr, SIZE_RAMP_MS),
+            predelay_s: SmoothedParam::new(settings.predelay_ms, sr, PREDELAY_RAMP_MS),
+            decay_s: smoothed(settings.decay),
+            low_mult_s: smoothed(settings.low_mult),
+            low_freq_s: smoothed(settings.low_freq),
+            high_mult_s: smoothed(settings.high_mult),
+            high_freq_s: smoothed(settings.high_freq),
+            diffusion_s: smoothed(settings.diffusion),
+            early_s: smoothed(settings.early),
+            rate_s: smoothed(settings.rate_hz),
+            depth_s: smoothed(settings.mod_depth),
+            low_cut_s: smoothed(settings.low_cut),
+            high_cut_s: smoothed(settings.high_cut),
+            ducking_s: smoothed(settings.ducking),
+            freeze_s: SmoothedParam::new(freeze_target(settings.freeze), sr, FREEZE_RAMP_MS),
+            width_s: smoothed(settings.width),
+            mix_s: smoothed(settings.mix),
+            mix_last: f32::NAN,
+            mix_gains: (1.0, 0.0),
             sleep: TailSleep::new(sr),
             is_active: true,
             is_enabled: true,
@@ -929,7 +1067,7 @@ impl ReverbDevice {
             fdn_f: [[0.0; 8]; LOOP_BLOCK],
             fdn_inj: [[0.0; 8]; LOOP_BLOCK],
             plate_v: [0.0; LOOP_BLOCK],
-            plate_d: [[0.0; 2]; LOOP_BLOCK],
+            plate_held: [PlateHeld::default(); LOOP_BLOCK],
         };
         device.prepare(sr, 0);
         device.update_tail();
@@ -948,121 +1086,105 @@ impl ReverbDevice {
 
     /// Recompute block-rate coefficients from the smoothed parameter values, once per block.
     fn update_block(&mut self, frames: usize) {
-        // Advance the block-rate smoothers by the whole block; size and pre-delay glide per
-        // sample. Advancing by frames keeps the trajectory independent of the block size.
-        advance(&mut self.decay_s, frames);
-        advance(&mut self.low_mult_s, frames);
-        advance(&mut self.low_freq_s, frames);
-        advance(&mut self.high_mult_s, frames);
-        advance(&mut self.high_freq_s, frames);
-        advance(&mut self.diffusion_s, frames);
-        advance(&mut self.early_s, frames);
-        advance(&mut self.rate_s, frames);
-        advance(&mut self.depth_s, frames);
-        advance(&mut self.width_s, frames);
-        advance(&mut self.mix_s, frames);
-        advance(&mut self.ducking_s, frames);
-        advance(&mut self.low_cut_s, frames);
-        advance(&mut self.high_cut_s, frames);
+        // Advance the block-rate smoothers by the whole block; the gains, Size, Pre-Delay and
+        // Freeze glide per sample. Advancing by frames keeps the trajectory independent of the
+        // block size.
+        for p in [
+            &mut self.decay_s,
+            &mut self.low_mult_s,
+            &mut self.low_freq_s,
+            &mut self.high_mult_s,
+            &mut self.high_freq_s,
+            &mut self.diffusion_s,
+            &mut self.rate_s,
+            &mut self.depth_s,
+            &mut self.low_cut_s,
+            &mut self.high_cut_s,
+        ] {
+            p.skip(frames);
+        }
 
         let size = SIZE_MIN_SCALE + self.size_s.current() * (SIZE_MAX_SCALE - SIZE_MIN_SCALE);
         let decay = self.decay_s.current();
         let low = (self.low_mult_s.current(), self.low_freq_s.current());
         let high = (self.high_mult_s.current(), self.high_freq_s.current());
-        let frozen = self.settings.freeze;
+        let sr = self.sample_rate;
 
-        self.fdn[0].update_coefs(self.sample_rate, size, frozen, decay, low, high);
-        self.fdn[1].update_coefs(self.sample_rate, size, frozen, decay, low, high);
-        self.plate
-            .update_coefs(self.sample_rate, size, frozen, decay, low, high);
+        self.fdn[0].update_coefs(sr, size, decay, low, high);
+        self.fdn[1].update_coefs(sr, size, decay, low, high);
+        self.plate.update_coefs(sr, size, decay, low, high);
 
-        self.tone_low_g = one_pole_g(self.low_cut_s.current(), self.sample_rate);
-        self.tone_high_g = one_pole_g(self.high_cut_s.current(), self.sample_rate);
+        self.tone_hp_coefs = tone_coefs(SvfShape::HighPass, self.low_cut_s.current(), sr);
+        self.tone_lp_coefs = tone_coefs(SvfShape::LowPass, self.high_cut_s.current(), sr);
     }
 
-    fn early_taps_here(&self) -> &'static [(f32, f32, f32)] {
-        self.early_taps
+    /// Dry and wet gains for the next sample; Mix glides per sample.
+    #[inline]
+    fn next_mix_gains(&mut self) -> (f32, f32) {
+        let mix = self.mix_s.next();
+        if mix != self.mix_last {
+            self.mix_last = mix;
+            self.mix_gains = dry_wet_gains(mix, MixLaw::EqualPower);
+        }
+        self.mix_gains
+    }
+
+    /// The eight modulation values for this sample, then advance the LFO.
+    #[inline]
+    fn next_mods(&mut self) -> [f32; 8] {
+        let (s, c) = (TAU * self.lfo_phase as f32).sin_cos();
+        self.lfo_phase += self.rate_s.current() as f64 / self.sample_rate as f64;
+        if self.lfo_phase >= 1.0 {
+            self.lfo_phase -= 1.0;
+        }
+        std::array::from_fn(|i| s * MOD_ROTATION[i].0 + c * MOD_ROTATION[i].1)
+    }
+
+    /// `algo`'s early reflections of the pre-delayed input, read before this sample is pushed.
+    #[inline]
+    fn early(&self, algo: Algorithm, size_scale: f32) -> (f32, f32) {
+        let k = 0.001 * self.sample_rate * size_scale;
+        let sum = |line: &DelayLine, taps: Taps| -> f32 {
+            taps.iter()
+                .map(|&(ms, g)| g * line.read_hermite(ms * k))
+                .sum()
+        };
+        let [left, right] = early_taps(algo);
+        let [norm_l, norm_r] = self.early_norm[algo as usize];
+        (
+            sum(&self.early_l, left) * norm_l,
+            sum(&self.early_r, right) * norm_r,
+        )
     }
 
     #[inline]
-    fn early(&mut self, pl: f32, pr: f32) -> (f32, f32) {
-        let sr = self.sample_rate;
-        let (mut el, mut er) = (0.0f32, 0.0f32);
-        for &(ms, gl, gr) in self.early_taps_here() {
-            let ago = ((ms * 0.001 * sr).round() as usize).max(1);
-            el += gl * self.early_l.read(ago);
-            er += gr * self.early_r.read(ago);
-        }
-        self.early_l.push(pl);
-        self.early_r.push(pr);
-        (el, er)
-    }
-
-    fn algorithm_wet(
-        &mut self,
-        algo: Algorithm,
-        dl: f32,
-        dr: f32,
-        size_scale: f32,
-        mods: &[f32; 8],
-    ) -> (f32, f32) {
-        let frozen = self.settings.freeze;
-        let depth = self.depth_s.current();
+    fn late(&mut self, algo: Algorithm, f: &Frame) -> (f32, f32) {
         let sr = self.sample_rate;
         match algo {
-            Algorithm::Room => self.fdn[0].process(dl, dr, size_scale, mods, depth, frozen, sr),
-            Algorithm::Hall => self.fdn[1].process(dl, dr, size_scale, mods, depth, frozen, sr),
-            Algorithm::Plate => self
-                .plate
-                .process(dl, dr, size_scale, mods[0], depth, frozen, sr),
+            Algorithm::Room => self.fdn[0].process(f, sr),
+            Algorithm::Hall => self.fdn[1].process(f, sr),
+            Algorithm::Plate => self.plate.process(f, sr),
         }
     }
 
+    /// `late` for the current algorithm with its loop signal held back for Tank FX (sample `k`
+    /// of the sub-block). A fading algorithm finishes on the plain path.
     #[inline]
-    fn late(&mut self, dl: f32, dr: f32, size_scale: f32, mods: &[f32; 8]) -> (f32, f32) {
-        let current = self.algorithm;
-        let cur = self.algorithm_wet(current, dl, dr, size_scale, mods);
-        if let Some(prev) = self.prev_algorithm {
-            let p = self.algorithm_wet(prev, dl, dr, size_scale, mods);
-            let t = self.xfade as f32 / self.xfade_frames.max(1) as f32;
-            self.xfade += 1;
-            if self.xfade >= self.xfade_frames {
-                self.prev_algorithm = None;
-            }
-            return (cur.0 + (p.0 - cur.0) * t, cur.1 + (p.1 - cur.1) * t);
-        }
-        cur
-    }
-
-    /// `late` with the current algorithm's loop signal held back for Tank FX (sample `k` of the
-    /// sub-block). A fading algorithm finishes on the plain path.
-    #[inline]
-    fn late_looped(
-        &mut self,
-        dl: f32,
-        dr: f32,
-        size_scale: f32,
-        mods: &[f32; 8],
-        k: usize,
-    ) -> (f32, f32) {
-        let current = self.algorithm;
-        let frozen = self.settings.freeze;
-        let depth = self.depth_s.current();
+    fn late_looped(&mut self, f: &Frame, k: usize) -> (f32, f32) {
         let sr = self.sample_rate;
         let (pending, floor) = (k as f32, self.loop_floor);
-        let cur = match current {
+        match self.algorithm {
             Algorithm::Room | Algorithm::Hall => {
-                let idx = if current == Algorithm::Room { 0 } else { 1 };
-                let fdn = &mut self.fdn[idx];
-                let (y, ol, or) = fdn.read(size_scale, mods, depth, frozen, sr, pending, floor);
+                let fdn = &mut self.fdn[fdn_index(self.algorithm)];
+                let (y, ol, or) = fdn.read(f, sr, pending, floor);
                 let mean = Fdn::householder_mean(&y);
                 let (mut pl, mut pr) = (0.0f32, 0.0f32);
                 for i in 0..8 {
-                    let f = y[i] - mean;
-                    self.fdn_f[k][i] = f;
-                    self.fdn_inj[k][i] = fdn.injection(i, dl, dr, frozen);
-                    pl += f * FDN_OUT_L[i];
-                    pr += f * FDN_OUT_R[i];
+                    let fb = y[i] - mean;
+                    self.fdn_f[k][i] = fb;
+                    self.fdn_inj[k][i] = fdn.injection(i, f);
+                    pl += fb * FDN_OUT_L[i];
+                    pr += fb * FDN_OUT_R[i];
                 }
                 // The chain sees the loop at output level.
                 self.slots.loop_in[2 * k] = pl * fdn.out_scale;
@@ -1070,28 +1192,17 @@ impl ReverbDevice {
                 (ol, or)
             }
             Algorithm::Plate => {
-                let v = self.plate.input(dl, dr);
-                let (y0, d0) = self.plate.tanks[0]
-                    .read(size_scale, mods[0], depth, frozen, sr, pending, floor);
-                let (y1, d1) = self.plate.tanks[1]
-                    .read(size_scale, -mods[0], depth, frozen, sr, pending, floor);
+                let v = self
+                    .plate
+                    .input(f.dl * f.inject, f.dr * f.inject, f.diffusion);
+                let (cross, ol, or) = self.plate.read(f, sr, pending, floor);
                 self.plate_v[k] = v;
-                self.plate_d[k] = [d0, d1];
-                self.slots.loop_in[2 * k] = d0;
-                self.slots.loop_in[2 * k + 1] = d1;
-                self.plate.taps(y0, y1)
+                self.plate_held[k] = PlateHeld::of(f, sr);
+                self.slots.loop_in[2 * k] = cross[0];
+                self.slots.loop_in[2 * k + 1] = cross[1];
+                (ol, or)
             }
-        };
-        if let Some(prev) = self.prev_algorithm {
-            let p = self.algorithm_wet(prev, dl, dr, size_scale, mods);
-            let t = self.xfade as f32 / self.xfade_frames.max(1) as f32;
-            self.xfade += 1;
-            if self.xfade >= self.xfade_frames {
-                self.prev_algorithm = None;
-            }
-            return (cur.0 + (p.0 - cur.0) * t, cur.1 + (p.1 - cur.1) * t);
         }
-        cur
     }
 
     /// Chain and write phases for the `n` samples read since the last call: run Tank FX on the
@@ -1106,15 +1217,10 @@ impl ReverbDevice {
         if let Some(chain) = self.slots.chain_mut(0) {
             chain.process_block(&loop_in[..2 * n], &mut loop_out[..2 * n], n);
         }
-        let frozen = self.settings.freeze;
+        let sr = self.sample_rate;
         match self.algorithm {
             Algorithm::Room | Algorithm::Hall => {
-                let idx = if self.algorithm == Algorithm::Room {
-                    0
-                } else {
-                    1
-                };
-                let fdn = &mut self.fdn[idx];
+                let fdn = &mut self.fdn[fdn_index(self.algorithm)];
                 for k in 0..n {
                     // Only the difference the chain made goes back into the lines, along the
                     // two directions it saw. A unity chain leaves the vector untouched.
@@ -1130,18 +1236,9 @@ impl ReverbDevice {
             }
             Algorithm::Plate => {
                 for k in 0..n {
-                    let (a0, a1) = (loop_out[2 * k], loop_out[2 * k + 1]);
-                    let v = self.plate_v[k];
-                    let [t0, t1] = &mut self.plate.tanks;
-                    let (s0, s1) = if frozen {
-                        (a0, a1)
-                    } else {
-                        (v + t1.last, v + t0.last)
-                    };
-                    t0.write(s0);
-                    t1.write(s1);
-                    t0.last = a0;
-                    t1.last = a1;
+                    let cross = [loop_out[2 * k], loop_out[2 * k + 1]];
+                    self.plate
+                        .write(self.plate_v[k], cross, &self.plate_held[k], sr);
                 }
             }
         }
@@ -1149,58 +1246,79 @@ impl ReverbDevice {
         self.slots.loop_out = loop_out;
     }
 
-    #[inline]
-    fn process_sample(&mut self, in_l: f32, in_r: f32) -> (f32, f32) {
-        self.process_sample_at(in_l, in_r, None)
-    }
-
     /// One sample of the wet signal. `held` is the sample's index in the Tank FX sub-block, or
     /// `None` on the plain path.
     #[inline]
-    fn process_sample_at(&mut self, in_l: f32, in_r: f32, held: Option<usize>) -> (f32, f32) {
+    fn process_sample(&mut self, in_l: f32, in_r: f32, held: Option<usize>) -> (f32, f32) {
+        let sr = self.sample_rate;
         // Advance per-sample smoothers exactly once, whichever algorithm runs.
         let size_scale = SIZE_MIN_SCALE + self.size_s.next() * (SIZE_MAX_SCALE - SIZE_MIN_SCALE);
-        let pd = (self.predelay_s.next() * 0.001 * self.sample_rate).max(1.0);
-        let mut mods = [0.0f32; 8];
-        for (i, m) in mods.iter_mut().enumerate() {
-            *m = self.lfo.value_at(LfoShape::Sine, i as f64 * 0.125);
-        }
-        self.lfo
-            .advance(self.rate_s.current() as f64 / self.sample_rate as f64);
+        let pd = (self.predelay_s.next() * 0.001 * sr).max(1.0);
+        let freeze = self.freeze_s.next();
+        let early_level = self.early_s.next();
+        let duck = self.ducking_s.next();
+        let width = self.width_s.next();
 
         let pl = self.predelay_l.read_hermite(pd);
         let pr = self.predelay_r.read_hermite(pd);
         self.predelay_l.push(in_l);
         self.predelay_r.push(in_r);
 
-        let early_level = self.early_s.current();
-        let (el, er) = self.early(pl, pr);
-
-        let (dl, dr) = self.diffuser.process(pl, pr, self.diffusion_s.current());
-        let (ll, lr) = match held {
-            Some(k) => self.late_looped(dl, dr, size_scale, &mods, k),
-            None => self.late(dl, dr, size_scale, &mods),
+        let diffusion = self.diffusion_s.current();
+        let (dl, dr) = self.diffuser.process(pl, pr, diffusion);
+        let frame = Frame {
+            dl,
+            dr,
+            size_scale,
+            mods: self.next_mods(),
+            depth: self.depth_s.current() * (1.0 - freeze),
+            inject: 1.0 - freeze,
+            freeze,
+            diffusion,
         };
 
+        // While it fades in, the incoming algorithm's input fades in too: it starts from empty
+        // lines, and an input switched on at full level would come out of every line as a step.
+        let incoming = match self.prev_algorithm {
+            Some(_) => Frame {
+                inject: frame.inject * (self.xfade as f32 / self.xfade_frames.max(1) as f32),
+                ..frame
+            },
+            None => frame,
+        };
+        let (el, er) = self.early(self.algorithm, size_scale);
+        let (ll, lr) = match held {
+            Some(k) => self.late_looped(&incoming, k),
+            None => self.late(self.algorithm, &incoming),
+        };
         let mut wl = el * early_level + ll;
-        let wr_raw = er * early_level + lr;
+        let mut wr = er * early_level + lr;
 
-        // Decorrelate the wet channels: a mono input would otherwise give near-identical L and R
-        // (the FDN lines are driven coherently). A few milliseconds of extra delay on R does it
-        // without a filter, and Width then sets the stereo image.
-        let decor = (self.sample_rate * 0.0047).max(2.0);
-        let mut wr = self.decor_r.read_hermite(decor);
-        self.decor_r.push(wr_raw);
+        if let Some(prev) = self.prev_algorithm {
+            // Equal power: the two tails are uncorrelated.
+            let (pel, per) = self.early(prev, size_scale);
+            let (pll, plr) = self.late(prev, &frame);
+            // The last sample of the fade reaches t = 1, so dropping `prev` afterwards never steps.
+            let t = (self.xfade + 1) as f32 / self.xfade_frames.max(1) as f32;
+            let (out, into) = dry_wet_gains(t, MixLaw::EqualPower);
+            wl = (pel * early_level + pll) * out + wl * into;
+            wr = (per * early_level + plr) * out + wr * into;
+            self.xfade += 1;
+            if self.xfade >= self.xfade_frames {
+                self.prev_algorithm = None;
+            }
+        }
+        self.early_l.push(pl);
+        self.early_r.push(pr);
 
         // Wet tone filters (outside the loop).
-        wl = self.tone_high[0].lowpass(wl, self.tone_high_g);
-        wl = self.tone_low[0].highpass(wl, self.tone_low_g);
-        wr = self.tone_high[1].lowpass(wr, self.tone_high_g);
-        wr = self.tone_low[1].highpass(wr, self.tone_low_g);
+        wl = self.tone_lp[0].process(wl, &self.tone_lp_coefs);
+        wl = self.tone_hp[0].process(wl, &self.tone_hp_coefs);
+        wr = self.tone_lp[1].process(wr, &self.tone_lp_coefs);
+        wr = self.tone_hp[1].process(wr, &self.tone_hp_coefs);
 
         // Ducking: the dry input turns the wet signal down.
         let env = self.duck.process(in_l.abs().max(in_r.abs()));
-        let duck = self.ducking_s.current();
         if duck > 0.0 {
             let norm = ((gain_to_db(env) + 40.0) / 40.0).clamp(0.0, 1.0);
             let g = 1.0 - duck * norm;
@@ -1209,12 +1327,11 @@ impl ReverbDevice {
         }
 
         // Width on the wet signal only (M/S).
-        let w = self.width_s.current();
-        if (w - 1.0).abs() > 1e-6 {
+        if (width - 1.0).abs() > 1e-6 {
             let m = (wl + wr) * 0.5;
             let s = (wl - wr) * 0.5;
-            wl = m + s * w;
-            wr = m - s * w;
+            wl = m + s * width;
+            wr = m - s * width;
         }
         (wl, wr)
     }
@@ -1235,8 +1352,8 @@ impl ReverbDevice {
             for f in 0..frames {
                 let in_l = inputs[f * 2];
                 let in_r = inputs[f * 2 + 1];
-                let (wl, wr) = self.process_sample(in_l, in_r);
-                let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
+                let (wl, wr) = self.process_sample(in_l, in_r, None);
+                let (dry, wet) = self.next_mix_gains();
                 outputs[f * 2] = in_l * dry + wl * wet;
                 outputs[f * 2 + 1] = in_r * dry + wr * wet;
             }
@@ -1259,7 +1376,7 @@ impl ReverbDevice {
                 let f = base + i;
                 let in_l = inputs[f * 2];
                 let in_r = inputs[f * 2 + 1];
-                let (wl, wr) = self.process_sample_at(in_l, in_r, tank.then_some(held));
+                let (wl, wr) = self.process_sample(in_l, in_r, tank.then_some(held));
                 if tank {
                     held += 1;
                     if held == LOOP_BLOCK {
@@ -1271,7 +1388,7 @@ impl ReverbDevice {
                     wet_buf[i * 2] = wl;
                     wet_buf[i * 2 + 1] = wr;
                 } else {
-                    let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
+                    let (dry, wet) = self.next_mix_gains();
                     outputs[f * 2] = in_l * dry + wl * wet;
                     outputs[f * 2 + 1] = in_r * dry + wr * wet;
                 }
@@ -1285,9 +1402,9 @@ impl ReverbDevice {
                 // The dry waits for the Wet FX chain's latency
                 let input = &inputs[base * 2..(base + n) * 2];
                 self.dry.process(input, &mut self.dry_buf[..n * 2], n);
-                let (dry, wet) = dry_wet_gains(self.mix_s.current(), MixLaw::EqualPower);
                 for i in 0..n {
                     let f = base + i;
+                    let (dry, wet) = self.next_mix_gains();
                     outputs[f * 2] = self.dry_buf[i * 2] * dry + outputs[f * 2] * wet;
                     outputs[f * 2 + 1] = self.dry_buf[i * 2 + 1] * dry + outputs[f * 2 + 1] * wet;
                 }
@@ -1297,15 +1414,48 @@ impl ReverbDevice {
         self.slots.slot_buf = wet_buf;
     }
 
+    /// Clear one algorithm's loop.
+    fn clear_engine(&mut self, algo: Algorithm) {
+        match algo {
+            Algorithm::Room => self.fdn[0].reset(),
+            Algorithm::Hall => self.fdn[1].reset(),
+            Algorithm::Plate => self.plate.reset(),
+        }
+    }
+
+    /// Clear everything that holds the wet signal: the shared front end and filters and the
+    /// current algorithm. The others are cleared when they are selected.
+    fn clear_tail(&mut self) {
+        self.predelay_l.clear();
+        self.predelay_r.clear();
+        self.early_l.clear();
+        self.early_r.clear();
+        self.diffuser.reset();
+        self.clear_engine(self.algorithm);
+        self.duck.reset();
+        for f in self.tone_hp.iter_mut().chain(self.tone_lp.iter_mut()) {
+            *f = LinearSvf::new();
+        }
+        self.prev_algorithm = None;
+        self.xfade = 0;
+    }
+
     fn apply(&mut self, id: ParamId, real: f32) {
         match id {
             ALGORITHM => {
                 let algo = Algorithm::from_index(real as usize);
                 if algo != self.algorithm {
+                    if self.prev_algorithm == Some(algo) {
+                        // Back to the one still fading out: carry on from its current level.
+                        self.xfade = self.xfade_frames.saturating_sub(self.xfade);
+                    } else {
+                        // Its lines still hold what was ringing when it was last left (a bounded
+                        // memset, no allocation).
+                        self.clear_engine(algo);
+                        self.xfade = 0;
+                    }
                     self.prev_algorithm = Some(self.algorithm);
-                    self.xfade = 0;
                     self.algorithm = algo;
-                    self.early_taps = early_taps(algo);
                 }
             }
             SIZE => {
@@ -1368,6 +1518,8 @@ impl ReverbDevice {
             }
             FREEZE => {
                 self.settings.freeze = real >= 0.5;
+                self.freeze_s
+                    .set_target(freeze_target(self.settings.freeze));
                 self.update_tail();
             }
             WIDTH => {
@@ -1383,12 +1535,46 @@ impl ReverbDevice {
     }
 }
 
-fn early_taps(algorithm: Algorithm) -> &'static [(f32, f32, f32)] {
+fn early_taps(algorithm: Algorithm) -> [Taps; 2] {
     match algorithm {
         Algorithm::Room => EARLY_ROOM,
         Algorithm::Hall => EARLY_HALL,
         Algorithm::Plate => EARLY_PLATE,
     }
+}
+
+fn early_norms() -> [[f32; 2]; 3] {
+    let norm = |taps: Taps| {
+        let energy: f32 = taps.iter().map(|&(_, g)| g * g).sum();
+        EARLY_RMS_GAIN / energy.sqrt()
+    };
+    Algorithm::ALL.map(|algo| early_taps(algo).map(norm))
+}
+
+fn fdn_index(algorithm: Algorithm) -> usize {
+    if algorithm == Algorithm::Room {
+        0
+    } else {
+        1
+    }
+}
+
+fn freeze_target(freeze: bool) -> f32 {
+    if freeze {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn tone_coefs(shape: SvfShape, freq: f32, sample_rate: f32) -> SvfCoefs {
+    SvfCoefs::new(
+        shape,
+        freq.min(sample_rate * 0.45),
+        FRAC_1_SQRT_2,
+        0.0,
+        sample_rate,
+    )
 }
 
 impl AudioDevice for ReverbDevice {
@@ -1503,43 +1689,30 @@ impl AudioDevice for ReverbDevice {
         self.slots.reset();
         self.whole_buf.fill(0.0);
         self.whole_pending = 0;
-        self.predelay_l.clear();
-        self.predelay_r.clear();
-        self.early_l.clear();
-        self.early_r.clear();
-        self.decor_r.clear();
-        self.diffuser.reset();
-        for fdn in self.fdn.iter_mut() {
-            fdn.reset();
+        self.clear_tail();
+        for algo in Algorithm::ALL {
+            self.clear_engine(algo);
         }
-        self.plate.reset();
-        self.duck.reset();
-        for p in self.tone_low.iter_mut() {
-            p.reset();
-        }
-        for p in self.tone_high.iter_mut() {
-            p.reset();
-        }
-        self.lfo = Lfo::default();
-        self.prev_algorithm = None;
-        self.xfade = 0;
+        self.lfo_phase = 0.0;
         // Snap the smoothers to their targets so a reset starts from the current settings.
-        self.size_s.snap(self.settings.size);
-        self.predelay_s.snap(self.settings.predelay_ms);
-        self.decay_s.snap(self.settings.decay);
-        self.low_mult_s.snap(self.settings.low_mult);
-        self.low_freq_s.snap(self.settings.low_freq);
-        self.high_mult_s.snap(self.settings.high_mult);
-        self.high_freq_s.snap(self.settings.high_freq);
-        self.diffusion_s.snap(self.settings.diffusion);
-        self.early_s.snap(self.settings.early);
-        self.rate_s.snap(self.settings.rate_hz);
-        self.depth_s.snap(self.settings.mod_depth);
-        self.low_cut_s.snap(self.settings.low_cut);
-        self.high_cut_s.snap(self.settings.high_cut);
-        self.ducking_s.snap(self.settings.ducking);
-        self.width_s.snap(self.settings.width);
-        self.mix_s.snap(self.settings.mix);
+        let s = self.settings;
+        self.size_s.snap(s.size);
+        self.predelay_s.snap(s.predelay_ms);
+        self.decay_s.snap(s.decay);
+        self.low_mult_s.snap(s.low_mult);
+        self.low_freq_s.snap(s.low_freq);
+        self.high_mult_s.snap(s.high_mult);
+        self.high_freq_s.snap(s.high_freq);
+        self.diffusion_s.snap(s.diffusion);
+        self.early_s.snap(s.early);
+        self.rate_s.snap(s.rate_hz);
+        self.depth_s.snap(s.mod_depth);
+        self.low_cut_s.snap(s.low_cut);
+        self.high_cut_s.snap(s.high_cut);
+        self.ducking_s.snap(s.ducking);
+        self.freeze_s.snap(freeze_target(s.freeze));
+        self.width_s.snap(s.width);
+        self.mix_s.snap(s.mix);
         self.sleep.wake();
     }
 
@@ -1554,23 +1727,38 @@ impl AudioDevice for ReverbDevice {
         }
         self.predelay_l.prepare_seconds(0.5, sample_rate);
         self.predelay_r.prepare_seconds(0.5, sample_rate);
+        // The longest early tap at Size 100 %.
         self.early_l.prepare_seconds(0.25, sample_rate);
         self.early_r.prepare_seconds(0.25, sample_rate);
-        self.decor_r.prepare_seconds(0.05, sample_rate);
         self.diffuser.prepare(sample_rate);
         for fdn in self.fdn.iter_mut() {
             fdn.prepare(sample_rate);
         }
         self.plate.prepare(sample_rate);
         self.duck.set_times(5.0, 200.0, sample_rate);
-        self.rate_s.set_ramp(sample_rate, 20.0);
-        self.size_s.set_ramp(sample_rate, 120.0);
-        self.predelay_s.set_ramp(sample_rate, 40.0);
-        if self.xfade_frames == 0 {
-            self.xfade_frames = (ALGORITHM_CROSSFADE_S * sample_rate) as usize;
+        self.xfade_frames = ((ALGORITHM_CROSSFADE_S * sample_rate) as usize).max(1);
+        self.size_s.set_ramp(sample_rate, SIZE_RAMP_MS);
+        self.predelay_s.set_ramp(sample_rate, PREDELAY_RAMP_MS);
+        self.freeze_s.set_ramp(sample_rate, FREEZE_RAMP_MS);
+        for p in [
+            &mut self.decay_s,
+            &mut self.low_mult_s,
+            &mut self.low_freq_s,
+            &mut self.high_mult_s,
+            &mut self.high_freq_s,
+            &mut self.diffusion_s,
+            &mut self.early_s,
+            &mut self.rate_s,
+            &mut self.depth_s,
+            &mut self.low_cut_s,
+            &mut self.high_cut_s,
+            &mut self.ducking_s,
+            &mut self.width_s,
+            &mut self.mix_s,
+        ] {
+            p.set_ramp(sample_rate, PARAM_RAMP_MS);
         }
         self.sleep.set_sample_rate(sample_rate);
-        self.mix_s.set_ramp(sample_rate, 20.0);
     }
 
     fn is_active(&self) -> bool {
@@ -1593,6 +1781,11 @@ impl AudioDevice for ReverbDevice {
     }
 
     fn set_enabled(&mut self, enabled: bool) {
+        // A bypassed reverb isn't processed, so its lines still hold the tail it was cut off
+        // with: start clean rather than resume it.
+        if enabled && !self.is_enabled {
+            self.clear_tail();
+        }
         self.is_enabled = enabled;
     }
 
@@ -1637,7 +1830,8 @@ mod tests {
     use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
     use crate::audio::dsp::test_util::schroeder_t60;
     use crate::audio::dsp::test_util::{
-        impulse, left, peak, pink_noise, render, right, rms, spectrum_db, stereo, tone_amplitude,
+        impulse, left, peak, pink_noise, render, right, rms, sine, spectrum_db, stereo,
+        tone_amplitude,
     };
 
     fn make(sr: f32) -> ReverbDevice {
@@ -1882,6 +2076,239 @@ mod tests {
         let one_k = tone_amplitude(segment, 1_000.0, sr);
         let rms_all = rms(segment);
         assert!(one_k < rms_all * 0.5, "tail is dominated by one tone");
+    }
+
+    /// Largest sample-to-sample step of the left channel in `[from, to)` frames.
+    fn max_step(out: &[f32], from: usize, to: usize) -> f32 {
+        let l = left(out);
+        (from.max(1)..to).fold(0.0f32, |m, i| m.max((l[i] - l[i - 1]).abs()))
+    }
+
+    /// Largest second difference of the left channel in `[from, to)` frames: tiny on a smooth
+    /// signal whatever its level, about the size of the jump at a discontinuity.
+    fn max_kink(out: &[f32], from: usize, to: usize) -> f32 {
+        let l = left(out);
+        (from.max(2)..to).fold(0.0f32, |m, i| {
+            m.max((l[i] - 2.0 * l[i - 1] + l[i - 2]).abs())
+        })
+    }
+
+    /// A reverb at full Mix and its input: a 200 Hz sine, so the wet signal is smooth and any
+    /// discontinuity stands out as a step.
+    fn smooth_wet(algorithm: usize, depth: f32, seconds: f32) -> (ReverbDevice, Vec<f32>) {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        set_real(&mut d, ALGORITHM, algorithm as f32);
+        set_real(&mut d, MIX, 100.0);
+        set_real(&mut d, DEPTH, depth);
+        render(&mut d, &vec![0.0; 8192 * 2], &[512]);
+        let input = stereo(&sine(200.0, sr, (seconds * sr) as usize, 0.3));
+        (d, input)
+    }
+
+    #[test]
+    fn algorithm_change_crossfades_without_a_step() {
+        let sr = 48_000.0;
+        for (from, to) in [(0, 1), (1, 2), (2, 0)] {
+            let (mut d, input) = smooth_wet(from, 0.0, 2.0);
+            let half = input.len() / 2;
+            let mut out = render(&mut d, &input[..half], &[512]);
+            set_real(&mut d, ALGORITHM, to as f32);
+            out.extend(render(&mut d, &input[half..], &[512]));
+            let at = half / 2;
+            let before = max_kink(&out, at - (sr * 0.3) as usize, at);
+            let during = max_kink(&out, at, at + (sr * 0.1) as usize);
+            assert!(
+                during < before * 3.0,
+                "{} → {}: kink {during} vs {before} before",
+                algo_name(from),
+                algo_name(to)
+            );
+        }
+    }
+
+    #[test]
+    fn switching_back_does_not_revive_an_old_tail() {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        set_real(&mut d, ALGORITHM, 0.0);
+        set_real(&mut d, MIX, 100.0);
+        set_real(&mut d, DECAY, 0.5);
+        render(&mut d, &vec![0.0; 8192 * 2], &[512]);
+        // Room rings, then Hall takes over mid-tail and everything dies away.
+        render(
+            &mut d,
+            &stereo(&pink_noise(sr as usize / 4, 0.5, 2)),
+            &[512],
+        );
+        set_real(&mut d, ALGORITHM, 1.0);
+        render(&mut d, &vec![0.0; 5 * sr as usize * 2], &[512]);
+        set_real(&mut d, ALGORITHM, 0.0);
+        let out = render(&mut d, &vec![0.0; sr as usize * 2 / 2], &[512]);
+        assert!(peak(&out) < 1e-4, "old Room tail came back: {}", peak(&out));
+    }
+
+    #[test]
+    fn freeze_engages_and_releases_without_a_step() {
+        let sr = 48_000.0;
+        for algorithm in 0..3 {
+            // Full modulation depth: the swept reads must glide to rest, not jump.
+            let (mut d, input) = smooth_wet(algorithm, 100.0, 3.0);
+            let third = input.len() / 3;
+            let mut out = render(&mut d, &input[..third], &[512]);
+            set_real(&mut d, FREEZE, 1.0);
+            out.extend(render(&mut d, &input[third..2 * third], &[512]));
+            set_real(&mut d, FREEZE, 0.0);
+            out.extend(render(&mut d, &input[2 * third..], &[512]));
+            let frames = |s: f32| (s * sr) as usize;
+            let before = max_kink(&out, frames(0.6), frames(1.0));
+            let on = max_kink(&out, frames(1.0), frames(1.2));
+            let off = max_kink(&out, frames(2.0), frames(2.2));
+            assert!(
+                on < before * 3.0 && off < before * 3.0,
+                "{}: kinks {on} (on), {off} (off) vs {before}",
+                algo_name(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn mix_glides_within_a_long_block() {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        set_real(&mut d, MIX, 0.0);
+        let dc = vec![0.5f32; 8192 * 2];
+        render(&mut d, &dc, &[4096]);
+        set_real(&mut d, MIX, 100.0);
+        let out = render(&mut d, &dc[..4096 * 2], &[4096]);
+        assert!((out[0] - 0.5).abs() < 0.01, "Mix stepped: {}", out[0]);
+        assert!(
+            max_step(&out, 1, 4096) < 0.01,
+            "Mix stepped inside the block"
+        );
+    }
+
+    #[test]
+    fn diffuser_keeps_the_highs() {
+        // At full Diffusion the diffuser is a lossless 4-channel all-pass: an impulse keeps its
+        // energy. Interpolated (fractional) lengths would low-pass it.
+        let sr = 48_000.0;
+        let mut diffuser = Diffuser::new();
+        diffuser.prepare(sr);
+        let mut energy = 0.0f64;
+        for n in 0..sr as usize {
+            let x = if n == 0 { 1.0 } else { 0.0 };
+            let y = diffuser.process4([x, 0.0, 0.0, 0.0], 1.0);
+            energy += y.iter().map(|&v| (v * v) as f64).sum::<f64>();
+        }
+        assert!((energy - 1.0).abs() < 1e-3, "diffuser energy {energy}");
+    }
+
+    /// Largest normalised autocorrelation of `x` at lags in `[min_lag, max_lag)`.
+    fn max_autocorrelation(x: &[f32], min_lag: usize, max_lag: usize) -> f32 {
+        use realfft::num_complex::Complex;
+        use realfft::RealFftPlanner;
+        let n = (x.len() * 2).next_power_of_two();
+        let mut planner = RealFftPlanner::<f32>::new();
+        let forward = planner.plan_fft_forward(n);
+        let inverse = planner.plan_fft_inverse(n);
+        let mut buf = vec![0.0f32; n];
+        buf[..x.len()].copy_from_slice(x);
+        let mut spectrum = forward.make_output_vec();
+        forward.process(&mut buf, &mut spectrum).unwrap();
+        for c in spectrum.iter_mut() {
+            *c = Complex::new(c.norm_sqr(), 0.0);
+        }
+        let mut ac = inverse.make_output_vec();
+        inverse.process(&mut spectrum, &mut ac).unwrap();
+        (min_lag..max_lag).fold(0.0f32, |m, lag| m.max(ac[lag] / ac[0]))
+    }
+
+    /// Largest autocorrelation of the late impulse response at lags of 5 to 800 ms, flattened to
+    /// a constant level and whitened.
+    fn tail_self_similarity(algorithm: usize, depth: f32) -> f32 {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        set_real(&mut d, ALGORITHM, algorithm as f32);
+        set_real(&mut d, MIX, 100.0);
+        set_real(&mut d, EARLY, 0.0);
+        set_real(&mut d, DEPTH, depth);
+        set_real(&mut d, DECAY, 4.0);
+        set_real(&mut d, LOW_MULT, 1.0);
+        set_real(&mut d, HIGH_MULT, 1.0);
+        render(&mut d, &vec![0.0; 8192 * 2], &[512]);
+        let l = left(&render(&mut d, &stereo(&impulse(2 * sr as usize)), &[512]));
+        // The first difference whitens what is left of the tone filters' tilt.
+        let diff: Vec<f32> = l.windows(2).map(|w| w[1] - w[0]).collect();
+        let tail = &diff[(sr * 0.3) as usize..(sr * 1.8) as usize];
+        let window = (sr * 0.01) as usize;
+        let flat: Vec<f32> = tail
+            .chunks(window)
+            .flat_map(|c| {
+                let level = rms(c).max(1e-12);
+                c.iter().map(move |&x| x / level)
+            })
+            .collect();
+        max_autocorrelation(&flat, (sr * 0.005) as usize, (sr * 0.8) as usize)
+    }
+
+    #[test]
+    fn late_tail_does_not_repeat() {
+        // A loop of plain delays replays the same diffused burst every round trip; all-passes
+        // inside the loop make every pass different. The plate is checked without modulation
+        // (the old two-delay tank scored 0.76 here). Unmodulated, the FDN still echoes itself once
+        // per total line length (Room about 0.6 at 240 ms), which the default modulation breaks.
+        let plate = tail_self_similarity(2, 0.0);
+        assert!(plate < 0.3, "unmodulated Plate repeats: {plate:.3}");
+        for algorithm in 0..3 {
+            let worst = tail_self_similarity(algorithm, 30.0);
+            assert!(
+                worst < 0.3,
+                "{}: tail repeats, autocorrelation {worst:.3}",
+                algo_name(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn flat_decay_eq_keeps_long_bright_tails() {
+        // High Mult ×1 means the highs decay like the mids; the interpolation in the loop must
+        // not add damping of its own.
+        let sr = 48_000.0;
+        for algorithm in 0..3 {
+            let mut device = make(sr);
+            set_real(&mut device, ALGORITHM, algorithm as f32);
+            set_real(&mut device, MIX, 100.0);
+            set_real(&mut device, DECAY, 5.0);
+            set_real(&mut device, HIGH_MULT, 1.0);
+            set_real(&mut device, HIGH_CUT, 20_000.0);
+            set_real(&mut device, DEPTH, 100.0);
+            render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+            let high = band_t60(&mut device, sr, 8.0, 8_000.0, 3.0);
+            assert!(
+                (high - 5.0).abs() / 5.0 < 0.2,
+                "{}: 8 kHz T60 {high:.2} s vs 5",
+                algo_name(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn reenabling_starts_without_the_old_tail() {
+        let sr = 48_000.0;
+        let mut d = make(sr);
+        set_real(&mut d, MIX, 100.0);
+        set_real(&mut d, EARLY, 100.0);
+        render(
+            &mut d,
+            &stereo(&pink_noise(sr as usize / 2, 0.5, 8)),
+            &[512],
+        );
+        d.set_enabled(false);
+        render(&mut d, &vec![0.0; 512 * 2], &[512]);
+        d.set_enabled(true);
+        let out = render(&mut d, &vec![0.0; sr as usize * 2 / 2], &[512]);
+        assert!(peak(&out) < 1e-6, "old tail resumed: {}", peak(&out));
     }
 
     // === Spec 040: Tank FX and Wet FX ===

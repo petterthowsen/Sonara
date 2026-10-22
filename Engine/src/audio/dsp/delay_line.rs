@@ -91,6 +91,24 @@ impl DelayLine {
         let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
         ((c3 * t + c2) * t + c1) * t + x0
     }
+
+    /// First-order all-pass (Thiran) interpolation, `delay` clamped to `1.5..=max_delay - 1`.
+    /// Its magnitude is flat at every fraction, so a read inside a feedback loop loses nothing
+    /// (linear and Hermite reads low-pass at fractional delays, which builds up over hundreds of
+    /// passes). Suits fixed or slowly moving delays. `state` is the previous output: one per read
+    /// position, read once per sample in order, zeroed when the line is cleared.
+    #[inline]
+    pub fn read_allpass(&self, delay: f32, state: &mut f32) -> f32 {
+        let d = delay.clamp(1.5, self.max_delay() - 1.0);
+        // The fraction lies in [0.5, 1.5), which keeps the coefficient in (−1/5, 1/3]: well away
+        // from the pole near Nyquist that a fraction near 0 brings.
+        let i = (d - 0.5) as usize;
+        let frac = d - i as f32;
+        let eta = (1.0 - frac) / (1.0 + frac);
+        let y = eta * self.tap(i) + self.tap(i + 1) - eta * *state;
+        *state = y;
+        y
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +147,41 @@ mod tests {
         }
         assert!(err_lin < 1e-3, "linear error {err_lin}");
         assert!(err_herm < 1e-5, "hermite error {err_herm}");
+    }
+
+    #[test]
+    fn allpass_reads_keep_the_level_and_the_delay() {
+        // Returns (level dB, correlation with the exactly delayed sine) for an all-pass read, and
+        // the linear read's level.
+        let run = |freq: f64| {
+            let sine = |t: f64| (std::f64::consts::TAU * freq * t / 48_000.0).sin() as f32;
+            let delay = 20.5;
+            let mut line = DelayLine::new();
+            line.prepare(256);
+            let mut state = 0.0;
+            let (mut e_in, mut e_ap, mut e_lin, mut dot) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for n in 0..4000 {
+                let ap = line.read_allpass(delay, &mut state);
+                let lin = line.read_linear(delay);
+                if n > 200 {
+                    let expected = sine(n as f64 - delay as f64);
+                    e_in += expected * expected;
+                    e_ap += ap * ap;
+                    e_lin += lin * lin;
+                    dot += ap * expected;
+                }
+                line.push(sine(n as f64));
+            }
+            let db = |e: f32| 10.0 * (e / e_in).log10();
+            (db(e_ap), dot / e_in, db(e_lin))
+        };
+        // 15 kHz at fraction 0.5: linear interpolation loses about 5 dB, all-pass nothing.
+        let (ap_db, _, lin_db) = run(15_000.0);
+        assert!(ap_db.abs() < 0.05, "all-pass level {ap_db} dB");
+        assert!(lin_db < -4.0, "linear level {lin_db} dB");
+        // The delay is exact at low frequencies.
+        let (_, corr, _) = run(500.0);
+        assert!(corr > 0.999, "all-pass delay off: correlation {corr}");
     }
 
     #[test]

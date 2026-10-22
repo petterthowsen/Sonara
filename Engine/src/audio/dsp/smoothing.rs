@@ -71,6 +71,18 @@ impl SmoothedParam {
         self.current
     }
 
+    /// Advance `frames` samples at once: the same end point as `frames` calls to `next`.
+    #[inline]
+    pub fn skip(&mut self, frames: usize) {
+        if self.current != self.target {
+            let next = self.current + self.step * frames as f32;
+            let passed = (self.step > 0.0 && next >= self.target)
+                || (self.step < 0.0 && next <= self.target)
+                || self.step == 0.0;
+            self.current = if passed { self.target } else { next };
+        }
+    }
+
     /// Fill `out` with the next `out.len()` values.
     pub fn fill(&mut self, out: &mut [f32]) {
         for v in out.iter_mut() {
@@ -118,5 +130,20 @@ mod tests {
             p.next();
         }
         assert_eq!(p.current(), 0.0);
+    }
+
+    #[test]
+    fn skip_lands_where_repeated_next_does() {
+        for frames in [0, 1, 7, 480, 959, 960, 5000] {
+            let mut a = SmoothedParam::new(0.2, 48_000.0, 20.0);
+            let mut b = SmoothedParam::new(0.2, 48_000.0, 20.0);
+            a.set_target(0.9);
+            b.set_target(0.9);
+            for _ in 0..frames {
+                a.next();
+            }
+            b.skip(frames);
+            assert!((a.current() - b.current()).abs() < 1e-5, "{frames} frames");
+        }
     }
 }
