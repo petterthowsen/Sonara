@@ -43,6 +43,25 @@ pub fn asym_clip(x: f32, b: f32) -> f32 {
     soft_clip(x + b) - soft_clip(b)
 }
 
+/// Negative-side ceiling of [`tube_clip`].
+const TUBE_NEG_CEILING: f32 = 0.55;
+
+/// Asymmetric soft saturation, tube-like: the positive side is [`soft_clip`], the negative side
+/// is the same curve scaled to saturate at −[`TUBE_NEG_CEILING`]. Both halves have slope 1 and
+/// zero curvature at 0, so the joint is smooth. Because the halves bend differently the curve
+/// makes even harmonics without any bias (a 2nd harmonic around −20 dB for a −6 dBFS sine
+/// driven 6–12 dB), rising with level until the signal clips hard on both sides; there it tends
+/// to an offset square wave, mostly odd, as an overdriven tube stage does. `tube_clip(0) == 0`;
+/// the signal-dependent DC it leaves is what a following DC blocker is for.
+#[inline]
+pub fn tube_clip(x: f32) -> f32 {
+    if x >= 0.0 {
+        soft_clip(x)
+    } else {
+        TUBE_NEG_CEILING * soft_clip(x / TUBE_NEG_CEILING)
+    }
+}
+
 /// Hard clipper: linear to ±0.9, a quadratic knee of width 0.1 that meets the slope-1 line at
 /// ±0.9 and flattens to slope 0 at ±1, and flat at ±1 beyond.
 #[inline]
@@ -129,6 +148,28 @@ mod tests {
         }
         assert_eq!(hard_clip(2.0), 1.0);
         assert_eq!(hard_clip(0.0), 0.0);
+    }
+
+    #[test]
+    fn tube_clip_is_asymmetric_continuous_and_bounded() {
+        assert_eq!(tube_clip(0.0), 0.0);
+        // Unity slope on both sides of zero.
+        assert!((tube_clip(1e-3) - 1e-3).abs() < 1e-8);
+        assert!((tube_clip(-1e-3) + 1e-3).abs() < 1e-8);
+        assert_eq!(tube_clip(10.0), 1.0);
+        assert!((tube_clip(-10.0) + TUBE_NEG_CEILING).abs() < 1e-6);
+        // The negative side saturates first, so the curve is not odd.
+        assert!(tube_clip(0.5) + tube_clip(-0.5) > 0.01);
+        let mut prev = tube_clip(-5.0);
+        let mut x = -5.0;
+        while x <= 5.0 {
+            let y = tube_clip(x);
+            // Rounding at soft_clip's ±3 clamp can dip by an ulp.
+            assert!(y >= prev - 1e-6, "monotonic at {x}");
+            assert!((y - prev).abs() < 0.01, "jump at {x}");
+            prev = y;
+            x += 0.001;
+        }
     }
 
     #[test]

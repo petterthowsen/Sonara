@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Saturator: new Flutter and Drift controls beside Wow in the Tape group. Flutter is a fast, slightly irregular flutter and Drift a slow random pitch wander. Wow, Flutter and Drift use a curved taper, so subtle settings get most of the knob (saved Wow settings sound subtler).
 - Reverb has its own panel view: a decay map (time against frequency, with Pre-Delay, early reflections that blur into the tail as Diffusion rises, the Decay EQ contour, the cuts and Freeze) whose handles you can drag to edit Decay, Decay EQ, Pre-Delay and the cuts, a live input and wet level strip underneath, and all controls and both slot tiles laid out in signal order. The Simple toggle still gives the generated view (spec 050).
 - Note Editor Harmony menu: Make Legato (extend each selected note to the start of the next) and Merge Same Notes (join touching notes of the same pitch). The clip context menu in the arranger gets Make Legato, Merge Same and Split to Tracks for all notes of the selected MIDI clips. The Transfer Notes target list is now a small scrollable tree in arranger order with foldable groups that highlights the track being edited (#169).
 - MIDI Send, a new note device: it forwards the notes reaching a channel to other channels in the same block, either to the channels nested under it (Children) or to a list you choose, with a Thru/Consume switch. Rows for targets that would make a MIDI loop are marked and ignored. Notes it started always end when a target is removed, the mode changes or the send is bypassed or removed.
@@ -35,6 +36,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Changed
 
+- Saturator: Tube now has its own asymmetric curve, so it sounds different from Soft without touching Bias. Bias is now ±100 % on a curved taper with a smaller, more usable range (saved Bias settings sound milder). Input now affects the dry signal too. Low Cut and High Cut are 12 dB/oct. Tape HF loss now reacts to Drive as well as the input level. The Tone knob shows its real ±9 dB range.
 - Step Sequencer: steps are 20% wider and the Velocity/Chance lane is about 40% shorter.
 - Mid/Side Split and L/R Split: each group stretches to the full height of the device, with its knobs centered.
 - Closing a device's View (collapsing its controls) in the device lane now also hides the devices in its slots, nested slots included (PolySynth, Delay, Reverb, Mid/Side and L/R Split, Chain, Layer, Drum Machine). Opening the View brings them back exactly as they were, including their own collapsed state, and hidden devices stop streaming their meters and displays.
@@ -45,6 +47,10 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- Saturator: Mix settings between 0 and 100 % no longer comb-filter the high end (the dry signal is now phase-matched to the oversampled wet signal).
+- Saturator: switching Quality back and forth quickly no longer leaves the wrong oversampling active, and rapid Type changes no longer click.
+- Saturator: the Noise knob shows its real level in dBFS (it read "0 dB" when off), and the Low Cut knob follows its curved taper.
+- Saturator: Dynamics no longer causes zipper noise on transients, and the DC blocker no longer moves with the sample rate.
 - MIDI editor: the track list no longer shows disabled tracks (or tracks inside a disabled folder), unless the arranger is set to show disabled tracks (#171).
 - MIDI editor: clicking inside a grid cell places the note in that cell again, in the piano roll and Drum View. It used to land on the next grid line when you clicked in the right half of a cell (#170).
 - MIDI editor: dragging a note that sits off the grid now snaps it to the current grid; the rest of the selection moves by the same amount and keeps its spacing. Hold Shift to move freely (#170).

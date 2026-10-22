@@ -261,6 +261,22 @@ knob_size = Vector2(30, 30)
 text = "Wow"
 metadata/param = "Wow"
 
+[node name="Flutter" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=1741520983]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Flutter"
+metadata/param = "Flutter"
+
+[node name="Drift" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=1176304452]
+layout_mode = 2
+theme_override_constants/separation = 2
+script = ExtResource("3_knob")
+knob_size = Vector2(30, 30)
+text = "Drift"
+metadata/param = "Drift"
+
 [node name="Noise" type="VBoxContainer" parent="MainPage/Bottom/TapeGroup/Knobs" unique_id=990399799]
 layout_mode = 2
 theme_override_constants/separation = 2

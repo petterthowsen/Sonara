@@ -149,25 +149,27 @@ a null test.
 
 ### Parameters
 
-17 parameters in four module blocks of ten, as `filter.rs`. Ranges are proposals to confirm at the
-first task; the shapes (`linear`/`log`/`skewed`, "0 = Off") follow existing devices.
+19 parameters in four module blocks of ten, as `filter.rs` (Flutter and Drift added 2026-10-22; see
+"Amendments"). The shapes (`linear`/`log`/`skewed`, "0 = Off") follow existing devices.
 
 | ID | Const | Name | Range / kind | Default |
 |---|---|---|---|---|
 | 0 | `TYPE` | Type | Enum `Soft, Tube, Tape, Hard` | Soft |
 | 1 | `DRIVE` | Drive | 0 … 36 dB | 6 dB |
-| 2 | `BIAS` | Bias | −1 … +1 (linear) | 0 |
+| 2 | `BIAS` | Bias | −100 … +100 % (signed square taper onto ±0.5) | 0 % |
 | 3 | `LEVEL_DEPEND` | Dynamics | 0 … 100 % | 0 % |
 | 4 | `INPUT` | Input | −24 … +24 dB | 0 dB |
 | 5 | `QUALITY` | Quality | Enum `1x, 2x, 4x`, `not_automatable` | 2x |
 | 10 | `PRE_HPF` | Low Cut | Off, 20 … 1000 Hz (`skewed`, 0 = Off — `SC_LOW_CUT` pattern) | Off |
 | 11 | `POST_LPF` | High Cut | 1 kHz … 20 kHz, top = Off | Off |
-| 12 | `TILT` | Tone | −6 … +6 dB (pivot 1 kHz) | 0 dB |
+| 12 | `TILT` | Tone | −9 … +9 dB high shelf (pivot 1.3 kHz) | 0 dB |
 | 20 | `HF_LOSS` | HF Loss | 0 … 100 % | 50 % |
 | 21 | `HEAD_BUMP` | Head Bump | 0 … 6 dB | 2 dB |
 | 22 | `SQUASH` | Squash | 0 … 100 % | 30 % |
-| 23 | `WOW` | Wow | 0 … 100 % | 0 % |
-| 24 | `NOISE` | Noise | Off, −90 … −40 dBFS | Off |
+| 23 | `WOW` | Wow | 0 … 100 % (square taper) | 0 % |
+| 24 | `NOISE` | Noise | −90 (Off) … −40 dBFS | Off |
+| 25 | `FLUTTER` | Flutter | 0 … 100 % (square taper) | 0 % |
+| 26 | `DRIFT` | Drift | 0 … 100 % (square taper) | 0 % |
 | 30 | `MIX` | Mix | 0 … 100 % | 100 % |
 | 31 | `OUTPUT` | Output | −24 … +24 dB | 0 dB |
 | 32 | `AUTO_GAIN` | Auto Gain | Bool | On |
@@ -347,3 +349,42 @@ covered automatically by `EFFECT_IDS`), `Engine/src/audio/commands/` and `Engine
 - [ ] Parameter ranges and defaults in the table above — confirm at the first task.
 - [ ] Should the type selector's four types also appear as a preset per type (proposed), or does the
       type knob make per-type presets redundant?
+
+## Amendments (2026-10-22, post-review)
+
+A review of the shipped device found these problems; the code now does the following.
+
+- **Dry/wet phase.** The IIR half-band oversampler delays the wet side by a frequency-dependent
+  5–8 samples, and `latency_frames()` is 0, so Mix between 0 and 100 % comb-filtered (−28 dB at
+  5 kHz for Mix 50 % at 2x). The dry side now runs through a twin `Oversampler` with an empty
+  stage (the identical phase response) and through the modulation line's centre delay. It only
+  runs while 0 < Mix < 100 % and crossfades in and out over `SWITCH_FADE_MS`, so Mix 0 % stays
+  bit-exact. `parallel_mix_does_not_comb_filter` checks ±0.2 dB at every Quality.
+- **Input** is a true input gain on both sides; **Output** stays a wet-level trim (Mix 0 % ignores
+  it). A post-mix output knob was rejected as redundant with Mix and a Utility device.
+- **Quality / Type switches** that arrive mid-crossfade are queued (or a Quality fade is reversed),
+  and `reset_dsp` commits pending values. Before, 2x → 4x → 2x within one fade ended on 4x.
+- **Tube** has its own curve, `tube_clip` (negative side saturating at 0.55), so it is
+  asymmetric at Bias 0. Before, Tube and Soft were identical unless Bias was raised.
+- **Bias** is ±100 % on a signed square taper onto ±0.5. ±1 in the shaper's domain was mostly
+  half-wave rectification.
+- **Tone** is labelled with its real far-side gain (±9 dB, `db_to_gain`). The old ±6 knob gave
+  ±9 dB through `2^(db/4)`. The normalized values map to the same sound.
+- **Noise** stores real dBFS (−90 = Off), the same normalized values as before. It is added after
+  Auto Gain, so its level reads true at Mix 100 %.
+- **Low Cut / High Cut** are 12 dB/oct Butterworth (`Svf` Hp12/Lp12), up from one-pole.
+- **DC blocker** corner is 10 Hz at every sample rate. Before, a fixed pole gave 20 Hz at 48 kHz and
+  5 Hz at 192 kHz.
+- **Dynamics** ramps the drive boost per sample across each control block (no 32-frame steps).
+- **Tape:** HF loss follows the input level *plus the effective drive* (−12 dB lossless, falling by
+  up to `5 × HF Loss` octaves over 18 dB). Before, it ignored Drive, and its comment said 4 octaves
+  where the code allowed 8. Squash detects on the shaper output it compresses.
+- **Wow / Flutter / Drift** are separate square-taper controls: wow is a 0.5 Hz sine up to ±3 ms,
+  flutter a 6 Hz + 9.7 Hz pair up to ±0.15 ms, and drift a seeded random cosine-segment wander
+  (0.7–2 s segments) up to ±3 ms. The delay swings around a centre equal to the summed depths, and
+  the depths glide over 300 ms to and from 0 when Type leaves or enters Tape, so the delay never
+  jumps. The LFOs are rotating phasors (no per-sample `sin`).
+- Auto Gain measures without DC, so Tube and Bias aren't over-compensated.
+
+Not done: an 8x Quality. It would change the enum's normalized mapping for saved projects. Hard at
+36 dB still aliases at 4x.

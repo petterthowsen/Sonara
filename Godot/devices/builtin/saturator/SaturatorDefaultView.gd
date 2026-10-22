@@ -1,9 +1,10 @@
-## Panel view of the built-in Saturator: one page, no tabs, all 17 parameters on it.
+## Panel view of the built-in Saturator: one page, no tabs, all 19 parameters on it.
 ##
 ## Top row: the Type and Quality selectors and Auto Gain. Middle row: Drive, Bias, Dynamics and
 ## Input knobs, the transfer curve with its harmonic bars, then Mix and Output faders. Bottom
 ## row: the tone group (Low Cut, High Cut, Tone) and the tape group (HF Loss, Head Bump, Squash,
-## Wow, Noise), dimmed unless Type is Tape — the engine gates those stages behind the Tape type.
+## Wow, Flutter, Drift, Noise), dimmed unless Type is Tape — the engine gates those stages behind
+## the Tape type.
 ##
 ## The layout lives in `SaturatorDefaultView.tscn`. Each parameter control carries its parameter
 ## name as `metadata/param`; `_build` collects and wires them. The view talks to the device
@@ -114,6 +115,7 @@ func _configure_knobs() -> void:
 		knob.min_value = param.min_value
 		knob.max_value = param.max_value
 		knob.logarithmic = param.is_logarithmic
+		knob.skew = param.skew
 		knob.value_default = param.default_value
 		knob.value_text_callback = _knob_text.bind(knob_name)
 
@@ -133,8 +135,8 @@ func _knob_text(value: float, param_name: String) -> String:
 		"Drive":
 			return "%.1f dB" % value
 		"Bias":
-			return "%+.2f" % value
-		"Dynamics", "HF Loss", "Squash", "Wow":
+			return "%+d %%" % roundi(value)
+		"Dynamics", "HF Loss", "Squash", "Wow", "Flutter", "Drift":
 			return "%d %%" % roundi(value)
 		"Input", "Output":
 			return "%+.1f dB" % value
@@ -145,7 +147,7 @@ func _knob_text(value: float, param_name: String) -> String:
 		"Tone", "Head Bump":
 			return "%+.1f dB" % value
 		"Noise":
-			return "Off" if value <= -89.5 else "%.0f dB" % value
+			return "Off" if value <= -89.5 else "%.0f dBFS" % value
 	return "%.2f" % value
 
 

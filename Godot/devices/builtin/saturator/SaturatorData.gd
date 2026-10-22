@@ -27,6 +27,8 @@ const P_HEAD_BUMP := 21
 const P_SQUASH := 22
 const P_WOW := 23
 const P_NOISE := 24
+const P_FLUTTER := 25
+const P_DRIFT := 26
 const P_MIX := 30
 const P_OUTPUT := 31
 const P_AUTO_GAIN := 32
@@ -34,7 +36,8 @@ const P_AUTO_GAIN := 32
 const TYPE_NAMES: Array[String] = ["Soft", "Tube", "Tape", "Hard"]
 const QUALITY_NAMES: Array[String] = ["1x", "2x", "4x"]
 
-## Type whose tape-only stages are audible (HF Loss, Head Bump, Squash, Wow, Noise).
+## Type whose tape-only stages are audible (HF Loss, Head Bump, Squash, Wow, Flutter, Drift,
+## Noise).
 const TYPE_TAPE := 2
 
 ## The transfer curve's 128 points span input -1…+1.

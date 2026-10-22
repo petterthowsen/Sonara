@@ -58,6 +58,14 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
+## Power-curve taper for non-logarithmic knobs, as `DeviceParameter.skew`:
+## `value = min + (max - min) * n ^ skew`. 1.0 is linear; above 1 the low end gets more travel.
+@export var skew := 1.0:
+	set(v):
+		skew = maxf(v, 0.01)
+		if is_inside_tree():
+			queue_redraw()
+
 ## Draws the value arc from the middle of the sweep instead of the start, for a value that
 ## reads -1..1 with 0 in the centre. Only the arc changes; the tooltip text comes from
 ## `value_text_callback`.
@@ -541,7 +549,8 @@ func _value_to_normalized(v: float) -> float:
 		if v <= min_value:
 			return 0.0
 		return clampf(log(v / min_value) / log(max_value / min_value), 0.0, 1.0)
-	return clampf((v - min_value) / (max_value - min_value), 0.0, 1.0)
+	var linear := clampf((v - min_value) / (max_value - min_value), 0.0, 1.0)
+	return pow(linear, 1.0 / skew) if skew != 1.0 else linear
 
 
 ## Inverse of `_value_to_normalized`.
@@ -549,7 +558,7 @@ func _normalized_to_value(normalized: float) -> float:
 	var n := clampf(normalized, 0.0, 1.0)
 	if logarithmic and min_value > 0.0:
 		return min_value * pow(max_value / min_value, n)
-	return min_value + n * (max_value - min_value)
+	return min_value + (pow(n, skew) if skew != 1.0 else n) * (max_value - min_value)
 
 
 ## Show, hide, or update the value tooltip for hover and live dragging.

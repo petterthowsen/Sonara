@@ -27,7 +27,7 @@ func run_tests() -> void:
 	await _test_bind_after_tree()
 
 
-## The engine's 17 parameters (ids, ranges and defaults from design.md's table).
+## The engine's 19 parameters (ids, ranges and defaults from design.md's table).
 func _make_instance() -> Object:
 	var device: Object = _device_script.new(
 		"sonara.builtin.saturator", "Saturator", _device_script.DeviceCategory.Effect
@@ -43,18 +43,20 @@ func _make_instance() -> Object:
 		return param
 	float_param.call(SaturatorData.P_TYPE, "Type", "", 0.0, 3.0, 0.0)
 	float_param.call(SaturatorData.P_DRIVE, "Drive", "dB", 0.0, 36.0, 6.0)
-	float_param.call(SaturatorData.P_BIAS, "Bias", "", -1.0, 1.0, 0.0)
+	float_param.call(SaturatorData.P_BIAS, "Bias", "%", -100.0, 100.0, 0.0)
 	float_param.call(SaturatorData.P_LEVEL_DEPEND, "Dynamics", "%", 0.0, 100.0, 0.0)
 	float_param.call(SaturatorData.P_INPUT, "Input", "dB", -24.0, 24.0, 0.0)
 	float_param.call(SaturatorData.P_QUALITY, "Quality", "", 0.0, 2.0, 1.0)
 	float_param.call(SaturatorData.P_PRE_HPF, "Low Cut", "Hz", 0.0, 1000.0, 0.0, false, 2.0)
 	float_param.call(SaturatorData.P_POST_LPF, "High Cut", "Hz", 1000.0, 20000.0, 20000.0, true)
-	float_param.call(SaturatorData.P_TILT, "Tone", "dB", -6.0, 6.0, 0.0)
+	float_param.call(SaturatorData.P_TILT, "Tone", "dB", -9.0, 9.0, 0.0)
 	float_param.call(SaturatorData.P_HF_LOSS, "HF Loss", "%", 0.0, 100.0, 50.0)
 	float_param.call(SaturatorData.P_HEAD_BUMP, "Head Bump", "dB", 0.0, 6.0, 2.0)
 	float_param.call(SaturatorData.P_SQUASH, "Squash", "%", 0.0, 100.0, 30.0)
 	float_param.call(SaturatorData.P_WOW, "Wow", "%", 0.0, 100.0, 0.0)
-	float_param.call(SaturatorData.P_NOISE, "Noise", "dB", -90.0, -40.0, -90.0)
+	float_param.call(SaturatorData.P_NOISE, "Noise", "dBFS", -90.0, -40.0, -90.0)
+	float_param.call(SaturatorData.P_FLUTTER, "Flutter", "%", 0.0, 100.0, 0.0)
+	float_param.call(SaturatorData.P_DRIFT, "Drift", "%", 0.0, 100.0, 0.0)
 	float_param.call(SaturatorData.P_MIX, "Mix", "%", 0.0, 100.0, 100.0)
 	float_param.call(SaturatorData.P_OUTPUT, "Output", "dB", -24.0, 24.0, 0.0)
 	var bool_param := DeviceParameter.new(SaturatorData.P_AUTO_GAIN, "Auto Gain")
@@ -221,6 +223,7 @@ func _test_view_in_the_tree() -> void:
 	# The layout fits the panel's content height.
 	var content: Vector2 = view._main_page.get_combined_minimum_size()
 	_assert(content.y <= 250.0, "the panel fits DevicePanel's height below the header (%s)" % content)
+	_assert(content.x <= 720.0, "the panel fits its 720 px width (%s)" % content)
 
 	view._on_view_hidden()
 	_assert(not view._subscribed, "hiding the view unsubscribes")
@@ -237,7 +240,7 @@ func _test_bind_after_tree() -> void:
 	view.load_osc = func(_name: String): return null
 	root.add_child(view)
 	await process_frame
-	_assert(view._knobs.size() == 12, "the scene tags 12 knobs with their parameter (%d)" % view._knobs.size())
+	_assert(view._knobs.size() == 14, "the scene tags 14 knobs with their parameter (%d)" % view._knobs.size())
 	_assert(view.curve != null and not view.curve.has_record(), "unbound: the curve is empty")
 	var inst := _make_instance()
 	inst.set_parameter_real(SaturatorData.P_DRIVE, 18.0)
