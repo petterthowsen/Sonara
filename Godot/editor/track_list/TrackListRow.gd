@@ -29,6 +29,7 @@ var has_children: bool = false
 var collapsed: bool = false
 
 var _selected := false
+var _disabled := false
 var _mixed := false
 var _renaming := false
 var _styling := false
@@ -105,8 +106,8 @@ func refresh() -> void:
 		fold_button.icon = null
 	fold_button.disabled = not has_children
 	fold_button.mouse_filter = Control.MOUSE_FILTER_STOP if has_children else Control.MOUSE_FILTER_IGNORE
-	modulate.a = ItemVisibility.dim_alpha(
-		ItemVisibility.track_hidden(project, track), ItemVisibility.track_disabled(project, track))
+	_disabled = ItemVisibility.track_disabled(project, track)
+	modulate.a = ItemVisibility.dim_alpha(ItemVisibility.track_hidden(project, track), _disabled)
 	_update_style()
 
 
@@ -183,7 +184,8 @@ func _on_name_edit_gui_input(event: InputEvent) -> void:
 		name_edit.accept_event()
 
 
-## Selected rows get the neutral selection border and a hover fill; the rest draw no panel.
+## Selected rows get the neutral selection border and a hover fill; disabled rows a dark fill so
+## they read differently from hidden ones (which only dim); the rest draw no panel.
 func _update_style() -> void:
 	var style := StyleBoxFlat.new()
 	style.set_corner_radius_all(3)
@@ -191,6 +193,8 @@ func _update_style() -> void:
 		style.bg_color = UiColors.role(&"control_hover")
 		style.set_border_width_all(1)
 		style.border_color = UiColors.role(&"border_selected")
+	elif _disabled:
+		style.bg_color = UiColors.role(&"app_bg")
 	else:
 		style.bg_color = Color(0, 0, 0, 0)
 	style.content_margin_left = 2

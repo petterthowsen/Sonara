@@ -36,6 +36,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Changed
 
+- Track list: disabled tracks get a darker row background, so they no longer look like hidden ones.
 - Saturator: Tube now has its own asymmetric curve, so it sounds different from Soft without touching Bias. Bias is now ±100 % on a curved taper with a smaller, more usable range (saved Bias settings sound milder). Input now affects the dry signal too. Low Cut and High Cut are 12 dB/oct. Tape HF loss now reacts to Drive as well as the input level. The Tone knob shows its real ±9 dB range.
 - Step Sequencer: steps are 20% wider and the Velocity/Chance lane is about 40% shorter.
 - Mid/Side Split and L/R Split: each group stretches to the full height of the device, with its knobs centered.
