@@ -100,10 +100,12 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   `enabled_changed`. Register it in `DeviceViewFactory.BUILTIN_PANEL_SCENES`.
   - _Files_: `Godot/devices/builtin/reverb/ReverbDefaultView.gd`, `Godot/devices/DeviceViewFactory.gd`
   - _Output_: a new Reverb opens in the custom view; the Simple toggle still swaps to Simple View.
-  - _Verify_: T-010 passes.
+  - _Verify_: the view opens for a new Reverb (T-010 dropped).
   - _Depends on_: T-006, T-008
 
-- [x?] **T-010** [REQ-001, REQ-002, REQ-004, REQ-007, REQ-009, REQ-010, REQ-011, REQ-012] View tests.
+- [ ] ~~**T-010**~~ Dropped: the view test was removed (UI tests stay surface level); the view is
+  checked by hand (Phase 6), the map model by `test_reverb_map.gd`. Original task:
+  [REQ-001, REQ-002, REQ-004, REQ-007, REQ-009, REQ-010, REQ-011, REQ-012] View tests.
   - _Files_: `Godot/tests/test_reverb_view.gd`
   - _Output_: one control per param id plus two slot tiles; x order from REQ-002 (stacked
     columns may tie); `set_parameter_real(DECAY)` changes the map's 1 kHz contour; synthetic

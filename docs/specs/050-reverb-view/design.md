@@ -174,7 +174,6 @@ on the first row. Freeze is a `CheckBox` styled like the compressor's toggles.
 | `Godot/devices/builtin/reverb/ReverbDefaultView.tscn` (new) | the layout above |
 | `Godot/devices/DeviceViewFactory.gd` | add `"sonara.builtin.reverb"` to `BUILTIN_PANEL_SCENES` |
 | `Godot/tests/test_reverb_map.gd` (new) | model tests (REQ-003, 005, 006) |
-| `Godot/tests/test_reverb_view.gd` (new) | view tests (REQ-001, 002, 004, 007, 009, 010, 011, 012) |
 | `docs/subsystems/osc-protocol.md` | "Reverb envelope stream" subsection |
 | `docs/subsystems/godot-device-views.md` | list the Reverb panel view with the other built-in views |
 | `CHANGELOG.md` | `### Added` line under `[Unreleased]` |
@@ -193,7 +192,7 @@ to `subscribe_data`. The map still works and the strip scrolls silence.
   - `envelope_blob_layout`: the header count matches the records and `record_seconds` is 256/sr.
   - `subscribed_reverb_still_sleeps`: after the tail, `update_sleep_state(false)` reports sleeping while subscribed (REQ-010).
   - Run with `cargo test reverb -- --nocapture`.
-- **Godot:** `Godot/tests/run_all.sh reverb` runs `test_reverb_map.gd` (contour times from REQ-003, span bounds and lock, freeze `INF`) and `test_reverb_view.gd`, which uses a `DeviceInstance` built from the reverb's `ParamInfo` list and a fake OSC injected through `load_osc`, like `test_saturator_view.gd`. That test checks one control per param id, x order, map refresh on `set_parameter_real`, synthetic drags on each handle plus undo, subscribe/unsubscribe on show/hide, gap fill after 0.5 s with no blobs, Tank FX approximate flag, and slot tile toggling.
+- **Godot:** `Godot/tests/run_all.sh reverb` runs `test_reverb_map.gd` (contour times from REQ-003, span bounds, freeze `INF`, the onset estimate, the square-root axis). A view test (`test_reverb_view.gd`) was written and later removed, since UI tests stay surface level; it used a `DeviceInstance` built from the reverb's `ParamInfo` list and a fake OSC injected through `load_osc`, like `test_saturator_view.gd`. That test checks one control per param id, x order, map refresh on `set_parameter_real`, synthetic drags on each handle plus undo, subscribe/unsubscribe on show/hide, gap fill after 0.5 s with no blobs, Tank FX approximate flag, and slot tile toggling.
 - **Live:** start the engine and app, put a Reverb on a channel with a drum loop:
   1. The map matches the knobs. Drag each handle and watch its knob follow, then undo.
   2. A single snare hit draws an input spike and a wet slope that ends near the map's contour.

@@ -92,7 +92,6 @@ func _test_span() -> void:
 	_assert(ReverbData.SPAN_STEPS.has(short) and ReverbData.SPAN_STEPS.has(long_span), "spans snap to the readable steps")
 	var pre_long := ReverbData.span_target(_values({ReverbData.P_DECAY: 0.3, ReverbData.P_PREDELAY: 500.0}))
 	_assert(pre_long > short, "Pre-Delay lengthens the span")
-	# Drag lock lives on the map control (ReverbDecayMap): it is covered by test_reverb_view.gd.
 
 
 func _test_freeze() -> void:
