@@ -1,6 +1,7 @@
 ## Options of Transfer Notes (spec 048, REQ-040, REQ-043): the target track, and a warning when
 ## the notes would land in a clip that other instances share. The last target is remembered
-## (REQ-004). Confirming emits `applied`; ClipEditor runs NoteEditor.transfer_selection.
+## (REQ-004), as is the "Keep original notes" toggle (`keep_check`). Confirming emits `applied`;
+## ClipEditor runs NoteEditor.transfer_selection.
 class_name TransferNotesDialog extends ConfirmationDialog
 
 ## The user confirmed with this target track.
@@ -8,6 +9,7 @@ signal applied(target: Track)
 
 ## The target tracks as the arranger's hierarchy: groups fold, the edited track is highlighted.
 var target_tree: Tree
+var keep_check: CheckBox
 var warning_label: Label
 var prompt_label: Label
 
@@ -18,15 +20,20 @@ var _targets: Array[Track] = []
 var _items: Dictionary = {}
 
 const TREE_SIZE := Vector2(300, 200)
+const DIALOG_SIZE := Vector2i(340, 420)
 const EDITING_COLOR := Color(1, 1, 1, 0.14)
 
 
 func _init() -> void:
 	title = "Transfer Notes"
+	# Fixed size (see DIALOG_SIZE) instead of growing to whatever the content asks for.
+	wrap_controls = false
+	min_size = Vector2i(DIALOG_SIZE.x, 300)
 	ok_button_text = "Transfer"
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
 	box.custom_minimum_size.x = TREE_SIZE.x
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(box)
 	prompt_label = Label.new()
 	prompt_label.text = "Move the selected notes to the same positions on:"
@@ -35,12 +42,20 @@ func _init() -> void:
 	target_tree.hide_root = true
 	target_tree.select_mode = Tree.SELECT_SINGLE
 	target_tree.custom_minimum_size = TREE_SIZE
+	target_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	target_tree.tooltip_text = "Notes go into the clips there, which grow to whole bars if needed, or into new clips."
 	target_tree.item_selected.connect(_update_warning)
 	target_tree.item_activated.connect(func(): get_ok_button().pressed.emit())
 	box.add_child(target_tree)
+	keep_check = CheckBox.new()
+	keep_check.text = "Keep original notes"
+	keep_check.tooltip_text = "Copy the notes instead of moving them: they also stay on the edited track."
+	keep_check.button_pressed = bool(NoteEditor._config_value(NoteEditor.TRANSFER_KEEP_KEY, false))
+	box.add_child(keep_check)
 	warning_label = Label.new()
 	warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# An autowrapping label with no width asks for an enormous height; give it one.
+	warning_label.custom_minimum_size.x = TREE_SIZE.x
 	warning_label.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35))
 	warning_label.visible = false
 	box.add_child(warning_label)
@@ -63,7 +78,7 @@ func open_for(editor: NoteEditor, selected_tracks: Array = []) -> void:
 	_reveal_editing_track()
 	get_ok_button().disabled = _targets.is_empty()
 	_update_warning()
-	popup_centered()
+	popup_centered(DIALOG_SIZE)
 
 
 ## Rows for the tracks in arranger order. A track is listed when it can take the notes, is the
@@ -162,4 +177,5 @@ func _on_confirmed() -> void:
 	if target == null:
 		return
 	NoteEditor.store_config(NoteEditor.TRANSFER_TARGET_KEY, target.id)
+	NoteEditor.store_config(NoteEditor.TRANSFER_KEEP_KEY, keep_check.button_pressed)
 	applied.emit(target)

@@ -1185,7 +1185,7 @@ func open_harmony_dialog(tool: StringName) -> void:
 				_transfer_dialog.applied.connect(func(target: Track):
 					var ed := midi_editor.get_active_note_editor()
 					if ed:
-						ed.transfer_selection(target))
+						ed.transfer_selection(target, _transfer_dialog.keep_check.button_pressed))
 			_transfer_dialog.open_for(editor)
 
 

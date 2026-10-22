@@ -1245,6 +1245,7 @@ const CHORDS_SEVENTH_KEY := "clip_editor/chords_seventh_default"
 const BASSLINE_PATTERN_KEY := "clip_editor/bassline_pattern"
 const BASSLINE_RANGE_KEY := "clip_editor/bassline_range"
 const TRANSFER_TARGET_KEY := "clip_editor/transfer_last_target"
+const TRANSFER_KEEP_KEY := "clip_editor/transfer_keep_original"
 
 ## True after the last insert_chords() run had to move notes by octaves to fit the range
 ## (the dialog shows a notice, REQ-034).
@@ -1690,12 +1691,13 @@ func transfer_linked_clips(target: Track) -> Array:
 
 ## Move the selected notes to `target` (an instrument track other than the source) at the same
 ## song positions, into existing clips (extending them to whole bars) or new ones (NoteTransfer).
-## One undo step. Returns the number of notes moved.
-func transfer_selection(target: Track) -> int:
+## With `keep_original` the notes are copied: the source notes stay. One undo step. Returns the
+## number of notes transferred.
+func transfer_selection(target: Track, keep_original: bool = false) -> int:
 	if not can_transfer() or not is_transfer_target(target):
 		return 0
 	var copies := NoteSplitActions.song_copies(selection_model.refs)
-	return _run_transfer("Transfer Notes", copies.moves, {target: copies.notes.values()})
+	return _run_transfer("Transfer Notes", {} if keep_original else copies.moves, {target: copies.notes.values()})
 
 
 ## Spread the voices of the selected notes (or of all notes when nothing is selected) over the
