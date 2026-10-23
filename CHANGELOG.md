@@ -6,14 +6,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- Stage view: sources of hidden channels are no longer listed unless you turn on the temporary Show hidden toggle (#179), and the long always-visible tooltip over the view is gone (#180).
-- Track list: Space no longer hides the selected track, so it toggles play/pause there like everywhere else (#181).
-- MIDI editor: closing the project now clears its tracklist and notes (#182).
-- Arranger: with the tempo lane hidden, the ruler header collapses to its minimum height and its divider is locked; the dragged height returns when the lane is shown again.
-- Arranger: the key lane no longer shows the start key name twice.
-- Arranger: the loop triangles on the time ruler now hang from the top edge, and every ruler row has a bottom border so the rows are easier to tell apart.
+## [0.2.0] - 2026-10-23
 
 ### Added
 
@@ -43,13 +36,19 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Clip names follow their track: new clips are named "Track name N", numbered among that track's own clips. Moving a clip to another track, or making it unique per track, swaps the track name in the name. Names you type yourself are never changed automatically.
 - New appearance setting "Mixer Strip Tint" sets how strongly Colored Mixer Strips take on the channel color (0–1, default 0.8).
 - New behavior setting "Toggle Visibility Groups While Modifier Is Held": Ctrl+1, then 2, 3… combines visibility groups, and pressing a number again removes that group, until the modifier (Ctrl, or Shift/Alt/Meta if rebound) is released.
-
-### Removed
-
-- The old Spectrum Analyzer device. Projects that still contain it load without it (the device is skipped).
+- Layer: each layer's volume knob is a modulation target (#160).
+- Device preset menu has a Reset option that returns all sound parameters to their defaults as one undo step (#161).
+- Every modulator has an Amount knob (0–100 %, default 100 so existing projects sound the same) that scales its output, and another modulator can modulate it, so modulators can be chained (#156).
+- Pitch Shifter effect: transposes audio ±24 semitones without changing its length, with Fine (cents), Grain (Hz or tempo-synced), Jitter, Feedback (for shimmer and rising repeats), Spread (a micro-pitch stereo doubler) and Mix. It can sit in a channel chain, in the Delay's FB FX or in a Multiband FX band.
 
 ### Changed
 
+- Stage view: sources of hidden channels are no longer listed unless you turn on the temporary Show hidden toggle (#179), and the long always-visible tooltip over the view is gone (#180).
+- Track list: Space no longer hides the selected track, so it toggles play/pause there like everywhere else (#181).
+- MIDI editor: closing the project now clears its tracklist and notes (#182).
+- Arranger: with the tempo lane hidden, the ruler header collapses to its minimum height and its divider is locked; the dragged height returns when the lane is shown again.
+- Arranger: the key lane no longer shows the start key name twice.
+- Arranger: the loop triangles on the time ruler now hang from the top edge, and every ruler row has a bottom border so the rows are easier to tell apart.
 - Track list: disabled tracks get a darker row background, so they no longer look like hidden ones.
 - Saturator: Tube now has its own asymmetric curve, so it sounds different from Soft without touching Bias. Bias is now ±100 % on a curved taper with a smaller, more usable range (saved Bias settings sound milder). Input now affects the dry signal too. Low Cut and High Cut are 12 dB/oct. Tape HF loss now reacts to Drive as well as the input level. The Tone knob shows its real ±9 dB range.
 - Step Sequencer: steps are 20% wider and the Velocity/Chance lane is about 40% shorter.
@@ -59,6 +58,11 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Clip editor, track mode: notes of several editable tracks can be selected together. A box select (also the ruler's Ctrl+drag range) and the pitch header pick the notes of every editable track, Ctrl+click on a note of another track adds it to the selection without leaving your track, and Ctrl+Alt+A selects all notes of all editable tracks. Switching tracks keeps the selection; hiding a track or turning off its pencil takes its notes out. Delete, cut, the arrow-key edits and the selection tools (quantize, flip, strum, harmonize and the rest) act on all selected notes as one undo step. Transfer Notes and Split Voices need notes of a single track. Dragging, resizing and the Alt velocity drag move the whole selection across tracks, starting from a note of any track, and Esc cancels them. Copying notes of several tracks pastes each note back onto its own track at the new position (a note whose track is no longer editable goes to your track), Ctrl+drag duplicates a multi-track selection onto each note's own track, and the length-scale handle appears for a selection across tracks. The value lanes (velocity, release and the other note values) edit the selected notes of every track in one undo step.
 - Track context menu: "Visible" and "Enabled" toggles sit side by side at the top (Visible replaces Hidden, inverted), every action has an icon of the same size, Delete is last, and the button labels are set in the scene.
 - Reverb: Plate is now a full Dattorro tank, with all-passes inside the decay loop and output taps spread over it, so its tail keeps getting denser instead of repeating every few hundred milliseconds. When frozen it holds a smooth, dense pad instead of two short loops. Long, bright tails keep their highs (High Mult ×1 now really decays the highs like the mids). Early reflections follow Size, are decorrelated left/right (no comb filtering in mono) and are equally loud in every algorithm. Low Cut and High Cut are 12 dB/oct, and Diffusion also shapes the plate's input diffusion.
+- The MIDI CC modulator's CC Number is a dropdown listing each controller's number and common name (#155).
+
+### Removed
+
+- The old Spectrum Analyzer device. Projects that still contain it load without it (the device is skipped).
 
 ### Fixed
 
@@ -86,20 +90,6 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - The file name and Load File button of SFZ and sample devices sit above the device view instead of on a separate File tab.
 - Improved drag and drop of tracks in the Arranger's TrackList.
 - PolySynth: the Noise Color control now changes the noise sound; before, it had no effect.
-
-### Added
-
-- Layer: each layer's volume knob is a modulation target (#160).
-- Device preset menu has a Reset option that returns all sound parameters to their defaults as one undo step (#161).
-- Every modulator has an Amount knob (0–100 %, default 100 so existing projects sound the same) that scales its output, and another modulator can modulate it, so modulators can be chained (#156).
-- Pitch Shifter effect: transposes audio ±24 semitones without changing its length, with Fine (cents), Grain (Hz or tempo-synced), Jitter, Feedback (for shimmer and rising repeats), Spread (a micro-pitch stereo doubler) and Mix. It can sit in a channel chain, in the Delay's FB FX or in a Multiband FX band.
-
-### Changed
-
-- The MIDI CC modulator's CC Number is a dropdown listing each controller's number and common name (#155).
-
-### Fixed
-
 - MIDI editor: the playhead is relative to the clip instance that is playing, so a duplicated clip shows the right position at each of its places, and it stays correct when the clip is moved, trimmed or looped while the editor is open (#163).
 - Resizing several selected notes now changes every note's length by the same grid-snapped amount as the dragged note, instead of staggering them off the grid (#162).
 - A Bipolar Knob modulator reads -1 to +1 with 0 in the middle of the sweep, and its value arc starts from the middle (#125).

@@ -9,7 +9,7 @@ class_name BuildInfo extends RefCounted
 
 ## OSC protocol number. Keep in step with `build_info::PROTOCOL` in Engine/src/build_info.rs and
 ## bump it on any incompatible OSC change.
-const PROTOCOL := 1
+const PROTOCOL := 2
 
 const BUILD_INFO_PATH := "res://build_info.json"
 const DEV_COMMIT := "dev"

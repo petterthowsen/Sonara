@@ -8,7 +8,7 @@ pub const COMMIT: &str = env!("SONARA_COMMIT");
 
 /// OSC protocol number. Bump it on any incompatible OSC change; the UI warns when its own
 /// differs. Keep in step with `BuildInfo.PROTOCOL` in Godot.
-pub const PROTOCOL: i32 = 1;
+pub const PROTOCOL: i32 = 2;
 
 #[cfg(test)]
 mod tests {
