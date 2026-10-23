@@ -94,6 +94,7 @@ var loop_start_ticks: int = 0
 var loop_end_ticks: int = 0
 const LOOP_TRIANGLE_WIDTH := 9.0
 const LOOP_TRIANGLE_HEIGHT := 12.0
+const ROW_BORDER_COLOR := Color(1, 1, 1, 0.18)
 ## -1 = no drag, 0 = dragging the start triangle, 1 = the end triangle
 var _loop_drag_edge: int = -1
 ## Hide the start arrow (e.g. an owner with nothing to point at).
@@ -206,12 +207,19 @@ func _notification(what: int) -> void:
 		queue_redraw()
 
 
+## Thin line along the bottom edge of an arranger ruler row so stacked rows read as separate
+## lanes. Rows call it right after drawing their background.
+static func draw_row_border(row: Control) -> void:
+	row.draw_line(Vector2(0, row.size.y - 0.5), Vector2(row.size.x, row.size.y - 0.5), ROW_BORDER_COLOR, 1.0)
+
+
 func _draw() -> void:
 	var sb_normal := _ruler_box()
 	if sb_normal:
 		draw_style_box(sb_normal, Rect2(0, 0, size.x, size.y))
 	else:
 		draw_rect(Rect2(0, 0, size.x, size.y), bg_color)
+	draw_row_border(self)
 
 	if grid_helper:
 		_draw_regions()
@@ -304,15 +312,18 @@ func _loop_draw_color() -> Color:
 	return c
 
 
-## Right triangles standing on the bottom edge: the vertical side sits on the region edge and
-## the hypotenuse slopes down toward the inside of the region.
+## Right triangles standing on the bottom edge (top edge, pointing down, for a TOP-aligned ruler):
+## the vertical side sits on the region edge and the hypotenuse slopes toward the inside of the region.
 func _loop_triangle_points(is_end: bool) -> PackedVector2Array:
 	var x := _tick_to_local_x(loop_end_ticks if is_end else loop_start_ticks)
 	var dir := -1.0 if is_end else 1.0
+	var top: bool = vertical_alignment == VerticalAlignment.TOP
+	var base_y := 0.0 if top else size.y
+	var tip_y := LOOP_TRIANGLE_HEIGHT if top else size.y - LOOP_TRIANGLE_HEIGHT
 	return PackedVector2Array([
-		Vector2(x, size.y),
-		Vector2(x + dir * LOOP_TRIANGLE_WIDTH, size.y),
-		Vector2(x, size.y - LOOP_TRIANGLE_HEIGHT),
+		Vector2(x, base_y),
+		Vector2(x + dir * LOOP_TRIANGLE_WIDTH, base_y),
+		Vector2(x, tip_y),
 	])
 
 
@@ -334,7 +345,9 @@ func _loop_edge_at(pos: Vector2) -> int:
 		var pts := _loop_triangle_points(is_end)
 		var left := minf(pts[0].x, pts[1].x) - 2.0
 		var right := maxf(pts[0].x, pts[1].x) + 2.0
-		if pos.x >= left and pos.x <= right and pos.y >= size.y - LOOP_TRIANGLE_HEIGHT - 2.0:
+		var in_band: bool = pos.y <= LOOP_TRIANGLE_HEIGHT + 2.0 if vertical_alignment == VerticalAlignment.TOP \
+				else pos.y >= size.y - LOOP_TRIANGLE_HEIGHT - 2.0
+		if pos.x >= left and pos.x <= right and in_band:
 			return 1 if is_end else 0
 	return -1
 

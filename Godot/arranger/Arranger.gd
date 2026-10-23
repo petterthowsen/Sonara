@@ -42,6 +42,7 @@ var show_disabled_toggle: Button
 @onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin/TimelineScrollBar
 
 @onready var v_split : VSplitContainer = $VSplitContainer
+var _header_split_offset: int = 60
 
 # Vertical scrolling container
 @onready var v_scroll: ScrollContainer = $VSplitContainer/ArrangeBody/VScroll
@@ -844,6 +845,22 @@ func _apply_ruler_row_visibility() -> void:
 		key_change_track.visible = key_toggle.button_pressed
 	if tempo_track:
 		tempo_track.visible = tempo_toggle.button_pressed
+	_update_header_resizable()
+
+
+## The header split only matters while the tempo lane is shown (it is the lane that grows).
+## Without it, collapse to the minimum height and lock the divider; restore the dragged
+## offset when the lane comes back.
+func _update_header_resizable() -> void:
+	var resizable := tempo_toggle.button_pressed
+	if resizable == v_split.dragging_enabled:
+		return
+	if resizable:
+		v_split.split_offset = _header_split_offset
+	else:
+		_header_split_offset = v_split.split_offset
+		v_split.split_offset = 0
+	v_split.dragging_enabled = resizable
 
 
 ## Footer toggles: show/hide automation lanes and buttons, or the routing button, on every

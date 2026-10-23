@@ -11,6 +11,9 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Stage view: sources of hidden channels are no longer listed unless you turn on the temporary Show hidden toggle (#179), and the long always-visible tooltip over the view is gone (#180).
 - Track list: Space no longer hides the selected track, so it toggles play/pause there like everywhere else (#181).
 - MIDI editor: closing the project now clears its tracklist and notes (#182).
+- Arranger: with the tempo lane hidden, the ruler header collapses to its minimum height and its divider is locked; the dragged height returns when the lane is shown again.
+- Arranger: the key lane no longer shows the start key name twice.
+- Arranger: the loop triangles on the time ruler now hang from the top edge, and every ruler row has a bottom border so the rows are easier to tell apart.
 
 ### Added
 

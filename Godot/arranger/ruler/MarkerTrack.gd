@@ -72,6 +72,7 @@ func _draw() -> void:
 		draw_style_box(sb_normal, Rect2(0, 0, size.x, size.y))
 	else:
 		draw_rect(Rect2(0, 0, size.x, size.y), bg_color)
+	BaseRuler.draw_row_border(self)
 
 
 ## Attach shared grid helper used by the arranger timeline.

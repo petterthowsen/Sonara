@@ -197,6 +197,7 @@ func _draw() -> void:
 		draw_style_box(sb, Rect2(0, 0, size.x, size.y))
 	else:
 		draw_rect(Rect2(0, 0, size.x, size.y), bg_color)
+	BaseRuler.draw_row_border(self)
 	if project == null or grid_helper == null:
 		return
 	for line in grid_helper.get_visible_grid_lines(0.0, size.x):

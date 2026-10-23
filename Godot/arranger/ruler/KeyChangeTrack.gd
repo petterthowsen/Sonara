@@ -7,7 +7,6 @@
 # Every edit is one undo step (`KeyChangeMapStateCommand`), recorded on release.
 class_name KeyChangeTrack extends Control
 
-const CHIP_WIDTH := 62.0
 
 @export var bg_color: Color = Color(0.10, 0.10, 0.10, 1.0)
 
@@ -220,17 +219,12 @@ func _draw() -> void:
 		draw_style_box(sb, Rect2(0, 0, size.x, size.y))
 	else:
 		draw_rect(Rect2(0, 0, size.x, size.y), bg_color)
+	BaseRuler.draw_row_border(self)
 	if project == null or grid_helper == null:
 		return
 	for line in grid_helper.get_visible_grid_lines(0.0, size.x):
 		if line.type == GridHelper.GridLineType.BAR:
 			draw_line(Vector2(line.x, 0), Vector2(line.x, size.y), Color(1, 1, 1, 0.08))
-	if project.key_change_map.is_empty():
-		var font := get_theme_default_font()
-		@warning_ignore("integer_division")
-		var y := size.y * 0.5 + 5.0
-		draw_string(font, Vector2(CHIP_WIDTH + 8.0, y), project.get_scale().display_name(),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, KeyChangeItem.FONT_SIZE, Color(KeyChangeItem.TAB_COLOR, 0.7))
 
 
 func _gui_input(event: InputEvent) -> void:
