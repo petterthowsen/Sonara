@@ -127,6 +127,11 @@ impl<'a> Args<'a> {
         Self { addr, args }
     }
 
+    /// Number of arguments, for messages with an optional tail.
+    pub(super) fn len(&self) -> usize {
+        self.args.len()
+    }
+
     /// The address the message was sent to.
     pub(super) fn addr(&self) -> &'a str {
         self.addr

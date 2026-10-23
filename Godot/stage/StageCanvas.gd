@@ -1,6 +1,7 @@
 # StageCanvas.gd
-# Top-down drawing of the virtual stage (spec 051, REQ-021..022): the room, the listener and one
-# bar per stage source (a dot at size 0), in its channel's colour and labelled with its name.
+# Top-down drawing of the virtual stage (spec 051, REQ-021..022; spec 052): the room, the listener
+# and one rectangle per stage source (a dot at size 0), in its channel's colour and labelled with
+# its name. A Block fills the rectangle; a Section outlines it and draws a person icon per player.
 # Hit-testing and drags live here; the numbers come from StageEdit and are applied to the
 # channels through set_stage_state, so the models send OSC. A finished drag is recorded as one
 # undo step.
@@ -23,12 +24,18 @@ const DOT_RADIUS := 7.0
 ## A selected dot shows its resize handle this far from the centre, along its rotation.
 const DOT_HANDLE_PX := 22.0
 const HANDLE_RADIUS := 5.0
-const ROTATION_SNAP_DEG := 15.0
 const GRID_MIN_PX := 36.0
+## UI state (not a user setting): drags snap to the grid.
+const SNAP_CONFIG_KEY := "stage_view/snap"
+## Lower bound on the person icon, and the share of its grid cell it fills.
+const ICON_MIN_PX := 3.0
+const ICON_FILL := 0.7
 
-enum Drag { NONE, MOVE, END, LISTENER }
+enum Drag { NONE, MOVE, END, EDGE, LISTENER }
 
 var project: Project = null
+## Snap placement drags (1 m, 15 degrees; Shift = 0.1 m, 1 degree). On by default, remembered in the UI config.
+var snap_enabled := true
 var selection: Array[Channel] = []
 
 var _items: Array[Channel] = []
@@ -44,6 +51,8 @@ var _drag_start := Vector2.ZERO
 var _drag_channels: Array[Channel] = []
 var _drag_old: Array[Dictionary] = []
 var _drag_which := 0
+## Index in `_drag_channels` of the source under the pointer: it is the one that snaps.
+var _drag_anchor := -1
 var _listener_old: Dictionary = {}
 
 
@@ -53,7 +62,15 @@ func _init() -> void:
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	clip_contents = true
 	focus_mode = Control.FOCUS_NONE
-	tooltip_text = "Drag a bar to move it, an end to resize and rotate it (Shift snaps to 15°), and the listener to move it."
+	tooltip_text = "Drag a source to move it, an end to resize and rotate it, the front or back edge to change its depth, and the listener to move it. Drags snap to 1 m and 15° (hold Shift for 0.1 m and 1°; the Snap toggle turns snapping off)."
+	snap_enabled = bool(Sonara.get_config(SNAP_CONFIG_KEY, true))
+
+
+## Turn snapping on or off and remember it in the UI config.
+func set_snap_enabled(on: bool) -> void:
+	snap_enabled = on
+	Sonara.set_config(SNAP_CONFIG_KEY, on)
+	Sonara.save_config()
 
 
 func set_project(p: Project) -> void:
@@ -217,8 +234,8 @@ func to_room(s: Vector2) -> Vector2:
 	return (s - _origin) / _scale
 
 
-## Screen positions of a source's two handles (end A, end B). A dot has none, so its handle sits
-## a fixed distance from the centre.
+## Screen positions of a source's two end handles (end A, end B). A dot has none, so its handle
+## sits a fixed distance from the centre.
 func _handles(state: Dictionary) -> Array[Vector2]:
 	var center := to_screen(Vector2(float(state.x), float(state.y)))
 	if float(state.size) < StageEdit.MIN_SIZE:
@@ -228,12 +245,19 @@ func _handles(state: Dictionary) -> Array[Vector2]:
 	return [to_screen(e[0]), to_screen(e[1])]
 
 
+## Screen positions of the depth handles at the middle of the front and back edges.
+func _edge_handles(state: Dictionary) -> Array[Vector2]:
+	var m := StageEdit.edge_midpoints(state)
+	return [to_screen(m[0]), to_screen(m[1])]
+
+
 # ============================================================================
 # Hit-testing
 # ============================================================================
 
-## What is under `pos` (control coordinates): `{kind: "end"|"body"|"listener"|"none", channel,
-## which}`. Ends are only grabbed on a selected or hovered source.
+## What is under `pos` (control coordinates): `{kind: "end"|"edge"|"body"|"listener"|"none",
+## channel, which}`. Handles (ends, edges) are only grabbed on a selected or hovered source. The
+## body is the whole rectangle.
 func hit_test(pos: Vector2) -> Dictionary:
 	if project == null:
 		return {"kind": "none"}
@@ -249,28 +273,25 @@ func hit_test(pos: Vector2) -> Dictionary:
 					if which == 0 and float(state.size) < StageEdit.MIN_SIZE:
 						continue  # a dot has one handle
 					return {"kind": "end", "channel": ch, "which": which}
+			if float(state.size) >= StageEdit.MIN_SIZE:
+				var edges := _edge_handles(state)
+				for which in 2:
+					if pos.distance_to(edges[which]) <= HIT_PX:
+						return {"kind": "edge", "channel": ch, "which": which}
 		var center := to_screen(Vector2(float(state.x), float(state.y)))
 		var dist := pos.distance_to(center)
 		if float(state.size) < StageEdit.MIN_SIZE:
 			dist = maxf(dist - DOT_RADIUS, 0.0)
+		elif StageEdit.contains(state, to_room(pos), HIT_PX / _scale):
+			dist = 0.0
 		else:
-			var e := StageEdit.ends(state)
-			dist = _distance_to_segment(pos, to_screen(e[0]), to_screen(e[1]))
+			dist = INF
 		if dist <= HIT_PX:
 			return {"kind": "body", "channel": ch}
 	var listener := to_screen(Vector2(project.stage.listener.x, project.stage.listener.y))
 	if pos.distance_to(listener) <= HIT_PX + 4.0:
 		return {"kind": "listener"}
 	return {"kind": "none"}
-
-
-static func _distance_to_segment(p: Vector2, a: Vector2, b: Vector2) -> float:
-	var ab := b - a
-	var len2 := ab.length_squared()
-	if len2 < 0.0001:
-		return p.distance_to(a)
-	var t := clampf((p - a).dot(ab) / len2, 0.0, 1.0)
-	return p.distance_to(a + ab * t)
 
 
 # ============================================================================
@@ -306,6 +327,11 @@ func _press(pos: Vector2, additive: bool) -> void:
 			_select(ch, false)
 			_begin(Drag.END, pos, [ch] as Array[Channel])
 			_drag_which = hit.which
+		"edge":
+			var ch: Channel = hit.channel
+			_select(ch, false)
+			_begin(Drag.EDGE, pos, [ch] as Array[Channel])
+			_drag_which = hit.which
 		"body":
 			var ch: Channel = hit.channel
 			if additive:
@@ -314,6 +340,7 @@ func _press(pos: Vector2, additive: bool) -> void:
 			if not selection.has(ch):
 				_select(ch, false)
 			_begin(Drag.MOVE, pos, selection.duplicate())
+			_drag_anchor = _drag_channels.find(ch)
 		"listener":
 			_begin(Drag.LISTENER, pos, [] as Array[Channel])
 			_listener_old = project.stage.get_state()
@@ -340,6 +367,7 @@ func _select(ch: Channel, additive: bool) -> void:
 
 func _begin(kind: Drag, pos: Vector2, channels: Array[Channel]) -> void:
 	_drag = kind
+	_drag_anchor = -1
 	_drag_start = to_room(pos)
 	_drag_channels = channels
 	_drag_old = []
@@ -347,17 +375,21 @@ func _begin(kind: Drag, pos: Vector2, channels: Array[Channel]) -> void:
 		_drag_old.append(ch.get_stage_state())
 
 
-func _drag_to(pos: Vector2, snap: bool) -> void:
+## Continue the drag at `pos`. `fine` (Shift) uses the fine snap steps; with snapping off the drag is free.
+func _drag_to(pos: Vector2, fine: bool) -> void:
 	var room := project.stage
 	var point := to_room(pos)
+	var step := StageEdit.step_m(snap_enabled, fine)
 	match _drag:
 		Drag.MOVE:
-			var moved := StageEdit.move_by(room, _drag_old, point - _drag_start)
+			var moved := StageEdit.move_by(room, _drag_old, point - _drag_start, _drag_anchor, step)
 			for i in _drag_channels.size():
 				_drag_channels[i].set_stage_state(moved[i])
 		Drag.END:
-			var changed := StageEdit.drag_end(room, _drag_old[0], _drag_which, point, ROTATION_SNAP_DEG if snap else 0.0)
+			var changed := StageEdit.drag_end(room, _drag_old[0], _drag_which, point, StageEdit.step_deg(snap_enabled, fine), step)
 			_drag_channels[0].set_stage_state(changed)
+		Drag.EDGE:
+			_drag_channels[0].set_stage_state(StageEdit.drag_edge(room, _drag_old[0], point, step))
 		Drag.LISTENER:
 			var p := room.clamp_point(Vector3(point.x, point.y, room.listener.z))
 			room.set_listener(p)
@@ -464,23 +496,64 @@ func _draw_source(ch: Channel, ink: Color, font: Font, font_size: int) -> void:
 	var selected := selection.has(ch)
 	var center := to_screen(Vector2(float(state.x), float(state.y)))
 	var dot: bool = float(state.size) < StageEdit.MIN_SIZE
+	var top := center.y - (DOT_RADIUS if dot else 0.0)
 	if dot:
 		if selected:
 			draw_circle(center, DOT_RADIUS + 2.5, Color.WHITE)
 		draw_circle(center, DOT_RADIUS, color)
 	else:
-		var e := StageEdit.ends(state)
-		var a := to_screen(e[0])
-		var b := to_screen(e[1])
+		var outline := PackedVector2Array()
+		for corner in StageEdit.corners(state):
+			var sp := to_screen(corner)
+			outline.append(sp)
+		top = outline[0].y
+		for sp in outline:
+			top = minf(top, sp.y)
+		var section: bool = int(state.get("display", 0)) == StageEdit.DISPLAY_SECTION
+		if section:
+			draw_colored_polygon(outline, Color(color, 0.2))
+			_draw_players(state, color)
+		else:
+			draw_colored_polygon(outline, Color(color, 0.85))
+		var closed := outline.duplicate()
+		closed.append(outline[0])
 		if selected:
-			draw_line(a, b, Color.WHITE, BAR_WIDTH + 4.0, true)
-		draw_line(a, b, color, BAR_WIDTH, true)
+			draw_polyline(closed, Color.WHITE, 4.0, true)
+		draw_polyline(closed, color, 2.0, true)
 	if selected or ch == _hover:
 		var handles := _handles(state)
 		for which in 2:
 			if dot and which == 0:
 				continue  # a dot has one handle
-			draw_circle(handles[which], HANDLE_RADIUS, Color.WHITE)
-			draw_circle(handles[which], HANDLE_RADIUS - 1.5, color)
-	var label_pos := center + Vector2(-60, -12 - (BAR_WIDTH if not dot else DOT_RADIUS))
-	draw_string(font, label_pos, ch.name, HORIZONTAL_ALIGNMENT_CENTER, 120, font_size, Color(ink, 0.95 if selected else 0.75))
+			_draw_handle(handles[which], color, false)
+		if not dot:
+			var edges := _edge_handles(state)
+			for which in 2:
+				_draw_handle(edges[which], color, true)
+	draw_string(font, Vector2(center.x - 60, top - 6), ch.name, HORIZONTAL_ALIGNMENT_CENTER, 120, font_size, Color(ink, 0.95 if selected else 0.75))
+
+
+func _draw_handle(at: Vector2, color: Color, square: bool) -> void:
+	if square:
+		draw_rect(Rect2(at - Vector2.ONE * HANDLE_RADIUS, Vector2.ONE * HANDLE_RADIUS * 2.0), Color.WHITE)
+		draw_rect(Rect2(at - Vector2.ONE * (HANDLE_RADIUS - 1.5), Vector2.ONE * (HANDLE_RADIUS - 1.5) * 2.0), color)
+	else:
+		draw_circle(at, HANDLE_RADIUS, Color.WHITE)
+		draw_circle(at, HANDLE_RADIUS - 1.5, color)
+
+
+## One person icon (a head and shoulders) per player of a Section, sized to its grid cell.
+func _draw_players(state: Dictionary, color: Color) -> void:
+	var players := StageEdit.player_positions(state)
+	if players.is_empty():
+		return
+	var grid := StageEdit.section_grid(players.size(), float(state.size), float(state.get("depth", 0.0)))
+	var cell := Vector2(float(state.size) / grid.x, float(state.get("depth", 0.0)) / grid.y) * _scale
+	var r := minf(cell.x, cell.y) * ICON_FILL * 0.5
+	for p in players:
+		var at := to_screen(p)
+		if r < ICON_MIN_PX:
+			draw_circle(at, maxf(r, 1.0), color)
+			continue
+		draw_circle(at + Vector2(0, -r * 0.45), r * 0.38, color)
+		draw_arc(at + Vector2(0, r * 0.85), r * 0.7, PI, TAU, 12, color, maxf(r * 0.35, 1.5), true)

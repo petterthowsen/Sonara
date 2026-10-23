@@ -163,6 +163,7 @@ impl StageTail {
 mod tests {
     use super::*;
     use crate::audio::dsp::test_util::{impulse, rms, schroeder_t60};
+    use crate::audio::stage::MicSetup;
 
     const SR: f32 = 48_000.0;
     const BLOCK: usize = 512;
@@ -283,5 +284,20 @@ mod tests {
             rms(&run(&mut t, &input)[SR as usize * 2..])
         };
         assert!(long > short * 10.0);
+    }
+
+    #[test]
+    fn tail_ignores_mic() {
+        let impulse_out = |mic: MicSetup| {
+            let mut r = room(2.0);
+            r.mic = mic;
+            let mut tail = tail_for(&r);
+            let input = impulse(SR as usize);
+            (run(&mut tail, &input), tail.gain, tail.enabled)
+        };
+        let pan = impulse_out(MicSetup::Pan);
+        for mic in MicSetup::ALL {
+            assert!(impulse_out(mic) == pan, "{mic:?} changes the tail");
+        }
     }
 }

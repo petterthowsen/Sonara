@@ -5,12 +5,15 @@ use anyhow::Result;
 use rosc::OscType;
 
 use super::RouteCtx;
-use crate::audio::stage::{OutputMode, RoomModel, SurfaceMaterial, Vec3};
+use crate::audio::stage::{MicSetup, OutputMode, RoomModel, SurfaceMaterial, Vec3};
 use crate::audio::AudioCommand;
 use crate::osc::parse::{ArgError, Args};
 
-/// Arguments of `/stage/set`: 8 floats, 2 ints, then a gain and a damping for each of 6 surfaces.
-const STAGE_SET_ARGS: usize = 8 + 2 + 12;
+/// Arguments of `/stage/set` before spec 052: 8 floats, 2 ints, then a gain and a damping for each
+/// of 6 surfaces. The mic setup is absent and means Pan.
+const STAGE_SET_ARGS_V1: usize = 8 + 2 + 12;
+/// Arguments of `/stage/set`: the above plus the mic setup (an int).
+const STAGE_SET_ARGS: usize = STAGE_SET_ARGS_V1 + 1;
 
 /// Handle stage routes: `/stage/*`. Returns false for an address this area doesn't know, so the
 /// caller can try the next area or report an unknown address.
@@ -33,9 +36,14 @@ pub(super) fn route(parts: &[&str], args: &[OscType], cx: &mut RouteCtx) -> Resu
 
 /// Read a `/stage/set` message into a room: width, depth, height, listener x, y, z, decay, tail
 /// dB, Distance delay, output mode, then (gain, damping) for front, back, left, right, floor and
-/// ceiling. The engine clamps the values when it applies them.
+/// ceiling, then optionally the mic setup (absent = Pan). The engine clamps the values when it applies them.
 fn parse_stage_set(a: &Args) -> Result<RoomModel, ArgError> {
-    a.exactly(STAGE_SET_ARGS)?;
+    let has_mic = a.len() == STAGE_SET_ARGS;
+    a.exactly(if has_mic {
+        STAGE_SET_ARGS
+    } else {
+        STAGE_SET_ARGS_V1
+    })?;
     let mut surfaces = [SurfaceMaterial::default(); 6];
     for (i, surface) in surfaces.iter_mut().enumerate() {
         surface.gain = a.float_or_int(10 + i * 2)?;
@@ -51,5 +59,10 @@ fn parse_stage_set(a: &Args) -> Result<RoomModel, ArgError> {
         distance_delay: a.bool(8)?,
         output_mode: OutputMode::from(a.int(9)?),
         surfaces,
+        mic: if has_mic {
+            MicSetup::from(a.int(22)?)
+        } else {
+            MicSetup::Pan
+        },
     })
 }

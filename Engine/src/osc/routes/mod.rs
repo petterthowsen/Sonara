@@ -274,7 +274,7 @@ mod tests {
         ));
     }
 
-    /// The 22 arguments of a `/stage/set` for a 30 x 20 x 12 m room.
+    /// The 22 arguments (the form before the mic setup) of a `/stage/set` for a 30 x 20 x 12 m room.
     fn stage_set_args() -> Vec<OscType> {
         let mut args = vec![
             Float(30.0),
@@ -316,6 +316,7 @@ mod tests {
         assert_eq!(room.surfaces[0].gain, 0.5);
         assert_eq!(room.surfaces[5].hf_damping, 0.5);
         assert_eq!(room.surfaces[3].gain, 0.65);
+        assert_eq!(room.mic, crate::audio::stage::MicSetup::Pan);
 
         // A short or mistyped message is dropped.
         let mut short = stage_set_args();
@@ -323,6 +324,40 @@ mod tests {
         assert!(h.send("/stage/set", short).is_empty());
         let mut bad = stage_set_args();
         bad[8] = Float(1.0);
+        assert!(h.send("/stage/set", bad).is_empty());
+    }
+
+    #[test]
+    fn stage_set_reads_the_mic_setup() {
+        use crate::audio::stage::MicSetup;
+        let mut h = Harness::new();
+        // 22 arguments: an older sender means Pan.
+        let sent = h.send("/stage/set", stage_set_args());
+        let [AudioCommand::SetStage { room }] = sent.as_slice() else {
+            panic!("expected SetStage, got {sent:?}");
+        };
+        assert_eq!(room.mic, MicSetup::Pan);
+        // 23 arguments: the last is the setup; an unknown value falls back to Pan.
+        for (value, expected) in [
+            (6, MicSetup::Decca),
+            (2, MicSetup::Blumlein),
+            (99, MicSetup::Pan),
+        ] {
+            let mut args = stage_set_args();
+            args.push(Int(value));
+            let sent = h.send("/stage/set", args);
+            let [AudioCommand::SetStage { room }] = sent.as_slice() else {
+                panic!("expected SetStage, got {sent:?}");
+            };
+            assert_eq!(room.mic, expected);
+        }
+        // 24 arguments, or a mistyped mic, are refused.
+        let mut long = stage_set_args();
+        long.push(Int(1));
+        long.push(Int(1));
+        assert!(h.send("/stage/set", long).is_empty());
+        let mut bad = stage_set_args();
+        bad.push(Float(1.0));
         assert!(h.send("/stage/set", bad).is_empty());
     }
 

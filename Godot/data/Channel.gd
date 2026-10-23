@@ -49,6 +49,10 @@ signal color_changed(color : Color)
 signal volume_changed(value: float)
 signal pan_changed(pan_left: float, pan_right: float)
 signal pan_mode_changed(pan_mode: PanMode)
+## How the Stage view fills a source's rectangle (spec 052). Visual only. The numbers are the saved values.
+enum StageDisplay { BLOCK, SECTION }
+const STAGE_DISPLAY_IDS: Array[String] = ["block", "section"]
+
 ## Placement of a stage source changed (spec 051): position, size, rotation, sum mode or Has room.
 signal stage_changed
 signal mute_changed(value: bool)
@@ -107,6 +111,9 @@ var stage_y: float = 0.0
 var stage_z: float = 0.0
 var stage_size: float = 0.0       # Width of a stereo source; 0 = one point
 var stage_rotation: float = 0.0   # Degrees, -180..180; 0 = parallel to the front wall
+var stage_depth: float = VirtualStage.DEFAULT_SOURCE_DEPTH  # Front-to-back extent in meters; visual only
+var stage_display: StageDisplay = StageDisplay.BLOCK
+var stage_players: int = VirtualStage.DEFAULT_PLAYERS  # Section mode only
 var stage_sum_mode: StageSumMode = StageSumMode.LEFT_PLUS_RIGHT
 var stage_has_room: bool = false  # Recorded with its own room: no reflections or tail
 ## False until the channel first enters Stage, which places it from its pan (REQ-002).
@@ -558,16 +565,19 @@ func place_in_stage_from_pan(stereo: bool = true) -> void:
 	stage_z = room.default_source_height()
 	stage_size = VirtualStage.DEFAULT_STEREO_SIZE if stereo else 0.0
 	stage_rotation = 0.0
+	stage_depth = VirtualStage.DEFAULT_SOURCE_DEPTH
 	stage_placed = true
 	stage_x = clampf(stage_x, 0.0, room.width)
 
 
-## Snapshot of the placement: `{x, y, z, size, rotation, sum_mode, has_room, placed, prev_pan_mode}`.
+## Snapshot of the placement: `{x, y, z, size, rotation, sum_mode, has_room, placed, prev_pan_mode, depth, display, players}`.
+## `display` is a StageDisplay value; the saved project writes its id ("block" / "section").
 func get_stage_state() -> Dictionary:
 	return {
 		"x": stage_x, "y": stage_y, "z": stage_z, "size": stage_size, "rotation": stage_rotation,
 		"sum_mode": int(stage_sum_mode), "has_room": stage_has_room, "placed": stage_placed,
 		"prev_pan_mode": int(stage_prev_pan_mode),
+		"depth": stage_depth, "display": int(stage_display), "players": stage_players,
 	}
 
 
@@ -582,6 +592,11 @@ func set_stage_state(state: Dictionary) -> void:
 	stage_has_room = bool(state.get("has_room", stage_has_room))
 	stage_placed = bool(state.get("placed", stage_placed))
 	stage_prev_pan_mode = clampi(int(state.get("prev_pan_mode", stage_prev_pan_mode)), PanMode.STEREO_COMBINED, PanMode.MONO) as PanMode
+	stage_depth = maxf(float(state.get("depth", stage_depth)), 0.0)
+	var display: Variant = state.get("display", int(stage_display))
+	var display_index: int = STAGE_DISPLAY_IDS.find(display) if display is String else int(display)
+	stage_display = clampi(display_index, StageDisplay.BLOCK, StageDisplay.SECTION) as StageDisplay
+	stage_players = clampi(int(state.get("players", stage_players)), VirtualStage.MIN_PLAYERS, VirtualStage.MAX_PLAYERS)
 	_stage_edited(false)
 
 
@@ -1295,7 +1310,9 @@ func to_json() -> Dictionary:
 		"devices": devices.map(func(d): return d.to_json()),
 	})
 	if stage_placed:
-		data["stage"] = get_stage_state()
+		var stage_state := get_stage_state()
+		stage_state["display"] = STAGE_DISPLAY_IDS[stage_display]
+		data["stage"] = stage_state
 	return data
 
 

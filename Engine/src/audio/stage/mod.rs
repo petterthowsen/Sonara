@@ -1,6 +1,7 @@
 //! Virtual Stage (spec 051): a shoebox room shared by every channel in the Stage pan mode.
 //!
 //! - `image_source` computes the direct path and the first and second order reflections.
+//! - `mic` is the listener's mic setup (spec 052): capsules with polar patterns and offsets.
 //! - `panner` turns a direction into per-output gains (the layout seam; stereo only for now).
 //! - `source` renders one stage source: direct sound plus its reflections.
 //! - `tail` is the shared late reverb on the Stage return.
@@ -10,11 +11,13 @@
 //! the listener's frame instead: X right, Y forward (toward the front wall), Z up.
 
 pub mod image_source;
+pub mod mic;
 pub mod panner;
 pub mod source;
 pub mod tail;
 
 use super::types::ChannelId;
+pub use mic::MicSetup;
 
 /// Distance at which a source sounds as loud as it would unspatialized.
 pub const R_REF: f32 = 5.0;
@@ -126,6 +129,8 @@ pub struct RoomModel {
     pub distance_delay: bool,
     pub output_mode: OutputMode,
     pub surfaces: [SurfaceMaterial; 6],
+    /// The mic array the listener records with; the shared tail ignores it.
+    pub mic: MicSetup,
 }
 
 impl Default for RoomModel {
@@ -141,6 +146,7 @@ impl Default for RoomModel {
             distance_delay: false,
             output_mode: OutputMode::Full,
             surfaces: [SurfaceMaterial::default(); 6],
+            mic: MicSetup::Pan,
         }
     }
 }

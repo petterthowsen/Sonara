@@ -8,11 +8,15 @@
 //! - A stereo source is one point at size 0 and two points (its L and R inputs) when wider.
 //!   Mono input is always one point.
 //! - A new room crossfades over 50 ms: the old reflections keep rendering from a frozen copy of
-//!   the old bank while the new one fades in.
+//!   the old bank while the new one fades in. A changed mic setup crossfades the direct sound too.
+//! - The mic setup (spec 052) decides how many reads a tap takes: one for Pan and the coincident
+//!   setups (capsule gains summed), one per capsule for the spaced ones, each with the capsule as
+//!   the receiver. Without Distance delay the spaced delays are measured from the point's
+//!   earliest capsule arrival, so the array adds no latency.
 //! - Everything is allocated in [`StageSource::new`]; `render` never allocates.
 
 use super::image_source::{direct_tap, distance, taps, Tap, TapSet};
-use super::panner::{Panner, StereoPanner};
+use super::mic::{rear_amount, MicArray, MAX_ARRAY_SPAN_M, MAX_CAPSULES};
 use super::{
     OutputMode, RoomModel, StageParams, SumMode, Vec3, FIRST_ORDER_SURFACES, SPEED_OF_SOUND,
 };
@@ -114,16 +118,23 @@ impl Line {
     }
 }
 
-/// A tap's delay and stereo gains: what is ramped across a block.
+/// One read of a tap: its delay and stereo gains, what is ramped across a block.
 #[derive(Clone, Copy, Default)]
-struct TapRamp {
+struct CapsuleRamp {
     delay: f32,
     left: f32,
     right: f32,
 }
 
+/// A tap's reads, one per capsule in use (`MicArray::reads`; always slot 0 for Pan and the
+/// coincident setups).
+#[derive(Clone, Copy, Default)]
+struct TapRamp {
+    caps: [CapsuleRamp; MAX_CAPSULES],
+}
+
 /// `tmp * (from → to)` added into the left and right buses.
-fn pan_add(tmp: &[f32], from: TapRamp, to: TapRamp, out_l: &mut [f32], out_r: &mut [f32]) {
+fn pan_add(tmp: &[f32], from: CapsuleRamp, to: CapsuleRamp, out_l: &mut [f32], out_r: &mut [f32]) {
     let n = tmp.len();
     if from.left == to.left && from.right == to.right {
         for ((l, r), &s) in out_l.iter_mut().zip(out_r.iter_mut()).zip(tmp) {
@@ -188,9 +199,16 @@ struct Geometry {
 
 /// Reflections of one room: the previous block's tap values (to ramp from) and the damping
 /// filters of the surface and second-order buses.
+///
+/// It also holds the direct sound's state (spec 052), so a mic change can render the direct from
+/// the old and the new setup at once.
 #[derive(Clone)]
 struct Bank {
     room: RoomModel,
+    mic: MicArray,
+    direct_taps: [TapRamp; 2],
+    direct_valid: [bool; 2],
+    direct_lp: [[OnePole; MAX_CAPSULES]; 2],
     first: [[TapRamp; FIRST]; 2],
     first_valid: [bool; 2],
     second: [TapRamp; SECOND],
@@ -202,6 +220,10 @@ impl Bank {
     fn new(room: RoomModel) -> Self {
         Self {
             room,
+            mic: MicArray::for_setup(room.mic),
+            direct_taps: [TapRamp::default(); 2],
+            direct_valid: [false; 2],
+            direct_lp: [[OnePole::new(); MAX_CAPSULES]; 2],
             first: [[TapRamp::default(); FIRST]; 2],
             first_valid: [false; 2],
             second: [TapRamp::default(); SECOND],
@@ -213,6 +235,11 @@ impl Bank {
     fn invalidate(&mut self) {
         self.first_valid = [false; 2];
         self.second_valid = false;
+    }
+
+    fn invalidate_direct(&mut self) {
+        self.direct_valid = [false; 2];
+        self.direct_lp = [[OnePole::new(); MAX_CAPSULES]; 2];
     }
 }
 
@@ -232,6 +259,9 @@ struct Scratch {
     sig_a: Vec<f32>,
     sig_b: Vec<f32>,
     tmp: Vec<f32>,
+    /// The old setup's direct sound while a mic change crossfades.
+    direct_l: Vec<f32>,
+    direct_r: Vec<f32>,
     bus_l: Vec<Vec<f32>>,
     bus_r: Vec<Vec<f32>>,
 }
@@ -241,12 +271,19 @@ struct Fade {
     pos: usize,
 }
 
+/// A running fade's gains over one chunk, each from the chunk's start to its end.
+#[derive(Clone, Copy)]
+struct FadeGains {
+    new: (f32, f32),
+    old: (f32, f32),
+    finished: bool,
+}
+
 pub struct StageSource {
     sample_rate: f32,
     max_frames: usize,
     lines: [Line; 2],
     scratch: Scratch,
-    panner: StereoPanner,
     smooth: Smoothed,
     /// Last block's two-point blend, ramped across the next block.
     blend: f32,
@@ -254,9 +291,6 @@ pub struct StageSource {
     fade: Option<Fade>,
     /// 1 while reflections render, ramped to 0 for Has room and Direct only.
     level: f32,
-    direct_taps: [TapRamp; 2],
-    direct_valid: [bool; 2],
-    direct_lp: [OnePole; 2],
     primed: bool,
 }
 
@@ -272,7 +306,8 @@ impl StageSource {
             ..RoomModel::default()
         }
         .max_path();
-        let history = (longest / SPEED_OF_SOUND * sample_rate).ceil() as usize + 8;
+        let history =
+            ((longest + MAX_ARRAY_SPAN_M) / SPEED_OF_SOUND * sample_rate).ceil() as usize + 8;
         let buses = |n: usize| (0..BUSES).map(|_| vec![0.0; n]).collect::<Vec<_>>();
         Self {
             sample_rate,
@@ -285,18 +320,16 @@ impl StageSource {
                 sig_a: vec![0.0; max_frames],
                 sig_b: vec![0.0; max_frames],
                 tmp: vec![0.0; max_frames],
+                direct_l: vec![0.0; max_frames],
+                direct_r: vec![0.0; max_frames],
                 bus_l: buses(max_frames),
                 bus_r: buses(max_frames),
             },
-            panner: StereoPanner,
             smooth: Smoothed::default(),
             blend: 0.0,
             bank: Bank::new(RoomModel::default()),
             fade: None,
             level: 1.0,
-            direct_taps: [TapRamp::default(); 2],
-            direct_valid: [false; 2],
-            direct_lp: [OnePole::new(); 2],
             primed: false,
         }
     }
@@ -307,7 +340,7 @@ impl StageSource {
 
     /// Change the room. After the first block this starts a 50 ms crossfade from the old
     /// reflections to the new; the direct sound follows the new listener and Distance delay
-    /// through the per-block ramps.
+    /// through the per-block ramps. A changed mic setup crossfades the direct sound as well.
     pub fn set_room(&mut self, room: RoomModel) {
         let room = room.clamped();
         if room == self.bank.room {
@@ -319,8 +352,13 @@ impl StageSource {
                 pos: 0,
             });
         }
+        let mic_changed = room.mic != self.bank.room.mic;
         self.bank.room = room;
         self.bank.invalidate();
+        if mic_changed {
+            self.bank.mic = MicArray::for_setup(room.mic);
+            self.bank.invalidate_direct();
+        }
     }
 
     /// Silence the history and snap to the current parameters (transport jumps, a rebuild).
@@ -335,8 +373,7 @@ impl StageSource {
         self.fade = None;
         self.bank.invalidate();
         self.bank.lp = [[OnePole::new(); 2]; BUSES];
-        self.direct_valid = [false; 2];
-        self.direct_lp = [OnePole::new(); 2];
+        self.bank.invalidate_direct();
     }
 
     /// Place `buf_l`/`buf_r` (the channel's signal after the fader) in the room. The direct sound
@@ -447,8 +484,15 @@ impl StageSource {
             }
         };
 
+        // A running fade: its gains serve the reflections and, when the mic setup differs, the
+        // direct sound.
+        let fade = self.fade_gains(n);
+        let mic_fade = match &self.fade {
+            Some(f) if f.bank.room.mic != room.mic => fade,
+            _ => None,
+        };
         let geo = geometry(&room, &self.smooth);
-        self.render_direct(&geo, buf_l, buf_r);
+        self.render_direct(&geometry, &geo, buf_l, buf_r, mic_fade);
 
         // Reflections: ramp the level toward its target, render nothing while it is 0.
         let target = if params.has_room || room.output_mode == OutputMode::DirectOnly {
@@ -469,54 +513,81 @@ impl StageSource {
         out_l.fill(0.0);
         out_r.fill(0.0);
         if level0 > 0.0 || level1 > 0.0 {
-            self.render_reflections(&geometry, out_l, out_r, (level0, level1));
+            self.render_reflections(&geometry, out_l, out_r, (level0, level1), fade);
         } else {
-            self.fade = None;
+            if mic_fade.is_none() {
+                self.fade = None;
+            }
             self.bank.invalidate();
+        }
+        if let Some(gains) = fade {
+            if let Some(f) = &mut self.fade {
+                f.pos += n;
+            }
+            if gains.finished {
+                self.fade = None;
+            }
         }
         self.primed = true;
     }
 
+    /// The running fade's gains for a chunk of `n` frames.
+    fn fade_gains(&self, n: usize) -> Option<FadeGains> {
+        let fade = self.fade.as_ref()?;
+        let fade_len = (ROOM_FADE_S * self.sample_rate) as usize;
+        let p0 = (fade.pos as f32 / fade_len as f32).min(1.0);
+        let p1 = ((fade.pos + n) as f32 / fade_len as f32).min(1.0);
+        let sin = |p: f32| (p * FRAC_PI_2).sin();
+        let cos = |p: f32| (p * FRAC_PI_2).cos();
+        Some(FadeGains {
+            new: (sin(p0), sin(p1)),
+            old: (cos(p0), cos(p1)),
+            finished: p1 >= 1.0,
+        })
+    }
+
     /// The direct path: each point's line read, air-absorbed, panned and written over the buffer.
-    fn render_direct(&mut self, geo: &Geometry, buf_l: &mut [f32], buf_r: &mut [f32]) {
+    /// While a mic change fades, the old setup's direct sound is rendered too and the two are
+    /// crossfaded.
+    fn render_direct(
+        &mut self,
+        geometry: &dyn Fn(&RoomModel, &Smoothed) -> Geometry,
+        geo: &Geometry,
+        buf_l: &mut [f32],
+        buf_r: &mut [f32],
+        mic_fade: Option<FadeGains>,
+    ) {
         let n = buf_l.len();
         let sr = self.sample_rate;
-        let room = self.bank.room;
-        buf_l.fill(0.0);
-        buf_r.fill(0.0);
-        for k in 0..2 {
-            if k >= geo.count {
-                self.direct_valid[k] = false;
-                continue;
-            }
-            let tap = direct_tap(geo.points[k], room.listener, room.distance_delay);
-            let mut gains = [0.0; 2];
-            let rear = self.panner.gains(tap.dir, &mut gains);
-            let to = TapRamp {
-                delay: tap.delay_s * sr,
-                left: tap.gain * gains[0],
-                right: tap.gain * gains[1],
-            };
-            let from = if self.direct_valid[k] {
-                self.direct_taps[k]
-            } else {
-                to
-            };
-            let r = distance(geo.points[k], room.listener);
-            let g = one_pole_g(air_cutoff_hz(r, rear), sr);
-            read_tap(
+        render_direct_bank(
+            &mut self.bank,
+            geo,
+            &self.lines,
+            &mut self.scratch.tmp[..n],
+            sr,
+            buf_l,
+            buf_r,
+        );
+        if let (Some(g), Some(fade)) = (mic_fade, self.fade.as_mut()) {
+            let old_geo = geometry(&fade.bank.room, &self.smooth);
+            let old_l = &mut self.scratch.direct_l[..n];
+            let old_r = &mut self.scratch.direct_r[..n];
+            render_direct_bank(
+                &mut fade.bank,
+                &old_geo,
                 &self.lines,
-                geo.reads[k],
-                from.delay,
-                to.delay,
                 &mut self.scratch.tmp[..n],
+                sr,
+                old_l,
+                old_r,
             );
-            for s in &mut self.scratch.tmp[..n] {
-                *s = self.direct_lp[k].lowpass(*s, g);
+            let inv = 1.0 / n as f32;
+            let (new_step, old_step) = ((g.new.1 - g.new.0) * inv, (g.old.1 - g.old.0) * inv);
+            for i in 0..n {
+                let (gn, go) = (g.new.0 + new_step * i as f32, g.old.0 + old_step * i as f32);
+                buf_l[i] = buf_l[i] * gn + old_l[i] * go;
+                buf_r[i] = buf_r[i] * gn + old_r[i] * go;
             }
-            pan_add(&self.scratch.tmp[..n], from, to, buf_l, buf_r);
-            self.direct_taps[k] = to;
-            self.direct_valid[k] = true;
         }
     }
 
@@ -526,19 +597,12 @@ impl StageSource {
         out_l: &mut [f32],
         out_r: &mut [f32],
         level: (f32, f32),
+        fade: Option<FadeGains>,
     ) {
-        let n = out_l.len();
-        let fade_len = (ROOM_FADE_S * self.sample_rate) as usize;
         let (mut new_gain, mut old_gain) = ((level.0, level.1), (0.0, 0.0));
-        let mut finished = false;
-        if let Some(fade) = &self.fade {
-            let p0 = (fade.pos as f32 / fade_len as f32).min(1.0);
-            let p1 = ((fade.pos + n) as f32 / fade_len as f32).min(1.0);
-            let sin = |p: f32| (p * FRAC_PI_2).sin();
-            let cos = |p: f32| (p * FRAC_PI_2).cos();
-            new_gain = (level.0 * sin(p0), level.1 * sin(p1));
-            old_gain = (level.0 * cos(p0), level.1 * cos(p1));
-            finished = p1 >= 1.0;
+        if let Some(g) = fade {
+            new_gain = (level.0 * g.new.0, level.1 * g.new.1);
+            old_gain = (level.0 * g.old.0, level.1 * g.old.1);
         }
         let smooth = self.smooth;
 
@@ -565,11 +629,86 @@ impl StageSource {
                 out_r,
                 old_gain,
             );
-            fade.pos += n;
         }
-        if finished {
-            self.fade = None;
+    }
+}
+
+/// One bank's direct sound: each point's line read per capsule, air-absorbed, mixed to left and
+/// right and written over `out_l/r`.
+fn render_direct_bank(
+    bank: &mut Bank,
+    geo: &Geometry,
+    lines: &[Line; 2],
+    tmp: &mut [f32],
+    sr: f32,
+    out_l: &mut [f32],
+    out_r: &mut [f32],
+) {
+    let room = bank.room;
+    let reads = bank.mic.reads();
+    out_l.fill(0.0);
+    out_r.fill(0.0);
+    for k in 0..2 {
+        if k >= geo.count {
+            bank.direct_valid[k] = false;
+            continue;
         }
+        let point = geo.points[k];
+        let mut to = TapRamp::default();
+        let mut rear = [0.0f32; MAX_CAPSULES];
+        let mut dist = [0.0f32; MAX_CAPSULES];
+        if bank.mic.is_spaced() {
+            let mut direct = [Tap::default(); MAX_CAPSULES];
+            let mut earliest = f32::MAX;
+            for c in 0..reads {
+                let pos = bank.mic.capsule_position_in(c, &room);
+                direct[c] = direct_tap(point, pos, true);
+                dist[c] = distance(point, pos);
+                earliest = earliest.min(direct[c].delay_s);
+            }
+            let reference = if room.distance_delay { 0.0 } else { earliest };
+            for c in 0..reads {
+                let g = bank.mic.capsule_gains(c, direct[c].dir);
+                rear[c] = rear_amount(direct[c].dir);
+                to.caps[c] = CapsuleRamp {
+                    delay: (direct[c].delay_s - reference) * sr,
+                    left: direct[c].gain * g[0],
+                    right: direct[c].gain * g[1],
+                };
+            }
+        } else {
+            let tap = direct_tap(point, room.listener, room.distance_delay);
+            let mut gains = [0.0; 2];
+            rear[0] = bank.mic.coincident_gains(tap.dir, &mut gains);
+            dist[0] = distance(point, room.listener);
+            to.caps[0] = CapsuleRamp {
+                delay: tap.delay_s * sr,
+                left: tap.gain * gains[0],
+                right: tap.gain * gains[1],
+            };
+        }
+        let n = out_l.len();
+        for c in 0..reads {
+            let from = if bank.direct_valid[k] {
+                bank.direct_taps[k].caps[c]
+            } else {
+                to.caps[c]
+            };
+            let g = one_pole_g(air_cutoff_hz(dist[c], rear[c]), sr);
+            read_tap(
+                lines,
+                geo.reads[k],
+                from.delay,
+                to.caps[c].delay,
+                &mut tmp[..n],
+            );
+            for s in &mut tmp[..n] {
+                *s = bank.direct_lp[k][c].lowpass(*s, g);
+            }
+            pan_add(&tmp[..n], from, to.caps[c], out_l, out_r);
+        }
+        bank.direct_taps[k] = to;
+        bank.direct_valid[k] = true;
     }
 }
 
@@ -584,13 +723,82 @@ fn read_tap(lines: &[Line; 2], reads: Reads, d0: f32, d1: f32, out: &mut [f32]) 
     }
 }
 
-fn tap_ramp(tap: &Tap, sample_rate: f32, panner: &StereoPanner) -> TapRamp {
-    let mut gains = [0.0; 2];
-    panner.gains(tap.dir, &mut gains);
-    TapRamp {
-        delay: tap.delay_s * sample_rate,
-        left: tap.gain * gains[0],
-        right: tap.gain * gains[1],
+/// The taps of one point heard by a mic array: one set for Pan and coincident setups (heard at
+/// the Listener), one per capsule for spaced ones (heard at the capsule, always with absolute
+/// flight times).
+struct ArrayTaps {
+    sets: [TapSet; MAX_CAPSULES],
+    /// Spaced setups without Distance delay: the earliest direct arrival, taken off every delay.
+    reference_s: f32,
+}
+
+fn array_taps(room: &RoomModel, mic: &MicArray, point: Vec3) -> ArrayTaps {
+    let mut out = ArrayTaps {
+        sets: [TapSet::default(); MAX_CAPSULES],
+        reference_s: 0.0,
+    };
+    if mic.is_spaced() {
+        let mut earliest = f32::MAX;
+        for c in 0..mic.reads() {
+            let pos = mic.capsule_position_in(c, room);
+            out.sets[c] = taps(room, point, pos, true);
+            earliest = earliest.min(out.sets[c].direct.delay_s);
+        }
+        if !room.distance_delay {
+            out.reference_s = earliest;
+        }
+    } else {
+        out.sets[0] = taps(room, point, room.listener, room.distance_delay);
+    }
+    out
+}
+
+/// The reads of one tap (picked from each set by `pick`) with their delays and gains.
+fn tap_ramp(
+    arr: &ArrayTaps,
+    mic: &MicArray,
+    sample_rate: f32,
+    pick: impl Fn(&TapSet) -> &Tap,
+) -> TapRamp {
+    let mut ramp = TapRamp::default();
+    if mic.is_spaced() {
+        for c in 0..mic.reads() {
+            let tap = pick(&arr.sets[c]);
+            let g = mic.capsule_gains(c, tap.dir);
+            ramp.caps[c] = CapsuleRamp {
+                delay: (tap.delay_s - arr.reference_s) * sample_rate,
+                left: tap.gain * g[0],
+                right: tap.gain * g[1],
+            };
+        }
+    } else {
+        let tap = pick(&arr.sets[0]);
+        let mut gains = [0.0; 2];
+        mic.coincident_gains(tap.dir, &mut gains);
+        ramp.caps[0] = CapsuleRamp {
+            delay: tap.delay_s * sample_rate,
+            left: tap.gain * gains[0],
+            right: tap.gain * gains[1],
+        };
+    }
+    ramp
+}
+
+/// Read a tap's capsules from `from` to `to` and add them into the buses.
+#[allow(clippy::too_many_arguments)]
+fn add_tap(
+    lines: &[Line; 2],
+    reads: Reads,
+    reads_per_tap: usize,
+    from: &TapRamp,
+    to: &TapRamp,
+    tmp: &mut [f32],
+    bus_l: &mut [f32],
+    bus_r: &mut [f32],
+) {
+    for c in 0..reads_per_tap {
+        read_tap(lines, reads, from.caps[c].delay, to.caps[c].delay, tmp);
+        pan_add(tmp, from.caps[c], to.caps[c], bus_l, bus_r);
     }
 }
 
@@ -609,34 +817,31 @@ fn render_bank(
 ) {
     let n = out_l.len();
     let room = bank.room;
-    let panner = StereoPanner;
+    let mic = bank.mic;
+    let reads = mic.reads();
     for b in 0..BUSES {
         scratch.bus_l[b][..n].fill(0.0);
         scratch.bus_r[b][..n].fill(0.0);
     }
 
-    let mut centre_taps: Option<TapSet> = None;
+    let mut centre_taps: Option<ArrayTaps> = None;
     for k in 0..geo.count {
-        let set = taps(&room, geo.points[k], room.listener, room.distance_delay);
-        for (t, tap) in set.first.iter().enumerate() {
-            let to = tap_ramp(tap, sample_rate, &panner);
+        let arr = array_taps(&room, &mic, geo.points[k]);
+        for t in 0..FIRST {
+            let to = tap_ramp(&arr, &mic, sample_rate, |s| &s.first[t]);
             let from = if bank.first_valid[k] {
                 bank.first[k][t]
             } else {
                 to
             };
-            read_tap(
+            let bus = arr.sets[0].first[t].surface.map_or(0, |s| s as usize);
+            add_tap(
                 lines,
                 geo.reads[k],
-                from.delay,
-                to.delay,
+                reads,
+                &from,
+                &to,
                 &mut scratch.tmp[..n],
-            );
-            let bus = tap.surface.map_or(0, |s| s as usize);
-            pan_add(
-                &scratch.tmp[..n],
-                from,
-                to,
                 &mut scratch.bus_l[bus][..n],
                 &mut scratch.bus_r[bus][..n],
             );
@@ -644,7 +849,7 @@ fn render_bank(
         }
         bank.first_valid[k] = true;
         if geo.count == 1 {
-            centre_taps = Some(set);
+            centre_taps = Some(arr);
         }
     }
     for k in geo.count..2 {
@@ -652,26 +857,21 @@ fn render_bank(
     }
 
     // Second order from the centre point's mono sum.
-    let set =
-        centre_taps.unwrap_or_else(|| taps(&room, geo.centre, room.listener, room.distance_delay));
-    for (t, tap) in set.second.iter().enumerate() {
-        let to = tap_ramp(tap, sample_rate, &panner);
+    let arr = centre_taps.unwrap_or_else(|| array_taps(&room, &mic, geo.centre));
+    for t in 0..SECOND {
+        let to = tap_ramp(&arr, &mic, sample_rate, |s| &s.second[t]);
         let from = if bank.second_valid {
             bank.second[t]
         } else {
             to
         };
-        read_tap(
+        add_tap(
             lines,
             geo.centre_reads,
-            from.delay,
-            to.delay,
+            reads,
+            &from,
+            &to,
             &mut scratch.tmp[..n],
-        );
-        pan_add(
-            &scratch.tmp[..n],
-            from,
-            to,
             &mut scratch.bus_l[SECOND_BUS][..n],
             &mut scratch.bus_r[SECOND_BUS][..n],
         );
@@ -680,7 +880,7 @@ fn render_bank(
     bank.second_valid = true;
 
     // Damping per bus, then the summed, gain-ramped result.
-    let second_damping = set.second.iter().map(|t| t.damping).sum::<f32>() / SECOND as f32;
+    let second_damping = arr.sets[0].second.iter().map(|t| t.damping).sum::<f32>() / SECOND as f32;
     let step = (gain.1 - gain.0) / n as f32;
     for b in 0..BUSES {
         let damping = if b == SECOND_BUS {
@@ -701,7 +901,8 @@ fn render_bank(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::dsp::test_util::{rms, sine, white_noise};
+    use crate::audio::dsp::test_util::{pink_noise, rms, sine, white_noise};
+    use crate::audio::stage::mic::MicSetup;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
 
@@ -1006,7 +1207,13 @@ mod tests {
         br.copy_from_slice(&bl);
         COUNTING.with(|c| c.set(true));
         ALLOCS.with(|a| a.set(0));
+        // Every mic setup, switched mid-render so each one crossfades from the last.
+        let mut cur = room();
         for i in 0..40 {
+            if i % 4 == 0 {
+                cur.mic = MicSetup::ALL[(i / 4) % MicSetup::ALL.len()];
+                s.set_room(cur);
+            }
             let p = StageParams {
                 x: (i % 7) as f32 * 2.0,
                 size: (i % 5) as f32 * 3.0,
@@ -1015,10 +1222,9 @@ mod tests {
                 ..params(5.0, 8.0)
             };
             if i == 10 {
-                let mut r = room();
-                r.width = 33.0;
-                r.distance_delay = true;
-                s.set_room(r);
+                cur.width = 33.0;
+                cur.distance_delay = true;
+                s.set_room(cur);
             }
             s.render(
                 &mut bl,
@@ -1042,5 +1248,219 @@ mod tests {
         );
         COUNTING.with(|c| c.set(false));
         assert_eq!(ALLOCS.with(|a| a.get()), 0, "render allocated");
+    }
+
+    // ---- Mic setups (spec 052) ----
+
+    fn mic_room(mic: MicSetup) -> RoomModel {
+        RoomModel {
+            width: 40.0,
+            mic,
+            ..room()
+        }
+    }
+
+    fn impulse_in(len: usize) -> Vec<f32> {
+        let mut x = vec![0.0; len];
+        x[0] = 1.0;
+        x
+    }
+
+    fn peak_index(v: &[f32]) -> usize {
+        v.iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .unwrap()
+            .0
+    }
+
+    /// First sample whose magnitude passes `threshold`.
+    fn first_over(v: &[f32], threshold: f32) -> usize {
+        v.iter().position(|s| s.abs() > threshold).unwrap()
+    }
+
+    #[test]
+    fn ab_time_difference() {
+        let x = impulse_in(BLOCK * 2);
+        // 10 m to the right of the listener: the right capsule is 0.6 m nearer.
+        let out = render(mic_room(MicSetup::Ab), &x, &x, &params(20.0, 18.0), true);
+        let (l, r) = (peak_index(&out.l), peak_index(&out.r));
+        let expected = 0.6 / SPEED_OF_SOUND * SR;
+        assert!(
+            ((l as f32 - r as f32) - expected).abs() <= 1.0,
+            "L {l} R {r} expected {expected}"
+        );
+        assert!(r <= 1, "no latency is added: R at {r}");
+        // Straight ahead: both capsules are equally far.
+        let out = render(mic_room(MicSetup::Ab), &x, &x, &params(10.0, 8.0), true);
+        assert_eq!(peak_index(&out.l), peak_index(&out.r));
+    }
+
+    #[test]
+    fn decca_centre_arrives_first() {
+        let x = impulse_in(BLOCK * 2);
+        // 10 m straight ahead.
+        let out = render(mic_room(MicSetup::Decca), &x, &x, &params(10.0, 8.0), true);
+        let (l0, r0) = (first_over(&out.l, 0.05), first_over(&out.r, 0.05));
+        assert_eq!(l0, r0, "the centre capsule lands on both outputs together");
+        assert!(l0 <= 1, "the centre is the reference: {l0}");
+        assert!((out.l[l0] - out.r[r0]).abs() < 1e-6);
+        // L and R follow 1.55 m (sqrt(10^2 + 1) - 8.5 m) later.
+        let later = ((101.0f32).sqrt() - 8.5) / SPEED_OF_SOUND * SR;
+        let search = |v: &[f32]| {
+            let from = (later as usize) - 8;
+            from + peak_index(&v[from..from + 16])
+        };
+        for v in [&out.l, &out.r] {
+            let i = search(v);
+            assert!((i as f32 - later).abs() <= 2.0, "{i} vs {later}");
+            assert!(v[i].abs() > 0.1);
+        }
+    }
+
+    #[test]
+    fn mic_setups_match_pan_level() {
+        // Pink noise from a centred source 5 m in front of the listener.
+        let x = pink_noise(BLOCK * 80, 0.5, 11);
+        let level = |mic: MicSetup| {
+            let out = render(mic_room(mic), &x, &x, &params(10.0, 13.0), true);
+            let tail = BLOCK * 8..;
+            let (l, r) = (rms(&out.l[tail.clone()]), rms(&out.r[tail]));
+            10.0 * (l * l + r * r).log10()
+        };
+        let pan = level(MicSetup::Pan);
+        for mic in MicSetup::ALL {
+            let db = level(mic) - pan;
+            assert!(db.abs() <= 1.5, "{mic:?}: {db:+.2} dB against Pan");
+        }
+    }
+
+    #[test]
+    fn mic_change_crossfades() {
+        let x = sine(200.0, SR, BLOCK * 80, 0.5);
+        let p = params(6.0, 8.0);
+        for to in [
+            MicSetup::Decca,
+            MicSetup::Ab,
+            MicSetup::Blumlein,
+            MicSetup::MidSide,
+        ] {
+            let mut s = source(mic_room(MicSetup::Pan));
+            let mut out = Out::default();
+            let before = BLOCK * 30;
+            run(&mut s, &x[..before], &x[..before], &p, true, &mut out);
+            let steady = max_step(&out.l[BLOCK * 10..]).max(max_step(&out.r[BLOCK * 10..]));
+            s.set_room(mic_room(to));
+            assert!(s.fade.is_some());
+            let mut after = Out::default();
+            run(&mut s, &x[before..], &x[before..], &p, true, &mut after);
+            for (b, a) in [(&out.l, &after.l), (&out.r, &after.r)] {
+                let joined: Vec<f32> = b[b.len() - 8..]
+                    .iter()
+                    .chain(a[..BLOCK * 6].iter())
+                    .copied()
+                    .collect();
+                assert!(
+                    max_step(&joined) < steady * 2.0,
+                    "{to:?}: {} vs {steady}",
+                    max_step(&joined)
+                );
+            }
+            assert!(s.fade.is_none(), "the fade ends");
+            // Afterwards it sounds like a source that always had the new setup.
+            let fresh = render(mic_room(to), &x, &x, &p, true);
+            let tail = before + BLOCK * 30;
+            for (a, f) in [(&after.l, &fresh.l), (&after.r, &fresh.r)] {
+                let diff: Vec<f32> = a[tail - before..]
+                    .iter()
+                    .zip(&f[tail..])
+                    .map(|(a, b)| a - b)
+                    .collect();
+                assert!(
+                    rms(&diff) < 0.01 * rms(&f[tail..]).max(1e-3),
+                    "{to:?}: {}",
+                    rms(&diff)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn room_change_with_same_mic_keeps_the_direct_ramp() {
+        let x = noise(BLOCK * 4);
+        let mut s = source(mic_room(MicSetup::Ab));
+        let mut out = Out::default();
+        run(&mut s, &x, &x, &params(5.0, 8.0), true, &mut out);
+        let mut moved = mic_room(MicSetup::Ab);
+        moved.listener.x = 14.0;
+        s.set_room(moved);
+        assert!(
+            s.bank.direct_valid[0],
+            "direct state survives a room change"
+        );
+        s.set_room(mic_room(MicSetup::Decca));
+        assert!(!s.bank.direct_valid[0], "but not a mic change");
+    }
+
+    /// Cost of the stage pass per mic setup: `cargo test --release stage_cost_per_mic_setup --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn stage_cost_per_mic_setup() {
+        const SOURCES: usize = 32;
+        const FRAMES: usize = 256;
+        const BLOCKS: usize = 600;
+        let input = noise(FRAMES * 4);
+        let mut baseline = 0.0;
+        for mic in MicSetup::ALL {
+            let room = RoomModel {
+                width: crate::audio::stage::MAX_WIDTH,
+                depth: crate::audio::stage::MAX_DEPTH,
+                height: crate::audio::stage::MAX_HEIGHT,
+                listener: Vec3::new(30.0, 30.0, 1.5),
+                mic,
+                ..RoomModel::default()
+            };
+            let mut sources: Vec<StageSource> = (0..SOURCES)
+                .map(|_| {
+                    let mut s = StageSource::new(SR, FRAMES);
+                    s.set_room(room);
+                    s
+                })
+                .collect();
+            let params: Vec<StageParams> = (0..SOURCES)
+                .map(|i| StageParams {
+                    x: 10.0 + (i % 8) as f32 * 5.0,
+                    y: 4.0 + (i / 8) as f32 * 5.0,
+                    size: if i % 2 == 0 { 0.0 } else { 6.0 },
+                    ..StageParams::default()
+                })
+                .collect();
+            let (mut bl, mut br) = (vec![0.0f32; FRAMES], vec![0.0f32; FRAMES]);
+            let (mut sl, mut sr) = (vec![0.0f32; FRAMES], vec![0.0f32; FRAMES]);
+            let mut pass = |sources: &mut Vec<StageSource>, block: usize| {
+                for (s, p) in sources.iter_mut().zip(&params) {
+                    let o = (block % 4) * FRAMES;
+                    bl.copy_from_slice(&input[o..o + FRAMES]);
+                    br.copy_from_slice(&input[o..o + FRAMES]);
+                    s.render(&mut bl, &mut br, &mut sl, &mut sr, p, false, FRAMES);
+                }
+            };
+            for b in 0..50 {
+                pass(&mut sources, b);
+            }
+            let start = std::time::Instant::now();
+            for b in 0..BLOCKS {
+                pass(&mut sources, b);
+            }
+            let per_block_us = start.elapsed().as_secs_f64() * 1e6 / BLOCKS as f64;
+            if mic == MicSetup::Pan {
+                baseline = per_block_us;
+            }
+            println!(
+                "{mic:?}: {per_block_us:.0} us per block of {SOURCES} sources ({:.2}x Pan)",
+                per_block_us / baseline
+            );
+        }
     }
 }

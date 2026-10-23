@@ -27,6 +27,13 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
+[node name="SnapToggle" type="CheckButton" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Snap drags in the view to 1 m and 15° (hold Shift for 0.1 m and 1°). Off: drags are free."
+button_pressed = true
+text = "Snap"
+
 [node name="RoomLabel" type="Label" parent="SideScroll/Side"]
 layout_mode = 2
 text = "Room"
@@ -182,6 +189,20 @@ popup/item_1/id = 1
 popup/item_2/text = "Direct only"
 popup/item_2/id = 2
 
+[node name="MicRow" type="HBoxContainer" parent="SideScroll/Side"]
+layout_mode = 2
+
+[node name="MicLabel" type="Label" parent="SideScroll/Side/MicRow"]
+layout_mode = 2
+text = "Mic"
+
+[node name="MicOption" type="OptionButton" parent="SideScroll/Side/MicRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "The stereo mic array at the listener, facing the front wall. Pan: ideal level panning. XY, Blumlein and Mid/Side: coincident (Blumlein and Mid/Side use figure-8s and are not mono compatible). AB, ORTF and Decca tree: spaced, they add time differences."
+fit_to_longest_item = false
+
 [node name="MaterialsLabel" type="Label" parent="SideScroll/Side"]
 layout_mode = 2
 text = "Surfaces"
@@ -238,6 +259,21 @@ max_value = 50.0
 step = 0.1
 suffix = " m"
 
+[node name="SourceDepthLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+layout_mode = 2
+text = "Depth"
+
+[node name="SourceDepth" type="SpinBox" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Front-to-back extent of the source in meters. Only changes how it is drawn."
+min_value = 0.1
+max_value = 60.0
+step = 0.1
+value = 0.1
+suffix = " m"
+
 [node name="SourceRotationLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
 layout_mode = 2
 text = "Rotation"
@@ -250,6 +286,41 @@ min_value = -180.0
 max_value = 180.0
 step = 1.0
 suffix = " °"
+
+[node name="DisplayLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+layout_mode = 2
+text = "Display"
+
+[node name="DisplayOption" type="OptionButton" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Block fills the rectangle. Section draws one person per player."
+fit_to_longest_item = false
+selected = 0
+item_count = 2
+popup/item_0/text = "Block"
+popup/item_0/id = 0
+popup/item_1/text = "Section"
+popup/item_1/id = 1
+
+[node name="PlayersLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "Players"
+
+[node name="SourcePlayers" type="SpinBox" parent="SideScroll/Side/SourceGrid"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Players in the section. The rectangle grows to give each 1.0 x 1.2 m."
+min_value = 1.0
+max_value = 64.0
+step = 1.0
+value = 1.0
+rounded = true
 
 [node name="SumLabel" type="Label" parent="SideScroll/Side/SourceGrid"]
 layout_mode = 2

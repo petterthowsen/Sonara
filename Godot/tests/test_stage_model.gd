@@ -30,6 +30,8 @@ func run_tests() -> void:
 	_test_osc_args()
 	_test_json_round_trip()
 	_test_project_sync_and_save()
+	_test_mic_setup()
+	_test_source_rectangle_state()
 
 
 func _test_presets_apply() -> void:
@@ -109,7 +111,8 @@ func _test_osc_args() -> void:
 	stage.set_distance_delay(true)
 	stage.set_output_mode(_stage.OutputMode.DIRECT_ONLY)
 	var a: Array = stage.osc_args()
-	_assert(a.size() == 22, "/stage/set has 22 args: %d" % a.size())
+	_assert(a.size() == 23, "/stage/set has 23 args: %d" % a.size())
+	_assert(a[22] == 0 and typeof(a[22]) == TYPE_INT, "the mic setup is the 23rd argument, an int (Pan by default)")
 	_assert(a[0] == 10.0 and a[1] == 14.0 and a[2] == 5.0, "dimensions first")
 	_assert(a[3] == 5.0 and a[4] == 8.0 and a[5] == 1.5, "listener x y z")
 	_assert(a[6] == 0.9 and a[7] == -9.0, "decay and tail level")
@@ -180,3 +183,97 @@ func _test_project_sync_and_save() -> void:
 	_osc._pending_sends.clear()
 	plain._sync_stage_to_engine()
 	_assert(_osc._pending_sends.is_empty(), "unused stage is not sent")
+
+
+func _test_mic_setup() -> void:
+	_assert(_stage.MIC_IDS.size() == 7 and _stage.MIC_LABELS.size() == 7, "seven mic setups with ids and labels")
+	_assert(_stage.MicSetup.DECCA == 6 and _stage.MicSetup.MID_SIDE == 3 and _stage.MicSetup.ORTF == 5, "enum values are the OSC values")
+	var stage = _stage.new()
+	_assert(stage.mic_setup == _stage.MicSetup.PAN and stage.to_json()["mic"] == "pan", "the default is Pan")
+	stage.apply_preset("church")
+	var emitted := [0]
+	stage.changed.connect(func(): emitted[0] += 1)
+	stage.set_mic_setup(_stage.MicSetup.DECCA)
+	_assert(emitted[0] == 1, "the setter emits changed once")
+	_assert(stage.osc_args()[22] == 6, "osc_args carries the Decca value")
+	_assert(stage.to_json()["mic"] == "decca", "to_json holds the id")
+	_assert(stage.preset_label().ends_with("(modified)"), "a mic edit marks the preset modified: %s" % stage.preset_label())
+	stage.set_mic_setup(99)
+	_assert(stage.mic_setup == _stage.MicSetup.DECCA, "an out-of-range value clamps to the last setup")
+	stage.set_mic_setup(-3)
+	_assert(stage.mic_setup == _stage.MicSetup.PAN, "and to the first")
+	stage.set_mic_setup(_stage.MicSetup.BLUMLEIN)
+	stage.apply_preset("studio_room")
+	_assert(stage.mic_setup == _stage.MicSetup.BLUMLEIN, "a preset keeps the mic setup")
+	var again = _stage.from_json(JSON.parse_string(JSON.stringify(stage.to_json())))
+	_assert(again.mic_setup == _stage.MicSetup.BLUMLEIN, "the mic setup round-trips through JSON")
+	var legacy: Dictionary = stage.to_json()
+	legacy.erase("mic")
+	_assert(_stage.from_json(legacy).mic_setup == _stage.MicSetup.PAN, "a project without `mic` loads as Pan")
+	legacy["mic"] = "theremin"
+	_assert(_stage.from_json(legacy).mic_setup == _stage.MicSetup.PAN, "an unknown id loads as Pan")
+	for i in _stage.MIC_IDS.size():
+		var each = _stage.new()
+		each.set_mic_setup(i)
+		_assert(_stage.from_json(each.to_json()).mic_setup == i, "%s round-trips" % _stage.MIC_IDS[i])
+	var restored = _stage.new()
+	restored.set_state(stage.get_state())
+	_assert(restored.mic_setup == stage.mic_setup, "get_state / set_state (undo) restore the mic setup")
+	_assert(_stage.new().is_default() and not stage.is_default(), "is_default notices a mic change")
+
+
+func _test_source_rectangle_state() -> void:
+	_assert(_stage.DEFAULT_SOURCE_DEPTH == 2.0 and _stage.PLAYER_FOOTPRINT == Vector2(1.0, 1.2), "rectangle constants")
+	_assert(_stage.MIN_PLAYERS == 1 and _stage.MAX_PLAYERS == 64 and _stage.DEFAULT_PLAYERS == 8, "player limits")
+	var project: Object = _project_script.new()
+	var ch = project.create_channel("Violins", _ch.ChannelType.INSTRUMENT)
+	_assert(ch.stage_depth == 2.0 and ch.stage_display == _ch.StageDisplay.BLOCK and ch.stage_players == 8, "defaults: 2 m, Block, 8 players")
+	ch.set_pan_mode(_ch.PanMode.STAGE)
+	_assert(ch.stage_depth == 2.0, "a channel first entering Stage has depth 2 m")
+	var state: Dictionary = ch.get_stage_state()
+	_assert(state.depth == 2.0 and state.display == 0 and state.players == 8, "the state snapshot carries depth, display, players")
+	# Depth is visual only: the OSC args do not change (REQ-014).
+	var osc: Node = root.get_node("AudioEngineOSC")
+	ch._is_connected = true
+	osc._pending_sends.clear()
+	ch.set_stage_state(state)
+	var before: Array = osc._pending_sends.back().args if not osc._pending_sends.is_empty() else []
+	var deeper := state.duplicate()
+	deeper["depth"] = 7.0
+	deeper["display"] = 1
+	deeper["players"] = 20
+	osc._pending_sends.clear()
+	ch.set_stage_state(deeper)
+	var after: Array = osc._pending_sends.back().args if not osc._pending_sends.is_empty() else []
+	ch._is_connected = false
+	_assert(not before.is_empty() and before == after, "/channel/{id}/stage args are identical for sources differing in depth, display and players")
+	_assert(ch.stage_depth == 7.0 and ch.stage_display == _ch.StageDisplay.SECTION and ch.stage_players == 20, "the new values apply")
+	# Clamping.
+	ch.set_stage_state({"depth": -4.0, "players": 500})
+	_assert(ch.stage_depth == 0.0 and ch.stage_players == 64, "depth >= 0 and players <= 64")
+	ch.set_stage_state({"players": 0, "display": 9})
+	_assert(ch.stage_players == 1 and ch.stage_display == _ch.StageDisplay.SECTION, "players >= 1, display clamps")
+	# Save and load: strings in the file, round trip, undo snapshot.
+	ch.set_stage_state(deeper)
+	var data: Dictionary = JSON.parse_string(JSON.stringify(project.to_json()))
+	var saved: Dictionary = {}
+	for c: Dictionary in data["channels"]:
+		if c.get("id") == ch.id:
+			saved = c["stage"]
+	_assert(saved.get("depth") == 7.0 and saved.get("display") == "section" and saved.get("players") == 20, "saved as depth, \"section\", players")
+	var loaded: Object = _project_script.from_json(data)
+	var lch = loaded.get_channel_by_id(ch.id)
+	_assert(lch.stage_depth == 7.0 and lch.stage_display == _ch.StageDisplay.SECTION and lch.stage_players == 20, "depth, display and players restored on load")
+	_assert(lch.get_stage_state() == ch.get_stage_state(), "the whole stage state round-trips")
+	# A project saved before spec 052 has none of the keys: 2 m, Block, 8.
+	var old: Dictionary = saved.duplicate()
+	for key in ["depth", "display", "players"]:
+		old.erase(key)
+	var legacy = _ch.new(77)
+	legacy.set_stage_state(old)
+	_assert(legacy.stage_depth == 2.0 and legacy.stage_display == _ch.StageDisplay.BLOCK and legacy.stage_players == 8, "an old stage block loads as 2 m, Block, 8 players")
+	# Undo restores the previous values (the snapshot is what a PropertyCommand holds).
+	var snapshot: Dictionary = ch.get_stage_state()
+	ch.set_stage_state({"depth": 3.0, "display": 0, "players": 4})
+	ch.set_stage_state(snapshot)
+	_assert(ch.stage_depth == 7.0 and ch.stage_display == _ch.StageDisplay.SECTION and ch.stage_players == 20, "set_stage_state(snapshot) undoes depth, display and players")

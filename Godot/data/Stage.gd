@@ -16,6 +16,11 @@ enum OutputMode {
 	DIRECT_ONLY,       # Nothing reaches the Stage return
 }
 
+## Mic setups (spec 052): the stereo array the listener records with. The numbers are the OSC values.
+enum MicSetup { PAN, XY, BLUMLEIN, MID_SIDE, AB, ORTF, DECCA }
+const MIC_IDS: Array[String] = ["pan", "xy", "blumlein", "ms", "ab", "ortf", "decca"]
+const MIC_LABELS: Array[String] = ["Pan", "XY", "Blumlein", "Mid/Side", "AB", "ORTF", "Decca tree"]
+
 ## Limits of the engine (`audio/stage/mod.rs`); it clamps to the same values.
 const MAX_WIDTH := 60.0
 const MAX_DEPTH := 40.0
@@ -29,6 +34,13 @@ const MAX_TAIL_DB := 12.0
 ## Source defaults when a channel first enters Stage (REQ-002).
 const DEFAULT_SOURCE_HEIGHT := 1.2
 const DEFAULT_STEREO_SIZE := 3.0
+## Visual-only source rectangle and Section mode (spec 052).
+const DEFAULT_SOURCE_DEPTH := 2.0
+## Floor space one player needs: width x depth in meters.
+const PLAYER_FOOTPRINT := Vector2(1.0, 1.2)
+const MIN_PLAYERS := 1
+const MAX_PLAYERS := 64
+const DEFAULT_PLAYERS := 8
 ## Distance from the listener at which a source sounds as loud as it did when panned.
 const REFERENCE_DISTANCE := 5.0
 
@@ -45,6 +57,7 @@ var decay_s: float = 1.6
 var tail_db: float = -6.0
 var distance_delay: bool = false
 var output_mode: OutputMode = OutputMode.FULL
+var mic_setup: MicSetup = MicSetup.PAN
 ## Material id per surface, in StagePresets.SURFACES order.
 var materials: Array[String] = []
 
@@ -146,6 +159,11 @@ func set_output_mode(mode: int) -> void:
 	_edited()
 
 
+func set_mic_setup(mode: int) -> void:
+	mic_setup = clampi(mode, MicSetup.PAN, MicSetup.DECCA) as MicSetup
+	_edited()
+
+
 ## Set one surface (`StagePresets.SURFACES`) to a material id. Unknown surface or material: ignored.
 func set_material(surface: String, material_id: String) -> void:
 	var index := StagePresets.SURFACES.find(surface)
@@ -211,6 +229,7 @@ func osc_args() -> Array:
 	for material_id in materials:
 		args.append(StagePresets.gain(material_id))
 		args.append(StagePresets.damping(material_id))
+	args.append(int(mic_setup))
 	return args
 
 
@@ -244,6 +263,7 @@ func to_json() -> Dictionary:
 		"tail_db": tail_db,
 		"distance_delay": distance_delay,
 		"output_mode": int(output_mode),
+		"mic": MIC_IDS[mic_setup],
 	}
 
 
@@ -273,6 +293,9 @@ func _read(data: Dictionary) -> void:
 	tail_db = clampf(float(data.get("tail_db", tail_db)), MIN_TAIL_DB, MAX_TAIL_DB)
 	distance_delay = bool(data.get("distance_delay", distance_delay))
 	output_mode = clampi(int(data.get("output_mode", output_mode)), OutputMode.FULL, OutputMode.DIRECT_ONLY) as OutputMode
+	# A missing or unknown id is Pan (older projects).
+	var mic_index := MIC_IDS.find(str(data.get("mic", MIC_IDS[mic_setup])))
+	mic_setup = (mic_index if mic_index >= 0 else MicSetup.PAN) as MicSetup
 	var mats: Variant = data.get("materials")
 	if mats is Dictionary:
 		for i in StagePresets.SURFACES.size():

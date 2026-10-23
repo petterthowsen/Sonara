@@ -24,11 +24,17 @@ var _shown := false
 @onready var _tail: SpinBox = %TailGain
 @onready var _distance_delay: CheckButton = %DistanceDelay
 @onready var _output: OptionButton = %OutputOption
+@onready var _mic: OptionButton = %MicOption
+@onready var _snap: CheckButton = %SnapToggle
 @onready var _material_grid: GridContainer = %MaterialGrid
 @onready var _summary: Label = %SourceSummary
 @onready var _source_height: SpinBox = %SourceHeight
 @onready var _source_size: SpinBox = %SourceSize
+@onready var _source_depth: SpinBox = %SourceDepth
 @onready var _source_rotation: SpinBox = %SourceRotation
+@onready var _display: OptionButton = %DisplayOption
+@onready var _players_label: Label = %PlayersLabel
+@onready var _players: SpinBox = %SourcePlayers
 @onready var _sum_mode: OptionButton = %SumOption
 @onready var _has_room: CheckButton = %HasRoom
 
@@ -56,6 +62,11 @@ func _ready() -> void:
 		option.item_selected.connect(_on_material_selected.bind(surface, option))
 		_material_grid.add_child(option)
 		_material_options[surface] = option
+	for i in VirtualStage.MIC_LABELS.size():
+		_mic.add_item(VirtualStage.MIC_LABELS[i], i)
+	_snap.set_pressed_no_signal(canvas.snap_enabled)
+	_snap.toggled.connect(canvas.set_snap_enabled)
+	_mic.item_selected.connect(func(i: int) -> void: _edit_room(func() -> void: project.stage.set_mic_setup(_mic.get_item_id(i)), false))
 	_width.value_changed.connect(func(v: float) -> void: _edit_room(func() -> void: project.stage.set_width(v)))
 	_depth.value_changed.connect(func(v: float) -> void: _edit_room(func() -> void: project.stage.set_depth(v)))
 	_height.value_changed.connect(func(v: float) -> void: _edit_room(func() -> void: project.stage.set_height(v)))
@@ -67,6 +78,9 @@ func _ready() -> void:
 	_output.item_selected.connect(func(i: int) -> void: _edit_room(func() -> void: project.stage.set_output_mode(_output.get_item_id(i)), false))
 	_source_height.value_changed.connect(_on_source_height)
 	_source_size.value_changed.connect(func(v: float) -> void: _edit_source_states("Set Source Size", StageEdit.set_size, v))
+	_source_depth.value_changed.connect(func(v: float) -> void: _edit_source_states("Set Source Depth", StageEdit.set_depth, v))
+	_display.item_selected.connect(func(i: int) -> void: _edit_source_states("Set Source Display", StageEdit.set_display, _display.get_item_id(i)))
+	_players.value_changed.connect(func(v: float) -> void: _edit_source_states("Set Section Players", StageEdit.set_players, v))
 	_source_rotation.value_changed.connect(func(v: float) -> void: _edit_source_states("Set Source Rotation", StageEdit.set_rotation, v))
 	_sum_mode.item_selected.connect(func(i: int) -> void: _edit_sources("Set Stage Sum Mode",
 			func(ch: Channel) -> void: ch.set_stage_sum_mode(_sum_mode.get_item_id(i)), false))
@@ -192,6 +206,7 @@ func _refresh_room() -> void:
 	_tail.set_value_no_signal(room.tail_db)
 	_distance_delay.set_pressed_no_signal(room.distance_delay)
 	_output.select(_output.get_item_index(int(room.output_mode)))
+	_mic.select(_mic.get_item_index(int(room.mic_setup)))
 	for i in _preset.item_count:
 		var id: String = _preset.get_item_metadata(i)
 		_preset.set_item_text(i, StagePresets.preset_label(id) if id != "" else "Custom")
@@ -266,7 +281,10 @@ func _refresh_source_panel() -> void:
 	var any := not selected.is_empty()
 	_source_height.editable = any
 	_source_size.editable = any
+	_source_depth.editable = any
 	_source_rotation.editable = any
+	_display.disabled = not any
+	_players.editable = any
 	_sum_mode.disabled = not any
 	_has_room.disabled = not any
 	if any:
@@ -276,11 +294,19 @@ func _refresh_source_panel() -> void:
 		_source_height.set_value_no_signal(first.stage_z)
 		_source_size.max_value = maxf(project.stage.width, project.stage.depth) * 1.5 if project else 50.0
 		_source_size.set_value_no_signal(first.stage_size)
+		_source_depth.max_value = maxf(project.stage.width, project.stage.depth) if project else 60.0
+		_source_depth.set_value_no_signal(first.stage_depth)
 		_source_rotation.set_value_no_signal(first.stage_rotation)
+		_display.select(_display.get_item_index(int(first.stage_display)))
+		_players.set_value_no_signal(first.stage_players)
 		_sum_mode.select(_sum_mode.get_item_index(int(first.stage_sum_mode)))
 		_has_room.set_pressed_no_signal(first.stage_has_room)
 	else:
 		_summary.text = "No source selected"
+	# The player count only matters to a Section.
+	var section: bool = any and selected[0].stage_display == Channel.StageDisplay.SECTION
+	_players_label.visible = section
+	_players.visible = section
 	_syncing = false
 
 
