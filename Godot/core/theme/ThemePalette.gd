@@ -10,6 +10,12 @@ class_name ThemePalette extends RefCounted
 ## Setting key prefix, kept in step with `Settings.THEME_PREFIX`.
 const PREFIX := "appearance/theme/"
 
+## Metronome emphasis levels 1 (weakest) to 4 (strongest), spec 053: blue, green, amber, red.
+## Fixed like the meter colours; published as `metronome_level_1` ... `metronome_level_4`.
+const METRONOME_LEVELS: Array[Color] = [
+	Color("#4a7fd0"), Color("#4cb06a"), Color("#e0a830"), Color("#d9503c"),
+]
+
 ## The defaults of the eight settings, keyed by the last part of the setting key. This is the only
 ## place they are written down: `Settings` registers its theme settings from here.
 const DEFAULTS := {
@@ -80,6 +86,8 @@ static func from_settings(values: Dictionary) -> ThemePalette:
 	r[&"mute"] = _color_value(values, "mute_color")
 	r[&"meter_warn"] = UiColors.METER_WARN
 	r[&"meter_clip"] = UiColors.METER_CLIP
+	for i in METRONOME_LEVELS.size():
+		r[StringName("metronome_level_%d" % (i + 1))] = METRONOME_LEVELS[i]
 	return p
 
 

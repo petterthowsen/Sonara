@@ -61,6 +61,12 @@ const MIN_COLUMN_WIDTH := 24.0
 ## Optional Callable(value: float) -> String for the readout and the editor's initial text.
 var value_text_callback: Callable
 @export var show_value_tooltip := true
+## Optional colour per whole value (BARS, spec 053): a bar is drawn in `level_colors[int(value)]`
+## instead of `bar_color`. Values past the array keep the normal colour.
+var level_colors := PackedColorArray():
+	set(c):
+		level_colors = c
+		queue_redraw()
 
 ## Bit k set = step k is Off (BARS draws those bars dimmed).
 var off_mask := 0:
@@ -360,7 +366,15 @@ func _draw_bars() -> void:
 		if is_equal_approx(vy, oy) and oy >= size.y:
 			top = size.y - 1.0
 		draw_rect(Rect2(r.position.x + 1.0, top, maxf(r.size.x - 2.0, 1.0), h),
-			off_c if is_step_off(k) else on_c, true)
+			off_c if is_step_off(k) else _bar_color_for(k), true)
+
+
+## Colour of step `k`'s bar: its entry of `level_colors`, else the lane's `bar` colour.
+func _bar_color_for(k: int) -> Color:
+	var level := int(_values[k])
+	if level >= 0 and level < level_colors.size():
+		return level_colors[level]
+	return bar_color
 
 
 func _draw_toggles() -> void:

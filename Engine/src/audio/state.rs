@@ -5,6 +5,7 @@ use crate::audio::block_clock::BlockClock;
 use crate::audio::channel::Channel;
 use crate::audio::clip::Clip;
 use crate::audio::devices::{AudioDevice, DevicePath};
+use crate::audio::metronome::Metronome;
 use crate::audio::mixing::midi_send::MidiSendOrder;
 use crate::audio::mixing::sidechain::SidechainTaps;
 use crate::audio::mixing::ChannelPool;
@@ -122,6 +123,9 @@ pub struct EngineState {
     /// The project's virtual stage (spec 051): the room and the Stage return. Written only by
     /// the command thread; the callback reads it under the lock.
     pub stage: StageState,
+    /// The metronome (spec 053), mixed into the hardware output after the master. Written only
+    /// by the command thread; the callback schedules and renders it under the lock.
+    pub metronome: Metronome,
 }
 
 impl EngineState {
@@ -276,6 +280,7 @@ impl Default for EngineState {
             latency_over_limit: 0,
             preview: PreviewPlayer::default(),
             stage: StageState::default(),
+            metronome: Metronome::new(48000.0, crate::audio::stream::MAX_BLOCK_FRAMES),
         }
     }
 }

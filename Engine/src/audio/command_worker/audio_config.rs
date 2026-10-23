@@ -312,6 +312,7 @@ impl CommandWorker {
             );
             state.device_sample_rate = sample_rate;
             state.settings.sample_rate = sample_rate.round() as i32;
+            state.metronome.prepare(sample_rate, max_frames);
             for (&channel_id, channel) in state.channels.iter_mut() {
                 channel.set_sample_rate(sample_rate);
                 container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {

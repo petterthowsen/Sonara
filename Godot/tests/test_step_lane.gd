@@ -24,6 +24,7 @@ func run_tests() -> void:
 	await _test_fine()
 	await _test_reset()
 	await _test_off_and_length()
+	await _test_level_colors()
 	await _test_no_signal_without_change()
 	await _test_toggles()
 	await _test_typed_entry()
@@ -232,6 +233,18 @@ func _test_off_and_length() -> void:
 	_press(lane, Vector2(_x(lane, 9), _y(lane, 7.0)))
 	_release(lane, Vector2(_x(lane, 9), _y(lane, 7.0)))
 	_assert(lane.get_value_at(9) == 7.0, "a beyond-length step is still editable")
+
+
+func _test_level_colors() -> void:
+	var lane := _make()
+	await process_frame
+	lane.set_values_no_signal(PackedFloat32Array([0.0, 1.0, 2.0, 5.0]))
+	_assert(lane._bar_color_for(1) == lane.bar_color, "without level_colors a bar uses the lane colour")
+	var colors := PackedColorArray([Color.BLACK, Color.RED, Color.GREEN, Color.BLUE])
+	lane.level_colors = colors
+	_assert(lane._bar_color_for(1) == colors[1] and lane._bar_color_for(2) == colors[2],
+		"a bar is drawn in level_colors[value]")
+	_assert(lane._bar_color_for(3) == lane.bar_color, "a value past the array keeps the lane colour")
 
 
 func _test_no_signal_without_change() -> void:

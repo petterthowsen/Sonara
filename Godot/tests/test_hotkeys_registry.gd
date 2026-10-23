@@ -56,6 +56,11 @@ func _test_table() -> void:
 	_assert(ok_chain, "every context's parent chain ends at global")
 	_assert(HotkeyActions.contexts_overlap("arranger", "global"), "arranger overlaps global")
 	_assert(not HotkeyActions.contexts_overlap("arranger", "mixer"), "arranger and mixer don't overlap")
+	var metronome := HotkeyActions.get_action("transport_metronome_toggle")
+	_assert(not metronome.is_empty() and metronome.group == "Transport" and metronome.context == "global",
+		"transport_metronome_toggle is a global Transport action")
+	_assert(metronome.defaults.is_empty() and Settings.get_value("shortcuts/transport_metronome_toggle") == [],
+		"the metronome toggle has no default chord and is rebindable")
 
 
 func _test_chords() -> void:

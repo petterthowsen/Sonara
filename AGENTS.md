@@ -57,6 +57,8 @@ Code on the audio callback must never allocate, block, do I/O, or wait on a lock
    - Routing and sends in dependency order. Each channel finishes once, after every channel routing or sending into it. Route targets then run their devices (even with no input, so tails ring) and pan.
    - Master output. The callback computes meters afterward.
 
+After the passes, the callback adds the browser preview and the metronome (spec 053, ADR 0026: outside the channel graph, post-master, hardware output only, never in exports) into the hardware buffer.
+
 Pan is applied only in pass 2 and once per route target in pass 3, never while routing. For a Stage source (pan mode 4) that pan is the identity and the stage pass does the placing. `audio/stage/` holds the room model, image-source reflections and tail; the Stage return is fed by a stage edge (`Channel::stage_feed`) beside the route and sends. The audio callback is the master clock.
 
 ### Channels and devices

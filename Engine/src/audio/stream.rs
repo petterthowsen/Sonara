@@ -1002,6 +1002,11 @@ fn run_live_block(
             }
         });
 
+        // The metronome is added after the master and the preview, never into a channel (spec 053).
+        rt_debug::section("metronome", || {
+            crate::audio::metronome::render_block(&mut state, chunk, channels)
+        });
+
         rt_debug::section("update_peaks", || {
             for channel in state.channels.values_mut() {
                 channel.update_peaks(frames, sample_rate);
@@ -1101,6 +1106,67 @@ mod tests {
         assert_eq!(run(&mut data), LiveBlock::Rendered);
         assert!(data.iter().any(|&s| s.abs() > 0.001), "the held note plays");
         assert!(state.lock().unwrap().get_current_tick() > 0);
+    }
+
+    #[test]
+    fn metronome_plays_after_master_and_bypasses_its_fader() {
+        use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
+
+        let mut state = EngineState::default();
+        state.ensure_master_channel(MAX_BLOCK_FRAMES);
+        let mut effects = CommandEffects::default();
+        for cmd in [
+            // Master all the way down, on hardware pair 2 (output 1001).
+            AudioCommand::SetChannelVolume { id: 1, db: -120.0 },
+            AudioCommand::SetMetronomeEnabled(true),
+            AudioCommand::MetronomeAudition(4),
+        ] {
+            process_command(&mut state, cmd, MAX_BLOCK_FRAMES, &mut effects);
+        }
+        state.channels.get_mut(&1).unwrap().output_channel_id = Some(1001);
+        let rendering = state.rendering.clone();
+        let block_clock = state.block_clock.clone();
+        let state = Mutex::new(state);
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut data = vec![0.0f32; 4 * 512];
+        run_live_block(
+            &state,
+            &rendering,
+            &block_clock,
+            &mut data,
+            4,
+            48_000.0,
+            Instant::now(),
+            &status_tx,
+            |_| {},
+        );
+        let pair = |data: &[f32], first: usize| {
+            data.chunks(4)
+                .map(|f| f[first].abs().max(f[first + 1].abs()))
+                .fold(0.0f32, f32::max)
+        };
+        assert!(
+            pair(&data, 2) > 0.001,
+            "the click plays on master's pair, past its fader"
+        );
+        assert_eq!(pair(&data, 0), 0.0, "and on no other pair");
+
+        // An offline render owns the devices: silence, and the click stays queued for later.
+        state.lock().unwrap().metronome.audition(4);
+        rendering.store(true, Ordering::Release);
+        data.fill(0.5);
+        run_live_block(
+            &state,
+            &rendering,
+            &block_clock,
+            &mut data,
+            4,
+            48_000.0,
+            Instant::now(),
+            &status_tx,
+            |_| {},
+        );
+        assert!(data.iter().all(|&s| s == 0.0), "muted while rendering");
     }
 
     #[test]

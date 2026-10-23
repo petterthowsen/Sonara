@@ -11,6 +11,7 @@ pub mod dsp;
 pub mod engine;
 pub mod io;
 pub mod ipc;
+pub mod metronome;
 pub mod midi_types;
 pub mod mixing;
 pub mod modulation;

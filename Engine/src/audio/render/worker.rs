@@ -971,6 +971,29 @@ mod tests {
         assert!(a == b, "renders differ");
     }
 
+    #[test]
+    fn render_excludes_metronome() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = project(&[(0, 1440, 48), (960, 1920, 55), (2880, 960, 67)], BAR);
+        let off = master_job(dir.path(), "off", 0, BAR, RenderTail::Seconds(0.5));
+        let on = master_job(dir.path(), "on", 0, BAR, RenderTail::Seconds(0.5));
+
+        let without = read_wav(&render(&state, &off).unwrap()[0]);
+        {
+            // Enabled, with an audition waiting and a downbeat click due at tick 0.
+            let mut state = state.lock().unwrap();
+            state.metronome.set_enabled(true);
+            state.metronome.audition(4);
+        }
+        let with = read_wav(&render(&state, &on).unwrap()[0]);
+        assert!(
+            without.iter().any(|s| s.abs() > 0.01),
+            "the synth is audible"
+        );
+        assert_eq!(without.len(), with.len());
+        assert!(without == with, "the click is in the render");
+    }
+
     /// The polysynth project with channel 2 as a stage source (off center, size 3 m, with a
     /// wide room) feeding a Stage return, channel 3, that routes to master.
     fn stage_project(length: Tick) -> Mutex<EngineState> {

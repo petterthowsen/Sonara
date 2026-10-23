@@ -1,0 +1,126 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://editor/metronome/MetronomePopup.gd" id="1_popup"]
+[ext_resource type="Script" path="res://components/StepLane.gd" id="2_lane"]
+[ext_resource type="Script" path="res://components/LabeledKnob.gd" id="3_knob"]
+
+[node name="MetronomePopup" type="PopupPanel"]
+size = Vector2i(560, 330)
+script = ExtResource("1_popup")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 556.0
+offset_bottom = 326.0
+theme_override_constants/separation = 8
+
+[node name="Header" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+
+[node name="SignatureLabel" type="Label" parent="VBox/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Pattern for 4/4"
+
+[node name="ResolutionLabel" type="Label" parent="VBox/Header"]
+layout_mode = 2
+modulate = Color(1, 1, 1, 0.6)
+text = "Step"
+
+[node name="ResolutionOption" type="OptionButton" parent="VBox/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Length of one step. Changing it keeps the steps that fall on the same beats."
+
+[node name="ResetButton" type="Button" parent="VBox/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Return this time signature to the default pattern"
+text = "Reset"
+
+[node name="StepLane" type="Control" parent="VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 88)
+layout_mode = 2
+script = ExtResource("2_lane")
+step_count = 4
+group_size = 1
+min_value = 0.0
+max_value = 4.0
+origin = 0.0
+default_value = 0.0
+value_step = 1.0
+
+[node name="HintLabel" type="Label" parent="VBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+modulate = Color(1, 1, 1, 0.6)
+theme_override_font_sizes/font_size = 12
+text = "Signatures in 32nd notes play the default pattern."
+
+[node name="SoundRow" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SoundOption" type="OptionButton" parent="VBox/SoundRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 0
+tooltip_text = "Click sound"
+
+[node name="Knobs" type="HBoxContainer" parent="VBox/SoundRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+alignment = 2
+
+[node name="TuneKnob" type="VBoxContainer" parent="VBox/SoundRow/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+label_width = 58.0
+text = "Tune"
+display_mode = 2
+
+[node name="DecayKnob" type="VBoxContainer" parent="VBox/SoundRow/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+label_width = 58.0
+text = "Decay"
+display_mode = 2
+
+[node name="ToneKnob" type="VBoxContainer" parent="VBox/SoundRow/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+label_width = 58.0
+text = "Tone"
+display_mode = 2
+
+[node name="LevelKnob" type="VBoxContainer" parent="VBox/SoundRow/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+label_width = 58.0
+text = "Level"
+display_mode = 2
+
+[node name="AccentVolumeKnob" type="VBoxContainer" parent="VBox/SoundRow/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+label_width = 58.0
+text = "Accent Vol"
+display_mode = 2
+
+[node name="AccentPitchKnob" type="VBoxContainer" parent="VBox/SoundRow/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_knob")
+label_width = 58.0
+text = "Accent Pitch"
+display_mode = 2

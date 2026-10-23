@@ -31,8 +31,13 @@ func _test_defaults() -> void:
 	for name in [&"app_bg", &"section", &"section_header", &"card", &"card_header", &"well", &"nest_overlay",
 			&"floating", &"border", &"border_selected", &"control_bg", &"control_hover", &"text", &"text_dim",
 			&"text_disabled", &"editor_bg", &"grid_line", &"handle", &"accent_primary", &"accent_secondary",
-			&"record", &"solo", &"mute", &"meter_warn", &"meter_clip"]:
+			&"record", &"solo", &"mute", &"meter_warn", &"meter_clip",
+			&"metronome_level_1", &"metronome_level_2", &"metronome_level_3", &"metronome_level_4"]:
 		_assert(p.has_role(name), "role '%s' exists" % name)
+	var seen := {}
+	for i in range(1, 5):
+		seen[p.role(StringName("metronome_level_%d" % i))] = true
+	_assert(seen.size() == 4, "the four metronome level roles are distinct colours")
 	_assert(p.role(&"floating").a < 1.0 and p.role(&"floating").a > 0.9, "floating is slightly translucent")
 
 

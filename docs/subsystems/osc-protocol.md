@@ -114,6 +114,35 @@ Godot knows every value it sent.
 | `/stage/set` | `f:width, f:depth, f:height, f:listener_x, f:listener_y, f:listener_z, f:decay_s, f:tail_db, i:distance_delay, i:output_mode`, then 6 × (`f:gain, f:hf_damping`), then `i:mic` | Replace the room (meters; at most 60 × 40 × 25, other values are clamped). `decay_s` is the tail's RT60, `tail_db` its level against the reflections. `distance_delay` 1 delays the direct sound by its distance to the listener. `output_mode`: 0 = Full (reflections and tail), 1 = Reflections only (no tail), 2 = Direct only (nothing reaches the Stage return). The six (gain, damping) pairs are the surfaces in the order front, back, left, right, floor, ceiling; damping 0 is bright, 1 is dull. `mic` (the 23rd argument, spec 052) is the mic setup the listener records with: 0 = Pan (constant-power panner, the default), 1 = XY, 2 = Blumlein, 3 = Mid/Side, 4 = AB, 5 = ORTF, 6 = Decca tree; other values mean Pan. Exactly 23 arguments, or 22 from an older sender (then `mic` = Pan); floats may also arrive as `i`. Sources crossfade to the new room (and the new mic setup) over 50 ms |
 | `/stage/return` | `i:channel_id` | Register the Stage return, a bus that receives every source's reflections and adds the tail before its own devices; 0 clears it. Every stage source gets an edge to it (the Stage return is ordered, solo'd and latency-compensated like a send target). Refused, with a warning, for master, a missing channel or a stage source |
 
+### Metronome (Godot -> Rust, spec 053)
+
+A click played by the engine itself, outside the channel graph (ADR 0026). It is mixed into the
+hardware pair master plays on, after master's devices and fader and with master's output delay, and
+it never appears in offline renders. No statuses: Godot knows every value it sent. Floats may also
+arrive as `i`. A message with bad arguments is warned and ignored.
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/metronome/enabled` | `i:on` | 1 plays clicks while the transport is playing, 0 stops scheduling new ones. A click already sounding finishes its decay |
+| `/metronome/sound` | `i:sound, f:tune_hz, f:decay_s, f:tone, f:level_db, f:emphasis_volume_db, f:emphasis_pitch_st` | `sound`: 0 = Beep (a tonal sine blip, built on the Kick), 1 = Wood (a tonal knock, built on the Snare); other values mean Beep. Exactly 7 arguments. Values are clamped: `tune_hz` 200 to 4000 (pitch of the level-4 click), `decay_s` 0.02 to 0.5, `tone` 0 to 1 (attack click), `level_db` -60 to 6 (level of a level-4 click), `emphasis_volume_db` 0 to 24, `emphasis_pitch_st` 0 to 24. A level-`e` click is `emphasis_volume_db * (4 - e) / 3` dB quieter and `round(emphasis_pitch_st * (4 - e) / 3)` semitones lower than a level-4 click. Applies from the next click |
+| `/metronome/pattern` | `i:num, i:den, i:resolution, i:level...` | One bar of emphasis levels (0 = Off, 1 to 4, up to 128 of them) for the time signature `num/den`. `resolution` is the note denominator of one step and must be 4, 8 or 16 (the UI offers only resolutions that are not coarser than the beat); `num * resolution / den` must be a whole number equal to the number of levels, else the message is warned and ignored. Replaces that signature's pattern. No levels removes it, and the signature goes back to its default. The table holds at most 32 signatures |
+| `/metronome/clear` | - | Forget every edited pattern. Godot sends it first on a full sync |
+| `/metronome/audition` | `i:level` | One preview click at `level` (1 to 4) at the start of the next block, even while the transport is stopped or the metronome is disabled. The engine queues at most 16 triggers; Godot limits itself to one per 150 ms |
+
+**Default pattern.** A signature with no edited pattern plays at the beat resolution (1/4 for
+denominators 1 and 2): level 4 on the first beat, level 2 on every other beat. 4/4 is `[4, 2, 2, 2]`
+and 6/8 is `[4, 2, 2, 2, 2, 2]`. For denominator 32 the engine's default uses 1/32 steps, which
+`/metronome/pattern` cannot carry, so those signatures can only play the default.
+
+**Scheduling.** Each bar uses the pattern of its own signature (time signature changes), a click on
+the loop start plays right after a wrap, and a seek neither misses nor doubles a click. Clicks land
+sample-accurately, one frame earlier than the beat's exact frame, like clip MIDI (at 120 BPM, 4/4 and
+48 kHz: frames 23 999, 47 999 and so on).
+
+**Sync.** On connect and on project load Godot sends `/metronome/clear`, every edited pattern,
+`/metronome/sound` and `/metronome/enabled`, in that order. The enabled state and the sound values
+are user settings (`metronome/*`), the patterns are saved in the project file.
+
 ### Channel Metering (Rust -> Godot)
 
 | Address | Args | Description |

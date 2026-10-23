@@ -27,6 +27,7 @@ func run_tests() -> void:
 	_test_loop_follows_selection()
 	_test_follow_flag_round_trip()
 	_test_space_pair_is_not_a_conflict()
+	await _test_metronome_hotkey_flips_setting()
 
 
 func _test_stop_cycle_with_markers() -> void:
@@ -187,3 +188,33 @@ func _test_follow_flag_round_trip() -> void:
 	data["loop"].erase("follows_selection")
 	loaded = (load("res://data/Project.gd") as GDScript).from_json(data)
 	_assert(not loaded.loop_follows_selection, "older files load with follow off")
+
+
+## Spec 053 REQ-003: the rebindable `transport_metronome_toggle` action flips the metronome and the
+## transport toggle button follows.
+func _test_metronome_hotkey_flips_setting() -> void:
+	var settings: Node = root.get_node("Settings")
+	var editor: Control = load("res://editor/Editor.tscn").instantiate()
+	root.add_child(editor)
+	await process_frame
+	await process_frame
+	editor.open_project(_project(), "", false)
+	await process_frame
+	settings.set_value("metronome/enabled", false)
+	settings.set_value("shortcuts/transport_metronome_toggle", ["M"])
+	var key := InputEventKey.new()
+	key.keycode = KEY_M
+	key.pressed = true
+	_assert(editor._handle_transport_hotkey(key), "the bound chord is handled as a transport hotkey")
+	_assert(settings.get_value("metronome/enabled") == true, "dispatching the action turns the metronome on")
+	_assert(editor.metronome_toggle.button_pressed, "the toggle button follows the model")
+	editor.metronome_toggle.button_pressed = false
+	_assert(settings.get_value("metronome/enabled") == false, "pressing the toggle turns it off")
+	editor._handle_transport_hotkey(key)
+	editor.metronome_toggle.set_pressed_no_signal(false)
+	settings.set_value("metronome/enabled", false)
+	_assert(not editor.metronome_toggle.button_pressed, "the button follows a setting change made elsewhere")
+	settings.set_value("shortcuts/transport_metronome_toggle", [])
+	editor.close_project()
+	editor.queue_free()
+	await process_frame

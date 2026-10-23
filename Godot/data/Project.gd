@@ -79,6 +79,9 @@ var channels: Array[Channel] = []
 ## The project's one virtual stage (spec 051). Always present; it is saved, and sent to the
 ## engine, only once the project uses it (see `uses_stage`).
 var stage: VirtualStage = VirtualStage.new()
+
+## The metronome's patterns (spec 053). Sound and on/off are user settings, not project data.
+var metronome: Metronome = Metronome.new()
 var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 var markers: Array[SongMarker] = []
@@ -219,6 +222,7 @@ func _init():
 	key_change_map.changed.connect(_sync_key_change_map_to_engine)  # the initializer doesn't run the setter
 	stage.set_project(self)
 	stage.changed.connect(_on_stage_changed)
+	metronome.set_project(self)
 	var master = Channel.new(1)  # Master is always ID 1
 	master.name = "Master"
 	master.output_channel_id = 1000  # Master routes to default output device (ID 1000)
@@ -343,6 +347,7 @@ func _on_engine_confirmed_connected() -> void:
 	_sync_key_change_map_to_engine()
 	_sync_loop_to_engine()
 	_sync_stage_to_engine()
+	metronome.sync_to_engine()
 
 	# Tracks are linked to channels now, so effective enabled states are final.
 	notify_item_visibility_changed()
@@ -2185,6 +2190,8 @@ func to_json() -> Dictionary:
 	}
 	if uses_stage():
 		data["stage"] = stage.to_json()
+	if metronome.has_edits():
+		data["metronome"] = metronome.to_json()
 	return data
 
 
@@ -2256,6 +2263,8 @@ static func from_json(data: Dictionary) -> Project:
 	project.channels.clear()
 	if data.get("stage") is Dictionary:
 		project.stage.load_json(data["stage"])
+	if data.get("metronome") is Dictionary:
+		project.metronome.load_json(data["metronome"])
 	var migrate_scales: bool = project.format_version < 3
 	for channel_data in data.get("channels", []):
 		if migrate_scales:

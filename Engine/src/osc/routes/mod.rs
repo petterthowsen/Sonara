@@ -8,6 +8,7 @@ mod channel;
 mod clip;
 mod device;
 mod device_slots;
+mod metronome;
 mod plugin;
 mod preview;
 mod project;
@@ -126,6 +127,7 @@ impl OscServer {
             Some("audio" | "engine") => warn_on_arg_error(audio::route(&parts, args, &mut cx))?,
             Some("render") => warn_on_arg_error(render::route(&parts, args, &mut cx))?,
             Some("stage") => warn_on_arg_error(stage::route(&parts, args, &mut cx))?,
+            Some("metronome") => warn_on_arg_error(metronome::route(&parts, args, &mut cx))?,
             Some("audiofile") => warn_on_arg_error(audiofile::route(&parts, args, &cx))?,
             Some("preview") => warn_on_arg_error(preview::route(&parts, args, &cx))?,
             _ => false,
@@ -359,6 +361,137 @@ mod tests {
         let mut bad = stage_set_args();
         bad.push(Float(1.0));
         assert!(h.send("/stage/set", bad).is_empty());
+    }
+
+    #[test]
+    fn metronome_enabled_and_audition() {
+        let mut h = Harness::new();
+        let sent = h.send("/metronome/enabled", vec![Int(1)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetMetronomeEnabled(true)]
+        ));
+        let sent = h.send("/metronome/enabled", vec![Int(0)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetMetronomeEnabled(false)]
+        ));
+        assert!(h.send("/metronome/enabled", vec![Float(1.0)]).is_empty());
+        assert!(h.send("/metronome/enabled", vec![]).is_empty());
+
+        let sent = h.send("/metronome/audition", vec![Int(3)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::MetronomeAudition(3)]
+        ));
+        assert!(h.send("/metronome/audition", vec![Int(0)]).is_empty());
+        assert!(h.send("/metronome/audition", vec![Int(5)]).is_empty());
+        assert!(h.send("/metronome/audition", vec![]).is_empty());
+        assert!(h.send("/metronome/other", vec![Int(1)]).is_empty());
+    }
+
+    #[test]
+    fn metronome_sound_reads_the_knobs() {
+        use crate::audio::metronome::SoundKind;
+        let mut h = Harness::new();
+        let args = vec![
+            Int(1),
+            Float(1500.0),
+            Float(0.1),
+            Float(0.25),
+            Float(-12.0),
+            Float(9.0),
+            Int(5),
+        ];
+        let sent = h.send("/metronome/sound", args.clone());
+        let [AudioCommand::SetMetronomeSound(sound)] = sent.as_slice() else {
+            panic!("expected one SetMetronomeSound, got {sent:?}");
+        };
+        assert_eq!(sound.kind, SoundKind::Wood);
+        assert_eq!(
+            (
+                sound.tune_hz,
+                sound.decay_s,
+                sound.tone,
+                sound.level_db,
+                sound.emphasis_volume_db,
+                sound.emphasis_pitch_st
+            ),
+            (1500.0, 0.1, 0.25, -12.0, 9.0, 5.0)
+        );
+        let mut short = args.clone();
+        short.pop();
+        assert!(h.send("/metronome/sound", short).is_empty());
+        let mut bad = args;
+        bad[0] = Float(1.0);
+        assert!(h.send("/metronome/sound", bad).is_empty());
+    }
+
+    #[test]
+    fn metronome_pattern_reads_levels_and_an_empty_one_removes() {
+        let mut h = Harness::new();
+        let mut args = vec![Int(7), Int(8), Int(8)];
+        args.extend([4, 0, 2, 0, 2, 0, 1].map(Int));
+        let sent = h.send("/metronome/pattern", args);
+        let [AudioCommand::SetMetronomePattern {
+            num,
+            den,
+            resolution,
+            levels,
+        }] = sent.as_slice()
+        else {
+            panic!("expected one SetMetronomePattern, got {sent:?}");
+        };
+        assert_eq!((*num, *den, *resolution), (7, 8, 8));
+        assert_eq!(levels, &[4, 0, 2, 0, 2, 0, 1]);
+
+        // No levels: the command carries an empty list, which the engine reads as remove.
+        let sent = h.send("/metronome/pattern", vec![Int(7), Int(8), Int(8)]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::SetMetronomePattern { levels, .. }] if levels.is_empty()
+        ));
+
+        // Malformed messages are dropped: a level above 4, a wrong type, a missing resolution.
+        let bad_level = vec![Int(4), Int(4), Int(4), Int(1), Int(5), Int(1), Int(1)];
+        assert!(h.send("/metronome/pattern", bad_level).is_empty());
+        let bad_type = vec![Int(4), Int(4), Int(4), Int(1), Float(1.0), Int(1), Int(1)];
+        assert!(h.send("/metronome/pattern", bad_type).is_empty());
+        assert!(h
+            .send("/metronome/pattern", vec![Int(4), Int(4)])
+            .is_empty());
+        assert!(h
+            .send("/metronome/pattern", vec![Int(0), Int(4), Int(4), Int(1)])
+            .is_empty());
+    }
+
+    #[test]
+    fn metronome_pattern_with_a_wrong_step_count_is_ignored_by_the_engine() {
+        use crate::audio::commands::{process_command, CommandEffects};
+        use crate::audio::state::EngineState;
+        // The route passes a wrong step count through; applying it warns and changes nothing.
+        let mut h = Harness::new();
+        let sent = h.send(
+            "/metronome/pattern",
+            vec![Int(4), Int(4), Int(8), Int(4), Int(1), Int(1)],
+        );
+        assert_eq!(sent.len(), 1);
+        let mut state = EngineState::default();
+        let mut effects = CommandEffects::default();
+        for cmd in sent {
+            process_command(&mut state, cmd, 64, &mut effects);
+        }
+        assert!(state.metronome.patterns().is_empty());
+    }
+
+    #[test]
+    fn metronome_clear_sends_the_command() {
+        let mut h = Harness::new();
+        let sent = h.send("/metronome/clear", vec![]);
+        assert!(matches!(
+            sent.as_slice(),
+            [AudioCommand::ClearMetronomePatterns]
+        ));
     }
 
     #[test]

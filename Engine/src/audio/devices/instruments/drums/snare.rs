@@ -31,18 +31,18 @@ use crate::audio::dsp::{
 };
 
 // Parameter IDs, grouped in tens by module.
-const TUNE: ParamId = 0;
-const DECAY: ParamId = 1;
-const OVERTONE: ParamId = 2;
-const DRIVE: ParamId = 3;
-const KEYTRACK: ParamId = 4;
-const PUNCH: ParamId = 10;
-const PUNCH_TIME: ParamId = 11;
-const SNAPPY: ParamId = 20;
-const SNAPPY_DECAY: ParamId = 21;
-const SNAPPY_TONE: ParamId = 22;
-const SNAP: ParamId = 30;
-const SNAP_TONE: ParamId = 31;
+pub(crate) const TUNE: ParamId = 0;
+pub(crate) const DECAY: ParamId = 1;
+pub(crate) const OVERTONE: ParamId = 2;
+pub(crate) const DRIVE: ParamId = 3;
+pub(crate) const KEYTRACK: ParamId = 4;
+pub(crate) const PUNCH: ParamId = 10;
+pub(crate) const PUNCH_TIME: ParamId = 11;
+pub(crate) const SNAPPY: ParamId = 20;
+pub(crate) const SNAPPY_DECAY: ParamId = 21;
+pub(crate) const SNAPPY_TONE: ParamId = 22;
+pub(crate) const SNAP: ParamId = 30;
+pub(crate) const SNAP_TONE: ParamId = 31;
 
 const OWN: [ParamSpec; 12] = [
     spec(TUNE, "Tune", "Snare", "Hz", log(80.0, 400.0), 180.0),
@@ -91,7 +91,7 @@ const SLOTS: [u8; 100] = slot_table(&SPECS);
 static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
 /// With Keytrack on, this note plays exactly Tune (D1, the GM snare note).
-const KEYTRACK_ROOT: u8 = 38;
+pub(crate) const KEYTRACK_ROOT: u8 = 38;
 /// Mode 2's pitch: an ideal membrane's first overtone sits at about 1.59x the fundamental.
 const MODE2_RATIO: f32 = 1.6;
 /// Level of the body and of the wires when the Snappy balance gives them full level.

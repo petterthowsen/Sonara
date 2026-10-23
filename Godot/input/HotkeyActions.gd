@@ -45,6 +45,9 @@ const ACTIONS := [
 	{ "id": "transport_loop_toggle", "label": "Toggle loop", "group": "Transport", "context": "global",
 		"defaults": ["L"],
 		"description": "Loop playback over the loop region. With no region yet, it is created from the selected time range." },
+	{ "id": "transport_metronome_toggle", "label": "Toggle metronome", "group": "Transport", "context": "global",
+		"defaults": [],
+		"description": "Turn the metronome click on or off. It plays on the main output while the transport is playing." },
 
 	# --- Edit ---
 	{ "id": "edit_undo", "label": "Undo", "group": "Edit", "context": "global",

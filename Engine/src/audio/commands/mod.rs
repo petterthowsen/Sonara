@@ -9,6 +9,7 @@ mod clip;
 mod device;
 mod device_data;
 mod layer;
+mod metronome;
 mod modulation;
 mod plugin;
 mod preview;
@@ -111,6 +112,22 @@ pub enum AudioCommand {
     SetStageReturn {
         id: ChannelId,
     },
+    /// Turn the metronome's clicks on or off (spec 053).
+    SetMetronomeEnabled(bool),
+    /// The metronome's sound knobs in real units; clamped when applied.
+    SetMetronomeSound(crate::audio::metronome::MetronomeSound),
+    /// One bar of step levels for a time signature; empty `levels` remove the pattern. A wrong
+    /// step count for the signature and resolution is warned about and ignored.
+    SetMetronomePattern {
+        num: u16,
+        den: u16,
+        resolution: u8,
+        levels: Vec<u8>,
+    },
+    /// Forget every edited pattern (every signature plays its default).
+    ClearMetronomePatterns,
+    /// Play one preview click of this level (1 to 4), playing or not.
+    MetronomeAudition(u8),
     SetChannelMute {
         id: ChannelId,
         mute: bool,
@@ -822,6 +839,16 @@ fn dispatch(
         }
         AudioCommand::SetChannelStage { id, params } => stage::set_channel_stage(state, id, params),
         AudioCommand::SetStage { room } => stage::set_stage(state, room),
+        AudioCommand::SetMetronomeEnabled(enabled) => metronome::set_enabled(state, enabled),
+        AudioCommand::SetMetronomeSound(sound) => metronome::set_sound(state, sound),
+        AudioCommand::SetMetronomePattern {
+            num,
+            den,
+            resolution,
+            levels,
+        } => metronome::set_pattern(state, num, den, resolution, levels, effects),
+        AudioCommand::ClearMetronomePatterns => metronome::clear_patterns(state),
+        AudioCommand::MetronomeAudition(level) => metronome::audition(state, level),
         AudioCommand::SetChannelPanWidth { id, width } => {
             channel::set_channel_pan_width(state, id, width)
         }

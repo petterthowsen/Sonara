@@ -68,6 +68,9 @@ signal view_changed(view: int)  # Editor.View
 
 @onready var play_button: Button = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/PlayButton
 @onready var stop_button: Button = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/StopButton
+@onready var metronome_toggle: Button = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/MetronomeToggle
+@onready var metronome_menu_button: Button = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/MetronomeMenuButton
+@onready var metronome_popup: MetronomePopup = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/MetronomePopup
 
 @onready var tempo_spinbox: SpinBox = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/Tempo
 @onready var time_signature_edit: LineEdit = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/TimeSignature
@@ -573,6 +576,7 @@ func open_project(p: Project, path: String = "", connect_engine: bool = true) ->
 	project_path = path
 	is_modified = false
 	history.clear()
+	_bind_metronome()
 
 	if not project.tempo_map.changed.is_connected(_update_transport_ui):
 		project.tempo_map.changed.connect(_update_transport_ui)
@@ -638,6 +642,7 @@ func close_project() -> void:
 	project = null
 	project_path = ""
 	is_modified = false
+	_bind_metronome()
 	playhead_ticks = 0
 	_reset_playhead_interpolation(0)
 	is_playing = false
@@ -925,6 +930,8 @@ func _handle_transport_hotkey(event: InputEvent) -> bool:
 		stop_cycle()
 	elif Hotkeys.pressed(event, "transport_loop_toggle"):
 		toggle_loop()
+	elif Hotkeys.pressed(event, "transport_metronome_toggle"):
+		toggle_metronome()
 	else:
 		return false
 	return true
@@ -1251,6 +1258,10 @@ func _setup_transport_buttons() -> void:
 	loop_follow_button.theme_type_variation = &"LoopButton"
 	stop_button.get_parent().add_child(loop_follow_button)
 	loop_follow_button.toggled.connect(_on_loop_follow_toggled)
+	# Loop stays next to Stop; the metronome buttons follow it.
+	stop_button.get_parent().move_child(loop_button, stop_button.get_index() + 1)
+	stop_button.get_parent().move_child(loop_follow_button, loop_button.get_index() + 1)
+	_setup_metronome_controls()
 	play_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_update_play_button()
 	_update_button_tooltips()
@@ -1261,6 +1272,7 @@ func _update_button_tooltips() -> void:
 	play_button.tooltip_text = "Play / pause (%s)" % _chord_text("transport_play")
 	stop_button.tooltip_text = "Stop: back to the start position; press again to step to the nearest marker, then bar 0 (%s)" % _chord_text("transport_stop_cycle")
 	loop_button.tooltip_text = "Loop playback (%s). With no loop region, select a time range first." % _chord_text("transport_loop_toggle")
+	metronome_toggle.tooltip_text = "Metronome (%s)" % _chord_text("transport_metronome_toggle")
 	loop_follow_button.tooltip_text = "Loop region follows the selected time range (does not turn looping on or off)"
 
 
@@ -1272,6 +1284,72 @@ func _chord_text(action_id: String) -> String:
 func _update_play_button() -> void:
 	if play_button:
 		play_button.icon = PAUSE_ICON if is_playing else PLAY_ICON
+	_update_metronome_popup()
+
+
+# --- Metronome (spec 053) -----------------------------------------------------------------------
+
+## A press on the chevron while its popup is open closes the popup first (outside click), so the
+## click arrives after it hid: this window treats that click as the "close".
+const METRONOME_REOPEN_GUARD_MSEC := 250
+var _metronome_popup_hidden_msec: int = -1000000
+## The model the toggle and popup are bound to (the open project's).
+var _metronome: Metronome = null
+
+
+func _setup_metronome_controls() -> void:
+	metronome_toggle.toggled.connect(_on_metronome_toggled)
+	metronome_menu_button.pressed.connect(_on_metronome_menu_pressed)
+	metronome_popup.popup_hide.connect(_on_metronome_popup_hidden)
+	playhead_moved.connect(func(_ticks): _update_metronome_popup())
+	Settings.setting_changed.connect(_on_metronome_setting_changed)
+	_bind_metronome()
+
+
+## Bind the toggle and popup to the open project's metronome (or the default one, with no project).
+func _bind_metronome() -> void:
+	_metronome = project.metronome if project else Metronome.new()
+	metronome_popup.setup(_metronome)
+	metronome_toggle.set_pressed_no_signal(_metronome.is_enabled())
+
+
+## Flip the metronome on or off (the toggle button and the `transport_metronome_toggle` hotkey).
+func toggle_metronome() -> void:
+	if _metronome:
+		_metronome.set_enabled(not _metronome.is_enabled())
+
+
+func _on_metronome_toggled(pressed: bool) -> void:
+	if _metronome and _metronome.is_enabled() != pressed:
+		_metronome.set_enabled(pressed)
+
+
+## The setting changed anywhere (the hotkey, the Settings dialog, another project): follow it.
+func _on_metronome_setting_changed(key: String, value) -> void:
+	if key == Metronome.KEY_ENABLED:
+		metronome_toggle.set_pressed_no_signal(bool(value))
+
+
+func _on_metronome_menu_pressed() -> void:
+	var just_closed := Time.get_ticks_msec() - _metronome_popup_hidden_msec < METRONOME_REOPEN_GUARD_MSEC
+	if metronome_popup.visible or just_closed:
+		metronome_popup.hide()
+		metronome_menu_button.set_pressed_no_signal(false)
+		return
+	_update_metronome_popup()
+	metronome_popup.popup_below(metronome_toggle)
+	metronome_menu_button.set_pressed_no_signal(true)
+
+
+func _on_metronome_popup_hidden() -> void:
+	_metronome_popup_hidden_msec = Time.get_ticks_msec()
+	metronome_menu_button.set_pressed_no_signal(false)
+
+
+## Tell the popup where the playhead is (its signature, the step to highlight) while it is open.
+func _update_metronome_popup() -> void:
+	if project and metronome_popup and metronome_popup.visible:
+		metronome_popup.follow_playhead(project, playhead_ticks, is_playing)
 
 
 func _update_loop_button() -> void:

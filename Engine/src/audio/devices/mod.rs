@@ -8,7 +8,7 @@ mod containers;
 mod device;
 mod effects;
 mod factory;
-mod instruments;
+pub(crate) mod instruments;
 pub mod note_fx;
 pub mod param_table;
 mod params;

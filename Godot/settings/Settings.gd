@@ -649,6 +649,72 @@ func _register_all_settings() -> void:
 		+ "Experimental, and only on the X11 display server. A plugin that can't be embedded still opens in its own window.",
 	)).sub("Plugins").available_if(_is_x11, "Needs the X11 display server (Sonara is running on %s)." % DisplayServer.get_name())
 
+	# --- Metronome (spec 053). Edited in the transport popup; `Metronome` sends them to the engine. ---
+	_register(Setting.new(
+		"metronome/enabled",
+		"Metronome",
+		Type.BOOL,
+		false,
+		CATEGORY_AUDIO,
+		"Play a click on the beats while the transport is playing. Heard on the main output only; exports never contain it.",
+	)).sub("Metronome")
+	_register(Setting.new(
+		"metronome/sound",
+		"Metronome Sound",
+		Type.INT,
+		0,
+		CATEGORY_AUDIO,
+		"0 is Beep, 1 is Wood.",
+	)).sub("Metronome").range(0, 1, 1)
+	_register(Setting.new(
+		"metronome/tune",
+		"Metronome Tune (Hz)",
+		Type.FLOAT,
+		1000.0,
+		CATEGORY_AUDIO,
+		"Pitch of the strongest click.",
+	)).sub("Metronome").range(200.0, 4000.0, 1.0)
+	_register(Setting.new(
+		"metronome/decay",
+		"Metronome Decay (s)",
+		Type.FLOAT,
+		0.06,
+		CATEGORY_AUDIO,
+		"Length of each click.",
+	)).sub("Metronome").range(0.02, 0.5, 0.005)
+	_register(Setting.new(
+		"metronome/tone",
+		"Metronome Tone",
+		Type.FLOAT,
+		0.5,
+		CATEGORY_AUDIO,
+		"Attack brightness: how much click the attack has.",
+	)).sub("Metronome").range(0.0, 1.0, 0.01)
+	_register(Setting.new(
+		"metronome/level",
+		"Metronome Level (dB)",
+		Type.FLOAT,
+		-6.0,
+		CATEGORY_AUDIO,
+		"Volume of the strongest click.",
+	)).sub("Metronome").range(-60.0, 6.0, 0.1)
+	_register(Setting.new(
+		"metronome/emphasis_volume",
+		"Metronome Accent Volume (dB)",
+		Type.FLOAT,
+		12.0,
+		CATEGORY_AUDIO,
+		"How much quieter the weakest accent level is than the strongest.",
+	)).sub("Metronome").range(0.0, 24.0, 0.5)
+	_register(Setting.new(
+		"metronome/emphasis_pitch",
+		"Metronome Accent Pitch (st)",
+		Type.FLOAT,
+		7.0,
+		CATEGORY_AUDIO,
+		"How many semitones lower the weakest accent level sounds than the strongest.",
+	)).sub("Metronome").range(0.0, 24.0, 1.0)
+
 	# --- AI / OpenRouter ---
 	_register(Setting.new(
 		"ai/openrouter/api_key",

@@ -27,7 +27,7 @@ The audio callback (`Engine/src/audio/processing/`, set up by `engine.rs`) proce
 4. Dispatch clip note on/off events to the owning channel with sample-accurate `frame_offset` values so instruments queue MIDI before rendering
 5. Render per-frame audio for each track (audio clips + channel device chains) into channel buffers
 6. Mix channels: apply gain/pan, route to output channels
-7. Write every channel routed to a hardware output (master included) to the audio hardware via CPAL
+7. Write every channel routed to a hardware output (master included) to the audio hardware via CPAL, then add the browser preview and the metronome into that buffer (post-master, hardware only)
 8. Update peak meters for all channels
 9. Advance the transport sample counter (`EngineState::advance_sample_position`) and send periodic status updates (playhead, sample position, meters) at ~20 Hz
 
@@ -74,6 +74,7 @@ Engine/src/
     mixing/            # mix_and_output: mod.rs (passes, master output), routing.rs (routes, sends,
                        # aux sources), solo.rs, sidechain.rs (spec 036 tap snapshot + feed),
                        # pool.rs (ChannelPool, spec 042), latency.rs (LatencySignature, LatencyPlan)
+    metronome/         # Metronome (spec 053, ADR 0026): mod.rs (Metronome, render), pattern.rs (PatternTable, StepCursor), sound.rs
     realtime.rs        # promote_current_thread: realtime request shared by plugin host and pool workers
     channel/           # Channel: mod.rs, chain.rs (device chain, notes), meter.rs, pan.rs, send.rs
     clip.rs            # Clip, ClipInstance, AudioPlayback (time-stretch maths)
@@ -262,6 +263,7 @@ Each audio `Clip` has a `StretchMode` and a clip tempo (`recorded_bpm`, the BPM 
 
 4. **Hardware Output**
    - The CPAL buffer is cleared, then every channel routed to a hardware output (master included) is written to its pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. Channels on the same pair accumulate; a pair the device lacks plays on 1/2. A channel routed straight to a pair skips master's effects (reference track) and is never silenced by another channel's solo. Peaks are computed by the callback afterward.
+   - After the passes, `run_live_block` (`stream.rs`) adds the browser preview and then the **metronome** into the same interleaved buffer (spec 053, ADR 0026). The metronome is not a channel: `Metronome::render` reads the block's `tick_events` / `loop_wraps`, finds the ticks that land on a pattern step (one `TimeSignatureMap::segment_at` per run, so each bar uses its own signature's pattern), queues a trigger at `frame + master.latency.hw_delay`, feeds the due ones to a Kick (Beep) or Snare (Wood) `DrumHost` and adds the result to master's hardware pair. It skips master's devices and fader and the offline render never calls it. Pattern table, trigger queue (16) and scratch are preallocated; `/metronome/audition` pushes a trigger even while stopped. A sound switch only changes the active host, so the old click rings out.
 
 **Channel worker pool** (spec 042, `mixing/pool.rs`, ADR 0020). Three of the passes treat channels as independent, and only those use the pool: the device pre-pass (channels nothing routes into), the stage pass (`JobKind::Stage`, ADR 0024) and each sweep of `route_in_dependency_order` (the `ready` list). `PooledPass::run` collects the eligible channels' addresses into `RenderScratch::jobs` (`usize`, so `EngineState` stays `Send`) and calls `ChannelPool::run_jobs` when the pool has workers and there are at least 2 jobs; otherwise the existing loop runs unchanged.
 - `run_jobs` publishes a generation and the job list (`PoolShared`, one packed claim word of generation, count and next index), rings a futex, claims jobs itself and then waits (spin about 20 us, then futex) for `done_count` to reach the number of *started* jobs. A job no worker reached is claimed by the callback, so a late or paused worker can't stall the block.

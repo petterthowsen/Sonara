@@ -29,21 +29,21 @@ use crate::audio::dsp::{
 };
 
 // Parameter IDs, grouped in tens by module.
-const TUNE: ParamId = 0;
-const DECAY: ParamId = 1;
-const SHAPE: ParamId = 2;
-const DRIVE: ParamId = 3;
-const KEYTRACK: ParamId = 4;
-const PUNCH: ParamId = 10;
-const PUNCH_TIME: ParamId = 11;
-const CLICK: ParamId = 20;
-const CLICK_TONE: ParamId = 21;
-const CLICK_TYPE: ParamId = 22;
-const NOISE: ParamId = 30;
-const NOISE_TONE: ParamId = 31;
-const GATE: ParamId = 40;
-const RELEASE: ParamId = 41;
-const GLIDE: ParamId = 42;
+pub(crate) const TUNE: ParamId = 0;
+pub(crate) const DECAY: ParamId = 1;
+pub(crate) const SHAPE: ParamId = 2;
+pub(crate) const DRIVE: ParamId = 3;
+pub(crate) const KEYTRACK: ParamId = 4;
+pub(crate) const PUNCH: ParamId = 10;
+pub(crate) const PUNCH_TIME: ParamId = 11;
+pub(crate) const CLICK: ParamId = 20;
+pub(crate) const CLICK_TONE: ParamId = 21;
+pub(crate) const CLICK_TYPE: ParamId = 22;
+pub(crate) const NOISE: ParamId = 30;
+pub(crate) const NOISE_TONE: ParamId = 31;
+pub(crate) const GATE: ParamId = 40;
+pub(crate) const RELEASE: ParamId = 41;
+pub(crate) const GLIDE: ParamId = 42;
 
 /// Kick module (IDs 0–9): the drum itself.
 const KICK: [ParamSpec; 5] = [
@@ -122,7 +122,7 @@ const SLOTS: [u8; 100] = slot_table(&SPECS);
 static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
 /// With Keytrack on, this note plays exactly Tune (C1, the GM kick note).
-const KEYTRACK_ROOT: u8 = 36;
+pub(crate) const KEYTRACK_ROOT: u8 = 36;
 /// The Noise layer decays this fraction of the body's Decay.
 const NOISE_DECAY_RATIO: f32 = 0.2;
 /// Body start phase at full Click: a sine starting at its peak is the hardest attack.
