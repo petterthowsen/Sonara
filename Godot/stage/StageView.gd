@@ -26,6 +26,7 @@ var _shown := false
 @onready var _output: OptionButton = %OutputOption
 @onready var _mic: OptionButton = %MicOption
 @onready var _snap: CheckButton = %SnapToggle
+@onready var _show_hidden: CheckButton = %ShowHiddenToggle
 @onready var _material_grid: GridContainer = %MaterialGrid
 @onready var _summary: Label = %SourceSummary
 @onready var _source_height: SpinBox = %SourceHeight
@@ -66,6 +67,7 @@ func _ready() -> void:
 		_mic.add_item(VirtualStage.MIC_LABELS[i], i)
 	_snap.set_pressed_no_signal(canvas.snap_enabled)
 	_snap.toggled.connect(canvas.set_snap_enabled)
+	_show_hidden.toggled.connect(canvas.set_show_hidden)
 	_mic.item_selected.connect(func(i: int) -> void: _edit_room(func() -> void: project.stage.set_mic_setup(_mic.get_item_id(i)), false))
 	_width.value_changed.connect(func(v: float) -> void: _edit_room(func() -> void: project.stage.set_width(v)))
 	_depth.value_changed.connect(func(v: float) -> void: _edit_room(func() -> void: project.stage.set_depth(v)))

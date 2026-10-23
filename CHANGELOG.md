@@ -6,6 +6,11 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Stage view: sources of hidden channels are no longer listed unless you turn on the temporary Show hidden toggle (#179), and the long always-visible tooltip over the view is gone (#180).
+- Track list: Space no longer hides the selected track, so it toggles play/pause there like everywhere else (#181).
+
 ### Added
 
 - Metronome (spec 053): a toggle and a settings button in the transport bar play a click on the beat while the transport is playing, with a hotkey you can bind (Toggle metronome). The popup has a step grid for the time signature at the playhead: pick a resolution and paint each step Off or level 1 to 4 (each level has its own colour); every time signature keeps its own pattern, saved with the project and covered by undo, and Reset returns it to the default. Choose the Beep or Wood sound and shape it with Tune, Decay, Tone, Level, Accent Volume and Accent Pitch. While stopped, changes play a preview click. The click follows tempo ramps, time signature changes and loops, plays after the master fader, and is never in exports. The beats-ruler toggle in the track list header now has a ruler icon.

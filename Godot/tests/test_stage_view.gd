@@ -72,6 +72,11 @@ func _test_items() -> void:
 	_assert(view.get_items().size() == 2 and not view.get_items().has(s.channels[1]), "a source leaving Stage loses its item")
 	plain.channel.set_pan_mode(plain.channel.PanMode.STAGE)
 	_assert(view.get_items().size() == 3, "a channel entering Stage gains one")
+	s.channels[0].set_hidden(true)
+	_assert(view.get_items().size() == 2 and not view.get_items().has(s.channels[0]), "a hidden channel's source is not listed")
+	view.canvas.set_show_hidden(true)
+	_assert(view.get_items().has(s.channels[0]), "Show hidden lists it again")
+	view.canvas.set_show_hidden(false)
 	view.queue_free()
 
 

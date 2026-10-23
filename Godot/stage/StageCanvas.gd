@@ -39,6 +39,8 @@ var snap_enabled := true
 var selection: Array[Channel] = []
 
 var _items: Array[Channel] = []
+## Show sources of hidden channels too. Not persisted: it resets with the view.
+var show_hidden := false
 var _watched: Dictionary = {}
 var _hover: Channel = null
 var _scale := 1.0
@@ -62,8 +64,13 @@ func _init() -> void:
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	clip_contents = true
 	focus_mode = Control.FOCUS_NONE
-	tooltip_text = "Drag a source to move it, an end to resize and rotate it, the front or back edge to change its depth, and the listener to move it. Drags snap to 1 m and 15° (hold Shift for 0.1 m and 1°; the Snap toggle turns snapping off)."
 	snap_enabled = bool(Sonara.get_config(SNAP_CONFIG_KEY, true))
+
+
+## Show or hide the sources of hidden channels.
+func set_show_hidden(on: bool) -> void:
+	show_hidden = on
+	refresh()
 
 
 ## Turn snapping on or off and remember it in the UI config.
@@ -96,7 +103,11 @@ func _disconnect_project() -> void:
 ## Rebuild the source items from the project and redraw.
 func refresh() -> void:
 	var before := _items
-	_items = project.stage_sources() if project else ([] as Array[Channel])
+	_items = [] as Array[Channel]
+	if project:
+		for ch in project.stage_sources():
+			if show_hidden or not ch.hidden:
+				_items.append(ch)
 	# Every channel is watched, not only the sources: a channel entering Stage must appear.
 	if project:
 		for ch in project.channels:
@@ -141,6 +152,7 @@ func _watch(ch: Channel) -> void:
 	ch.pan_mode_changed.connect(_on_channel_changed)
 	ch.name_changed.connect(_on_channel_changed)
 	ch.color_changed.connect(_on_channel_changed)
+	ch.hidden_changed.connect(_on_channel_changed)
 
 
 func _on_channel_changed(_value = null) -> void:

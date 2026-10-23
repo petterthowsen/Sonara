@@ -713,9 +713,6 @@ func _gui_input(event: InputEvent) -> void:
 			_key_left()
 		KEY_RIGHT:
 			_key_right()
-		KEY_SPACE:
-			if not event.echo:
-				toggle_visibility_of(_selected)
 		_:
 			return
 	accept_event()

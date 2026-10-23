@@ -34,6 +34,12 @@ tooltip_text = "Snap drags in the view to 1 m and 15° (hold Shift for 0.1 m and
 button_pressed = true
 text = "Snap"
 
+[node name="ShowHiddenToggle" type="CheckButton" parent="SideScroll/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Also list sources of hidden channels. Not remembered."
+text = "Show hidden"
+
 [node name="RoomLabel" type="Label" parent="SideScroll/Side"]
 layout_mode = 2
 text = "Room"
