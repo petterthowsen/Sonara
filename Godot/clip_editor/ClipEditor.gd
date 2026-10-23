@@ -155,6 +155,7 @@ func _ready():
 	_editor = Sonara.editor
 	if _editor:
 		_editor.project_opened.connect(func(p: Project): _bind_project_scale(p))
+		_editor.project_closed.connect(_on_project_closed)
 		_editor.playback_started.connect(func(): midi_editor.transport_playing = true)
 		_editor.playback_stopped.connect(func(): midi_editor.transport_playing = false)
 	if Sonara.editor:
@@ -162,6 +163,26 @@ func _ready():
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
 		Sonara.editor.playhead_moved.connect(_on_editor_playhead_moved)
 	_bind_project_scale()
+
+
+## The project is gone: drop its tracks, clips and notes from the editor.
+func _on_project_closed() -> void:
+	_bind_project_scale(null)
+	pending_clips.clear()
+	pending_multi_track = false
+	selected_clips.clear()
+	selected_tracks.clear()
+	last_track_mode_tracks.clear()
+	last_track_mode_selected_track = null
+	last_active_clip_by_track.clear()
+	bound_clip_instance = null
+	track_mode = false
+	track_toggles.set_tracks([])
+	track_selector.set_project(null)
+	midi_editor.unbind()
+	_update_mode_ui()
+	_refresh_all_toggles()
+	_mark_ruler_context_dirty()
 
 
 func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):

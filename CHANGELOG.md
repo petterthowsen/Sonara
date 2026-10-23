@@ -10,6 +10,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 - Stage view: sources of hidden channels are no longer listed unless you turn on the temporary Show hidden toggle (#179), and the long always-visible tooltip over the view is gone (#180).
 - Track list: Space no longer hides the selected track, so it toggles play/pause there like everywhere else (#181).
+- MIDI editor: closing the project now clears its tracklist and notes (#182).
 
 ### Added
 
