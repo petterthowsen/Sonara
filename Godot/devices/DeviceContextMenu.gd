@@ -15,6 +15,10 @@ var device : DeviceInstance = null
 ## Devices Copy and Duplicate act on: the lane's selection when it holds `device`, else just it.
 var targets: Array[DeviceInstance] = []
 
+## Enabled (processing vs bypassed) and Active (loaded vs unloaded to save RAM and CPU).
+var enabled_toggle: CheckBox = null
+var active_toggle: CheckBox = null
+
 var copy_button: Button = null
 var paste_button: Button = null
 var duplicate_button: Button = null
@@ -39,6 +43,8 @@ func _ready() -> void:
 	load_kit.visible = false
 	v_box_container.add_child(load_kit)
 	v_box_container.move_child(load_kit, host_individually.get_index())
+	enabled_toggle = _add_toggle("Enabled", "Off bypasses the device.", func(on: bool): device.set_enabled(on))
+	active_toggle = _add_toggle("Active", "Off unloads the device to save RAM and CPU.", func(on: bool): device.set_active(on))
 	copy_button = _add_action_button("Copy", _on_copy_pressed)
 	paste_button = _add_action_button("Paste", _on_paste_pressed)
 	duplicate_button = _add_action_button("Duplicate", _on_duplicate_pressed)
@@ -52,6 +58,19 @@ func _add_action_button(text: String, handler: Callable) -> Button:
 	v_box_container.add_child(button)
 	v_box_container.move_child(button, remove.get_index())
 	return button
+
+
+## A check box placed just above Remove. `apply` receives the new state; it is skipped without a device.
+func _add_toggle(text: String, tooltip: String, apply: Callable) -> CheckBox:
+	var box := CheckBox.new()
+	box.text = text
+	box.tooltip_text = tooltip
+	box.toggled.connect(func(on: bool):
+		if device:
+			apply.call(on))
+	v_box_container.add_child(box)
+	v_box_container.move_child(box, remove.get_index())
+	return box
 
 
 func _on_copy_pressed() -> void:
@@ -87,6 +106,8 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	var layer_chain := _is_layer_chain(device)
 	duplicate_button.text = "Duplicate Layer" if layer_chain else "Duplicate"
 	remove.text = "Remove Layer" if layer_chain else "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else ("Clear Slot" if slot_chain else "Remove"))
+	enabled_toggle.set_pressed_no_signal(device.enabled)
+	active_toggle.set_pressed_no_signal(device.active)
 	load_kit.visible = DrumKit.is_drum_machine(device)
 	paste_button.disabled = not DeviceActions.can_paste()
 	# Pads and band chains are fixed by their host; only plain devices copy.

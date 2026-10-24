@@ -17,6 +17,10 @@ var logger : Log = Log.make("CompactDevicePanel")
 @onready var name_label : Label = %Name
 @onready var collapse_button : ToggleIconButton = %CollapseToggle
 
+## Narrower than this the panel shows its state through colour alone; the light needs the room.
+const LIGHT_MIN_WIDTH := 80.0
+const STATE_RED := Color(0.73, 0, 0)
+const STATE_GOLD := Color.GOLD
 const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
 
 # ============================================================================
@@ -48,6 +52,10 @@ var is_selected := false:
 	set(selected):
 		is_selected = selected
 		theme_type_variation = &"DeviceCardSelected" if selected else &"DeviceCard"
+		if is_inside_tree():
+			_refresh_state_style()
+## Guards _refresh_state_style: setting a theme override notifies THEME_CHANGED.
+var _styling := false
 var _button_hovered := false
 var _name_hovered := false
 
@@ -78,10 +86,12 @@ func _ready() -> void:
 	# Fires for children too (Godot 4.2+), so the whole panel counts as hovered.
 	mouse_entered.connect(_set_hovered.bind(true))
 	mouse_exited.connect(_set_hovered.bind(false))
+	resized.connect(_update_light_visibility)
 	set_process(false)
 
 	# Apply initial state
 	_update_ui_visibility()
+	_update_light_visibility()
 
 
 ## Release engine subscriptions when the panel is freed (e.g. the channel's
@@ -89,14 +99,20 @@ func _ready() -> void:
 ## Not _exit_tree(): DockHost reparents docks, which would wipe the parameter
 ## list with nothing to rebuild it.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_refresh_state_style()
 	if what == NOTIFICATION_PREDELETE:
 		_unbind()
 
 
 ## Disconnect from the bound device instance. Idempotent.
 func _unbind() -> void:
-	if device_instance and device_instance.name_changed.is_connected(_on_device_name_changed):
-		device_instance.name_changed.disconnect(_on_device_name_changed)
+	if device_instance:
+		if device_instance.name_changed.is_connected(_on_device_name_changed):
+			device_instance.name_changed.disconnect(_on_device_name_changed)
+		for sig: Signal in _state_signals(device_instance):
+			if sig.is_connected(_on_state_changed):
+				sig.disconnect(_on_state_changed)
 	if _param_list:
 		_param_list.unbind()
 	device_instance = null
@@ -161,12 +177,88 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 		device_instance.name_changed.connect(_on_device_name_changed)
 	
 	device_light.bind_to_device_instance(device_instance)
+	for sig: Signal in _state_signals(device_instance):
+		sig.connect(_on_state_changed)
+	_refresh_state_style()
 	_update_note_fx_stripe()
 	
 	tooltip_text = device_instance.device.name
 	
 	_ensure_param_list()
 	_param_list.bind_to_device(device_instance, "param")
+
+
+func _update_light_visibility() -> void:
+	device_light.visible = size.x >= LIGHT_MIN_WIDTH
+
+
+## The state signals carry 0 or 1 argument; none of them matter, the style is re-read.
+func _on_state_changed(_value = null) -> void:
+	_refresh_state_style()
+
+
+func _state_signals(inst: DeviceInstance) -> Array[Signal]:
+	return [inst.enabled_changed, inst.active_changed, inst.loading_state_changed, inst.stats_changed]
+
+
+## Show enabled/active in the card itself instead of a light (#172): a disabled device is muted
+## (background, title, border), an inactive one gets a red border, a failed or crashed plugin a
+## red border too and one missing its deadline a gold border.
+func _refresh_state_style() -> void:
+	if device_instance == null or not is_node_ready():
+		return
+	if _styling:
+		return
+	_styling = true
+	# Read the themed boxes, not our own previous overrides.
+	remove_theme_stylebox_override(&"panel")
+	header.remove_theme_stylebox_override(&"panel")
+	var card := get_theme_stylebox(&"panel", theme_type_variation) as StyleBoxFlat
+	var head := header.get_theme_stylebox(&"panel", &"DeviceCardHeader") as StyleBoxFlat
+	if card == null or head == null:
+		_styling = false
+		return
+	var loading := device_instance.loading_state
+	var broken := loading.begins_with("failed:") or loading.begins_with("crashed:")
+	var border := card.border_color
+	if broken or not device_instance.active:
+		border = STATE_RED
+	elif device_instance.is_struggling():
+		border = STATE_GOLD
+	var muted := not device_instance.enabled
+	var mute_to := card.bg_color.darkened(0.5)
+	if muted:
+		border = border.lerp(mute_to, 0.5)
+	card = card.duplicate() as StyleBoxFlat
+	head = head.duplicate() as StyleBoxFlat
+	card.border_color = border
+	if muted:
+		card.bg_color = card.bg_color.lerp(mute_to, 0.6)
+		head.bg_color = head.bg_color.lerp(mute_to, 0.6)
+	add_theme_stylebox_override(&"panel", card)
+	header.add_theme_stylebox_override(&"panel", head)
+	name_label.self_modulate = Color(1, 1, 1, 0.45) if muted else Color.WHITE
+	name_label.tooltip_text = _state_tooltip()
+	_styling = false
+
+
+func _state_tooltip() -> String:
+	var type_name := device_instance.device.name if device_instance.device else ""
+	var loading := device_instance.loading_state
+	var state := ""
+	if loading == "loading":
+		state = "Loading device..."
+	elif loading.begins_with("failed:"):
+		state = "Failed to load: " + loading.substr(7)
+	elif loading.begins_with("crashed:"):
+		state = "Crashed: %s. Use Reload to bring it back." % loading.substr(8)
+	elif loading == "unloaded" or not device_instance.active:
+		state = "Inactive: unloaded to save RAM and CPU. Activate it from the context menu."
+	elif not device_instance.enabled:
+		state = "Disabled: bypassed."
+	elif device_instance.is_struggling():
+		state = "Missing its processing deadline: its audio drops out."
+	return type_name if state.is_empty() else "%s\n%s" % [type_name, state]
 
 
 ## The note-effect marker: a thin bar in the secondary accent colour above the header (spec 027 REQ-036).
@@ -193,7 +285,7 @@ func _refresh_name_label() -> void:
 		return
 	name_label.text = device_instance.get_display_name()
 	var type_name := device_instance.device.name if device_instance.device else ""
-	name_label.tooltip_text = type_name
+	name_label.tooltip_text = _state_tooltip()
 	tooltip_text = type_name
 
 
