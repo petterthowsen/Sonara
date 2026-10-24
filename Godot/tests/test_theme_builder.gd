@@ -169,5 +169,7 @@ func _test_component_types() -> void:
 	_assert(t.has_color(&"bar_line_color", &"Ruler") and t.has_stylebox(&"normal", &"Ruler"), "Ruler keeps its item names")
 	# A new accent reaches every component that uses it.
 	var q := ThemeBuilder.build(_palette({"accent_primary": "#ff0000"}))
-	for entry in [[&"Fader", &"fill"], [&"RotaryKnob", &"value_arc"], [&"Meter", &"fader"], [&"EnvelopeControl", &"line"]]:
+	for entry in [[&"Fader", &"fill"], [&"RotaryKnob", &"value_arc"], [&"EnvelopeControl", &"line"]]:
 		_assert(q.get_color(entry[1], entry[0]).is_equal_approx(Color("#ff0000")), "%s/%s follows the primary accent" % entry)
+	# The meter's fader is a dark primary, so it stands apart from the bars.
+	_assert(q.get_color(&"fader", &"Meter").is_equal_approx(Color("#ff0000").darkened(0.55)), "Meter/fader follows the primary accent, darkened")

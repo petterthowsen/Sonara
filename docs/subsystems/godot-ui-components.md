@@ -192,7 +192,7 @@ Controls built on them: `RotaryKnob` (Inspector exports grouped into Value, Appe
 Interaction; Appearance includes `arc_offset`, `shadow_width`, `knob_line_length`, plus a Modulation
 subgroup for range-arc width, spacing, inset, and live-marker size/color), `HorSlider` (single) and
 `HDualSlider` (pan),
-`VolumeSlider` (`VSlider.gd`), `Meter` (mixer strip, optional fader), `Volumeter` (track header
+`VolumeSlider` (`VSlider.gd`), `Meter` (mixer strip, optional fader; `tick_position` SIDE/CENTER, `fader_handle_on_hover`; a `settings_key` ties those and `show_fader` to Settings and adds a right-click options menu), `Volumeter` (track header
 meter and fader), `XYSlider`, and `EnvelopeControl` with the `Envelope` resource (any subset of
 ADSR).
 

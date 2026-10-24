@@ -117,6 +117,20 @@ var zero_db_color: Color:
 		min_width_for_ticks = v
 		_wake()
 
+enum TickPosition { SIDE, CENTER }
+## SIDE: a label column left of the bars. CENTER: labels between the left and right bars
+## (Cubase style); the fader, when shown, runs down the middle of that column. Mono meters
+## always use SIDE.
+@export var tick_position := TickPosition.SIDE:
+	set(v):
+		tick_position = v
+		_wake()
+## Width (px) of the label column between the bars in CENTER mode
+@export var center_ticks_width := 20.0:
+	set(v):
+		center_ticks_width = v
+		_wake()
+
 # show an integrated fader control
 @export var show_fader := false: ## Whether to draw an interactive volume fader alongside the meter bars
 	set(v):
@@ -150,6 +164,22 @@ var fader_handle_color: Color:
 	set(v):
 		fader_handle_height = v
 		_wake()
+## Draw the fader handle only while the pointer is over the meter (or a drag is running)
+@export var fader_handle_on_hover := false:
+	set(v):
+		fader_handle_on_hover = v
+		_wake()
+
+## Settings prefix (e.g. "mixer/big_meter") for the user options. When set, the options follow
+## `<key>/centered_ticks`, `<key>/show_fader` and `<key>/fader_handle_on_hover` (registered by
+## Settings.gd `_register_meter_settings`) and right-click opens a menu to change them, which
+## updates every meter sharing the key. Empty: no menu, the exported properties are used as they are.
+@export var settings_key := ""
+const SETTING_CENTERED_TICKS := "centered_ticks"
+const SETTING_SHOW_FADER := "show_fader"
+const SETTING_HANDLE_ON_HOVER := "fader_handle_on_hover"
+enum MenuItem { CENTERED_TICKS, SHOW_FADER, HANDLE_ON_HOVER }
+var _menu: PopupMenu = null
 ## Fader handle color while hovered
 var fader_handle_color_hover: Color:
 	get:
@@ -280,6 +310,65 @@ func _ready() -> void:
 	_target_rms_left = 0.0
 	_target_rms_right = 0.0
 
+	if not settings_key.is_empty() and not Engine.is_editor_hint():
+		_apply_settings()
+		_settings().setting_changed.connect(_on_setting_changed)
+
+
+## The Settings autoload, looked up at runtime so this script compiles without autoloads (tests).
+func _settings() -> Node:
+	return get_node("/root/Settings")
+
+
+func _setting(option: String) -> String:
+	return settings_key + "/" + option
+
+
+func _apply_settings() -> void:
+	tick_position = TickPosition.CENTER if _settings().get_value(_setting(SETTING_CENTERED_TICKS)) else TickPosition.SIDE
+	show_fader = _settings().get_value(_setting(SETTING_SHOW_FADER))
+	fader_handle_on_hover = _settings().get_value(_setting(SETTING_HANDLE_ON_HOVER))
+	queue_redraw()
+
+
+func _on_setting_changed(key: String, _value) -> void:
+	if key.begins_with(settings_key + "/"):
+		_apply_settings()
+
+
+## The right-click menu with the user options (only with a `settings_key`).
+func _open_menu() -> void:
+	if _menu == null:
+		_menu = PopupMenu.new()
+		_menu.theme_type_variation = &"ContextMenuList"
+		_menu.hide_on_checkable_item_selection = false
+		_menu.add_check_item("Centered Scale", MenuItem.CENTERED_TICKS)
+		_menu.add_check_item("Show Fader", MenuItem.SHOW_FADER)
+		_menu.add_check_item("Show Fader Handle Only on Hover", MenuItem.HANDLE_ON_HOVER)
+		_menu.id_pressed.connect(_on_menu_id_pressed)
+		add_child(_menu)
+	_refresh_menu()
+	ContextMenuPopup.popup_at_mouse(_menu)
+
+
+func _refresh_menu() -> void:
+	_menu.set_item_checked(_menu.get_item_index(MenuItem.CENTERED_TICKS), tick_position == TickPosition.CENTER)
+	_menu.set_item_checked(_menu.get_item_index(MenuItem.SHOW_FADER), show_fader)
+	var hover := _menu.get_item_index(MenuItem.HANDLE_ON_HOVER)
+	_menu.set_item_checked(hover, fader_handle_on_hover)
+	_menu.set_item_disabled(hover, not show_fader)
+
+
+func _on_menu_id_pressed(id: int) -> void:
+	match id:
+		MenuItem.CENTERED_TICKS:
+			_settings().set_value(_setting(SETTING_CENTERED_TICKS), tick_position != TickPosition.CENTER)
+		MenuItem.SHOW_FADER:
+			_settings().set_value(_setting(SETTING_SHOW_FADER), not show_fader)
+		MenuItem.HANDLE_ON_HOVER:
+			_settings().set_value(_setting(SETTING_HANDLE_ON_HOVER), not fader_handle_on_hover)
+	_refresh_menu()
+
 
 func _on_mouse_entered():
 	mouse_hovered = true
@@ -363,6 +452,12 @@ func _is_settled() -> bool:
 
 
 func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT \
+			and not settings_key.is_empty():
+		_open_menu()
+		accept_event()
+		return
+
 	# clicking the bars (not the fader) clears the clip lights and max peak
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT \
 			and not (show_fader and _is_mouse_on_fader(event.position)):
@@ -419,10 +514,16 @@ func _begin_fader_drag(mouse: Vector2) -> void:
 
 ## Where a press grabs the handle instead of jumping.
 func _handle_grab_rect() -> Rect2:
-	var width := bars_spacing
-	var left := _get_fader_offset_x() - HANDLE_OVERHANG - HANDLE_GRAB_PAD
-	var top := _db_to_y(volume_db) - fader_handle_height * 0.5 - HANDLE_GRAB_PAD
-	return Rect2(left, top, width + (HANDLE_OVERHANG + HANDLE_GRAB_PAD) * 2.0, fader_handle_height + HANDLE_GRAB_PAD * 2.0)
+	return _handle_rect().grow(HANDLE_GRAB_PAD)
+
+
+## The cap: wider than the column in SIDE mode, the whole label column in CENTER mode.
+func _handle_rect() -> Rect2:
+	var top := _db_to_y(volume_db) - fader_handle_height * 0.5
+	if _centered_ticks():
+		var bar_w := _center_bar_width()
+		return Rect2(bar_w, top, center_ticks_width, fader_handle_height)
+	return Rect2(_get_fader_offset_x() - HANDLE_OVERHANG, top, bars_spacing + HANDLE_OVERHANG * 2.0, fader_handle_height)
 
 
 ## Open a floating LineEdit above the fader to type a new volume directly.
@@ -460,32 +561,42 @@ func _is_mouse_on_fader(pos: Vector2) -> bool:
 	return _is_mouse_in_fader(pos) or _is_mouse_over_fader_handle(pos)
 
 
+## In CENTER mode the whole label column counts as the fader.
 func _is_mouse_in_fader(pos : Vector2) -> bool:
-	var fader_width = bars_spacing
-	var fader_offset = _get_fader_offset_x()
-	return pos.x >= fader_offset and pos.x <= fader_offset + fader_width
-
-func _get_fader_offset_x() -> float:
 	if not show_fader:
 		return false
+	if _centered_ticks():
+		var bar_w := _center_bar_width()
+		return pos.x >= bar_w and pos.x <= bar_w + center_ticks_width
+	var fader_offset = _get_fader_offset_x()
+	return pos.x >= fader_offset and pos.x <= fader_offset + bars_spacing
 
-	# calculate fader position (same as in _draw_fader)
-	var fader_offset_x = 0.0
 
-	# find fader x position (same calculation as _draw)
-	var minimum_bars_width = 12 if mono else 25
-	var show_ticks = size.x >= min_width_for_ticks + minimum_bars_width
-	var ticks_width = min_width_for_ticks if show_ticks else 0.0
-	var bars_width = max(0.0, size.x - ticks_width)
-	var offset_x = ticks_width
-
+## Left edge of the fader column (same layout as _draw).
+func _get_fader_offset_x() -> float:
+	if _centered_ticks():
+		return _center_bar_width() + FADER_SEAM
 	if mono:
-		fader_offset_x = offset_x + bars_width + 2
-	else:
-		var bar_width = max(0.0, (bars_width - bars_spacing) * 0.5)
-		fader_offset_x = offset_x + bar_width
+		return ticks_width + bars_width + 2
+	return ticks_width + max(0.0, (bars_width - bars_spacing) * 0.5)
 
-	return fader_offset_x
+
+## Fader column width: the gap between the bars, or in CENTER mode the label column less a seam
+## on each side, so the labels sit inside the fader.
+func _fader_width() -> float:
+	if _centered_ticks():
+		return maxf(0.0, center_ticks_width - FADER_SEAM * 2.0)
+	return bars_spacing
+
+
+## CENTER mode is in effect: asked for, stereo, and wide enough for the label column.
+func _centered_ticks() -> bool:
+	return tick_position == TickPosition.CENTER and not mono \
+		and size.x >= center_ticks_width + minimum_bars_width
+
+
+func _center_bar_width() -> float:
+	return maxf(0.0, (size.x - center_ticks_width) * 0.5)
 
 
 func _is_mouse_over_fader_handle(mouse_pos: Vector2) -> bool:
@@ -557,8 +668,12 @@ var bars_width : float:
 
 
 func _draw() -> void:
+	if _centered_ticks():
+		_draw_centered()
+		return
+
 	var show_ticks = _should_show_ticks()
-	
+
 	if show_ticks:
 		_draw_tick_marks(ticks_width)
 	
@@ -596,13 +711,35 @@ func _draw_fader(offset_x : float, width : float):
 	var fader_height = vol_normalized * size.y
 
 	draw_rect(Rect2(offset_x, fader_top, width, fader_height), fader_color, true, -1.0, true)
+	_draw_fader_handle()
 
-	# cap-style handle, wider than the column
-	var cap := Rect2(offset_x - HANDLE_OVERHANG, fader_top - fader_handle_height * 0.5,
-		width + HANDLE_OVERHANG * 2.0, fader_handle_height)
+
+## CENTER mode: full-height bars on both sides of a label column, the fader down its middle.
+func _draw_centered() -> void:
+	var bar_w := _center_bar_width()
+	var right_x := bar_w + center_ticks_width
+	_draw_bar(rms_left, peak_left, peak_hold_left_db, _clip_left, 0.0, bar_w)
+	_draw_bar(rms_right, peak_right, peak_hold_right_db, _clip_right, right_x, size.x - right_x)
+	if show_fader:
+		# trough and fill under the labels; the handle goes on top of them
+		var x := _get_fader_offset_x()
+		var w := _fader_width()
+		var top := _db_to_y(volume_db)
+		draw_rect(Rect2(x, 0, w, size.y), fader_bg_color, true)
+		draw_rect(Rect2(x, top, w, size.y - top), fader_color, true)
+	_draw_center_tick_marks(bar_w, center_ticks_width)
+	if show_fader:
+		_draw_fader_handle()
+
+
+func _draw_fader_handle() -> void:
+	if fader_handle_on_hover and not (mouse_hovered or _is_dragging_fader):
+		return
+	var cap := _handle_rect()
+	var y := _db_to_y(volume_db)
 	_cap_style.bg_color = fader_handle_color_hover if mouse_hovered else fader_handle_color
 	draw_style_box(_cap_style, cap)
-	draw_line(Vector2(cap.position.x + 2.0, fader_top), Vector2(cap.end.x - 2.0, fader_top), Color(0, 0, 0, 0.45), 1.0)
+	draw_line(Vector2(cap.position.x + 2.0, y), Vector2(cap.end.x - 2.0, y), Color(0, 0, 0, 0.45), 1.0)
 
 
 static func _make_cap_style() -> StyleBoxFlat:
@@ -678,6 +815,22 @@ func _draw_tick_marks(ticks_width := 28.0) -> void:
 		var tick_start_x = label_x + label_width + 2
 		var tick_end_x = ticks_width
 		draw_line(Vector2(tick_start_x, y), Vector2(tick_end_x, y), col, thick)
+
+## CENTER mode labels, centered in the column, with faint lines across both bars.
+func _draw_center_tick_marks(column_x: float, column_w: float) -> void:
+	var font := get_theme_default_font()
+	var fs := tick_font_size
+	for db in _get_ticks():
+		if db > db_top or db < db_bottom:
+			continue
+		var y = floor(_db_to_y(db)) + 0.5
+		var col := zero_db_color if db == 0 else tick_color
+		var line := Color(col, col.a * 0.25)
+		draw_line(Vector2(0, y), Vector2(column_x, y), line, 1.0)
+		draw_line(Vector2(column_x + column_w, y), Vector2(size.x, y), line, 1.0)
+		var label_text := str(abs(db))
+		var pos := Vector2(column_x, y + 4)
+		draw_string(font, pos, label_text, HORIZONTAL_ALIGNMENT_CENTER, column_w, fs, col)
 
 # -------------------------
 # bar drawing

@@ -6,6 +6,11 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Right-click a mixer meter (the big meter or the compact one) for its options: Centered Scale draws the dB scale between the left and right bars, Show Fader turns the meter's fader on or off, and Show Fader Handle Only on Hover hides the handle until the pointer is over the meter. Each kind of meter keeps its own options for all channels; they are also under Settings > Appearance > Mixer.
+- The fader inside a mixer meter is a darker shade of the accent color, so it stands apart from the meter bars; with Centered Scale it fills the scale column and the labels sit inside it.
+
 ### Changed
 
 - The mixer pan mode button shows a cuboid icon instead of the text "Stage" in Stage mode, so narrow channel strips can shrink further (#178).

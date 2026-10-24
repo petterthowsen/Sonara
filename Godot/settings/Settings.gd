@@ -491,6 +491,8 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Tint each mixer strip's background with a hint of its channel color.",
 	)).sub("Mixer")
+	_register_meter_settings("mixer/big_meter", "Big Meter", false)
+	_register_meter_settings("mixer/compact_meter", "Compact Meter", true)
 	_register(Setting.new(
 		"appearance/mixer_strip_tint",
 		"Mixer Strip Tint",
@@ -857,6 +859,34 @@ func _register_theme_settings() -> void:
 
 static func _is_x11() -> bool:
 	return DisplayServer.get_name() == "X11"
+
+
+## The options a Meter with this `settings_key` reads (Meter.SETTING_*); also in its right-click menu.
+func _register_meter_settings(prefix: String, label: String, fader_default: bool) -> void:
+	_register(Setting.new(
+		prefix + "/centered_ticks",
+		label + ": Centered Scale",
+		Type.BOOL,
+		false,
+		CATEGORY_APPEARANCE,
+		"Draw the dB scale between the left and right bars instead of beside them. Also in the meter's right-click menu.",
+	)).sub("Mixer")
+	_register(Setting.new(
+		prefix + "/show_fader",
+		label + ": Show Fader",
+		Type.BOOL,
+		fader_default,
+		CATEGORY_APPEARANCE,
+		"Show a volume fader between the meter bars. Also in the meter's right-click menu.",
+	)).sub("Mixer")
+	_register(Setting.new(
+		prefix + "/fader_handle_on_hover",
+		label + ": Show Fader Handle Only on Hover",
+		Type.BOOL,
+		false,
+		CATEGORY_APPEARANCE,
+		"Hide the fader handle until the pointer is over the meter. Also in the meter's right-click menu.",
+	)).sub("Mixer")
 
 
 func _register(s: Setting) -> Setting:
