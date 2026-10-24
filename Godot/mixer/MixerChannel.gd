@@ -910,24 +910,29 @@ func _update_volume_max_height() -> void:
 	if volume == null or big_meter == null:
 		return
 	var fill := not main_vsplit.visible and not big_meter.visible
-	if _shared_volume_height > 0.0:
-		volume.custom_minimum_size.y = _shared_volume_height
-		volume.custom_maximum_size.y = -1.0 if fill else _shared_volume_height
+	volume.custom_minimum_size.y = _volume_min_height
+	if _shared_volume_fraction > 0.0 and main_vsplit.visible:
+		# A share of the space the VSplit and fader divide, not a pixel height: pixels would
+		# raise the strip's minimum height and overflow the mixer when the device lane opens.
+		volume.custom_maximum_size.y = -1.0
+		volume.size_flags_stretch_ratio = _shared_volume_fraction
+		main_vsplit.size_flags_stretch_ratio = 1.0 - _shared_volume_fraction
 	else:
-		volume.custom_minimum_size.y = _volume_min_height
 		volume.custom_maximum_size.y = -1.0 if fill else _volume_max_height
-	volume.size_flags_stretch_ratio = 1.0 if fill else _volume_stretch_ratio
+		volume.size_flags_stretch_ratio = 1.0 if fill else _volume_stretch_ratio
+		main_vsplit.size_flags_stretch_ratio = 1.0
 
 
-## Bottom fader/meter height shared by every strip (0 = scene default, flexible).
-static var _shared_volume_height := 0.0
-const MIN_VOLUME_HEIGHT := 60.0
-const MAX_VOLUME_HEIGHT := 700.0
+## Share of the stretch space (VSplit + fader) given to the bottom fader on every strip
+## (0 = scene default).
+static var _shared_volume_fraction := 0.0
+const MIN_VOLUME_FRACTION := 0.1
+const MAX_VOLUME_FRACTION := 0.9
 
 
-## Fix the bottom fader/meter height on every strip; 0 restores the flexible default.
-static func set_shared_volume_height(tree: SceneTree, h: float) -> void:
-	_shared_volume_height = clampf(h, MIN_VOLUME_HEIGHT, MAX_VOLUME_HEIGHT) if h > 0.0 else 0.0
+## Set the bottom fader/meter share on every strip; 0 restores the default.
+static func set_shared_volume_fraction(tree: SceneTree, f: float) -> void:
+	_shared_volume_fraction = clampf(f, MIN_VOLUME_FRACTION, MAX_VOLUME_FRACTION) if f > 0.0 else 0.0
 	tree.call_group("mixer_channel", "_update_volume_max_height")
 
 
@@ -938,20 +943,21 @@ func _setup_volume_resize_grip() -> void:
 	grip.mouse_default_cursor_shape = Control.CURSOR_VSIZE
 	grip.mouse_filter = Control.MOUSE_FILTER_STOP
 	grip.tooltip_text = "Drag to resize the fader (double-click to reset)"
-	var drag := {"y": 0.0, "h": 0.0, "on": false}
+	var drag := {"y": 0.0, "h": 0.0, "total": 1.0, "on": false}
 	grip.gui_input.connect(func(event: InputEvent) -> void:
 		var button := event as InputEventMouseButton
 		if button and button.button_index == MOUSE_BUTTON_LEFT:
 			if button.double_click:
-				MixerChannel.set_shared_volume_height(get_tree(), 0.0)
+				MixerChannel.set_shared_volume_fraction(get_tree(), 0.0)
 			else:
 				drag.on = button.pressed
 				drag.y = grip.get_global_mouse_position().y
 				drag.h = volume.size.y
+				drag.total = maxf(volume.size.y + (main_vsplit.size.y if main_vsplit.visible else 0.0), 1.0)
 			grip.accept_event()
 		elif event is InputEventMouseMotion and drag.on:
 			var dy: float = drag.y - grip.get_global_mouse_position().y
-			MixerChannel.set_shared_volume_height(get_tree(), drag.h + dy)
+			MixerChannel.set_shared_volume_fraction(get_tree(), (drag.h + dy) / drag.total)
 			grip.accept_event())
 	volume.get_parent().add_child(grip)
 	volume.get_parent().move_child(grip, volume.get_index())

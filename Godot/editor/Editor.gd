@@ -177,7 +177,7 @@ var _frame_view: View = View.ARRANGER
 # ============================================================================
 
 ## Smallest the main window can be resized to.
-const MIN_WINDOW_SIZE := Vector2i(1280, 700)
+const MIN_WINDOW_SIZE := Vector2i(1280, 960)
 
 
 ## `Window.min_size` is in pixels, the layout in content units: multiply by the UI scale.
