@@ -1,9 +1,10 @@
 //! Parameter automation: lanes of points evaluated on the audio callback.
 //!
 //! A lane owns a sorted-by-tick list of points and resolves to one normalized `0.0..=1.0` value
-//! per buffer. Automation never writes a base value: the resolved value is applied as an override
-//! (see `Channel::automation_volume` / `automation_pan`) or, for device parameters, pushed through
-//! `AudioDevice::set_parameter_at` after the lane has captured the device's pre-automation value.
+//! per buffer, plus one per loop wrap inside it. Automation never writes a base value: the
+//! resolved value is applied as an override (see `Channel::automation_volume` /
+//! `automation_pan`) or, for device parameters, pushed through `AudioDevice::set_parameter_at`
+//! after the lane has captured the device's pre-automation value.
 //!
 //! Real-time contract: `AutomationLane::value_at` allocates nothing and never scans the full point
 //! list. It keeps a cursor that walks forward with the playhead and binary-searches only when the
@@ -452,6 +453,20 @@ pub fn apply_automation(
     channels: &mut HashMap<ChannelId, Channel>,
     tick: Tick,
 ) {
+    apply_automation_at(tracks, channels, tick, 0);
+}
+
+/// [`apply_automation`] with the values taking effect `frame_offset` frames into the coming
+/// block. `process_audio` calls this again at every loop wrap inside the block, so the notes at
+/// the loop start see the loop start's values rather than the loop end's. Devices that stamp
+/// parameter events (CLAP, PolySynth) switch at that frame; the rest, and the channel-level
+/// targets, take the last value applied before the block renders.
+pub fn apply_automation_at(
+    tracks: &mut HashMap<TrackId, Track>,
+    channels: &mut HashMap<ChannelId, Channel>,
+    tick: Tick,
+    frame_offset: usize,
+) {
     for track in tracks.values_mut() {
         if track.automation_lanes.is_empty() {
             continue;
@@ -477,7 +492,7 @@ pub fn apply_automation(
                 release_lane(lane, channel);
                 continue;
             };
-            if !apply_lane_value(lane, channel, value.clamp(0.0, 1.0)) {
+            if !apply_lane_value(lane, channel, value.clamp(0.0, 1.0), frame_offset) {
                 // The target stopped resolving (a removed device, a removed send): hand back
                 // whatever base the lane captured and say so once, not once per buffer.
                 release_lane(lane, channel);
@@ -490,7 +505,12 @@ pub fn apply_automation(
 /// Apply one resolved value, skipping the work when it has not meaningfully changed (REQ-011).
 ///
 /// Returns false when the target does not resolve, leaving the lane for the caller to release.
-fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32) -> bool {
+fn apply_lane_value(
+    lane: &mut AutomationLane,
+    channel: &mut Channel,
+    value: f32,
+    frame_offset: usize,
+) -> bool {
     if let Some(previous) = lane.last_applied {
         if (previous - value).abs() <= APPLY_EPSILON {
             return true;
@@ -547,7 +567,7 @@ fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32
             if captured_base.is_none() {
                 *captured_base = device.get_parameter(*param_id);
             }
-            device.set_parameter_at(*param_id, value, 0);
+            device.set_parameter_at(*param_id, value, frame_offset);
             // The value really changed (the dedup above proved it), so waking the device is
             // justified; a constant lane leaves a sleeping device asleep.
             device.mark_activity();
@@ -589,7 +609,7 @@ fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32
             }
             // The lane owns the controller, so live CC on it is suppressed while this bit is set.
             channel.cc_lane_mask |= 1u128 << *cc;
-            channel.send_cc_to_devices(*cc, value14, 0);
+            channel.send_cc_to_devices(*cc, value14, frame_offset);
         }
     }
 

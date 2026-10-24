@@ -101,6 +101,19 @@ pub fn process_audio(
         // Update global tick and carry fractional forward
         state.set_current_tick(tick_cursor);
         state.set_fractional_tick_accumulator(acc);
+
+        // The block-start resolve above saw the loop end. Resolve again at each wrap, stamped at
+        // its frame, so the notes at the loop start meet the loop start's values instead of
+        // waiting a whole buffer for them.
+        for &index in loop_wraps.iter() {
+            let (wrap_tick, wrap_frame) = tick_events[index];
+            super::automation::apply_automation_at(
+                &mut state.tracks,
+                &mut state.channels,
+                wrap_tick,
+                wrap_frame,
+            );
+        }
     } else {
         // Nothing plays while stopped, so no in-block key changes apply this block.
         tick_events.clear();
@@ -349,5 +362,103 @@ mod tests {
         for block in [64usize, 512, 2048] {
             run(block);
         }
+    }
+
+    /// A loop wrap inside the block resolves automation again at the loop start, stamped at the
+    /// wrap's frame: the notes there must not hear the loop end's value for the rest of the block.
+    #[test]
+    fn loop_wrap_reapplies_automation_at_the_wrap_frame() {
+        use crate::audio::automation::{
+            AutomationLane, AutomationPoint, AutomationTarget, CurveKind,
+        };
+        use crate::audio::devices::DevicePath;
+        use crate::audio::track::Track;
+
+        type Applied = std::sync::Arc<std::sync::Mutex<Vec<(f32, usize)>>>;
+        struct Stamped {
+            value: f32,
+            applied: Applied,
+        }
+        impl crate::audio::devices::AudioDevice for Stamped {
+            fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _n: usize) {}
+            fn set_parameter(&mut self, _id: ParamId, value: ParamValue) {
+                self.value = value;
+            }
+            fn set_parameter_at(&mut self, _id: ParamId, value: ParamValue, frame: usize) {
+                self.value = value;
+                self.applied.lock().unwrap().push((value, frame));
+            }
+            fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+                Some(self.value)
+            }
+            fn device_id(&self) -> &str {
+                "test.stamped"
+            }
+            fn device_name(&self) -> &str {
+                "Stamped"
+            }
+            fn device_category(&self) -> DeviceCategory {
+                DeviceCategory::Instrument
+            }
+            fn device_variant(&self) -> DeviceVariant {
+                DeviceVariant::BuiltIn
+            }
+            fn parameters(&self) -> Vec<ParamInfo> {
+                Vec::new()
+            }
+            fn reset(&mut self) {}
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        const BLOCK: usize = 2048;
+        let mut state = EngineState::default();
+        let applied = Applied::default();
+        let mut channel = Channel::new(2, "Inst".to_string(), BLOCK, 48_000.0);
+        channel.devices.push(Box::new(Stamped {
+            value: 0.5,
+            applied: applied.clone(),
+        }));
+        state.channels.insert(2, channel);
+
+        // Cutoff-style ramp: low at the loop start, high at its end.
+        let mut lane = AutomationLane::new(
+            "cutoff".to_string(),
+            AutomationTarget::DeviceParam {
+                device_path: DevicePath::root(0),
+                param_id: 0,
+            },
+        );
+        for (id, tick, value) in [(1, 0, 0.0), (2, 3840, 1.0)] {
+            lane.insert_point(AutomationPoint::new(
+                id,
+                tick,
+                value,
+                CurveKind::Linear,
+                0.0,
+            ));
+        }
+        let mut track = Track::new(1, 2);
+        track.automation_lanes.push(lane);
+        state.tracks.insert(1, track);
+
+        // 120 BPM: 2048 frames is ~82 ticks, so a block starting 40 ticks before the loop end
+        // wraps about halfway through.
+        state.loop_region = Some((0, 3840));
+        state.set_current_tick(3800);
+        state.set_is_playing(true);
+        process_audio(&mut state, BLOCK, 48_000.0, Instant::now());
+
+        let applied = applied.lock().unwrap().clone();
+        assert_eq!(applied.len(), 2, "{applied:?}");
+        assert_eq!(applied[0].1, 0, "block start: {applied:?}");
+        assert!(applied[0].0 > 0.9, "the loop end is high: {applied:?}");
+        let (value, frame) = applied[1];
+        assert!(value < 0.01, "the loop start is low: {applied:?}");
+        assert!(
+            frame > 0 && frame < BLOCK,
+            "stamped at the wrap: {applied:?}"
+        );
     }
 }

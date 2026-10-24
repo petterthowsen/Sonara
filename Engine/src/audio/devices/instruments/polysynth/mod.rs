@@ -138,6 +138,9 @@ pub struct PolySynthDevice {
     /// Queued MIDI for frame-accurate scheduling within the next block.
     /// (frame_offset, key, velocity or release, is_note_on)
     queued_midi: Vec<(usize, u8, f32, bool)>,
+    /// Parameter changes stamped inside the next block by `set_parameter_at` (automation at a
+    /// loop wrap): (frame_offset, param_id, value). The block renders in segments split at them.
+    queued_params: Vec<(usize, ParamId, ParamValue)>,
 
     // Scratch, sized in `prepare`.
     mix_l: Vec<f32>,
@@ -184,6 +187,7 @@ impl PolySynthDevice {
             is_enabled: true,
             sleep_state: crate::audio::devices::DeviceSleepState::new(),
             queued_midi: Vec::with_capacity(128),
+            queued_params: Vec::with_capacity(64),
             mix_l: Vec::new(),
             mix_r: Vec::new(),
             level_buf: [Vec::new(), Vec::new()],
@@ -628,6 +632,7 @@ impl PolySynthDevice {
     fn render(&mut self, outputs: &mut [f32], sample_count: usize) -> usize {
         outputs[..sample_count * 2].fill(0.0);
         if !self.is_active || !self.is_enabled {
+            self.flush_queued_params();
             return 0;
         }
 
@@ -643,18 +648,96 @@ impl PolySynthDevice {
             self.drain_note_sink(sample_count);
         }
 
+        // Sort queued MIDI by offset, note-offs (and chokes) before note-ons on the same frame:
+        // a repeat of the same key whose on arrives ahead of the previous note's off would
+        // otherwise be released at once. Taken so voices can be borrowed while iterating; put
+        // back (cleared) at the end so the queue keeps its preallocated capacity.
+        let mut events = core::mem::take(&mut self.queued_midi);
+        events.sort_by_key(|e| (e.0, e.3));
+        // Stable sort: two changes to one parameter on the same frame keep their order.
+        let mut param_events = core::mem::take(&mut self.queued_params);
+        param_events.sort_by_key(|e| e.0);
+
+        self.mix_l[..sample_count].fill(0.0);
+        self.mix_r[..sample_count].fill(0.0);
+
+        // Render in segments split at the stamped parameter changes, so a change lands before
+        // the notes on its frame (automation at a loop wrap meets the loop's first notes).
+        let mut next_event = 0usize;
+        let mut next_param = 0usize;
+        let mut seg_start = 0usize;
+        loop {
+            while let Some(&(offset, param_id, value)) = param_events.get(next_param) {
+                if offset.min(sample_count) > seg_start {
+                    break;
+                }
+                self.set_parameter(param_id, value);
+                next_param += 1;
+            }
+            let seg_end = param_events
+                .get(next_param)
+                .map_or(sample_count, |e| e.0.min(sample_count));
+            self.render_segment(&events, &mut next_event, seg_start, seg_end, sample_count);
+            seg_start = seg_end;
+            if seg_start >= sample_count {
+                break;
+            }
+        }
+
+        outputs[..sample_count * 2]
+            .chunks_exact_mut(2)
+            .zip(
+                self.mix_l[..sample_count]
+                    .iter()
+                    .zip(&self.mix_r[..sample_count]),
+            )
+            .for_each(|(out, (l, r))| {
+                out[0] = *l;
+                out[1] = *r;
+            });
+
+        // Return the (cleared) queues so the next block doesn't allocate
+        events.clear();
+        self.queued_midi = events;
+        param_events.clear();
+        self.queued_params = param_events;
+        sample_count
+    }
+
+    /// Apply every stamped parameter change now, in order. For a block that will not render them
+    /// at their frames, so an older queued value can never land after a newer one.
+    fn flush_queued_params(&mut self) {
+        let mut param_events = core::mem::take(&mut self.queued_params);
+        param_events.sort_by_key(|e| e.0);
+        for &(_, param_id, value) in param_events.iter() {
+            self.set_parameter(param_id, value);
+        }
+        param_events.clear();
+        self.queued_params = param_events;
+    }
+
+    /// Render `[start, end)` of the block: the smoothed controls, the queued notes that fall in
+    /// it (from `events[*next_event..]`, sorted), the voices, and the volume. The segment that
+    /// ends the block also takes the notes queued past it.
+    fn render_segment(
+        &mut self,
+        events: &[(usize, u8, f32, bool)],
+        next_event: &mut usize,
+        start: usize,
+        end: usize,
+        sample_count: usize,
+    ) {
         if self.env_dirty {
             self.apply_envelopes();
         }
 
-        // Smoothed levels for the whole block, shared by every voice.
+        // Smoothed levels for the segment, shared by every voice.
         for o in 0..2 {
             retarget(&mut self.level_smoothed[o], self.params.osc[o].level);
-            self.level_smoothed[o].fill(&mut self.level_buf[o][..sample_count]);
+            self.level_smoothed[o].fill(&mut self.level_buf[o][start..end]);
         }
         retarget(&mut self.noise_smoothed, self.params.noise_level);
-        self.noise_smoothed
-            .fill(&mut self.noise_buf[..sample_count]);
+        self.noise_smoothed.fill(&mut self.noise_buf[start..end]);
         // The cutoff smoother carries the *effective* base (mono offset from an enclosing
         // wrapper included); a voice adds its own poly offset on top.
         let cutoff_slot = params::slot_of(CUTOFF);
@@ -662,24 +745,16 @@ impl PolySynthDevice {
             &mut self.cutoff_smoothed,
             self.params.effective_norm_at(cutoff_slot),
         );
-        self.cutoff_smoothed
-            .fill(&mut self.cutoff_buf[..sample_count]);
+        self.cutoff_smoothed.fill(&mut self.cutoff_buf[start..end]);
         retarget(&mut self.volume_smoothed, self.params.volume_gain);
 
-        // Sort queued MIDI by offset, note-offs (and chokes) before note-ons on the same frame:
-        // a repeat of the same key whose on arrives ahead of the previous note's off would
-        // otherwise be released at once. Taken so voices can be borrowed while iterating; put
-        // back (cleared) at the end so the queue keeps its preallocated capacity.
-        let mut events = core::mem::take(&mut self.queued_midi);
-        events.sort_by_key(|e| (e.0, e.3));
-
-        self.mix_l[..sample_count].fill(0.0);
-        self.mix_r[..sample_count].fill(0.0);
-
         // Render in spans between event offsets so note on/off are applied with sample accuracy
-        let mut cursor = 0usize;
-        for &(offset, note, value, is_on) in events.iter() {
+        let mut cursor = start;
+        while let Some(&(offset, note, value, is_on)) = events.get(*next_event) {
             let span_end = offset.min(sample_count);
+            if span_end >= end && end < sample_count {
+                break;
+            }
             if span_end > cursor {
                 self.render_span(cursor, span_end);
                 cursor = span_end;
@@ -691,21 +766,17 @@ impl PolySynthDevice {
             } else {
                 self.note_off(note, value);
             }
+            *next_event += 1;
         }
-        if cursor < sample_count {
-            self.render_span(cursor, sample_count);
+        if cursor < end {
+            self.render_span(cursor, end);
         }
 
-        for i in 0..sample_count {
+        for i in start..end {
             let gain = self.volume_smoothed.next();
-            outputs[i * 2] = self.mix_l[i] * gain;
-            outputs[i * 2 + 1] = self.mix_r[i] * gain;
+            self.mix_l[i] *= gain;
+            self.mix_r[i] *= gain;
         }
-
-        // Return the (cleared) queue so the next `send_note_event` doesn't allocate
-        events.clear();
-        self.queued_midi = events;
-        sample_count
     }
 }
 
@@ -846,6 +917,18 @@ impl AudioDevice for PolySynthDevice {
         self.sleep_state.mark_activity(); // Wake on parameter change
         let changed = self.params.set(param_id, value);
         self.apply_change(changed);
+    }
+
+    /// Automation stamped inside the block (a loop wrap) is queued and applied at its frame by
+    /// `render`; frame 0, or a full queue, applies now.
+    fn set_parameter_at(&mut self, param_id: ParamId, value: ParamValue, frame_offset: usize) {
+        if frame_offset == 0 || self.queued_params.len() >= self.queued_params.capacity() {
+            self.flush_queued_params();
+            self.set_parameter(param_id, value);
+            return;
+        }
+        self.sleep_state.mark_activity();
+        self.queued_params.push((frame_offset, param_id, value));
     }
 
     fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
@@ -1179,6 +1262,39 @@ mod tests {
             .collect();
         notes.sort();
         notes
+    }
+
+    /// Automation stamped mid-block (a loop wrap) moves the cutoff at its frame, before the note
+    /// on the same frame starts, rather than at the next block.
+    #[test]
+    fn stamped_cutoff_change_lands_at_its_frame() {
+        let mut dev = PolySynthDevice::new(SR);
+        dev.set_parameter(CUTOFF, 1.0);
+        render(&mut dev, 4); // settle the smoother on the open filter
+
+        const WRAP: usize = 100;
+        dev.set_parameter_at(CUTOFF, 0.0, WRAP);
+        dev.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 0.8,
+            },
+            WRAP,
+        );
+        assert_eq!(
+            dev.get_parameter(CUTOFF),
+            Some(1.0),
+            "queued, not applied yet"
+        );
+        render(&mut dev, 1);
+
+        assert_eq!(dev.cutoff_buf[WRAP - 1], 1.0, "open until the wrap");
+        assert!(dev.cutoff_buf[WRAP] < 1.0, "closing from the wrap frame");
+        assert!(dev.cutoff_buf[BLOCK - 1] < dev.cutoff_buf[WRAP]);
+        assert_eq!(dev.get_parameter(CUTOFF), Some(0.0));
+        assert_eq!(sounding_notes(&dev), vec![60]);
+        assert!(dev.queued_params.is_empty());
     }
 
     #[test]
@@ -1666,10 +1782,19 @@ mod tests {
             let (cl, cr) = side_rms(param, 0.0);
             assert!((cl - cr).abs() < 1e-6, "centre is balanced");
             let (l, r) = side_rms(param, -100.0);
-            assert!(l > 0.0 && r < 1e-4, "hard left leaves the right silent: {l} {r}");
-            assert!((l - cl * std::f32::consts::SQRT_2).abs() < 0.02 * l, "equal power");
+            assert!(
+                l > 0.0 && r < 1e-4,
+                "hard left leaves the right silent: {l} {r}"
+            );
+            assert!(
+                (l - cl * std::f32::consts::SQRT_2).abs() < 0.02 * l,
+                "equal power"
+            );
             let (l, r) = side_rms(param, 100.0);
-            assert!(r > 0.0 && l < 1e-4, "hard right leaves the left silent: {l} {r}");
+            assert!(
+                r > 0.0 && l < 1e-4,
+                "hard right leaves the left silent: {l} {r}"
+            );
         }
     }
 
@@ -1727,7 +1852,10 @@ mod tests {
             let mono: Vec<f32> = out.iter().step_by(2).copied().take(2048).collect();
             centroids.push(centroid(&mono));
         }
-        assert!(centroids[0] < centroids[1] && centroids[1] < centroids[2], "{centroids:?}");
+        assert!(
+            centroids[0] < centroids[1] && centroids[1] < centroids[2],
+            "{centroids:?}"
+        );
     }
 
     #[test]
