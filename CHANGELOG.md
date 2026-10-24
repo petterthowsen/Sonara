@@ -6,6 +6,10 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The mixer pan mode button shows a cuboid icon instead of the text "Stage" in Stage mode, so narrow channel strips can shrink further (#178).
+
 ### Fixed
 
 - Automation at a loop's start now applies when the loop wraps, not one audio buffer later: notes at the loop start no longer play with the loop end's value (for example a PolySynth cutoff ramp). PolySynth and CLAP plugins switch at the exact sample; other devices switch at the start of the buffer that contains the wrap.

@@ -29,6 +29,8 @@ names=(
   scissors square-split-horizontal
   # mixer toolbar toggles
   move-horizontal panel-right send cable chart-no-axes-column plug
+  # mixer pan mode button (Stage)
+  cuboid
 )
 
 for n in "${names[@]}"; do

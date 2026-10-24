@@ -1,7 +1,7 @@
 # PanControl.gd
 # Channel pan strip for the pan modes: a single slider (Balance, Mono) or a dual slider
 # (Dual, Combined), with a right-click mode menu. In Stage mode (spec 051) the sliders give way
-# to a "Stage" button that opens the Stage view; the menu offers Stage only where
+# to a Stage icon button that opens the Stage view; the menu offers Stage only where
 # Channel.can_use_stage(). Reads and writes the bound Channel through its
 # setters and records undo as set_pan_state snapshots. The value readout is a plain overlay
 # drawn over the slider, on the side away from the knob, while it is hovered or dragged, so a long value never widens the strip.
@@ -10,6 +10,10 @@ class_name PanControl extends PanelContainer
 @onready var _single_slider: HorSlider = $HSlider
 @onready var _dual_slider: HDualSlider = $DualPanSlider
 @onready var _mode_popup: PopupMenu = $PanModePopup
+## Shown instead of the sliders in Stage mode; opens the Stage view.
+@onready var _stage_button: Button = $StageButton
+## Right-click menu of the Stage button: open the Stage view or leave Stage.
+@onready var _stage_menu: PopupMenu = $StageMenu
 
 ## Pixels kept between the knob and the readout.
 const KNOB_CLEARANCE := 6.0
@@ -26,10 +30,6 @@ var _hovered := false
 var _dragging := false
 ## Where the pointer sits on the dual slider (HDualSlider.pick_at); picks the Combined readout.
 var _hover_part := HDualSlider.DragMode.NONE
-## Shown instead of the sliders in Stage mode; opens the Stage view.
-var _stage_button: Button
-## Right-click menu of the Stage button: open the Stage view or leave Stage.
-var _stage_menu: PopupMenu
 
 
 func _ready() -> void:
@@ -48,21 +48,9 @@ func _ready() -> void:
 		slider.mouse_entered.connect(_set_hovered.bind(true))
 		slider.mouse_exited.connect(_set_hovered.bind(false))
 	_dual_slider.gui_input.connect(_on_dual_slider_input)
-	_stage_button = Button.new()
-	_stage_button.name = "StageButton"
-	_stage_button.text = "Stage"
-	_stage_button.tooltip_text = "Open the Stage view"
-	_stage_button.focus_mode = Control.FOCUS_NONE
-	_stage_button.visible = false
 	_stage_button.pressed.connect(_on_stage_button_pressed)
 	_stage_button.gui_input.connect(_on_stage_button_input)
-	add_child(_stage_button)
-	_stage_menu = PopupMenu.new()
-	_stage_menu.name = "StageMenu"
-	_stage_menu.add_item("Open Stage view", STAGE_MENU_OPEN)
-	_stage_menu.add_item("Leave Stage", STAGE_MENU_LEAVE)
 	_stage_menu.id_pressed.connect(_on_stage_menu_selected)
-	add_child(_stage_menu)
 	_value_tip = ValueTooltip.attach(self)
 	_value_tip.set_plain(true)
 	set_process(false)

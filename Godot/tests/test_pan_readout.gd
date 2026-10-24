@@ -34,6 +34,12 @@ func _make_pan() -> Control:
 	for i in 4:
 		popup.add_check_item("mode", i)
 	pan.add_child(popup)
+	var stage_button := Button.new()
+	stage_button.name = "StageButton"
+	pan.add_child(stage_button)
+	var stage_menu := PopupMenu.new()
+	stage_menu.name = "StageMenu"
+	pan.add_child(stage_menu)
 	pan.set_script(load("res://mixer/PanControl.gd"))
 	pan.position = Vector2(200, 200)
 	pan.custom_minimum_size = Vector2(100, 24)

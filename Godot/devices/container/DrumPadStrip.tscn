@@ -1,10 +1,11 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://devices/container/DrumPadStrip.gd" id="1_strip"]
 [ext_resource type="Script" uid="uid://cv2bu0k4y0j80" path="res://mixer/PanControl.gd" id="2_pan"]
 [ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="3_hslider"]
 [ext_resource type="Script" uid="uid://cdo41pchcayq7" path="res://components/HDualSlider.gd" id="4_dual"]
 [ext_resource type="PackedScene" uid="uid://de6qmyspkqaw7" path="res://components/meter/Meter.tscn" id="5_meter"]
+[ext_resource type="Texture2D" uid="uid://cb7o2rctuoq62" path="res://assets/icons/cuboid.svg" id="stage_icon"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pan"]
 content_margin_left = 0.0
@@ -61,6 +62,24 @@ min_value = -100.0
 max_value = 100.0
 a_value = -0.5
 b_value = 0.0
+
+[node name="StageButton" type="Button" parent="Pan"]
+visible = false
+layout_mode = 2
+tooltip_text = "Open the Stage view"
+focus_mode = 0
+icon = ExtResource("stage_icon")
+icon_alignment = 1
+expand_icon = true
+
+[node name="StageMenu" type="PopupMenu" parent="Pan"]
+oversampling_override = 1.0
+theme_type_variation = &"ContextMenuList"
+item_count = 2
+item_0/text = "Open Stage view"
+item_0/id = 0
+item_1/text = "Leave Stage"
+item_1/id = 1
 
 [node name="PanModePopup" type="PopupMenu" parent="Pan"]
 oversampling_override = 1.0

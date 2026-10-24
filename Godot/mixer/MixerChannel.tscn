@@ -15,6 +15,7 @@
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="10_8wi2u"]
 [ext_resource type="Script" uid="uid://cv2bu0k4y0j80" path="res://mixer/PanControl.gd" id="11_panctl"]
 [ext_resource type="Script" uid="uid://dqv5jd1spvtcs" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
+[ext_resource type="Texture2D" uid="uid://cb7o2rctuoq62" path="res://assets/icons/cuboid.svg" id="stage_icon"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
@@ -115,7 +116,6 @@ size_flags_horizontal = 0
 focus_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
-resizable = false
 side_pane_width = 160.0
 
 [node name="HBox" type="HBoxContainer" parent="." unique_id=1923224323]
@@ -286,6 +286,7 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_573y5")
 script = ExtResource("11_panctl")
 
 [node name="HSlider" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=1152018147]
+visible = false
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_filter = 1
@@ -307,10 +308,28 @@ max_value = 100.0
 a_value = -0.5
 b_value = 0.0
 
+[node name="StageButton" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=2103723017]
+custom_minimum_size = Vector2(0, 25)
+layout_mode = 2
+tooltip_text = "Open the Stage view"
+focus_mode = 0
+icon = ExtResource("stage_icon")
+icon_alignment = 1
+expand_icon = true
+
+[node name="StageMenu" type="PopupMenu" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=1502377497]
+oversampling_override = 1.0
+theme_type_variation = &"ContextMenuList"
+item_count = 2
+item_0/text = "Open Stage view"
+item_0/id = 0
+item_1/text = "Leave Stage"
+item_1/id = 1
+
 [node name="PanModePopup" type="PopupMenu" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=506406282]
 oversampling_override = 1.0
 title = "Pan Mode"
-size = Vector2i(174, 100)
+size = Vector2i(174, 104)
 theme_type_variation = &"ContextMenuList"
 item_count = 4
 item_0/text = "Stereo Combined"
@@ -356,6 +375,7 @@ script = ExtResource("6_1hr2l")
 value = -6.0
 
 [node name="SmartLineEdit" parent="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader" unique_id=1108990559 instance=ExtResource("2_xa46q")]
+visible = false
 layout_mode = 1
 anchors_preset = -1
 anchor_top = 0.2
