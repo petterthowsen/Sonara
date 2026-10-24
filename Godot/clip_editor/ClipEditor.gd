@@ -682,6 +682,11 @@ func _apply_drum_view_preference() -> void:
 		return
 	midi_editor.refresh_note_map()
 	midi_editor.drum_view = midi_editor.wants_drum_view()
+	# A multi-clip selection opens as a piano roll unless the channel has drum rows (#150).
+	# Not remembered per channel: the toggle still decides from there.
+	if midi_editor.drum_view and selected_clips.size() > 1 \
+			and not NoteMapResolver.has_row_source(midi_editor.get_active_channel()):
+		midi_editor.drum_view = false
 	_sync_note_map_toolbar()
 
 

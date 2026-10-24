@@ -10,9 +10,12 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 - Right-click a mixer meter (the big meter or the compact one) for its options: Centered Scale draws the dB scale between the left and right bars, Show Fader turns the meter's fader on or off, and Show Fader Handle Only on Hover hides the handle until the pointer is over the meter. Each kind of meter keeps its own options for all channels; they are also under Settings > Appearance > Mixer.
 - The fader inside a mixer meter is a darker shade of the accent color, so it stands apart from the meter bars; with Centered Scale it fills the scale column and the labels sit inside it.
+- Dragging a device over a layer in a Layer's list for a second opens that layer, so you can drop the device inside it; the layer closes again if you let go elsewhere (#159).
 
 ### Changed
 
+- A new track or channel is selected as soon as it is created (#165).
+- Opening the clip editor with several clips selected shows the piano roll, unless the channel has drum rows (#150).
 - Compact devices in the mixer show their state in the card (#172), and the on/off light only when the device is at least 80 px wide: a disabled device is muted (background, title and border), an inactive one has a red border, and a failed or crashed plugin a red border too. The device context menu has Enabled and Active toggles.
 - The mixer pan mode button shows a cuboid icon instead of the text "Stage" in Stage mode, so narrow channel strips can shrink further (#178).
 

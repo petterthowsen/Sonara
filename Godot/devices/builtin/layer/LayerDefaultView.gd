@@ -6,6 +6,8 @@
 class_name LayerDefaultView extends DeviceView
 
 const MIX_PARAM := "Mix"
+## Seconds a device drag has to rest on a row before that layer opens in the lane.
+const HOVER_OPEN_SECONDS := 1.0
 const SLOT_ROW_SCENE: PackedScene = preload("res://devices/builtin/layer/LayerSlotRow.tscn")
 
 @onready var mapping_button: Button = %MappingButton
@@ -13,6 +15,15 @@ const SLOT_ROW_SCENE: PackedScene = preload("res://devices/builtin/layer/LayerSl
 @onready var mix_knob: LabeledKnob = %MixKnob
 var _rows: Dictionary = {}  # instance id -> LayerSlotRow
 var _mix_id := -1
+
+## Drag hover (#159): the row under the pointer and for how long, the slots that were open when
+## the drag began and the layer's device count then. Opening is a view state only; the chain and
+## the engine don't change.
+var _hover_child: DeviceInstance = null
+var _hover_time := 0.0
+var _hover_opened := false
+var _open_before := PackedStringArray()
+var _drag: Variant = null
 
 
 ## Prefer a compact column so Layer can sit beside parameter lists.
@@ -22,6 +33,7 @@ func _get_minimum_size() -> Vector2:
 
 ## Hook the Mapping… button and the Mix knob, then build if a device arrived before the tree.
 func _ready() -> void:
+	set_process(false)
 	mapping_button.pressed.connect(_on_mapping_pressed)
 	mix_knob.knob.value_changed.connect(_on_mix_changed)
 	mix_knob.knob.value_text_callback = _format_mix
@@ -59,6 +71,67 @@ func _on_unbind() -> void:
 		device.child_moved.disconnect(_on_children_changed)
 	if device.slots_changed.is_connected(_on_slots_changed):
 		device.slots_changed.disconnect(_on_slots_changed)
+
+
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_DRAG_BEGIN:
+			_drag = DragDrop.current_drag(self)
+			if device != null and DeviceDropTarget.accepts(_drag):
+				_open_before = device.open_slot_keys()
+				_hover_child = null
+				_hover_time = 0.0
+				_hover_opened = false
+				set_process(true)
+		NOTIFICATION_DRAG_END:
+			_end_drag_hover()
+
+
+func _process(delta: float) -> void:
+	if device == null or not is_visible_in_tree():
+		return
+	var child := _child_under_mouse()
+	if child != _hover_child:
+		_hover_child = child
+		_hover_time = 0.0
+		return
+	if child == null:
+		return
+	_hover_time += delta
+	if _hover_time >= HOVER_OPEN_SECONDS:
+		var key := device.slot_key_for(child)
+		if not device.is_slot_open(key):
+			_hover_opened = true
+			device.set_slot_open(key, true)
+		_hover_time = -INF  # once per hover
+
+
+func _child_under_mouse() -> DeviceInstance:
+	var mouse := get_global_mouse_position()
+	for child_id in _rows:
+		var row: LayerSlotRow = _rows[child_id]
+		if is_instance_valid(row) and DragDrop.is_point_visible(row, mouse):
+			return row.instance
+	return null
+
+
+## The drag ended: a layer opened by hover closes again (the earlier open slots come back) unless
+## the drop landed in it.
+func _end_drag_hover() -> void:
+	set_process(false)
+	var dropped := _drag is DeviceDrag and (_drag as DeviceDrag).did_commit
+	_drag = null
+	_hover_child = null
+	if device == null or not _hover_opened:
+		return
+	_hover_opened = false
+	if dropped:
+		return
+	for key in device.open_slot_keys():
+		if not _open_before.has(key):
+			device.set_slot_open(key, false)
+	for key in _open_before:
+		device.set_slot_open(key, true)
 
 
 ## Highlight the rows whose slot is open, in their (possibly new) colors.

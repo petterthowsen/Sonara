@@ -695,8 +695,12 @@ func _on_left_add_menu_pressed(id: int) -> void:
 			)
 			channel.output_channel_id = 1
 			logger.info("Added new instrument channel: ", channel.name)
+			select_channel(channel)
 		LeftAddItem.GROUP_TRACK:
-			HistoryUtil.execute(TrackCreateCommand.new(project, "group", "Group"))
+			var cmd := TrackCreateCommand.new(project, "group", "Group")
+			HistoryUtil.execute(cmd)
+			if cmd.track != null:
+				Sonara.editor.select_tracks([cmd.track] as Array[Track], cmd.track)
 
 
 func _on_right_add_button_pressed() -> void:
@@ -709,6 +713,7 @@ func _on_right_add_button_pressed() -> void:
 	var channel = project.create_channel("Bus %d" % (project.channels.size()), Channel.ChannelType.BUS)
 	channel.output_channel_id = 1  # Route to master
 	logger.info("Added new bus channel: ", channel.name)
+	select_channel(channel)
 
 # ============================================================================
 # INTERNAL HELPERS

@@ -31,6 +31,8 @@ static func create(project: Project, id: int) -> TrackCreateCommand:
 	HistoryUtil.execute(cmd)
 	if cmd.track != null and cmd.channel != null:
 		cmd.track.color = cmd.channel.color
+	if cmd.track != null and Sonara and Sonara.editor and Sonara.editor.has_method("select_tracks"):
+		Sonara.editor.select_tracks([cmd.track] as Array[Track], cmd.track)
 	return cmd
 
 
