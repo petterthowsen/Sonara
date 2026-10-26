@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- The Drum Machine's Synth Kit now has 13 pads on GM notes: Kick, Rimshot, Snare, Clap, Closed and Open Hat, Low/Mid/High Tom, Crash, Ride, Cowbell and Shaker (spec 056).
 - New built-in drum instrument Shaker (spec 056): shaped, filtered noise for maracas and shakers, with Attack, Decay, Tone, Ring and a Grain control that adds a beads texture.
 - New built-in drum instrument Rimshot (spec 056): a tick rings two tuned resonators (the 808 pair) through a high-pass and drive for the snap; with high Ring and Tone it also makes claves.
 - New built-in drum instrument Cowbell (spec 056): the 808 recipe of two pulse oscillators through a resonant band-pass, with a Strike control that mixes a sharp attack into the tail.

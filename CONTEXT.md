@@ -74,6 +74,7 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Keytrack root** — the note a keytracked drum plays at exactly its Tune (Kick C1/36, Snare D1/38); other notes transpose from it, so Tune means the same with Keytrack on or off.
 - **Choke target** — a Drum Machine pad that another pad's note-on chokes, so a closed hat cuts an open one. Directed: a pad lists its own targets (ADR-0015).
 - **Choked by** — the pads that list a given pad as a choke target. Derived from the other pads' targets, never stored.
+- **Grab** — the Cymbal's choke on note-off: with Grab on, a note-off fades the cymbal out over 30 ms (a hand on the plate); off, note-off is ignored like any other one-shot drum.
 - **Choke group** — retired (ADR-0012). Old projects' groups load as mutual choke targets.
 
 ## Modulation
