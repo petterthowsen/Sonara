@@ -1076,6 +1076,8 @@ func drop_new_channel(data: Variant, mouse: Vector2) -> Array[Channel]:
 			if not slot.is_empty():
 				place_root_strip(channel, after)
 				after = channel
+	if not created.is_empty():
+		select_channel(created.back())
 	if data is DeviceDrag and not created.is_empty():
 		(data as DeviceDrag).did_commit = true
 	return created

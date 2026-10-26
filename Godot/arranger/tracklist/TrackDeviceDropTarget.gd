@@ -68,15 +68,19 @@ func commit(data: Variant = null) -> bool:
 			changed = true
 		Kind.NEW_TRACK:
 			var after := after_sibling
+			var created: Array[Track] = []
 			for item in _items:
 				var ch := DeviceDropUtil.create_channel_for(_project, item, false, parent_id, after)
 				var track := _project.get_channel_paired_track(ch)
 				if track:
 					after = track
+					created.append(track)
 					changed = true
 			var parent := _project.get_track_by_id(parent_id) if parent_id >= 0 else null
 			if changed and parent and not parent.is_folder_expanded:
 				parent.is_folder_expanded = true
+			if not created.is_empty() and Sonara and Sonara.editor:
+				Sonara.editor.select_tracks(created, created.back())
 	if changed and data is DeviceDrag:
 		(data as DeviceDrag).did_commit = true
 	return changed
