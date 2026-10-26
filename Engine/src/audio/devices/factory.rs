@@ -255,6 +255,8 @@ pub const DRUM_IDS: &[&str] = &[
     "sonara.builtin.clap",
     "sonara.builtin.cymbal",
     "sonara.builtin.tom",
+    "sonara.builtin.cowbell",
+    "sonara.builtin.rimshot",
 ];
 
 /// Built-in note effects (spec 027). Each is made from the sample rate alone. The note-effect
@@ -315,7 +317,7 @@ pub fn create_drum(
 ) -> Option<Box<dyn AudioDevice>> {
     use super::instruments::drums::{
         clap::ClapVoice, hat::HatVoice, kick::KickVoice, snare::SnareVoice, tom::TomVoice,
-        DrumHost,
+        cowbell::CowbellVoice, rimshot::RimshotVoice, DrumHost,
     };
     let mut device: Box<dyn AudioDevice> = match device_id {
         "sonara.builtin.kick" => Box::new(DrumHost::<KickVoice>::new(sample_rate, max_frames)),
@@ -323,6 +325,8 @@ pub fn create_drum(
         "sonara.builtin.hat" => Box::new(DrumHost::<HatVoice>::new(sample_rate, max_frames)),
         "sonara.builtin.clap" => Box::new(DrumHost::<ClapVoice>::new(sample_rate, max_frames)),
         "sonara.builtin.tom" => Box::new(DrumHost::<TomVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.cowbell" => Box::new(DrumHost::<CowbellVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.rimshot" => Box::new(DrumHost::<RimshotVoice>::new(sample_rate, max_frames)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);

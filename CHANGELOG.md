@@ -8,6 +8,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- New built-in drum instrument Rimshot (spec 056): a tick rings two tuned resonators (the 808 pair) through a high-pass and drive for the snap; with high Ring and Tone it also makes claves.
+- New built-in drum instrument Cowbell (spec 056): the 808 recipe of two pulse oscillators through a resonant band-pass, with a Strike control that mixes a sharp attack into the tail.
 - New built-in drum instrument Cymbal (spec 056): an 808-style metal cymbal with separately decaying low, mid and high bands, Bloom, Trash, Diffusion and a Stick transient. The defaults make a crash; Grab chokes it on note-off, and Tune, Decay and Tone reach splash, ride and china.
 - New built-in drum instrument Tom (spec 056): a tuned membrane with a pitch sweep, a second membrane mode and a skin layer. Tune is the pitch of note 45, with optional Keytrack; one device covers low, mid and high toms and, with a short Decay, congas and bongos.
 - The MIDI editor shows automation lanes in track mode (spec 055). The Automation toggle in the toolbar opens a pane under the note area with the focused track's lanes, lined up with the notes; the + button lists the track's lanes and adds a new one, and Ctrl+C / X / V / D and Delete act on the lane you last clicked. Open lanes and their heights are saved with the project.
