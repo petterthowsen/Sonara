@@ -1,8 +1,8 @@
 ## DrumStrategy.gd
 ## Drum rules: Tune and Decay are the large knobs, levels go in a row, and the rest is grouped
 ## by the device's module path. The built-in drums declare one `module` per section: the drum
-## itself (Kick, Snare, Hat, Clap) first, then its layers (Punch, Click, Noise, Snappy, Snap,
-## Tone, Hands), the Kick's 808 mode and the shared Global block last. Their tables list each
+## itself (Kick, Snare, Hat, Clap, Tom, Cowbell, Rimshot, Shaker, Cymbal) first, then its layers
+## (Punch, Click, Noise, Snappy, Snap, Tone, Hands, Sweep, Membrane, Skin, Stick), the Kick's 808 mode and the shared Global block last. Their tables list each
 ## section's controls in playing order, so a drum keeps that order instead of the generic
 ## "levels first" rule. This strategy also supplies groups for devices whose parameters carry no
 ## module.
@@ -15,16 +15,16 @@ func role_keywords() -> Dictionary:
 	# and "Release" don't rank them as levels or decays and pull their sections forward.
 	return {
 		"global": ["output", "humanize", "velocity"],
-		"mode": ["gate", "glide", "release", "keytrack"],
+		"mode": ["gate", "glide", "release", "keytrack", "grab"],
 		# Before tone: "Tune" is the pitch, not a tone control.
 		"tune": ["tune", "pitch", "freq*", "note"],
-		"decay": ["decay", "length", "time"],
+		"decay": ["decay", "length", "time", "bloom", "attack"],
 		# Before level: "Click Tone" is a tone control of the Click section, not its level.
 		"tone": ["tone", "color", "cut*", "filter", "sweep", "punch", "resonance", "res", "q", "ring",
 			"body", "overtone"],
 		"level": ["level", "volume", "gain", "amount", "mix", "blend", "click", "noise", "snappy",
-			"snap", "metal", "room", "hands"],
-		"character": ["drive", "curve", "shape", "mode", "spread", "loose"],
+			"snap", "metal", "room", "hands", "strike", "stick"],
+		"character": ["drive", "curve", "shape", "mode", "spread", "loose", "trash", "diffusion", "grain"],
 	}
 
 

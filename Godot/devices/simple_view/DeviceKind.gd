@@ -27,7 +27,8 @@ const FEATURE_KINDS: Array[Array] = [
 
 ## Drum name keywords, matched against the device name only (not its id: a CLAP plugin's id
 ## contains the token "clap", which would otherwise classify every plugin as a drum).
-const DRUM_NAME_KEYWORDS: Array = ["kick*", "snare*", "hat*", "hihat*", "clap*"]
+const DRUM_NAME_KEYWORDS: Array = ["kick*", "snare*", "hat*", "hihat*", "clap*", "tom*", "cowbell*",
+	"rimshot*", "shaker*", "maraca*", "cymbal*"]
 
 ## Kind → name/id keywords (see `ParamClassifier.matches_keyword`), checked in this order.
 const NAME_KEYWORDS: Array[Array] = [

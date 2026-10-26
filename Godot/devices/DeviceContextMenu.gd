@@ -38,7 +38,7 @@ func _ready() -> void:
 	host_individually.toggled.connect(_on_host_individually_toggled)
 	load_kit = Button.new()
 	load_kit.text = "Load Synth Kit"
-	load_kit.tooltip_text = "Fill the pads with the default kit: Kick, Snare, Clap, Closed Hat and Open Hat (the hats choke each other)."
+	load_kit.tooltip_text = "Fill the pads with the default kit: Kick, Rimshot, Snare, Clap, Closed and Open Hat (the hats choke each other), three Toms, Crash, Ride, Cowbell and Shaker."
 	load_kit.pressed.connect(_on_load_kit_pressed)
 	load_kit.visible = false
 	v_box_container.add_child(load_kit)

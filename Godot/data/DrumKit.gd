@@ -1,25 +1,46 @@
-## The Drum Machine's "Synth Kit" preset (spec 013, Phase 4 wrap-up): the four drum voices laid
-## out on their GM note numbers, with the two hats choking each other so a closed hat silences
-## the open one. The notes are the GM numbers, which are the same whatever the octave naming.
+## The Drum Machine's "Synth Kit" preset (spec 013, Phase 4 wrap-up; extended by spec 056): the
+## built-in drum voices laid out on their GM note numbers, with the two hats choking each other so
+## a closed hat silences the open one. The notes are the GM numbers, which are the same whatever the octave naming.
 ##
-## The two hats are the same device with different Decay, so the preset also sets that parameter:
-## a kit of five identical hats would not play a pattern.
+## Several pads are the same device with different settings (two hats, three toms, crash and
+## ride), so the preset also sets those parameters: a kit of identical pads would not play a
+## pattern.
 
 class_name DrumKit extends RefCounted
 
 const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
-## Hat Decay (hat.rs ID 1; ID 11 is Metal).
+## Engine parameter IDs used by the kit (see the drum sources in Engine/src/audio/devices/
+## instruments/drums/). Hat Decay is ID 1; ID 11 is Metal.
 const HAT_DECAY := 1
+const TOM_TUNE := 0
+const CYMBAL_DECAY := 1
+const CYMBAL_TONE := 10
+const CYMBAL_DIFFUSION := 13
+const CYMBAL_STICK := 20
+const CYMBAL_BLOOM := 21
 
 ## One pad: `id` is the built-in device, `note` its GM note, `name` the pad's display name,
 ## `choke` (optional) the names of the kit pads it chokes and `params` (optional) real values
-## (Hz, s, %, ...) keyed by the drum's parameter ID.
+## (Hz, s, %, ...) keyed by the drum's parameter ID. Pads are added in array order.
 const SYNTH_KIT: Array[Dictionary] = [
 	{"id": "sonara.builtin.kick", "note": 36, "name": "Kick"},
+	{"id": "sonara.builtin.rimshot", "note": 37, "name": "Rimshot"},
 	{"id": "sonara.builtin.snare", "note": 38, "name": "Snare"},
 	{"id": "sonara.builtin.clap", "note": 39, "name": "Clap"},
-	{"id": "sonara.builtin.hat", "note": 42, "name": "Closed Hat", "choke": ["Open Hat"], "params": {HAT_DECAY: 0.06}},
-	{"id": "sonara.builtin.hat", "note": 46, "name": "Open Hat", "choke": ["Closed Hat"], "params": {HAT_DECAY: 0.6}},
+	{"id": "sonara.builtin.hat", "note": 42, "name": "Closed Hat", "choke": ["Open Hat"],
+		"params": {HAT_DECAY: 0.06}},
+	{"id": "sonara.builtin.hat", "note": 46, "name": "Open Hat", "choke": ["Closed Hat"],
+		"params": {HAT_DECAY: 0.6}},
+	{"id": "sonara.builtin.tom", "note": 45, "name": "Low Tom", "params": {TOM_TUNE: 90.0}},
+	{"id": "sonara.builtin.tom", "note": 48, "name": "Mid Tom", "params": {TOM_TUNE: 130.0}},
+	{"id": "sonara.builtin.tom", "note": 50, "name": "High Tom", "params": {TOM_TUNE: 180.0}},
+	{"id": "sonara.builtin.cymbal", "note": 49, "name": "Crash"},
+	# The Ride variation from cymbal.rs.
+	{"id": "sonara.builtin.cymbal", "note": 51, "name": "Ride",
+		"params": {CYMBAL_DECAY: 4.0, CYMBAL_TONE: 9000.0, CYMBAL_STICK: 70.0,
+			CYMBAL_DIFFUSION: 25.0, CYMBAL_BLOOM: 0.001}},
+	{"id": "sonara.builtin.cowbell", "note": 56, "name": "Cowbell"},
+	{"id": "sonara.builtin.shaker", "note": 70, "name": "Shaker"},
 ]
 
 

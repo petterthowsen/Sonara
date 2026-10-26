@@ -150,6 +150,21 @@ func _test_drum_kind_inference() -> void:
 	for n in ["Snare", "Closed Hat", "HiHat", "Clap"]:
 		_assert(DeviceKind.infer(_device("x.thing", n, Device.DeviceCategory.Instrument)) == DeviceKind.DRUM,
 			"%s infers drum" % n)
+	_test_spec_056_drums()
+
+
+## Spec 056: Tom and Cymbal infer as drums, and the Cymbal's Grab is a mode control.
+func _test_spec_056_drums() -> void:
+	for n in ["Tom", "Cowbell", "Rimshot", "Shaker", "Cymbal"]:
+		_assert(DeviceKind.infer(_device("sonara.builtin.%s" % n.to_lower(), n, Device.DeviceCategory.Instrument)) == DeviceKind.DRUM,
+			"%s infers drum" % n)
+	var strategy := DrumStrategy.new()
+	_assert(strategy.role_for(_bool(2, "Grab")) == "mode", "Cymbal Grab is in the Mode role")
+	var groups: Array = []
+	for g in strategy.groups():
+		if "mode" in g.roles:
+			groups.append(g.title)
+	_assert(groups == ["Mode"], "the mode role lands in the Mode group %s" % [groups])
 
 
 ## The built-in EQ names every band's parameters alike ("Freq", "Gain", "Q") and tells them apart
