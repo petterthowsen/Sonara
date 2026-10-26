@@ -901,7 +901,11 @@ mod tests {
         b.reseed(2);
         a.gate_voice_on(60, 0.8);
         b.gate_voice_on(60, 0.8);
-        assert_ne!(a.value(), b.value(), "voices must not share a random sequence");
+        assert_ne!(
+            a.value(),
+            b.value(),
+            "voices must not share a random sequence"
+        );
     }
 
     #[test]

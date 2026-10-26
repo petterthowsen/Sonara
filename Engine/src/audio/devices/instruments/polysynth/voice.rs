@@ -204,7 +204,10 @@ fn pan_gains(pan: f32) -> [f32; 2] {
         return [1.0; 2];
     }
     let (sin, cos) = ((pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4).sin_cos();
-    [cos * std::f32::consts::SQRT_2, sin * std::f32::consts::SQRT_2]
+    [
+        cos * std::f32::consts::SQRT_2,
+        sin * std::f32::consts::SQRT_2,
+    ]
 }
 
 pub struct Voice {

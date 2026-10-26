@@ -421,6 +421,14 @@ impl Channel {
             .release_clip(|off| send_note_event_to(devices, &off, frame_offset));
     }
 
+    /// Send a note-off for each sounding clip note `release(clip_note_id, key)` picks, at the
+    /// start of the next buffer.
+    pub fn release_clip_notes_where(&mut self, release: impl FnMut(u64, u8) -> bool) {
+        let devices = &mut self.devices;
+        self.active_notes
+            .release_clip_where(release, |off| send_note_event_to(devices, &off, 0));
+    }
+
     /// Send a note event to every top-level device with a frame offset, like scheduled notes.
     ///
     /// Audio effects ignore notes (the trait default); containers forward to their children.

@@ -9,6 +9,8 @@ use std::time::Instant;
 
 pub use timeline::frames_before_tick;
 
+pub(crate) use clip_midi::release_orphaned_clip_notes;
+
 use clip_audio::{render_audio_clips, BufferSpan};
 use clip_midi::dispatch_clip_midi;
 use live_midi::schedule_live_midi_events;

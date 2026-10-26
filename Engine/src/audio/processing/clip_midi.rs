@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::audio::channel::Channel;
 use crate::audio::clip::{Clip, ClipInstance};
 use crate::audio::render_scratch::ClipNoteEvent;
+use crate::audio::state::EngineState;
 use crate::audio::track::Track;
 use crate::audio::types::*;
 
@@ -75,6 +76,56 @@ pub(super) fn dispatch_clip_midi(
             }
         }
     }
+}
+
+/// Command thread, after a command that changes what the clips play (a note, clip, instance
+/// or track route edited or removed): release every sounding clip note the playhead no
+/// longer plays on its channel, or now plays on another key. Its own note-off would never
+/// come, so it would hang until stop, seek or a loop wrap (#186).
+pub(crate) fn release_orphaned_clip_notes(state: &mut EngineState) {
+    if !state.get_is_playing() {
+        return;
+    }
+    let tick = state.get_current_tick();
+    let (tracks, clips) = (&state.tracks, &state.clips);
+    for (&channel_id, channel) in state.channels.iter_mut() {
+        channel.release_clip_notes_where(|clip_note_id, key| {
+            !clip_note_plays_at(tracks, clips, channel_id, clip_note_id, key, tick)
+        });
+    }
+}
+
+/// True when an unmuted instance on a track routed to `channel_id` holds clip note
+/// `clip_note_id` on `key` at `tick`.
+fn clip_note_plays_at(
+    tracks: &HashMap<TrackId, Track>,
+    clips: &HashMap<ClipId, Clip>,
+    channel_id: ChannelId,
+    clip_note_id: NoteId,
+    key: MidiNote,
+    tick: Tick,
+) -> bool {
+    tracks
+        .values()
+        .filter(|track| track.channel_id == channel_id)
+        .flat_map(|track| &track.clip_instances)
+        .filter(|instance| {
+            !instance.muted && tick >= instance.start_tick && tick < instance.end_tick()
+        })
+        .any(|instance| {
+            let Some(clip) = clips.get(&instance.clip_id) else {
+                return false;
+            };
+            let content_pos =
+                instance.wrap_content_tick(instance.clip_offset + tick - instance.start_tick);
+            clip.midi_notes.iter().any(|note| {
+                note.id == clip_note_id
+                    && (note.note as i16 + instance.transpose as i16).clamp(0, 127) as MidiNote
+                        == key
+                    && note.start_tick <= content_pos
+                    && content_pos < note.start_tick + note.duration_ticks
+            })
+        })
 }
 
 /// Push the note-ons and note-offs that one clip instance produces at `current_tick`.
@@ -443,6 +494,124 @@ mod tests {
         assert_eq!(offs[0].0.note_id(), ons[0].0.note_id());
         assert_eq!(offs[1].0.note_id(), ons[1].0.note_id());
         assert!(offs[0].1 < offs[1].1);
+    }
+
+    /// Play a clip holding one long note (id 1, key 60) until it sounds, apply `edit` through
+    /// `process_command`, and return the probe's events from after the edit.
+    fn edit_while_note_sounds(edit: impl FnOnce(&mut EngineState)) -> Vec<NoteEvent> {
+        const BLOCK: usize = 64;
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut state = EngineState::default();
+        let mut channel = Channel::new(2, "Probe".to_string(), BLOCK, 48_000.0);
+        channel.devices.push(Box::new(NoteProbe {
+            events: events.clone(),
+        }));
+        state.channels.insert(2, channel);
+
+        let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
+        clip.midi_notes.push(ClipNote {
+            id: 1,
+            note: 60,
+            velocity: 0.8,
+            release: 0.3,
+            start_tick: 0,
+            duration_ticks: 3840,
+        });
+        clip.content_length_ticks = 3840;
+        state.clips.insert("c".to_string(), clip);
+        let mut track = Track::new(1, 2);
+        track
+            .clip_instances
+            .push(ClipInstance::new("i".to_string(), "c".to_string(), 0, 3840));
+        track.clip_instances.push(ClipInstance::new(
+            "j".to_string(),
+            "c".to_string(),
+            7680,
+            3840,
+        ));
+        state.tracks.insert(1, track);
+
+        state.set_is_playing(true);
+        state.request_playhead_midi_dispatch();
+        while state.get_current_tick() < 960 {
+            process_audio(&mut state, BLOCK, 48_000.0, Instant::now());
+        }
+        let before: Vec<_> = events.lock().unwrap().drain(..).collect();
+        assert!(
+            matches!(before.as_slice(), [(NoteEvent::On { key: 60, .. }, _)]),
+            "{before:?}"
+        );
+
+        edit(&mut state);
+        // Play on to just before the untouched second instance.
+        while state.get_current_tick() < 7000 {
+            process_audio(&mut state, BLOCK, 48_000.0, Instant::now());
+        }
+        let after = events.lock().unwrap().drain(..).map(|(e, _)| e).collect();
+        after
+    }
+
+    fn run(state: &mut EngineState, cmd: crate::audio::commands::AudioCommand) {
+        let mut effects = crate::audio::commands::CommandEffects::default();
+        crate::audio::commands::process_command(state, cmd, 64, &mut effects);
+    }
+
+    #[test]
+    fn removing_the_instance_of_a_sounding_note_releases_it() {
+        let after = edit_while_note_sounds(|state| {
+            run(
+                state,
+                crate::audio::commands::AudioCommand::RemoveClipInstance {
+                    track_id: 1,
+                    instance_id: "i".to_string(),
+                },
+            )
+        });
+        assert!(
+            matches!(after.as_slice(), [NoteEvent::Off { key: 60, release, .. }] if *release == 0.3),
+            "{after:?}"
+        );
+    }
+
+    #[test]
+    fn shortening_a_sounding_note_behind_the_playhead_releases_it() {
+        let after = edit_while_note_sounds(|state| {
+            run(
+                state,
+                crate::audio::commands::AudioCommand::UpdateClipNote {
+                    clip_id: "c".to_string(),
+                    note_id: 1,
+                    note: 60,
+                    start_tick: 0,
+                    duration_ticks: 480,
+                    velocity: 0.8,
+                    release: 0.3,
+                },
+            )
+        });
+        assert!(
+            matches!(after.as_slice(), [NoteEvent::Off { key: 60, .. }]),
+            "{after:?}"
+        );
+    }
+
+    #[test]
+    fn editing_another_instance_keeps_the_sounding_note_until_its_end() {
+        let after = edit_while_note_sounds(|state| {
+            run(
+                state,
+                crate::audio::commands::AudioCommand::RemoveClipInstance {
+                    track_id: 1,
+                    instance_id: "j".to_string(),
+                },
+            );
+            assert!(state.channels[&2].active_notes.len() == 1);
+        });
+        // One note-off, at the note's own end (tick 3840), not at the edit.
+        assert!(
+            matches!(after.as_slice(), [NoteEvent::Off { key: 60, .. }]),
+            "{after:?}"
+        );
     }
 
     #[test]

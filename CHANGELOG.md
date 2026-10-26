@@ -30,6 +30,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 - Automation at a loop's start now applies when the loop wraps, not one audio buffer later: notes at the loop start no longer play with the loop end's value (for example a PolySynth cutoff ramp). PolySynth and CLAP plugins switch at the exact sample; other devices switch at the start of the buffer that contains the wrap.
 - The mixer's sends panel keeps each page of send knobs centered between its page buttons, the last page included, and paging back lands on the previous page. A page button now hides when there is nothing more in its direction, and the knobs and buttons appear and disappear without fading.
+- Notes no longer get stuck playing when you edit clips during playback. Merging clips, deleting or moving a clip, deleting, shortening or transposing a note, muting a clip, changing its loop, or rerouting its track now releases any note the playhead no longer plays (#186).
 
 ## [0.2.0] - 2026-10-23
 

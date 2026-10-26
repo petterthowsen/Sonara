@@ -772,9 +772,30 @@ pub fn process_command(
     buffer_size: usize,
     effects: &mut CommandEffects,
 ) {
+    let changes_clip_notes = changes_clip_notes(&cmd);
     if let Some(status) = dispatch(state, cmd, buffer_size, effects) {
         effects.statuses.push(status);
     }
+    if changes_clip_notes {
+        crate::audio::processing::release_orphaned_clip_notes(state);
+    }
+}
+
+/// True for commands that can end a clip note the playhead is holding, so its own note-off
+/// never comes (#186).
+fn changes_clip_notes(cmd: &AudioCommand) -> bool {
+    matches!(
+        cmd,
+        AudioCommand::RemoveClip { .. }
+            | AudioCommand::RemoveNoteFromClip { .. }
+            | AudioCommand::UpdateClipNote { .. }
+            | AudioCommand::RemoveClipInstance { .. }
+            | AudioCommand::UpdateClipInstancePosition { .. }
+            | AudioCommand::UpdateClipInstanceTranspose { .. }
+            | AudioCommand::UpdateClipInstanceMute { .. }
+            | AudioCommand::UpdateClipInstanceLoop { .. }
+            | AudioCommand::SetTrackRoute { .. }
+    )
 }
 
 /// The dispatcher: each arm calls the function for that command in the domain module

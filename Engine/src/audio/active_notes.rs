@@ -159,11 +159,25 @@ impl ActiveNotes {
 
     /// End every clip-sourced note with its stored release, oldest first. Live notes keep
     /// sounding, so keys held on a controller survive stop and seek.
-    pub fn release_clip(&mut self, mut out: impl FnMut(NoteEvent)) {
+    pub fn release_clip(&mut self, out: impl FnMut(NoteEvent)) {
+        self.release_clip_where(|_, _| true, out);
+    }
+
+    /// End the clip-sourced notes `release(clip_note_id, key)` picks, with their stored
+    /// release, oldest first. `key` is the key the note started on.
+    pub fn release_clip_where(
+        &mut self,
+        mut release: impl FnMut(u64, u8) -> bool,
+        mut out: impl FnMut(NoteEvent),
+    ) {
         let mut kept = 0;
         for i in 0..self.len {
             let entry = self.entries[i];
-            if matches!(entry.source, NoteSource::Clip { .. }) {
+            let ends = match entry.source {
+                NoteSource::Clip { clip_note_id } => release(clip_note_id, entry.key),
+                NoteSource::Live { .. } => false,
+            };
+            if ends {
                 out(NoteEvent::Off {
                     note_id: entry.note_id,
                     key: entry.key,
@@ -335,5 +349,35 @@ mod tests {
                 release: 0.4
             })
         );
+    }
+
+    #[test]
+    fn active_notes_release_clip_where_ends_only_picked_clip_notes() {
+        let mut notes = ActiveNotes::new();
+        let (_, _kept) = notes.note_on(clip(1), 60, 1.0, 0.9);
+        let (_, _held) = notes.note_on(live(0), 64, 1.0, 0.5);
+        let (_, gone) = notes.note_on(clip(2), 64, 1.0, 0.2);
+
+        let mut asked = Vec::new();
+        let mut released = Vec::new();
+        notes.release_clip_where(
+            |id, key| {
+                asked.push((id, key));
+                id == 2
+            },
+            |event| released.push(event),
+        );
+        // Live notes aren't offered, and only clip note 2 ends.
+        assert_eq!(asked, vec![(1, 60), (2, 64)]);
+        assert_eq!(
+            released,
+            vec![NoteEvent::Off {
+                note_id: gone.note_id(),
+                key: 64,
+                release: 0.2
+            }]
+        );
+        assert_eq!(notes.len(), 2);
+        assert!(notes.note_off(clip(1), 60, None).is_some());
     }
 }
