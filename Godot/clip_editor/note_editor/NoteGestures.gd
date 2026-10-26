@@ -73,6 +73,8 @@ func begin_drag(ref: NoteRef, pos: Vector2, open_edit := true, ctrl_held := fals
 	if not editor.selection_model.has(ref.data):
 		editor.selection_manager.select_ref(ref)
 	editor.note_touched.emit(ref.data)
+	if not editor.layout.is_drum():
+		editor.last_note_length = ref.data.duration_ticks
 
 	kind = Kind.DRAG
 	grabbed = ref
@@ -390,6 +392,7 @@ func begin_resize(ref: NoteRef, pos: Vector2) -> bool:
 	if not editor.selection_model.has(ref.data):
 		editor.selection_manager.select_ref(ref)
 	editor.note_touched.emit(ref.data)
+	editor.last_note_length = ref.data.duration_ticks
 
 	kind = Kind.RESIZE
 	grabbed = ref
