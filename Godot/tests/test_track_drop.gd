@@ -1,7 +1,8 @@
 # test_track_drop.gd
 # Headless tests for arranger track drag targets (TrackDropTarget): the middle of a folder header
 # nests at the end, the gap above a child inserts into the folder with an indented line, the left
-# gutter un-nests, dropping in place is a no-op, and nothing moves until commit.
+# gutter un-nests, the gutter never pulls a drop out of the gap under the pointer, dropping in place
+# is a no-op, and nothing moves until commit.
 # Run: godot --headless --path Godot -s tests/test_track_drop.gd -- --test
 #
 # TrackList and the project reference autoloads, so they are loaded with load() instead of named.
@@ -25,6 +26,7 @@ func run_tests() -> void:
 	await _test_folder_header_nests()
 	await _test_insert_into_folder_with_indented_line()
 	await _test_left_gutter_unnests()
+	await _test_gutter_keeps_gap()
 	await _test_drop_in_place_is_noop()
 
 
@@ -111,6 +113,25 @@ func _test_left_gutter_unnests() -> void:
 	_assert(absf(target.indicator_rect.position.x - _list.get_global_rect().position.x) <= 0.5, "root line not indented")
 	_assert(target.commit(), "commit un-nests")
 	_assert(t.a.parent_track_id == -1 and _child_names(t.folder) == ["B"], "A left the folder")
+
+
+## #185: the gutter beside a folder's first child (or between two children) can't un-nest there,
+## so the line stays in that gap instead of jumping before or after the whole folder.
+func _test_gutter_keeps_gap() -> void:
+	var t := await _setup()
+	var a_rect: Rect2 = _item(t.a).get_global_rect()
+	var x: float = _list.get_global_rect().position.x + 2
+	var top: Object = _drop_target.resolve(_list, _drag(t.c), Vector2(x, a_rect.position.y + 4))
+	_assert(top.parent_id == t.folder.id and top.after_sibling == null, "gutter above A: first in folder")
+	_assert(absf(top.indicator_rect.get_center().y - a_rect.position.y) <= 2.0, "line at A's top edge")
+	var bottom: Object = _drop_target.resolve(_list, _drag(t.c), Vector2(x, a_rect.end.y - 4))
+	_assert(bottom.parent_id == t.folder.id and bottom.after_sibling == t.a, "gutter below A: after A in folder")
+	_assert(absf(bottom.indicator_rect.get_center().y - a_rect.end.y) <= 2.0, "line at A's bottom edge")
+	var header: Rect2 = _item(t.folder).get_global_rect()
+	var under: Object = _drop_target.resolve(_list, _drag(t.c), Vector2(x, header.end.y - 2))
+	_assert(under.parent_id == t.folder.id and under.after_sibling == null, "bottom of folder header: first in folder")
+	_assert(under.commit(), "commit inserts")
+	_assert(_child_names(t.folder) == ["C", "A", "B"], "C first in folder: %s" % str(_child_names(t.folder)))
 
 
 func _test_drop_in_place_is_noop() -> void:

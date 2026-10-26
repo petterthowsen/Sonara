@@ -108,21 +108,18 @@ func _resolve(mouse: Vector2) -> void:
 	if remaining.is_empty():
 		return
 
-	var hovered: TrackItem = null
-	var insert_before := true
-	for item in remaining:
-		var rect := item.get_global_rect()
+	var index := remaining.size() - 1
+	var insert_before := false
+	for i in remaining.size():
+		var rect := remaining[i].get_global_rect()
 		if mouse.y < rect.position.y + rect.size.y * 0.5:
-			hovered = item
+			index = i
 			insert_before = true
 			break
 		if mouse.y < rect.end.y:
-			hovered = item
-			insert_before = false
+			index = i
 			break
-	if hovered == null:
-		hovered = remaining.back()
-		insert_before = false
+	var hovered := remaining[index]
 
 	# Middle of a folder/group header: append inside it.
 	var hovered_rect := hovered.get_global_rect()
@@ -133,21 +130,32 @@ func _resolve(mouse: Vector2) -> void:
 				indicator_rect = hovered_rect
 				return
 
+	# Resolve against the gap between the rows above and below, never shallower than the row
+	# below: anything shallower is a slot elsewhere in the list, so the line would jump there.
 	var local_x := mouse.x - _list.get_global_rect().position.x
 	var placement: Dictionary
 	var skip := _dragged_root_ids()
+	var above: Track = null
+	var below: Track = null
+	var desired := 0
 	if insert_before:
-		placement = _placement_before(hovered.track, _desired_level_before(hovered.track, local_x), skip)
+		above = remaining[index - 1].track if index > 0 else null
+		below = hovered.track
+		desired = below.get_nesting_level(_project)
 	else:
+		above = hovered.track
+		below = remaining[index + 1].track if index + 1 < remaining.size() else null
 		var nest_into_parent := (
 			hovered.track.can_contain_tracks()
 			and mouse.x >= hovered_rect.get_center().x
 		)
-		placement = _placement_after(
-			hovered.track,
-			_desired_level_after(hovered.track, local_x, nest_into_parent),
-			skip
-		)
+		desired = _desired_level_after(above, local_x, nest_into_parent)
+	if below:
+		desired = maxi(desired, below.get_nesting_level(_project))
+	if above:
+		placement = _placement_after(above, desired, skip)
+	else:
+		placement = _placement_before(below, desired, skip)
 	if _try_set(Kind.INSERT, int(placement["parent_id"]), placement.get("after_sibling")):
 		indicator_rect = _insert_line_rect()
 
@@ -227,11 +235,6 @@ func _desired_level_after(item: Track, local_x: float, nest_into_parent: bool) -
 	if nest_into_parent and item.can_contain_tracks():
 		return item_level + 1
 	return _desired_level_from_x(item_level, local_x)
-
-
-## Nesting level when inserting before `item`: same as `item`, or one level shallower in the left gutter.
-func _desired_level_before(item: Track, local_x: float) -> int:
-	return _desired_level_from_x(item.get_nesting_level(_project), local_x)
 
 
 ## Keep `item_level` unless the pointer is in the left gutter, which pulls out one folder level.
