@@ -118,6 +118,9 @@ func _notification(what: int) -> void:
 
 
 signal request_show_context_menu
+## The sends divider was dragged well past the sends' minimum height: the mixer turns the
+## sends off.
+signal sends_close_requested
 
 # Data binding
 var channel: Channel = null
@@ -246,11 +249,15 @@ func _ready():
 		_scene_vsplit_offset = main_vsplit.split_offset
 		main_vsplit.dragged.connect(_on_vsplit_dragged)
 		main_vsplit.resized.connect(_apply_shared_vsplit_offset)
+		main_vsplit.drag_started.connect(_on_vsplit_drag_started)
 		main_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
+		SplitOverdrag.watch(main_vsplit, _sends_close_threshold, _on_vsplit_overdragged.bind(main_vsplit))
 	if side_vsplit:
 		side_vsplit.dragged.connect(_on_vsplit_dragged)
 		side_vsplit.resized.connect(_apply_shared_vsplit_offset)
+		side_vsplit.drag_started.connect(_on_vsplit_drag_started)
 		side_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
+		SplitOverdrag.watch(side_vsplit, _sends_close_threshold, _on_vsplit_overdragged.bind(side_vsplit))
 	_apply_shared_vsplit_offset()
 	# SendsPanel isn't a @tool script, so in the editor it is only a placeholder instance.
 	if sends_panel and not Engine.is_editor_hint():
@@ -260,6 +267,8 @@ func _ready():
 		sends_panel.minimum_size_changed.connect(_queue_clamp_vsplit_to_sends)
 		sends_panel.sends_rebuilt.connect(_queue_vsplit_revalidate)
 		sends_panel.scroll_container.get_v_scroll_bar().value_changed.connect(_on_sends_scrolled)
+		sends_panel.scroll_container.page_scroll_started.connect(_on_sends_page_scroll_started)
+		sends_panel.scroll_container.page_scroll_finished.connect(_on_sends_page_scroll_finished)
 		# Adopt the shared position once the sends have content to scroll.
 		sends_panel.scroll_container.get_v_scroll_bar().changed.connect(_apply_shared_sends_scroll)
 
@@ -715,6 +724,32 @@ func _queue_vsplit_revalidate() -> void:
 			return
 
 
+## Dragging the sends divider this far past the sends' minimum height turns the sends off.
+const SENDS_DRAG_CLOSE_THRESHOLD := 48.0
+## The shared sends span when the current divider drag started, restored when the drag closes
+## the sends, so they come back at that height.
+static var _span_before_drag := -1
+
+
+func _on_vsplit_drag_started() -> void:
+	_span_before_drag = _shared_sends_span
+
+
+func _sends_close_threshold() -> float:
+	return SENDS_DRAG_CLOSE_THRESHOLD
+
+
+## The divider was let go well past the sends' minimum height: turn the sends off, with the
+## divider back where the drag started. Runs before drag_ended, whose row snap then finds the
+## sends hidden and leaves the divider alone.
+func _on_vsplit_overdragged(vsplit: VSplitContainer) -> void:
+	if sends_panel == null or not sends_panel.is_visible_in_tree() or sends_panel.get_parent() != vsplit:
+		return
+	_shared_sends_span = _span_before_drag
+	get_tree().call_group("mixer_channel", "_apply_shared_vsplit_offset")
+	sends_close_requested.emit()
+
+
 ## Propagate a manual VSplit drag (MainPane or SidePane) to every mixer strip.
 func _on_vsplit_dragged(offset: int) -> void:
 	if _vsplit_snap_tween and _vsplit_snap_tween.is_valid():
@@ -860,6 +895,22 @@ func _on_sends_scrolled(value: float) -> void:
 		return
 	_shared_sends_scroll = int(value)
 	get_tree().call_group("mixer_channel", "_apply_shared_sends_scroll")
+
+
+## This strip's sends started paging. The others follow its scroll step by step, so have them
+## show both pages too, or their knobs only pop in once the scroll lands.
+func _on_sends_page_scroll_started(vertical: bool, from: float, target: float) -> void:
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		var strip := node as MixerChannel
+		if strip and strip != self and strip.sends_panel and strip.sends_panel.is_node_ready():
+			strip.sends_panel.scroll_container.follow_page_scroll(vertical, from, target)
+
+
+func _on_sends_page_scroll_finished() -> void:
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		var strip := node as MixerChannel
+		if strip and strip != self and strip.sends_panel and strip.sends_panel.is_node_ready():
+			strip.sends_panel.scroll_container.end_follow_page_scroll()
 
 
 ## Scroll this strip's sends to the shared position (clamped by the scroll bar).

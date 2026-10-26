@@ -20,6 +20,7 @@ func run_tests() -> void:
 	await _test_over_drag_is_clamped(10, "below the device list minimum")
 	await _test_over_drag_is_clamped(-5000, "past the top")
 	await _test_snap_never_grows_past_need()
+	await _test_drag_down_closes_sends()
 	_mixer.free()
 
 
@@ -62,3 +63,59 @@ func _test_snap_never_grows_past_need() -> void:
 func _frames(n: int) -> void:
 	for i in n:
 		await process_frame
+
+
+## Releasing the divider a little past the sends' minimum keeps them; well past turns them off,
+## and the divider goes back to where the drag started. Real mouse drags: Godot clamps the
+## offset while dragging, so only the pointer shows the over-drag.
+func _test_drag_down_closes_sends() -> void:
+	var vsplit: SplitContainer = _strip.main_vsplit
+	# Down to the sends' minimum first, so any further drag is past it.
+	await _drag_divider(vsplit, 3000)
+	_assert(not _strip.sends_panel.visible, "a long drag down turns the sends off")
+	_assert(not _mixer.sends_toggle.button_pressed, "the Sends toggle goes off with them")
+	_mixer._on_sends_toggled(true)
+	await _frames(4)
+	_assert(_strip.sends_panel.visible, "the sends come back on")
+	var span_before: int = _strip._shared_sends_span
+	var sends_min: float = _strip.sends_panel.get_combined_minimum_size().y
+	var room: float = _strip.sends_panel.size.y - sends_min
+	await _drag_divider(vsplit, room + 20)
+	await _frames(4)
+	_assert(_strip.sends_panel.visible, "a short drag past the minimum keeps the sends")
+	await _frames(4)
+	span_before = _strip._shared_sends_span
+	await _drag_divider(vsplit, 200)
+	await _frames(2)
+	_assert(not _strip.sends_panel.visible, "dragging well past the minimum turns the sends off")
+	_assert(_strip._shared_sends_span == span_before, "the divider goes back to where the drag started (%d vs %d)" % [_strip._shared_sends_span, span_before])
+	_mixer._on_sends_toggled(true)
+	await _frames(2)
+
+
+## Drag `split`'s divider with real mouse events: grab its middle, move `dy` px, let go.
+func _drag_divider(split: SplitContainer, dy: float) -> void:
+	var dragger: Control = null
+	for child in split.get_children(true):
+		if child.get_class() == "SplitContainerDragger":
+			dragger = child
+	var at := dragger.get_global_rect().get_center()
+	await _mouse(at, true)
+	for step in 4:
+		await _mouse(at + Vector2(0, dy * (step + 1) / 4.0))
+	await _mouse(at + Vector2(0, dy), false)
+
+
+func _mouse(at: Vector2, pressed: Variant = null) -> void:
+	var ev: InputEventMouse
+	if pressed == null:
+		ev = InputEventMouseMotion.new()
+		ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	else:
+		ev = InputEventMouseButton.new()
+		ev.button_index = MOUSE_BUTTON_LEFT
+		ev.pressed = pressed
+	ev.position = at
+	ev.global_position = at
+	root.push_input(ev)
+	await process_frame

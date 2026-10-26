@@ -14,14 +14,23 @@
 ##
 ## With `reserve_button_space` the buttons get their own strips instead of covering the content.
 ## The space is only taken while the content overflows, so content that fits uses the whole area.
-## A reserved button that can't scroll further stays in place, dimmed and disabled.
+## A reserved button that can't scroll further hides, but keeps its strip.
+##
+## While an axis overflows, the view is trimmed to a whole number of item lines and the leftover
+## is split between both ends, so every page (the first and last included) sits centered.
 ##
 ## With `fade_hidden_items`, items not wholly inside the view fade to `hidden_item_alpha`, so
-## the view never shows a half-cut item.
+## the view never shows a half-cut item. Fades and the hover buttons switch instantly.
 ##
 ## With `show_buttons_on_hover`, the buttons fade in only while the mouse is over the container.
 ## Reserved space stays reserved, so the content never shifts when they appear.
 class_name PagedContainer extends ScrollContainer
+
+## A page scroll animation started, from `from` toward `target` along an axis. Containers that
+## mirror this one's scroll can `follow_page_scroll` it, so they show both pages while it runs.
+signal page_scroll_started(vertical: bool, from: float, target: float)
+## The page scroll animation ended (finished, or stopped).
+signal page_scroll_finished
 
 const ICON_UP: Texture2D = preload("res://assets/icons/chevron-up.svg")
 const ICON_DOWN: Texture2D = preload("res://assets/icons/chevron-down.svg")
@@ -51,15 +60,11 @@ const ICON_RIGHT: Texture2D = preload("res://assets/icons/chevron-right.svg")
 		_update_item_fades()
 ## Opacity of items not wholly in view.
 @export_range(0.0, 1.0) var hidden_item_alpha := 0.0
-## Seconds an item takes to fade in or out.
-@export var fade_duration := 0.12
 ## Show the page buttons only while the mouse is over the container.
 @export var show_buttons_on_hover := false:
 	set(value):
 		show_buttons_on_hover = value
-		_update_hover(false)
-## Seconds the buttons take to fade in or out with `show_buttons_on_hover`.
-@export var hover_fade_duration := 0.1
+		_update_hover()
 @export var button_color := Color(0.1, 0.1, 0.1, 0.8)
 @export var button_hover_color := Color(0.25, 0.25, 0.25, 0.9)
 
@@ -72,10 +77,13 @@ var _tween: Tween
 ## from there instead of re-targeting the same item edge.
 var _tween_target := 0.0
 var _tween_vertical := true
+## Where the running scroll animation started (or the page an interrupted one was headed for).
+var _tween_from := 0.0
+## True while mirroring another container's page scroll (see `follow_page_scroll`).
+var _following := false
 ## Holds the buttons. ScrollContainer lays out every Control child (internal ones too) as
 ## content, so the buttons live under a Node2D, which it leaves alone.
 var _button_layer: Node2D
-var _hover_tween: Tween
 var _refresh_queued := false
 ## Whether the mouse was over the container at the last motion event.
 var _hovered := false
@@ -100,7 +108,7 @@ func _ready() -> void:
 	resized.connect(_update_buttons)
 	sort_children.connect(_update_buttons)
 	gui_input.connect(_on_gui_input)
-	_update_hover(false)
+	_update_hover()
 	for bar in [get_v_scroll_bar(), get_h_scroll_bar()]:
 		bar.changed.connect(_update_buttons)
 		bar.value_changed.connect(_update_buttons.unbind(1))
@@ -139,6 +147,25 @@ func refresh() -> void:
 ## Stop a running scroll animation, e.g. before setting the scroll position from outside.
 func stop_animation() -> void:
 	_kill_tween()
+
+
+## Another container that this one mirrors started a page scroll from `from` to `target`, and
+## this one's scroll will be set to follow it: show both pages meanwhile, as its own page
+## scroll would, instead of only the items wholly in view at each step.
+func follow_page_scroll(vertical: bool, from: float, target: float) -> void:
+	_following = true
+	_tween_vertical = vertical
+	_tween_from = from
+	_tween_target = target
+	_update_item_fades()
+
+
+## The mirrored page scroll ended: back to showing only the items in view.
+func end_follow_page_scroll() -> void:
+	if not _following:
+		return
+	_following = false
+	_update_item_fades()
 
 
 ## Scroll one page toward the end (`direction` 1) or start (-1) of an axis, animated. With
@@ -206,9 +233,7 @@ func _make_button(icon: Texture2D, vertical: bool, direction: int) -> Button:
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", hover)
-	button.add_theme_stylebox_override("disabled", normal)
 	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.2))
 	button.pressed.connect(scroll_step.bind(vertical, direction))
 	button.visible = false
 	_button_layer.add_child(button)
@@ -229,22 +254,12 @@ func _input(event: InputEvent) -> void:
 		_update_hover()
 
 
-## With `show_buttons_on_hover`, fade the buttons in while the mouse is over the container
-## and out otherwise. Without `animate` (switching the option) the buttons jump there.
-func _update_hover(animate := true) -> void:
+## With `show_buttons_on_hover`, show the buttons only while the mouse is over the container.
+func _update_hover() -> void:
 	set_process_input(show_buttons_on_hover)
 	if _button_layer == null:
 		return
-	var target := 1.0
-	if show_buttons_on_hover:
-		target = 1.0 if _hovered else 0.0
-	if _hover_tween and _hover_tween.is_valid():
-		_hover_tween.kill()
-	if not animate or not is_inside_tree() or is_equal_approx(_button_layer.modulate.a, target):
-		_button_layer.modulate.a = target
-		return
-	_hover_tween = create_tween()
-	_hover_tween.tween_property(_button_layer, "modulate:a", target, hover_fade_duration)
+	_button_layer.modulate.a = 1.0 if _hovered or not show_buttons_on_hover else 0.0
 
 
 ## Scrollbars are replaced by the buttons. Disabled axes stay disabled.
@@ -256,7 +271,6 @@ func _hide_scrollbars() -> void:
 
 
 ## Show each button only while its direction has more to reveal, and keep it on its edge.
-## Reserved buttons stay while the axis overflows, disabled at the end they can't pass.
 func _update_buttons() -> void:
 	if _button_up == null:
 		return
@@ -285,12 +299,7 @@ func _update_buttons() -> void:
 
 
 func _set_button_state(button: Button, overflowing: bool, can_scroll: bool) -> void:
-	if reserve_button_space:
-		button.visible = overflowing
-		button.disabled = not can_scroll
-	else:
-		button.visible = overflowing and can_scroll
-		button.disabled = false
+	button.visible = overflowing and can_scroll
 
 
 ## True when the axis is enabled and the content is longer than the area (without reserve).
@@ -315,21 +324,48 @@ func _base_margin(vertical: bool) -> float:
 	return _base_panel.get_margin(SIDE_LEFT) + _base_panel.get_margin(SIDE_RIGHT)
 
 
-## Grow the panel margins by the button strips on overflowing axes. Only writes on change,
-## since a margin change re-sorts the container and lands back here.
+## Grow the panel margins by the button strips on overflowing axes, plus half the centering
+## slack on each end. Only writes on change, since a margin change re-sorts the container and
+## lands back here.
 func _update_reserve(v_over: bool, h_over: bool) -> void:
 	if _reserve_panel == null:
 		return
-	var v_extra := button_thickness if reserve_button_space and v_over else 0.0
-	var h_extra := button_thickness if reserve_button_space and h_over else 0.0
+	var v_extra := _end_margins(true) if v_over else Vector2.ZERO
+	var h_extra := _end_margins(false) if h_over else Vector2.ZERO
 	var margins := {
-		SIDE_TOP: v_extra, SIDE_BOTTOM: v_extra, SIDE_LEFT: h_extra, SIDE_RIGHT: h_extra,
+		SIDE_TOP: v_extra.x, SIDE_BOTTOM: v_extra.y, SIDE_LEFT: h_extra.x, SIDE_RIGHT: h_extra.y,
 	}
 	for side: Side in margins:
 		var base := _base_panel.get_margin(side) if _base_panel else 0.0
 		var want: float = base + margins[side]
 		if not is_equal_approx(_reserve_panel.get_content_margin(side), want):
 			_reserve_panel.set_content_margin(side, want)
+
+
+## Extra margin at the start (x) and end (y) of an overflowing axis: the reserved strip, plus
+## half each of what is left after the whole lines that fit, so the shown lines sit centered.
+## The end takes the odd (or fractional) pixel, so the page is exactly the lines: a page a pixel
+## longer would leave the scroll end a pixel past the last line start, and paging there would
+## crawl by that pixel. Measured from the outer size, not the current page, so it doesn't feed
+## back on itself.
+func _end_margins(vertical: bool) -> Vector2:
+	var strip := button_thickness if reserve_button_space else 0.0
+	if not snap_to_items:
+		return Vector2(strip, strip)
+	var lines := _line_edges(vertical)
+	if lines.is_empty():
+		return Vector2(strip, strip)
+	var view := (size.y if vertical else size.x) - _base_margin(vertical) - 2.0 * strip
+	var span := 0.0
+	for line in lines:
+		if line.y - lines[0].x > view + 0.5:
+			break
+		span = line.y - lines[0].x
+	# A line longer than the view fits none whole; leave the view as it is.
+	if span <= 0.0:
+		return Vector2(strip, strip)
+	var start := floorf((view - span) / 2.0)
+	return Vector2(strip + start, strip + view - span - start)
 
 
 func _max_scroll(vertical: bool) -> float:
@@ -370,12 +406,16 @@ func _step_target(vertical: bool, direction: int) -> float:
 				target = minf(line.x, max_scroll)
 				break
 	else:
-		# A whole page back: the earliest line start that still keeps the current first line in
-		# view, so the old first line ends up last. Without one (a line longer than the view),
-		# the previous line start.
+		# A whole page back, mirroring the step forward: the line just before the current first
+		# line ends up last, at the earliest line start that keeps it wholly in view. Without one
+		# (a line longer than the view), the previous line start.
+		var previous_end := -INF
+		for line: Vector2 in lines:
+			if line.x < current - 0.5:
+				previous_end = line.y
 		var found := false
 		for line: Vector2 in lines:
-			if line.x >= current - page - 0.5 and line.x < current - 0.5:
+			if line.x >= previous_end - page - 0.5 and line.x < current - 0.5:
 				target = line.x
 				found = true
 				break
@@ -428,39 +468,65 @@ func _item_rect(item: Control, content: Control) -> Rect2:
 	return Rect2(item.global_position - content.global_position, item.size)
 
 
-## Fade each item toward full opacity when wholly inside the view, else toward
-## `hidden_item_alpha`. An item too large for the view along an enabled axis can never be
-## wholly inside, so it stays opaque instead of vanishing. Only starts a tween when an
-## item's target changes.
+## Set each item to full opacity when wholly inside the view, else to `hidden_item_alpha`.
+## While a page scroll animates, the view is both the page it left and the page it heads for,
+## so both pages stay visible as they slide. An item too large for the view along an enabled
+## axis can never be wholly inside, so it stays opaque instead of vanishing.
 func _update_item_fades() -> void:
 	var content := _content()
 	if content == null:
 		return
 	var view := Rect2(Vector2(scroll_horizontal, scroll_vertical),
 			Vector2(_bar(false).page, _bar(true).page))
+	var views: Array[Rect2] = [view]
+	if _page_scrolling():
+		views = [_scrolled_view(view, _tween_from), _scrolled_view(view, _tween_target)]
 	for item in _items():
 		var target := 1.0
 		if fade_hidden_items:
 			var r := _item_rect(item, content)
-			var inside := true
+			var inside := false
+			for v in views:
+				inside = inside or _wholly_inside(r, v)
 			var can_fit := true
 			if vertical_scroll_mode != SCROLL_MODE_DISABLED:
-				inside = r.position.y >= view.position.y - 0.5 and r.end.y <= view.end.y + 0.5
 				can_fit = item.size.y <= view.size.y + 0.5
 			if horizontal_scroll_mode != SCROLL_MODE_DISABLED:
-				inside = inside and r.position.x >= view.position.x - 0.5 and r.end.x <= view.end.x + 0.5
 				can_fit = can_fit and item.size.x <= view.size.x + 0.5
 			target = 1.0 if inside or not can_fit else hidden_item_alpha
-		if is_equal_approx(float(item.get_meta(&"_fade_target", 1.0)), target):
-			continue
-		item.set_meta(&"_fade_target", target)
-		if item.has_meta(&"_fade_tween"):
-			var old: Tween = item.get_meta(&"_fade_tween")
-			if old and old.is_valid():
-				old.kill()
-		var tween := item.create_tween()
-		tween.tween_property(item, "modulate:a", target, fade_duration)
-		item.set_meta(&"_fade_tween", tween)
+		item.modulate.a = target
+
+
+## Whether a page scroll is under way (its own, or one it follows) and the scroll is still short
+## of the target. Checked against the scroll itself, so a tween that stopped without finishing (or the
+## scroll moved from outside) can't leave both pages showing.
+func _page_scrolling() -> bool:
+	if not _following and (_tween == null or not _tween.is_valid()):
+		return false
+	var current := _current(_tween_vertical)
+	var low := minf(_tween_from, _tween_target) - 0.5
+	var high := maxf(_tween_from, _tween_target) + 0.5
+	return current > low and current < high and absf(current - _tween_target) >= 0.5
+
+
+## `view` moved to `offset` along the animating axis.
+func _scrolled_view(view: Rect2, offset: float) -> Rect2:
+	if _tween_vertical:
+		view.position.y = offset
+	else:
+		view.position.x = offset
+	return view
+
+
+## Whether `r` lies wholly inside `view` along the enabled axes.
+func _wholly_inside(r: Rect2, view: Rect2) -> bool:
+	if vertical_scroll_mode != SCROLL_MODE_DISABLED:
+		if r.position.y < view.position.y - 0.5 or r.end.y > view.end.y + 0.5:
+			return false
+	if horizontal_scroll_mode != SCROLL_MODE_DISABLED:
+		if r.position.x < view.position.x - 0.5 or r.end.x > view.end.x + 0.5:
+			return false
+	return true
 
 
 ## Start/end (x/y) of each item along the axis, in scrolled-content coordinates.
@@ -499,18 +565,36 @@ func _content() -> Control:
 
 
 func _animate_to(vertical: bool, target: float) -> void:
+	# A press during a scroll starts from the page that one was headed for.
+	var running := _tween and _tween.is_valid() and _tween_vertical == vertical
+	var from := _tween_target if running else _current(vertical)
+	_following = false
 	_kill_tween()
+	_tween_from = from
 	_tween_target = target
 	_tween_vertical = vertical
 	_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	_tween.tween_property(self, "scroll_vertical" if vertical else "scroll_horizontal",
 			int(round(target)), animation_duration)
+	# Once the page has landed, the items outside it hide.
+	_tween.finished.connect(_on_scroll_finished)
+	page_scroll_started.emit(vertical, _tween_from, target)
+	_update_item_fades()
+
+
+func _on_scroll_finished() -> void:
+	_tween = null
+	_update_item_fades()
+	page_scroll_finished.emit()
 
 
 func _kill_tween() -> void:
-	if _tween and _tween.is_valid():
+	var running := _tween != null and _tween.is_valid()
+	if running:
 		_tween.kill()
 	_tween = null
+	if running:
+		page_scroll_finished.emit()
 
 
 ## The wheel steps like the buttons. Handled here, from the gui_input signal, the event is

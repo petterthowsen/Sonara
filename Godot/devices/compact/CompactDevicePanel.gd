@@ -423,10 +423,9 @@ func _on_double_clicked() -> void:
 	Sonara.editor.mixer.select_channel(channel)
 	
 	# Show DeviceLane if hidden
-	if not Sonara.editor.device_lane.visible:
-		Sonara.editor.seconday_panel.show()
-		Sonara.editor.device_lane.show()
+	if not Sonara.editor.is_device_lane_open():
 		# DeviceLane will auto-bind to the focused channel via channel_focused signal
+		Sonara.editor.open_device_lane()
 	
 	# Wait a frame for the DeviceLane to update with the new channel
 	await get_tree().process_frame

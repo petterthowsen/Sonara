@@ -61,10 +61,13 @@ class SendControl extends LabeledKnob:
 
 
 	## Block a send that would create a feedback loop: the knob ignores the mouse and fades,
-	## and hovering the slot says why.
+	## and hovering the slot says why. Fades the knob and caption, not the slot itself: the
+	## slot's own modulate belongs to the PagedContainer, which hides slots out of view.
 	func set_blocked(blocked: bool, bus_name: String) -> void:
 		knob.mouse_filter = Control.MOUSE_FILTER_IGNORE if blocked else Control.MOUSE_FILTER_STOP
-		modulate.a = 0.35 if blocked else 1.0
+		var alpha := 0.35 if blocked else 1.0
+		knob.modulate.a = alpha
+		label.self_modulate.a = alpha
 		tooltip_text = ChannelOutputMenu.LOOP_TOOLTIP % bus_name if blocked else ""
 
 

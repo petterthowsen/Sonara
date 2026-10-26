@@ -32,6 +32,7 @@
 [ext_resource type="PackedScene" path="res://editor/track_list/TrackListPanel.tscn" id="track_list_panel"]
 [ext_resource type="Texture2D" uid="uid://sdwtbedbsin0" path="res://assets/icons/x.svg" id="win_close"]
 [ext_resource type="Texture2D" uid="uid://b4cmo7tg2llix" path="res://assets/icons/minus.svg" id="win_min"]
+[ext_resource type="Script" path="res://components/RevealContainer.gd" id="99_reveal"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
 content_margin_left = 4.0
@@ -351,11 +352,14 @@ size_flags_vertical = 3
 
 [node name="Secondary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter" unique_id=1593592873]
 layout_mode = 2
-size_flags_vertical = 3
-size_flags_stretch_ratio = 0.7
 theme_type_variation = &"SectionPanel"
 
-[node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary" unique_id=1241292927 instance=ExtResource("10_2m1gq")]
+[node name="Reveal" type="Container" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary"]
+clip_contents = true
+layout_mode = 2
+script = ExtResource("99_reveal")
+
+[node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/Reveal" unique_id=1241292927 instance=ExtResource("10_2m1gq")]
 custom_minimum_size = Vector2(0, 76)
 layout_mode = 2
 

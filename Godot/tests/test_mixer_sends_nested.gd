@@ -90,9 +90,15 @@ func _test_controls_line_up(when: String) -> void:
 
 ## Paging the top-level strip scrolls the nested one to the same rows, none faded differently.
 func _test_paging_syncs_rows() -> void:
-	_top.sends_panel.scroll_container.scroll_step(true, 1)
-	await create_timer(0.5).timeout
 	var top_sc: PagedContainer = _top.sends_panel.scroll_container
+	top_sc.scroll_step(true, 1)
+	# Mid-scroll the strips that follow show both pages too, not only what is wholly in view.
+	await create_timer(top_sc.animation_duration / 3.0).timeout
+	for strip in [_group, _nested]:
+		var sc: PagedContainer = strip.sends_panel.scroll_container
+		_assert(_shown(sc) == _shown(top_sc),
+				"mid-scroll %s shows the same knobs (%s vs %s)" % [strip.channel.name, _shown(sc), _shown(top_sc)])
+	await create_timer(0.5).timeout
 	_assert(top_sc.scroll_vertical > 0, "paging scrolls the top-level strip")
 	for strip in [_group, _nested]:
 		var sc: PagedContainer = strip.sends_panel.scroll_container
@@ -100,6 +106,10 @@ func _test_paging_syncs_rows() -> void:
 				"%s follows the scroll (%d vs %d)" % [strip.channel.name, sc.scroll_vertical, top_sc.scroll_vertical])
 		_assert(_shown(sc) == _shown(top_sc),
 				"%s shows the same rows (%s vs %s)" % [strip.channel.name, _shown(sc), _shown(top_sc)])
+	# Hovering the panel re-checks blocked (looping) sends, which must not show hidden knobs.
+	_top.sends_panel._refresh_blocked()
+	_assert(_shown(top_sc) == _in_view(top_sc),
+			"re-checking blocked sends keeps the knobs out of view hidden (%s vs %s)" % [_shown(top_sc), _in_view(top_sc)])
 
 
 ## Switching strip width re-wraps the knobs: every pager re-fits to a row start, and the knobs
@@ -118,7 +128,7 @@ func _test_width_mode_refits() -> void:
 	for mode: int in [2, 1]:
 		root.get_tree().call_group("mixer_channel", "set_size_mode", mode)
 		await _frames(4)
-		await create_timer(top_sc.fade_duration + 0.1).timeout
+		await process_frame
 		var name := "WIDE" if mode == 2 else "MEDIUM"
 		for strip in [_top, _group, _nested]:
 			var sc: PagedContainer = strip.sends_panel.scroll_container
@@ -146,13 +156,9 @@ func _test_divider_revalidates() -> void:
 
 ## True when the sends view holds a whole number of knob rows.
 func _whole_rows(strip: Object) -> bool:
+	# The page itself is always trimmed to whole rows, so measure the container's outer height.
 	var sc: PagedContainer = strip.sends_panel.scroll_container
-	var page := sc.get_v_scroll_bar().page
-	var lines := sc._line_edges(true)
-	for line: Vector2 in lines:
-		if absf(line.y - lines[0].x - page) <= 1.0:
-			return true
-	return false
+	return absf(sc.snap_length(true, sc.size.y) - sc.size.y) <= 1.0
 
 
 ## Wait out the deferred revalidation and its snap animation.
@@ -180,7 +186,7 @@ func _shown(sc: PagedContainer) -> Array[int]:
 	var shown: Array[int] = []
 	var items := sc._items()
 	for i in items.size():
-		if float(items[i].get_meta(&"_fade_target", 1.0)) > 0.5:
+		if items[i].modulate.a > 0.5:
 			shown.append(i)
 	return shown
 

@@ -102,7 +102,9 @@ signal view_changed(view: int)  # Editor.View
 @onready var clip_editor: ClipEditor = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/ClipEditor
 
 # secondary panels
-@onready var device_lane : DeviceLane = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane
+## Holds the device lane, so it can slide open and shut below its minimum height.
+@onready var device_lane_reveal: RevealContainer = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/Reveal
+@onready var device_lane : DeviceLane = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/Reveal/DeviceLane
 
 
 # ============================================================================
@@ -220,6 +222,11 @@ func _ready():
 	# ensure device lane is hidden
 	device_lane.hide()
 	seconday_panel.hide()
+	# The lane is as tall as its devices: a divider drag never resizes it, but dragging on well
+	# past it closes it.
+	center_vsplit.dragged.connect(func(_offset: int) -> void: center_vsplit.split_offset = 0)
+	SplitOverdrag.watch(center_vsplit, func() -> float: return DEVICE_LANE_DRAG_CLOSE_THRESHOLD,
+			close_device_lane)
 
 	# Blank project first; a startup project replaces it once the devices it uses are known.
 	# A .sonara path on the command line wins over the startup project (REQ-017).
@@ -1183,23 +1190,73 @@ func show_assistant() -> void:
 
 
 func toggle_device_lane():
-	logger.info("toggglng device lane")
-	if seconday_panel.visible and device_lane.visible:
-		# hide device lane
-		device_lane.hide()
-		seconday_panel.hide()
+	if is_device_lane_open():
+		close_device_lane()
 	else:
 		# show - fail if no channel is focused
 		if focused_channel == null:
 			logger.warn("[Editor] Cannot open device lane: no channel is focused")
 			return
-		
-		device_lane.show()
-		
 		device_lane.bind_to_channel(focused_channel)
-		
-		if not seconday_panel.visible:
-			seconday_panel.show()
+		open_device_lane()
+
+
+## Seconds the device lane takes to slide open or shut.
+const DEVICE_LANE_SLIDE_DURATION := 0.3
+## Dragging the center divider this far past the device lane closes it.
+const DEVICE_LANE_DRAG_CLOSE_THRESHOLD := 48.0
+var _device_lane_tween: Tween
+## Where the device lane is headed: open, or shut (also while it slides shut).
+var _device_lane_open := false
+
+
+## Whether the device lane is open or opening.
+func is_device_lane_open() -> bool:
+	return _device_lane_open
+
+
+## Slide the device lane open.
+func open_device_lane(animate := true) -> void:
+	if _device_lane_open:
+		return
+	_device_lane_open = true
+	device_lane.show()
+	_slide_device_lane(animate)
+
+
+## Slide the device lane shut.
+func close_device_lane(animate := true) -> void:
+	if not _device_lane_open:
+		return
+	_device_lane_open = false
+	_slide_device_lane(animate)
+
+
+## Slide the Secondary panel toward `_device_lane_open`, from wherever it is now (so a toggle
+## mid-slide turns it around). The panel doesn't expand, so its height is the reveal's.
+func _slide_device_lane(animate: bool) -> void:
+	if _device_lane_tween and _device_lane_tween.is_valid():
+		_device_lane_tween.kill()
+	var open_height := device_lane.get_combined_minimum_size().y
+	var from := device_lane_reveal.size.y if seconday_panel.visible else 0.0
+	var target := open_height if _device_lane_open else 0.0
+	if not animate or not is_inside_tree():
+		_finish_device_lane_slide()
+		return
+	seconday_panel.show()
+	device_lane_reveal.content_height = open_height
+	device_lane_reveal.reveal_height = from
+	_device_lane_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_device_lane_tween.tween_property(device_lane_reveal, "reveal_height", target,
+			DEVICE_LANE_SLIDE_DURATION)
+	_device_lane_tween.finished.connect(_finish_device_lane_slide)
+
+
+func _finish_device_lane_slide() -> void:
+	_device_lane_tween = null
+	device_lane_reveal.reveal_height = -1.0
+	seconday_panel.visible = _device_lane_open
+	device_lane.visible = _device_lane_open
 
 
 ## Open (never close) the Device Lane bound to `track`'s channel. Makes sure the track is the
@@ -1215,10 +1272,8 @@ func open_device_lane_for_track(track: Track) -> void:
 		logger.warn("[Editor] Cannot open device lane: track has no channel")
 		return
 	focus_channel(channel)
-	device_lane.show()
 	device_lane.bind_to_channel(channel)
-	if not seconday_panel.visible:
-		seconday_panel.show()
+	open_device_lane()
 
 
 # ============================================================================

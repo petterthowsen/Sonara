@@ -15,6 +15,9 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Every action in the clip context menu has an icon now, and Make Unique and Make Unique Per Track use a broken link.
 - Dragging a device over a layer in a Layer's list for a second opens that layer, so you can drop the device inside it; the layer closes again if you let go elsewhere (#159).
 
+- Drag the divider above a mixer strip's sends well past their smallest height and let go to turn the sends off, as the Sends toggle does; they come back at the height they had before the drag.
+- The device lane slides open and shut (about 300 ms), whether from the hotkey, a double-click on a track, or a compact device. It is always as tall as its devices: dragging the divider above it no longer resizes it, and dragging it well down and letting go closes the lane.
+
 ### Changed
 
 - The clip editor's ruler no longer shades the clips; the clip strip below it shows them.
@@ -26,6 +29,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 ### Fixed
 
 - Automation at a loop's start now applies when the loop wraps, not one audio buffer later: notes at the loop start no longer play with the loop end's value (for example a PolySynth cutoff ramp). PolySynth and CLAP plugins switch at the exact sample; other devices switch at the start of the buffer that contains the wrap.
+- The mixer's sends panel keeps each page of send knobs centered between its page buttons, the last page included, and paging back lands on the previous page. A page button now hides when there is nothing more in its direction, and the knobs and buttons appear and disappear without fading.
 
 ## [0.2.0] - 2026-10-23
 

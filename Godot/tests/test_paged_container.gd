@@ -51,10 +51,11 @@ func run_tests() -> void:
 	sc.reserve_button_space = true
 	await root.get_tree().process_frame
 	await root.get_tree().process_frame
-	_assert(is_equal_approx(box.position.y, sc.button_thickness), "content starts below the reserved strip (got %s)" % box.position.y)
-	_assert(is_equal_approx(sc.get_v_scroll_bar().page, 100.0 - 2.0 * sc.button_thickness), "view excludes both strips")
-	_assert(sc._button_up.visible and sc._button_up.disabled, "reserved up button stays, disabled at the top")
-	_assert(sc._button_down.visible and not sc._button_down.disabled, "reserved down button is enabled")
+	# The 68 left between the strips holds one 60-tall row; the other 8 is split over both ends.
+	_assert(is_equal_approx(box.position.y, sc.button_thickness + 4.0), "content starts below the reserved strip, centered (got %s)" % box.position.y)
+	_assert(is_equal_approx(sc.get_v_scroll_bar().page, 60.0), "view is trimmed to whole rows (got %s)" % sc.get_v_scroll_bar().page)
+	_assert(not sc._button_up.visible, "reserved up button hides at the top")
+	_assert(sc._button_down.visible, "reserved down button is shown")
 	_assert(is_equal_approx(sc.snap_length(true, 110.0), 60.0 + 2.0 * sc.button_thickness), "snap_length counts the reserved strips")
 
 	# A real click on the down button (through the viewport, so the content can't swallow it).
@@ -73,29 +74,29 @@ func run_tests() -> void:
 	sc.scroll_vertical = 0
 	await root.get_tree().process_frame
 
-	# Fading: with a 68 view (100 minus the strips) only the first 60-tall item is wholly in view.
+	# Fading: with a 60 view (100 minus the strips, trimmed to a row) only the first 60-tall item is wholly in view.
 	sc.fade_hidden_items = true
-	await root.get_tree().create_timer(sc.fade_duration + 0.1).timeout
+	await root.get_tree().process_frame
 	_assert(is_equal_approx(box.get_child(0).modulate.a, 1.0), "item in view stays opaque")
 	_assert(is_equal_approx(box.get_child(1).modulate.a, 0.0), "cut-off item fades out (got %s)" % box.get_child(1).modulate.a)
 	sc.scroll_vertical = 64
-	await root.get_tree().create_timer(sc.fade_duration + 0.1).timeout
+	await root.get_tree().process_frame
 	_assert(is_equal_approx(box.get_child(0).modulate.a, 0.0), "item scrolled out fades out")
 	_assert(is_equal_approx(box.get_child(1).modulate.a, 1.0), "item scrolled in fades back in")
 	sc.scroll_vertical = 0
 	await root.get_tree().process_frame
 
 	# The wheel steps item by item like the buttons, so each notch reveals a whole item.
-	# View is 68 (100 minus the strips): one 60-tall item at a time.
+	# View is 60 (100 minus the strips, trimmed to a row): one 60-tall item at a time.
 	_assert(sc.scroll_vertical == 0, "wheel test starts at the top")
 	await _wheel(sc, MOUSE_BUTTON_WHEEL_DOWN)
 	_assert(sc.scroll_vertical == 64, "wheel down pages to the next item's start (got %d)" % sc.scroll_vertical)
 	_assert(is_equal_approx(box.get_child(1).modulate.a, 1.0), "wheel down reveals the next item")
 	_assert(is_equal_approx(box.get_child(0).modulate.a, 0.0), "wheel down fades the item scrolled past")
-	_assert(not sc._button_up.disabled, "wheel down enables the up button")
+	_assert(sc._button_up.visible, "wheel down shows the up button")
 	await _wheel(sc, MOUSE_BUTTON_WHEEL_UP)
 	_assert(sc.scroll_vertical == 0, "wheel up lands on the previous item's start (got %d)" % sc.scroll_vertical)
-	_assert(sc._button_up.disabled, "back at the top disables the up button")
+	_assert(not sc._button_up.visible, "back at the top hides the up button")
 
 	# Hover-only buttons: hidden until the mouse is over the container, and over a button too.
 	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "buttons always shown by default")
@@ -103,14 +104,11 @@ func run_tests() -> void:
 	sc.show_buttons_on_hover = true
 	_assert(is_equal_approx(sc._button_layer.modulate.a, 0.0), "hover-only buttons hide while the mouse is away")
 	await _move_mouse(sc.get_global_rect().get_center())
-	await root.get_tree().create_timer(sc.hover_fade_duration + 0.1).timeout
-	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "hover-only buttons fade in on hover")
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "hover-only buttons show on hover")
 	await _move_mouse(sc._button_down.get_global_rect().get_center())
-	await root.get_tree().create_timer(sc.hover_fade_duration + 0.1).timeout
 	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "buttons stay while hovering a button")
 	await _move_mouse(Vector2(190, 190))
-	await root.get_tree().create_timer(sc.hover_fade_duration + 0.1).timeout
-	_assert(is_equal_approx(sc._button_layer.modulate.a, 0.0), "hover-only buttons fade out on leaving")
+	_assert(is_equal_approx(sc._button_layer.modulate.a, 0.0), "hover-only buttons hide on leaving")
 	sc.show_buttons_on_hover = false
 	_assert(is_equal_approx(sc._button_layer.modulate.a, 1.0), "turning the option off shows the buttons")
 
@@ -123,6 +121,7 @@ func run_tests() -> void:
 	_assert(not sc._button_up.visible and not sc._button_down.visible, "no buttons when content fits")
 	sc.free()
 	await _test_items_taller_than_view()
+	await _test_odd_slack_pages_whole_rows()
 
 
 ## Items longer than the view can't show whole: paging lands on their starts, never cutting
@@ -157,6 +156,31 @@ func _test_items_taller_than_view() -> void:
 	sc.free()
 
 
+## A view that leaves an odd number of pixels after its whole rows: the page is still exactly
+## the rows, so the scroll end is a row start and the last page doesn't crawl by a pixel.
+func _test_odd_slack_pages_whole_rows() -> void:
+	var sc := PagedContainer.new()
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	for i in 5:
+		var item := Control.new()
+		item.custom_minimum_size = Vector2(100, 60)
+		box.add_child(item)
+	sc.add_child(box)
+	root.add_child(sc)
+	# 101 holds one 60-tall row, leaving 41: 20 above, 21 below.
+	sc.size = Vector2(100, 101)
+	await root.get_tree().process_frame
+	await root.get_tree().process_frame
+	_assert(is_equal_approx(sc.get_v_scroll_bar().page, 60.0), "odd slack: the page is one row (got %s)" % sc.get_v_scroll_bar().page)
+	_assert(is_equal_approx(box.position.y, 20.0), "odd slack: the row sits centered (got %s)" % box.position.y)
+	_assert(is_equal_approx(sc._max_scroll(true), 256.0), "odd slack: the scroll end is the last row start (got %s)" % sc._max_scroll(true))
+	sc.scroll_vertical = 256
+	_assert(is_equal_approx(sc._step_target(true, 1), 256.0), "odd slack: the last page doesn't step on")
+	sc.free()
+
+
 ## One wheel notch over the middle of `sc`, then wait out the scroll and fade animations.
 func _wheel(sc: PagedContainer, button: MouseButton) -> void:
 	var at := sc.get_global_rect().get_center()
@@ -168,7 +192,7 @@ func _wheel(sc: PagedContainer, button: MouseButton) -> void:
 		ev.position = at
 		ev.global_position = at
 		root.push_input(ev)
-	await root.get_tree().create_timer(sc.animation_duration + sc.fade_duration + 0.1).timeout
+	await root.get_tree().create_timer(sc.animation_duration + 0.1).timeout
 
 
 func _move_mouse(at: Vector2) -> void:

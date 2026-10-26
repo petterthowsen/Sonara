@@ -314,6 +314,8 @@ func wire_channel_item(channel_item: MixerChannel) -> void:
 		channel_item.request_show_context_menu.connect(_on_channel_request_context_menu.bind(channel))
 	if not channel_item.gui_input.is_connected(_on_channel_item_gui_input.bind(channel)):
 		channel_item.gui_input.connect(_on_channel_item_gui_input.bind(channel))
+	if not channel_item.sends_close_requested.is_connected(_on_sends_close_requested):
+		channel_item.sends_close_requested.connect(_on_sends_close_requested)
 	_apply_toggle_states_to_channel(channel_item)
 	_apply_item_state(channel_item)
 	if selection.has(channel):
@@ -792,6 +794,12 @@ func _on_sends_toggled(pressed: bool) -> void:
 	"""Toggle Sends panel visibility."""
 	get_tree().call_group("mixer_channel_sends", "set", "visible", pressed)
 	logger.info("Sends panel: ", pressed)
+
+## A strip's sends divider was dragged shut: turn the sends off through the toolbar toggle.
+func _on_sends_close_requested() -> void:
+	sends_toggle.set_pressed_no_signal(false)
+	_on_sends_toggled(false)
+
 
 ## Narrow strips hide the device list regardless of this toggle.
 func _on_devices_toggled(pressed: bool) -> void:
