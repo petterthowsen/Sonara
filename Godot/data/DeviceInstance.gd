@@ -1166,8 +1166,8 @@ func get_routes_into(target: String) -> Array[Dictionary]:
 ## fail in the engine's target parse when B comes later in the array, because the engine resolves
 ## targets against the modulators added so far.
 ## The device-tree walk calls this again after the children are added, since routes into
-## a child only resolve once it exists.
-func sync_modulators_to_engine() -> void:
+## a child only resolve once it exists. `include_child_routes` is false for the first pass.
+func sync_modulators_to_engine(include_child_routes := true) -> void:
 	if not has_modulation():
 		return
 	_expect_mod_echo(MOD_CLEAR_KEY)
@@ -1180,6 +1180,8 @@ func sync_modulators_to_engine() -> void:
 			_send_modulator_param(mod, param_id, mod.params[param_id])
 	for mod in modulators:
 		for target in mod.routes:
+			if not include_child_routes and str(target).begins_with("child/"):
+				continue
 			_expect_mod_echo("route:%d:%s" % [mod.mod_id, target])
 			AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % mod.mod_id), [target, mod.routes[target]])
 
@@ -2450,7 +2452,8 @@ func _push_restored_parameters_to_engine() -> void:
 ## Sync this device instance's parameters to the audio engine (bulk sync)
 ## TODO: Implement this
 func sync_to_engine() -> void:
-	sync_modulators_to_engine()
+	# Child routes wait for the tree walk's second pass (the children don't exist yet).
+	sync_modulators_to_engine(false)
 	_sync_params_to_engine()
 	if is_midi_send():
 		_send_midi_send_targets()
