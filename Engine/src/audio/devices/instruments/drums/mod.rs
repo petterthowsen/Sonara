@@ -12,6 +12,7 @@ pub mod kick;
 pub mod layers;
 pub mod params;
 pub mod snare;
+pub mod tom;
 
 pub use host::DrumHost;
 pub use params::{GlobalParams, GLOBAL_SPECS};

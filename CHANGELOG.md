@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- New built-in drum instrument Tom (spec 056): a tuned membrane with a pitch sweep, a second membrane mode and a skin layer. Tune is the pitch of note 45, with optional Keytrack; one device covers low, mid and high toms and, with a short Decay, congas and bongos.
 - The MIDI editor shows automation lanes in track mode (spec 055). The Automation toggle in the toolbar opens a pane under the note area with the focused track's lanes, lined up with the notes; the + button lists the track's lanes and adds a new one, and Ctrl+C / X / V / D and Delete act on the lane you last clicked. Open lanes and their heights are saved with the project.
 - With two or more automation points selected, handles tilt the selection from either end or compress it toward its middle, in the arranger and in the MIDI editor; each drag is one undo step.
 - Automation lane presets: the lane menu (arranger and MIDI editor) can save the shown lanes under a name and load, replace or delete a preset. Loading shows the preset's lanes, creates missing ones and is one undo step; device parameters are found again if the device moved.
