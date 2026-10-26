@@ -44,9 +44,9 @@ static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 // === Synthesis constants ===
 
 /// The six 808 metal partials (Hz) at Tune 1.
-const RATIOS: [f32; 6] = [205.3, 304.4, 369.6, 522.7, 540.0, 800.0];
+pub(super) const RATIOS: [f32; 6] = [205.3, 304.4, 369.6, 522.7, 540.0, 800.0];
 /// Fixed phase offsets so the six oscillators don't all fire their edge on the same sample.
-const PHASE_OFFSETS: [f64; 6] = [0.0, 0.17, 0.33, 0.51, 0.68, 0.83];
+pub(super) const PHASE_OFFSETS: [f64; 6] = [0.0, 0.17, 0.33, 0.51, 0.68, 0.83];
 /// Each oscillator's contribution is scaled so the six-partial sum stays around ±1.
 const METAL_SCALE: f32 = 1.0 / 6.0;
 /// Internal render chunk. Any `render` length is cut into pieces of at most this many frames.

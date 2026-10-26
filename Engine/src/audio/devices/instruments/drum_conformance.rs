@@ -358,10 +358,20 @@ fn check_no_midi_is_exact_silence(make: &Make) -> Result<(), String> {
     Ok(())
 }
 
+/// Longest tail a drum may have at its **default** settings: a hit must be silent (and the
+/// device asleep) within this many seconds plus the 1 s quiet window. The Cymbal's 1.8 s decay
+/// is the longest today.
+const MAX_TAIL_SECONDS: f32 = 4.0;
+
 fn check_sleeps_and_wakes(make: &Make) -> Result<(), String> {
     let mut device = make();
     // A hit, then let the tail die.
-    render_blocks(device.as_mut(), SR as usize / 2, 512, &[(0, 60, 120)]);
+    render_blocks(
+        device.as_mut(),
+        (SR * MAX_TAIL_SECONDS) as usize,
+        512,
+        &[(0, 60, 120)],
+    );
     let quiet = render_blocks(device.as_mut(), SR as usize, 512, &[]);
     if !device.is_sleeping() {
         return Err("did not sleep after the tail".into());
