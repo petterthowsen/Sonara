@@ -289,7 +289,6 @@ pub fn create_note_effect(
         note_echo::NoteEcho, note_filter::NoteFilter, note_length::NoteLength,
         step_sequencer::StepSequencer, transpose::Transpose, velocity::Velocity, NoteFxHost,
     };
-    use super::instruments::drums::cymbal::CymbalVoice;
     let mut device: Box<dyn AudioDevice> = match device_id {
         "sonara.builtin.transpose" => Box::new(NoteFxHost::<Transpose>::new(sample_rate)),
         "sonara.builtin.note_filter" => Box::new(NoteFxHost::<NoteFilter>::new(sample_rate)),
@@ -302,7 +301,6 @@ pub fn create_note_effect(
         "sonara.builtin.note_length" => Box::new(NoteFxHost::<NoteLength>::new(sample_rate)),
         "sonara.builtin.latch" => Box::new(NoteFxHost::<Latch>::new(sample_rate)),
         "sonara.builtin.midi_send" => Box::new(MidiSend::new(sample_rate)),
-        "sonara.builtin.cymbal" => Box::new(DrumHost::<CymbalVoice>::new(sample_rate, max_frames)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);
@@ -316,9 +314,10 @@ pub fn create_drum(
     sample_rate: f32,
     max_frames: usize,
 ) -> Option<Box<dyn AudioDevice>> {
+    use super::instruments::drums::cymbal::CymbalVoice;
     use super::instruments::drums::{
-        clap::ClapVoice, hat::HatVoice, kick::KickVoice, snare::SnareVoice, tom::TomVoice,
-        cowbell::CowbellVoice, rimshot::RimshotVoice, shaker::ShakerVoice, DrumHost,
+        clap::ClapVoice, cowbell::CowbellVoice, hat::HatVoice, kick::KickVoice,
+        rimshot::RimshotVoice, shaker::ShakerVoice, snare::SnareVoice, tom::TomVoice, DrumHost,
     };
     let mut device: Box<dyn AudioDevice> = match device_id {
         "sonara.builtin.kick" => Box::new(DrumHost::<KickVoice>::new(sample_rate, max_frames)),
@@ -326,9 +325,14 @@ pub fn create_drum(
         "sonara.builtin.hat" => Box::new(DrumHost::<HatVoice>::new(sample_rate, max_frames)),
         "sonara.builtin.clap" => Box::new(DrumHost::<ClapVoice>::new(sample_rate, max_frames)),
         "sonara.builtin.tom" => Box::new(DrumHost::<TomVoice>::new(sample_rate, max_frames)),
-        "sonara.builtin.cowbell" => Box::new(DrumHost::<CowbellVoice>::new(sample_rate, max_frames)),
-        "sonara.builtin.rimshot" => Box::new(DrumHost::<RimshotVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.cowbell" => {
+            Box::new(DrumHost::<CowbellVoice>::new(sample_rate, max_frames))
+        }
+        "sonara.builtin.rimshot" => {
+            Box::new(DrumHost::<RimshotVoice>::new(sample_rate, max_frames))
+        }
         "sonara.builtin.shaker" => Box::new(DrumHost::<ShakerVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.cymbal" => Box::new(DrumHost::<CymbalVoice>::new(sample_rate, max_frames)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);
