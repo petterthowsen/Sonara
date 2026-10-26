@@ -3042,4 +3042,91 @@ mod slot_tests {
         assert!(spec <= 64 * 1024, "VoiceModSpec is {spec} B");
         assert!(all_voices <= 1 << 20, "{all_voices} B of voice modulators");
     }
+
+    /// Seeking back to a clip note's start while it sounds (clicking bar 1 on the ruler while
+    /// bar 1's note plays) must leave no voice gated once the clip's notes are over.
+    #[test]
+    fn seek_back_onto_a_sounding_note_leaves_no_voice_held() {
+        use crate::audio::channel::Channel;
+        use crate::audio::clip::{Clip, ClipInstance, ClipNote, ClipType};
+        use crate::audio::commands::{process_command, AudioCommand, CommandEffects};
+        use crate::audio::processing::process_audio;
+        use crate::audio::state::EngineState;
+        use crate::audio::track::Track;
+
+        let mut failures = Vec::new();
+        for with_seq in [false, true] {
+            for &block in &[64usize, 512, 1024] {
+                for seek_at in (240..3840).step_by(480) {
+                    let mut state = EngineState::default();
+                    state.settings.tempo = 128.0;
+                    let mut channel = Channel::new(2, "Bass".to_string(), block, SR);
+                    let mut synth = PolySynthDevice::new(SR);
+                    if with_seq {
+                        // Default Step Sequencer (step 1 on, Length 4) in Note FX, like the bass.
+                        let seq =
+                            create_note_effect("sonara.builtin.step_sequencer", SR, block).unwrap();
+                        put(&mut synth, NOTE_FX_SLOT, seq);
+                    }
+                    channel.devices.push(Box::new(synth));
+                    state.channels.insert(2, channel);
+                    let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
+                    clip.content_length_ticks = 7680;
+                    clip.midi_notes.push(ClipNote {
+                        id: 269,
+                        note: 29,
+                        velocity: 0.8,
+                        release: 0.25,
+                        start_tick: 0,
+                        duration_ticks: 3840,
+                    });
+                    state.clips.insert("c".to_string(), clip);
+                    let mut track = Track::new(1, 2);
+                    track.clip_instances.push(ClipInstance::new(
+                        "i".to_string(),
+                        "c".to_string(),
+                        0,
+                        7680,
+                    ));
+                    state.tracks.insert(1, track);
+                    state.ensure_master_channel(block);
+                    let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+                    let mut out = vec![0.0f32; block * 2];
+                    let mut run_to = |state: &mut EngineState, tick: i64| {
+                        while state.get_current_tick() < tick {
+                            process_audio(state, block, SR, std::time::Instant::now());
+                            crate::audio::mixing::mix_and_output(
+                                state, &mut out, 2, block, &status_tx,
+                            );
+                        }
+                    };
+
+                    let mut effects = CommandEffects::default();
+                    process_command(&mut state, AudioCommand::Play, block, &mut effects);
+                    run_to(&mut state, seek_at);
+                    process_command(&mut state, AudioCommand::Seek(0), block, &mut effects);
+                    run_to(&mut state, 5000);
+                    // Step notes are short: watch the tail rather than one instant.
+                    let mut held = Vec::new();
+                    while state.get_current_tick() < 6000 {
+                        let next = state.get_current_tick() + 1;
+                        run_to(&mut state, next);
+                        let synth = state.channels.get_mut(&2).unwrap().devices[0]
+                            .as_any_mut()
+                            .downcast_mut::<PolySynthDevice>()
+                            .unwrap();
+                        held.extend(sounding_keys(synth));
+                    }
+                    held.sort();
+                    held.dedup();
+                    if !held.is_empty() {
+                        failures.push(format!(
+                            "step seq {with_seq} block {block} seek at {seek_at}: held {held:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 }

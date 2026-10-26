@@ -667,8 +667,18 @@ impl<P: NoteProcessor> AudioDevice for NoteFxHost<P> {
             }
         }
 
+        // Forget the clip notes from before the discontinuity, but keep those that started in
+        // this block: a seek while playing re-fires the clip notes at the new playhead in the
+        // same block, and dropping one would let its note-off pass the processor by, leaving it
+        // held for good.
         if discontinuity {
-            self.held.retain(|&id| !is_clip_note(id));
+            let input = self.input.as_slice();
+            self.held.retain(|&id| {
+                !is_clip_note(id)
+                    || input
+                        .iter()
+                        .any(|n| matches!(n.event, NoteEvent::On { note_id, .. } if note_id == id))
+            });
         }
         self.input.clear();
         self.output.sort();
