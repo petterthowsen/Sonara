@@ -6,6 +6,7 @@
 //! (IDs 90–92) is shared by every drum.
 
 pub mod clap;
+pub mod cymbal;
 pub mod hat;
 pub mod host;
 pub mod kick;
