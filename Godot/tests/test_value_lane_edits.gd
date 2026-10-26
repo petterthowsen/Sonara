@@ -20,6 +20,7 @@ func run_tests() -> void:
 	_test_formatter()
 	_test_maths()
 	_test_transforms()
+	_test_range_maths()
 	await _test_paint()
 	await _test_paint_closest()
 	await _test_paint_selection_and_updates()
@@ -60,6 +61,23 @@ func _test_maths() -> void:
 		line.append(ValueLaneEdits.line_value(Vector2(0, 0.2), Vector2(40, 1.0), i * 10.0, rel))
 	_assert(_near(line[0], 0.2) and _near(line[2], 0.6) and _near(line[4], 1.0), "line over five stems runs 0.2 to 1.0")
 	_assert(ValueLaneEdits.stems_at_x([10.0, 12.0, 30.0], 11.0, 3.0) == [0, 1], "chord: stems within tolerance")
+
+
+func _test_range_maths() -> void:
+	var xs := [0.0, 960.0, 1920.0]
+	var t := ValueLaneEdits.tilt_range([0.5, 0.5, 0.5], xs, 0.2, false, 0.0, 1.0)
+	_assert(_near(t[0], 0.5) and _near(t[1], 0.6) and _near(t[2], 0.7), "tilt_range right +0.2 gives 0.5/0.6/0.7")
+	var tl := ValueLaneEdits.tilt_range([0.5, 0.5, 0.5], xs, 0.2, true, 0.0, 1.0)
+	_assert(_near(tl[0], 0.7) and _near(tl[1], 0.6) and _near(tl[2], 0.5), "tilt_range left +0.2 gives 0.7/0.6/0.5")
+	var tc := ValueLaneEdits.tilt_range([0.9, 0.5, 0.1], xs, 0.5, false, 0.0, 1.0)
+	_assert(_near(tc[0], 0.9) and _near(tc[2], 0.6), "tilt_range clamps at 1")
+	var tb := ValueLaneEdits.tilt_range([0.5, 0.5, 0.5], xs, -1.0, false, 0.0, 1.0)
+	_assert(_near(tb[2], 0.0), "tilt_range clamps at 0")
+	var c := ValueLaneEdits.compress_range([0.2, 0.8], 0.5, 0.0, 1.0)
+	_assert(_near(c[0], 0.35) and _near(c[1], 0.65), "compress_range 0.2/0.8 x0.5 gives 0.35/0.65")
+	var ce := ValueLaneEdits.compress_range([0.2, 0.8], 5.0, 0.0, 1.0)
+	_assert(_near(ce[0], 0.0) and _near(ce[1], 1.0), "compress_range clamps at 0 and 1")
+	_assert(ValueLaneEdits.compress_range([], 0.5, 0.0, 1.0).is_empty(), "compress_range of nothing is empty")
 
 
 func _test_transforms() -> void:

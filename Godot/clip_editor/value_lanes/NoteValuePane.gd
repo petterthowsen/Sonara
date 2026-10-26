@@ -17,6 +17,9 @@ signal note_touched(note: MidiNoteData)
 var midi_editor: MidiEditor = null
 ## The editor split this pane sits at the bottom of (null when used on its own).
 var _split: SplitContainer = null
+## The pane stacked under this one, if any (the automation pane): the split has to leave room
+## for it, so this pane's top lane keeps its height.
+var _below: Control = null
 var lanes: Array[ValueLane] = []
 var _loading := false
 
@@ -39,9 +42,13 @@ func _ready() -> void:
 
 
 ## Follow `editor` and restore the persisted lanes. Called once by ClipEditor.
-func bind(editor: MidiEditor) -> void:
+func bind(editor: MidiEditor, split: SplitContainer = null, below: Control = null) -> void:
 	midi_editor = editor
-	_split = get_parent() as SplitContainer
+	_split = split if split else get_parent() as SplitContainer
+	_below = below
+	if _below:
+		_below.minimum_size_changed.connect(func(): _sync_split.call_deferred())
+		_below.visibility_changed.connect(func(): _sync_split.call_deferred())
 	if _split:
 		_split.dragged.connect(func(_o): _capture_top_height.call_deferred())
 		_split.drag_ended.connect(func():
@@ -143,9 +150,16 @@ func _sync_split() -> void:
 	if _split == null or lanes.is_empty() or not is_visible_in_tree():
 		return
 	var top: ValueLane = lanes[0]
-	var want := roundi(get_combined_minimum_size().y + top.lane_height() - top.min_row_height())
+	var want := roundi(get_combined_minimum_size().y + _below_height() + top.lane_height() - top.min_row_height())
 	if _split.split_offset != -want:
 		_split.split_offset = -want
+
+
+## Height the pane below needs (0 when there is none or it is hidden).
+func _below_height() -> float:
+	if _below == null or not _below.visible:
+		return 0.0
+	return _below.get_combined_minimum_size().y
 
 
 func _capture_top_height() -> void:
@@ -157,7 +171,16 @@ func _capture_top_height() -> void:
 ## its floor, so everything above the minimum is the top lane's. (Its row may not be laid out
 ## yet right after the split moved.)
 func _top_row_height() -> float:
-	return lanes[0].min_row_height() + size.y - get_combined_minimum_size().y
+	return lanes[0].min_row_height() + _pane_height() - get_combined_minimum_size().y
+
+
+## The pane's height from its container, not its own size: when the split moves, the container
+## is resized at once but the pane only on the next layout pass.
+func _pane_height() -> float:
+	var parent := get_parent_control()
+	if parent == null or parent == _split:
+		return size.y
+	return parent.size.y - _below_height()
 
 
 # ============================================================================

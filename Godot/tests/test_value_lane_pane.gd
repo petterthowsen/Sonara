@@ -66,7 +66,7 @@ func run_tests() -> void:
 	_assert(_keys(ed2.value_pane, ["vel", "rel"]), "and the same lanes")
 	_assert(is_equal_approx(ed2.value_pane.lanes[1].lane_height(), 150.0), "and their heights")
 
-	ed2.value_pane.visible = true
+	ed2.value_lanes_toggle.button_pressed = true
 	ed2.size = Vector2(1100, 600)
 	for _i in 3:
 		await process_frame
@@ -130,7 +130,7 @@ func _test_grip_follows_pointer(lane, top) -> void:
 ## the height is saved.
 func _test_split_sizes_top_lane(ed) -> void:
 	var pane = ed.value_pane
-	var split: SplitContainer = pane.get_parent()
+	var split: SplitContainer = ed.editor_split
 	var top = pane.lanes[0]
 	var h0: float = top.row.size.y
 	split.split_offset = -roundi(pane.size.y + 80.0)
@@ -151,7 +151,7 @@ func _test_split_sizes_top_lane(ed) -> void:
 	ed.queue_free()
 	await process_frame
 	var ed3: Control = await _editor()
-	ed3.value_pane.visible = true
+	ed3.value_lanes_toggle.button_pressed = true
 	ed3.size = Vector2(1100, 600)
 	for _i in 4:
 		await process_frame

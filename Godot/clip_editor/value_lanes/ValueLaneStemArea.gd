@@ -411,6 +411,10 @@ func _on_button(event: InputEventMouseButton) -> void:
 
 
 func _begin(event: InputEventMouseButton) -> void:
+	# A press here takes the keyboard shortcuts back from an automation lane (spec 055 REQ-013).
+	var active := midi_editor.get_active_note_editor()
+	if active:
+		active.grab_focus()
 	_press_pos = event.position
 	_moved = false
 	_touched.clear()

@@ -53,25 +53,35 @@ static func stems_at_x(xs: Array, x: float, tolerance: float) -> Array[int]:
 ## delta and the opposite end none, in between linearly (a tilt). `xs` holds each value's x.
 ## A single x (no span) shifts everything by the whole delta.
 static func tilt(values: Array, xs: Array, delta: float, from_left: bool, d: NoteValueDescriptor) -> Array[float]:
+	return tilt_range(values, xs, delta, from_left, d.min_value, d.max_value)
+
+
+## `tilt` clamped to an explicit `lo`..`hi` range instead of a descriptor.
+static func tilt_range(values: Array, xs: Array, delta: float, from_left: bool, lo: float, hi: float) -> Array[float]:
 	var out: Array[float] = []
-	var lo := INF
-	var hi := -INF
+	var x_lo := INF
+	var x_hi := -INF
 	for x in xs:
-		lo = minf(lo, float(x))
-		hi = maxf(hi, float(x))
-	var span := hi - lo
+		x_lo = minf(x_lo, float(x))
+		x_hi = maxf(x_hi, float(x))
+	var span := x_hi - x_lo
 	for i in values.size():
 		var w := 1.0
 		if span > 0.0:
-			var t := (float(xs[i]) - lo) / span
+			var t := (float(xs[i]) - x_lo) / span
 			w = 1.0 - t if from_left else t
-		out.append(d.clamp_value(float(values[i]) + delta * w))
+		out.append(clampf(float(values[i]) + delta * w, lo, hi))
 	return out
 
 
 ## Every value's distance from the mean of `values` multiplied by `factor` (below 1
 ## compresses, above 1 expands), clamped.
 static func compress(values: Array, factor: float, d: NoteValueDescriptor) -> Array[float]:
+	return compress_range(values, factor, d.min_value, d.max_value)
+
+
+## `compress` clamped to an explicit `lo`..`hi` range instead of a descriptor.
+static func compress_range(values: Array, factor: float, lo: float, hi: float) -> Array[float]:
 	var out: Array[float] = []
 	if values.is_empty():
 		return out
@@ -80,5 +90,5 @@ static func compress(values: Array, factor: float, d: NoteValueDescriptor) -> Ar
 		mean += float(v)
 	mean /= values.size()
 	for v in values:
-		out.append(d.clamp_value(mean + (float(v) - mean) * maxf(factor, 0.0)))
+		out.append(clampf(mean + (float(v) - mean) * maxf(factor, 0.0), lo, hi))
 	return out

@@ -358,6 +358,7 @@ const CONTEXTS := {
 	"computer_keyboard": "global",
 	"value_lanes": "clip_editor",
 	"automation_lane": "arranger",
+	"clip_automation_lane": "clip_editor",
 	"control_knob": "global",
 	"step_lane": "device_panel",
 	# A text control has focus: the help bar shows nothing but Escape/Enter hints.
@@ -390,6 +391,7 @@ const CONTEXT_LABELS := {
 	"computer_keyboard": "Computer keyboard",
 	"value_lanes": "Value lanes",
 	"automation_lane": "Automation lane",
+	"clip_automation_lane": "Automation lane",
 	"control_knob": "Control",
 	"step_lane": "Step lane",
 	"text": "Text input",
@@ -425,6 +427,9 @@ const GESTURES := [
 	{ "context": "automation_lane", "mods": "", "input": "double_click", "label": "add point" },
 	{ "context": "automation_lane", "mods": "Shift", "input": "click", "label": "toggle point" },
 	{ "context": "automation_lane", "mods": "Ctrl", "input": "drag", "label": "select range" },
+	{ "context": "clip_automation_lane", "mods": "", "input": "double_click", "label": "add point" },
+	{ "context": "clip_automation_lane", "mods": "Shift", "input": "click", "label": "toggle point" },
+	{ "context": "clip_automation_lane", "mods": "Ctrl", "input": "drag", "label": "select range" },
 	# --- Clip editor: MidiEditor._gui_input and the left/right press handlers ---
 	{ "context": "clip_editor", "mods": "", "input": "wheel", "label": "scroll", "help": false },
 	{ "context": "clip_editor", "mods": "Shift", "input": "wheel", "label": "zoom horizontally" },

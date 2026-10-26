@@ -10,6 +10,8 @@ signal note_touched(note: MidiNoteData)
 
 const MIN_HEIGHT := 40.0
 const MAX_HEIGHT := 400.0
+## Height a lane opens at.
+const DEFAULT_HEIGHT := 96.0
 
 const MENU_SET := 0
 const MENU_RANDOMIZE := 1
@@ -30,7 +32,7 @@ var descriptor: NoteValueDescriptor = null
 var midi_editor: MidiEditor = null
 ## The stored height. The top lane fills the pane, so its row follows the editor split and
 ## the pane writes the result back here.
-var _height := 96.0
+var _height := DEFAULT_HEIGHT
 ## The top lane: expands to whatever height the pane gets from the editor split, which also
 ## stands in for its grip.
 var fills := false

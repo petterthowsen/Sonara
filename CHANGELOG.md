@@ -8,6 +8,9 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- The MIDI editor shows automation lanes in track mode (spec 055). The Automation toggle in the toolbar opens a pane under the note area with the focused track's lanes, lined up with the notes; the + button lists the track's lanes and adds a new one, and Ctrl+C / X / V / D and Delete act on the lane you last clicked. Open lanes and their heights are saved with the project.
+- With two or more automation points selected, handles tilt the selection from either end or compress it toward its middle, in the arranger and in the MIDI editor; each drag is one undo step.
+- Automation lane presets: the lane menu (arranger and MIDI editor) can save the shown lanes under a name and load, replace or delete a preset. Loading shows the preset's lanes, creates missing ones and is one undo step; device parameters are found again if the device moved.
 - A track or channel created by dropping a device or sample onto the arranger or the mixer is selected right away, like one made from the add menus (#165).
 - Right-click a mixer meter (the big meter or the compact one) for its options: Centered Scale draws the dB scale between the left and right bars, Show Fader turns the meter's fader on or off, and Show Fader Handle Only on Hover hides the handle until the pointer is over the meter. Each kind of meter keeps its own options for all channels; they are also under Settings > Appearance > Mixer.
 - The fader inside a mixer meter is a darker shade of the accent color, so it stands apart from the meter bars; with Centered Scale it fills the scale column and the labels sit inside it.

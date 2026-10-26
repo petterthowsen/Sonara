@@ -47,6 +47,10 @@ const HANDLE_RADIUS := 3.5
 const TENSION_SNAP := 0.04
 ## Shift-drag moves a point's value this fraction as fast as the cursor.
 const PRECISION_SCALE := 0.1
+## Selection handles (tilt left / right, compress) over a multi-selection, as in the value lanes.
+const SELECTION_HANDLE_SIZE := 9.0
+const SELECTION_HANDLE_GAP := 7.0
+enum SelectionHandle { NONE, TILT_LEFT, TILT_RIGHT, COMPRESS }
 
 var lane: AutomationLane = null
 var track: Track = null
@@ -83,6 +87,17 @@ var _bend_point_id: int = -1
 var _bend_start_y: float = 0.0
 var _bend_before: Dictionary = {}          # point id (the left point of each segment) -> state
 
+# --- selection handle state (tilt / compress over 2+ selected points) ---
+var _sel_handle: SelectionHandle = SelectionHandle.NONE
+var _sel_hover: SelectionHandle = SelectionHandle.NONE
+var _sel_before: Dictionary = {}           # point id -> {tick, value, curve, tension}
+var _sel_ids: Array = []                   # ids in the order of the arrays below
+var _sel_values: Array = []                # values at press
+var _sel_ticks: Array = []                 # ticks at press
+var _sel_press_y: float = 0.0
+var _sel_fine := FineDrag.new()
+var _sel_text: String = ""
+
 # --- box select state ---
 enum BoxMode {
 	FREE,    ## Plain drag: select the points inside the rectangle.
@@ -100,10 +115,12 @@ var _hover_point_id: int = -1
 var _tooltip: ValueTooltip = null
 ## Height at the last resize, so a width-only resize doesn't redraw.
 var _drawn_height := -1.0
+## Hotkey context this row registers; the MIDI editor's row overrides it.
+var hotkey_context := "automation_lane"
 
 
 func _ready() -> void:
-	Hotkeys.set_context(self, "automation_lane")
+	Hotkeys.set_context(self, hotkey_context)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -120,6 +137,7 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_MOUSE_EXIT:
 		_set_hover(-1)
 		_set_handle_hover(-1)
+		_set_selection_hover(SelectionHandle.NONE)
 	elif what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
 		if not is_visible_in_tree():
 			_refresh_tooltip()
@@ -215,9 +233,22 @@ func _on_track_color_changed(_new_color: Color) -> void:
 
 func _on_lane_flag_changed(_value: bool) -> void:
 	queue_redraw()
-	# The fill is drawn by the Timeline, so a resolved-state change must redraw its background.
+	# The fill is drawn by the host, so a resolved-state change must redraw its background.
+	_redraw_background()
+
+
+## Repaint whatever draws this row's background (the Timeline in the Arranger). Overridden by
+## hosts that draw it elsewhere.
+func _redraw_background() -> void:
 	if timeline:
 		timeline.queue_redraw()
+
+
+## Drop any selection that competes with this row's points (the Arranger's clip selection).
+## Overridden by hosts with a different competing selection.
+func _release_other_selection() -> void:
+	if timeline and timeline.clip_selection_manager:
+		timeline.clip_selection_manager.clear_selection()
 
 
 func _on_lane_height_changed(new_height: int) -> void:
@@ -341,6 +372,7 @@ func _draw_body() -> void:
 		PerfRecorder.begin(&"AutomationLaneRow._draw_points")
 		_draw_points()
 		PerfRecorder.end(&"AutomationLaneRow._draw_points")
+		_draw_selection_handles()
 		if not lane.resolved:
 			_draw_unresolved_overlay()
 
@@ -535,6 +567,138 @@ func _visible_x_range() -> Vector2:
 	return Vector2(start_x, end_x)
 
 
+# ---------------------------------------------------------------------------
+# Selection handles (REQ-015)
+# ---------------------------------------------------------------------------
+
+## The selected points of this lane when there are two or more, else empty.
+func _handle_points() -> Array:
+	if lane == null or selection_manager == null or selection_manager.lane != lane:
+		return []
+	var points: Array = selection_manager.get_selected_points()
+	return points if points.size() >= 2 else []
+
+
+## Hit rects by handle: tilt left / right at the top corners of the selected points' bounds,
+## compress at the lane's bottom right. Empty unless two or more points are selected.
+func _selection_handle_rects() -> Dictionary:
+	var points := _handle_points()
+	if points.is_empty():
+		return {}
+	var lo := INF
+	var hi := -INF
+	var top := INF
+	for point in points:
+		var x := tick_to_x(point.tick)
+		lo = minf(lo, x)
+		hi = maxf(hi, x)
+		top = minf(top, value_to_y(point.value))
+	var half := SELECTION_HANDLE_SIZE * 0.5
+	var y := clampf(top - SELECTION_HANDLE_GAP - half, half + 1.0,
+			maxf(size.y - 3.0 * SELECTION_HANDLE_SIZE, half + 1.0))
+	var left_x := clampf(lo - SELECTION_HANDLE_GAP, half + 1.0, maxf(size.x - half - 1.0, half + 1.0))
+	var right_x := clampf(hi + SELECTION_HANDLE_GAP, half + 1.0, maxf(size.x - half - 1.0, half + 1.0))
+	var box := Vector2.ONE * SELECTION_HANDLE_SIZE
+	return {
+		SelectionHandle.TILT_LEFT: Rect2(Vector2(left_x - half, y - half), box),
+		SelectionHandle.TILT_RIGHT: Rect2(Vector2(right_x - half, y - half), box),
+		SelectionHandle.COMPRESS: Rect2(Vector2(right_x - half, size.y - SELECTION_HANDLE_SIZE - 2.0), box),
+	}
+
+
+func _selection_handle_at(pos: Vector2) -> SelectionHandle:
+	var rects := _selection_handle_rects()
+	for h in rects:
+		if (rects[h] as Rect2).grow(2.0).has_point(pos):
+			return h
+	return SelectionHandle.NONE
+
+
+func _draw_selection_handles() -> void:
+	var active := _sel_handle if _sel_handle != SelectionHandle.NONE else _sel_hover
+	var rects := _selection_handle_rects()
+	for h in rects:
+		var rect: Rect2 = rects[h]
+		draw_rect(rect, Color.WHITE if h == active else get_curve_color().lightened(0.35))
+		draw_rect(rect, Color(0, 0, 0, 0.6), false, 1.0)
+		var c := rect.get_center()
+		var ink := Color(0, 0, 0, 0.7)
+		if h == SelectionHandle.COMPRESS:
+			draw_line(c + Vector2(-2.5, -1.5), c + Vector2(2.5, -1.5), ink, 1.0)
+			draw_line(c + Vector2(-2.5, 1.5), c + Vector2(2.5, 1.5), ink, 1.0)
+		else:
+			var dir := -1.0 if h == SelectionHandle.TILT_LEFT else 1.0
+			draw_line(c + Vector2(-2.5 * dir, 2.0), c + Vector2(2.5 * dir, -2.0), ink, 1.0)
+
+
+func _set_selection_hover(handle: SelectionHandle) -> void:
+	if handle == _sel_hover:
+		return
+	_sel_hover = handle
+	mouse_default_cursor_shape = Control.CURSOR_VSIZE if handle != SelectionHandle.NONE else Control.CURSOR_ARROW
+	queue_redraw()
+
+
+## Capture the selected points' ticks and values and arm the gesture.
+func _begin_selection_handle(handle: SelectionHandle, pos: Vector2) -> void:
+	var points := _handle_points()
+	if points.is_empty():
+		return
+	_set_hover(-1)
+	_sel_handle = handle
+	_sel_ids = []
+	_sel_values = []
+	_sel_ticks = []
+	for point in points:
+		_sel_ids.append(point.id)
+		_sel_values.append(point.value)
+		_sel_ticks.append(point.tick)
+	_sel_before = AutomationActions.capture_point_states(points)
+	_sel_press_y = pos.y
+	_sel_fine.begin(pos)
+	_sel_text = ""
+	queue_redraw()
+
+
+func _apply_selection_handle(pos: Vector2, precise: bool) -> void:
+	var dy := _sel_fine.update(pos, precise).y - _sel_press_y
+	var values: Array[float]
+	if _sel_handle == SelectionHandle.COMPRESS:
+		var factor := maxf(1.0 - dy / (maxf(size.y, 1.0) * 0.5), 0.0)
+		values = ValueLaneEdits.compress_range(_sel_values, factor, 0.0, 1.0)
+		_sel_text = "%+d%%" % roundi((factor - 1.0) * 100.0)
+	else:
+		var delta := -dy / _value_span()
+		values = ValueLaneEdits.tilt_range(_sel_values, _sel_ticks, delta, _sel_handle == SelectionHandle.TILT_LEFT, 0.0, 1.0)
+		_sel_text = "%+d%%" % roundi(delta * 100.0)
+	for i in _sel_ids.size():
+		lane.update_point(_sel_ids[i], _sel_ticks[i], values[i])
+	queue_redraw()
+	_refresh_tooltip()
+
+
+## Commit the handle drag as one undo step; a press that changed nothing records nothing.
+func _finish_selection_handle() -> void:
+	var label := "Compress Points" if _sel_handle == SelectionHandle.COMPRESS else "Tilt Points"
+	var points: Array = []
+	var changed := false
+	for id in _sel_ids:
+		var point := _find_point(id)
+		if point:
+			points.append(point)
+			changed = changed or not is_equal_approx(point.value, _sel_before[id]["value"])
+	if changed:
+		AutomationActions.move_points(lane, points, _sel_before.duplicate(true), false, label)
+	_sel_handle = SelectionHandle.NONE
+	_sel_before.clear()
+	_sel_ids = []
+	_sel_values = []
+	_sel_ticks = []
+	_sel_text = ""
+	queue_redraw()
+	_refresh_tooltip()
+
+
 # ============================================================================
 # INPUT (REQ-018, REQ-019, REQ-020)
 # ============================================================================
@@ -553,8 +717,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	var pos: Vector2 = event.position
 
 	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		if _point_at(pos) == null and timeline and timeline.clip_selection_manager:
-			timeline.clip_selection_manager.clear_selection()
+		if _point_at(pos) == null:
+			_release_other_selection()
 		_open_context_menu(pos)
 		accept_event()
 		return
@@ -575,6 +739,13 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				_begin_tension_drag(handle)
 			accept_event()
 			return
+
+		if hit == null and handle == null and plain and not event.double_click:
+			var sel := _selection_handle_at(pos)
+			if sel != SelectionHandle.NONE:
+				_begin_selection_handle(sel, pos)
+				accept_event()
+				return
 
 		if hit != null and event.alt_pressed and _plain_except_alt(event):
 			_begin_bend(hit, pos)
@@ -618,7 +789,10 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		return
 
 	# Release.
-	if _bend_point_id >= 0:
+	if _sel_handle != SelectionHandle.NONE:
+		_finish_selection_handle()
+		accept_event()
+	elif _bend_point_id >= 0:
 		_finish_bend()
 		accept_event()
 	elif _tension_drag_id >= 0:
@@ -638,6 +812,10 @@ func _plain_except_alt(event: InputEventMouseButton) -> bool:
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	var pos: Vector2 = event.position
+	if _sel_handle != SelectionHandle.NONE:
+		_apply_selection_handle(pos, event.shift_pressed)
+		accept_event()
+		return
 	if _bend_point_id >= 0:
 		_apply_bend(pos)
 		return
@@ -662,6 +840,7 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		return
 	var hover := _point_at(pos)
 	_set_hover(hover.id if hover else -1)
+	_set_selection_hover(_selection_handle_at(pos) if hover == null and _handle_at(pos) == null else SelectionHandle.NONE)
 	var segment := _segment_at_x(pos.x)
 	_set_handle_hover(segment.id if segment else -1)
 
@@ -707,8 +886,11 @@ func get_point_value_text(point: AutomationPoint) -> String:
 
 ## Show, hide or update the value tooltip for hover and live dragging (REQ-013).
 func _refresh_tooltip() -> void:
+	if _sel_handle != SelectionHandle.NONE and is_inside_tree():
+		_show_handle_readout()
+		return
 	var point := _tooltip_point()
-	if point == null or timeline == null or not is_inside_tree():
+	if point == null or not is_inside_tree():
 		if _tooltip:
 			_tooltip.visible = false
 		set_process(false)
@@ -722,8 +904,21 @@ func _refresh_tooltip() -> void:
 	set_process(true)
 
 
+## The signed delta / factor readout beside the dragged selection handle.
+func _show_handle_readout() -> void:
+	var rect: Rect2 = _selection_handle_rects().get(_sel_handle, Rect2())
+	if _tooltip == null:
+		_tooltip = ValueTooltip.attach(self)
+	_tooltip.set_text(_sel_text)
+	_tooltip.visible = true
+	_tooltip.place_right_of(get_global_transform() * rect.get_center())
+	set_process(true)
+
+
 func _process(_delta: float) -> void:
-	if _tooltip and _tooltip.visible:
+	if _sel_handle != SelectionHandle.NONE:
+		_show_handle_readout()
+	elif _tooltip and _tooltip.visible:
 		_position_tooltip()
 	else:
 		set_process(false)
@@ -746,8 +941,7 @@ func _on_lane_pressed(pos: Vector2) -> void:
 	if selection_manager:
 		selection_manager.focus(lane)
 		selection_manager.set_anchor(_snap_tick(x_to_tick(pos.x)))
-	if timeline and timeline.clip_selection_manager:
-		timeline.clip_selection_manager.clear_selection()
+	_release_other_selection()
 
 
 ## Empty-space click: move the playhead like a click on empty track-lane space.
@@ -995,7 +1189,7 @@ func _reset_tension(left: AutomationPoint) -> void:
 
 ## Open a floating editor on `point` to type its value exactly, in the target's own units.
 func _open_value_editor(point: AutomationPoint) -> void:
-	if lane == null or timeline == null:
+	if lane == null:
 		return
 	_cancel_pending_drag()
 	if selection_manager:

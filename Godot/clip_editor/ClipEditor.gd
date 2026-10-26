@@ -30,7 +30,14 @@ signal track_mode_track_selected(track: Track)
 @onready var midi_editor: MidiEditor = $HSplit/MainPanel/VBox/EditorSplit/MidiEditor
 
 ## Velocity / release lanes under the note area (docs/specs/019-note-values).
-@onready var value_pane: NoteValuePane = $HSplit/MainPanel/VBox/EditorSplit/NoteValuePane
+@onready var editor_split: SplitContainer = $HSplit/MainPanel/VBox/EditorSplit
+@onready var value_pane: NoteValuePane = $HSplit/MainPanel/VBox/EditorSplit/LanePanes/NoteValuePane
+## Holds the value pane and the automation pane under the note area; hidden when both are.
+@onready var lane_panes: VBoxContainer = %LanePanes
+## The focus track's automation lanes under the value lanes, track mode only (spec 055).
+## Untyped: the class_name may not be in the script cache yet.
+@onready var automation_pane = %AutomationPane
+@onready var automation_lanes_toggle: Button = %AutomationLanesToggle
 @onready var value_lanes_toggle: Button = $BottomPanel/Toolbar/LanesGroup/ValueLanesToggle
 ## Velocity the next drawn note gets (the last touched note's, or what the user typed).
 @onready var next_value_spin: SpinBox = $BottomPanel/Toolbar/LanesGroup/NextValue
@@ -231,9 +238,17 @@ func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
 
 ## Bind the value pane (the grid helper is set by now) and its toolbar toggle.
 func _setup_value_lanes() -> void:
-	value_pane.bind(midi_editor)
+	value_pane.bind(midi_editor, editor_split, automation_pane)
+	automation_pane.bind(midi_editor, editor_split, value_pane)
 	value_lanes_toggle.set_pressed_no_signal(value_pane.visible)
-	value_lanes_toggle.toggled.connect(value_pane.set_lanes_visible)
+	value_lanes_toggle.toggled.connect(func(on: bool):
+		value_pane.set_lanes_visible(on)
+		_update_lane_panes())
+	automation_lanes_toggle.set_pressed_no_signal(automation_pane.is_lanes_visible())
+	automation_lanes_toggle.toggled.connect(func(on: bool):
+		automation_pane.set_lanes_visible(on)
+		_update_lane_panes())
+	_update_lane_panes()
 	value_pane.note_touched.connect(midi_editor.next_note_values.take_from)
 	_setup_next_value()
 
@@ -1459,10 +1474,21 @@ func _playing_instance_at(song_ticks: int) -> ClipInstance:
 	return bound_clip_instance
 
 
+## The automation pane and its toggle exist in track mode only (spec 055 REQ-001); the lane
+## container is hidden while neither pane is shown.
+func _update_lane_panes() -> void:
+	if automation_pane == null:
+		return
+	automation_pane.set_available(track_mode)
+	automation_lanes_toggle.visible = track_mode
+	lane_panes.visible = value_pane.visible or automation_pane.visible
+
+
 func _update_mode_ui():
 	"""Sync UI with current mode state (toggle text/state, panels visibility)."""
 	if left_panel:
 		left_panel.visible = track_mode
+	_update_lane_panes()
 	if track_mode_toggle:
 		# Avoid feedback loop when syncing pressed state
 		track_mode_toggle.set_pressed_no_signal(track_mode)

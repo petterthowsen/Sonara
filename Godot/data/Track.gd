@@ -19,6 +19,8 @@ signal parent_changed(new_parent_id: int)
 signal automation_lane_added(lane: AutomationLane)
 signal automation_lane_removed(lane: AutomationLane)
 signal automation_expanded_changed(expanded: bool)
+## The MIDI editor's open automation lanes changed (`clip_editor_lanes`).
+signal clip_editor_lanes_changed
 ## Folder/group children shown or hidden in the arranger.
 signal folder_expanded_changed(expanded: bool)
 ## Hidden or enabled changed (issue 70).
@@ -65,6 +67,10 @@ var order: int:
 # Timeline data (PPQ-based positions)
 var clip_instances: Array[ClipInstance] = []  # Array of ClipInstance objects
 var automation_lanes: Array[AutomationLane] = []
+## Automation lanes open in the MIDI editor's automation pane, in pane order. Each entry is
+## {"id": lane id, "height": float}. UI state like `automation_expanded`: saved with the project,
+## never sent to the engine. Change it through `set_clip_editor_lanes()`.
+var clip_editor_lanes: Array[Dictionary] = []
 
 # Routing
 var _default_channel_id: int = -1  # -1 = no routing, otherwise ID of Channel
@@ -769,7 +775,41 @@ func remove_automation_lane(lane: AutomationLane) -> void:
 	if _is_connected:
 		AudioEngineOSC.send("/track/%d/automation/%s/delete" % [id, lane.id])
 	lane.track = null
+	var kept: Array[Dictionary] = []
+	for entry in clip_editor_lanes:
+		if entry["id"] != lane.id:
+			kept.append(entry)
+	if kept.size() != clip_editor_lanes.size():
+		clip_editor_lanes = kept
+		clip_editor_lanes_changed.emit()
 	automation_lane_removed.emit(lane)
+
+
+## Replace the open-lane entries. Entries whose id isn't one of this track's lanes (or repeats an
+## earlier entry) are dropped and heights are clamped to the value lane range. Emits
+## `clip_editor_lanes_changed` only when the stored entries differ.
+func set_clip_editor_lanes(entries: Array[Dictionary]) -> void:
+	var known := {}
+	for lane in automation_lanes:
+		known[lane.id] = true
+	# Loaded lazily: a static ValueLane reference would pull the UI scripts (and their autoload
+	# identifiers) into Track's compile, which breaks headless model tests.
+	var lane_limits: GDScript = load("res://clip_editor/value_lanes/ValueLane.gd")
+	var cleaned: Array[Dictionary] = []
+	var seen := {}
+	for entry in entries:
+		var lane_id := str(entry.get("id", ""))
+		if not known.has(lane_id) or seen.has(lane_id):
+			continue
+		seen[lane_id] = true
+		cleaned.append({
+			"id": lane_id,
+			"height": clampf(float(entry.get("height", lane_limits.DEFAULT_HEIGHT)), lane_limits.MIN_HEIGHT, lane_limits.MAX_HEIGHT),
+		})
+	if cleaned == clip_editor_lanes:
+		return
+	clip_editor_lanes = cleaned
+	clip_editor_lanes_changed.emit()
 
 
 ## The lane driving `target` on this track, or null when none exists (REQ-015: used to skip
@@ -858,6 +898,7 @@ func to_json() -> Dictionary:
 		"color": Utils.color_to_json(_color),
 		"clip_instances": clip_instances.map(func(i): return i.to_json()),
 		"automation_lanes": automation_lanes.map(func(a): return a.to_json()),
+		"clip_editor_lanes": clip_editor_lanes.duplicate(true),
 		"child_track_ids": child_track_ids.duplicate(),
 	})
 	return data
@@ -900,5 +941,12 @@ static func from_json(data: Dictionary) -> Track:
 			track.automation_lanes.append(lane)
 			lane.height_changed.connect(track._on_lane_height_changed)
 			lane_index += 1
+
+	# Open MIDI editor lanes go through the setter so ids with no lane are dropped.
+	var open_entries: Array[Dictionary] = []
+	for entry in data.get("clip_editor_lanes", []):
+		if entry is Dictionary:
+			open_entries.append(entry)
+	track.set_clip_editor_lanes(open_entries)
 
 	return track

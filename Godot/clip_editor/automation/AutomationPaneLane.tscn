@@ -1,0 +1,102 @@
+[gd_scene format=3 uid="uid://b45eof433vb6d"]
+
+[ext_resource type="Script" uid="uid://dnfem3tdws0ub" path="res://clip_editor/automation/AutomationPaneLane.gd" id="1_lane"]
+[ext_resource type="Script" uid="uid://c3o24brktjqp6" path="res://clip_editor/automation/ClipAutomationLaneRow.gd" id="2_row"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lane"]
+content_margin_right = 3.0
+bg_color = Color(0.1254902, 0.1254902, 0.16470589, 0.3529412)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_grip"]
+color = Color(0.3032328, 0.30323285, 0.30323276, 1)
+thickness = 2
+
+[sub_resource type="LabelSettings" id="LabelSettings_xge4j"]
+font_size = 12
+
+[node name="AutomationPaneLane" type="PanelContainer" unique_id=1680277415]
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_lane")
+script = ExtResource("1_lane")
+
+[node name="VBox" type="VBoxContainer" parent="." unique_id=407270210]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="ResizeGrip" type="Panel" parent="VBox" unique_id=270820589]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 1.7)
+layout_mode = 2
+mouse_default_cursor_shape = 9
+theme_override_styles/panel = SubResource("StyleBoxLine_grip")
+
+[node name="Body" type="HBoxContainer" parent="VBox" unique_id=274315683]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="VBox/Body" unique_id=1904964276]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+theme_type_variation = &"SectionHeader"
+
+[node name="VBox" type="VBoxContainer" parent="VBox/Body/Header" unique_id=1626421550]
+layout_mode = 2
+
+[node name="NameLabel" type="Label" parent="VBox/Body/Header/VBox" unique_id=1895437238]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 1
+text = "Volume"
+label_settings = SubResource("LabelSettings_xge4j")
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="MaxLabel" type="Label" parent="VBox/Body/Header/VBox" unique_id=205893523]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "+6 dB"
+clip_text = true
+
+[node name="Spacer" type="Control" parent="VBox/Body/Header/VBox" unique_id=1726293290]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="MinLabel" type="Label" parent="VBox/Body/Header/VBox" unique_id=209267817]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "-inf"
+clip_text = true
+
+[node name="Buttons" type="HBoxContainer" parent="VBox/Body/Header/VBox" unique_id=2131615608]
+layout_mode = 2
+
+[node name="BypassButton" type="Button" parent="VBox/Body/Header/VBox/Buttons" unique_id=73425208]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Bypass this lane"
+toggle_mode = true
+text = "B"
+
+[node name="CloseButton" type="Button" parent="VBox/Body/Header/VBox/Buttons" unique_id=1717829466]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Close this lane here (it stays in the Arranger)"
+text = "×"
+
+[node name="Row" type="Control" parent="VBox/Body" unique_id=1352379903]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 96)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("2_row")

@@ -32,12 +32,19 @@ func run_tests() -> void:
 	_device_script = load("res://data/Device.gd")
 	_device_instance_script = load("res://data/DeviceInstance.gd")
 	_param_script = load("res://data/DeviceParameter.gd")
+	var library: GDScript = load("res://data/PresetLibrary.gd")
+	library.dir_override = OS.get_temp_dir().path_join("sonara_lane_menu_test_%d" % Time.get_ticks_usec())
 	_test_add_new_with_no_lanes()
 	_test_lane_toggle_and_add_new_together()
 	_test_cc_menu_generic_range()
 	_test_cc_menu_sfz_labels_first_and_no_device_submenu()
 	_test_cc_menu_omits_laned_controller()
 	_test_device_submenu_skips_controller_params()
+	_test_menu_uses_clip_editor_view()
+	_test_create_lane_for_opens_and_undoes()
+	_test_create_lane_for_redo_reopens()
+	_test_presets_section()
+	library.dir_override = ""
 
 
 func _make_menu(track: Object) -> Object:
@@ -56,7 +63,7 @@ func _on_add_lane_requested(_track) -> void:
 func _test_add_new_with_no_lanes() -> void:
 	var track := _make_menu_track()
 	var menu := _make_menu(track)
-	_assert(menu.get_item_count() == 1, "empty track shows only '+ Add new'")
+	_assert(menu.get_item_index(menu.ADD_NEW_ID) == 0, "empty track lists '+ Add new' first, no lane items")
 	# The id Godot delivers for the item, looked up rather than assumed.
 	var add_id: int = menu.get_item_id(menu.get_item_index(menu.ADD_NEW_ID))
 	_assert(add_id == menu.ADD_NEW_ID, "'+ Add new' keeps its explicit id: %d" % add_id)
@@ -70,7 +77,7 @@ func _test_lane_toggle_and_add_new_together() -> void:
 	var lane: Object = _lane_script.new("lane0", AutomationTarget.channel_volume())
 	track.add_automation_lane(lane)
 	var menu := _make_menu(track)
-	_assert(menu.get_item_count() == 3, "lane checkbox + separator + '+ Add new'")
+	_assert(menu.get_item_index(menu.ADD_NEW_ID) == 2, "lane checkbox + separator + '+ Add new'")
 	menu._on_id_pressed(0)
 	_assert(lane.visible == false, "lane id 0 toggles visibility")
 	menu._on_id_pressed(menu.ADD_NEW_ID)
@@ -197,3 +204,109 @@ func _test_device_submenu_skips_controller_params() -> void:
 			var texts: Array = _texts(submenu)
 			_assert(not texts.has("Dynamics"), "controller parameters are not listed under their device")
 	picker.free()
+
+
+# ---------------------------------------------------------------------------
+# lane views and shared lane creation (spec 055 T-007)
+# ---------------------------------------------------------------------------
+
+func _test_menu_uses_clip_editor_view() -> void:
+	var view: Object = load("res://clip_editor/automation/ClipEditorLaneView.gd").new()
+	var track := _make_menu_track()
+	var lane: Object = _lane_script.new("lane0", AutomationTarget.channel_volume())
+	track.add_automation_lane(lane)
+	var menu: Object = _menu_script.new()
+	menu.track = track
+	menu.view = view
+	menu._rebuild()
+	_assert(not menu.is_item_checked(0), "a lane that isn't open in the MIDI editor is unchecked, whatever lane.visible says")
+	menu._on_id_pressed(0)
+	_assert(view.is_shown(track, lane) and lane.visible, "checking opens the lane and leaves lane.visible alone")
+	_assert(menu.is_item_checked(0), "the item shows the new state")
+	menu._on_id_pressed(0)
+	_assert(not view.is_shown(track, lane) and lane.visible, "unchecking closes the lane but keeps it and its Arranger flag")
+	_assert(track.automation_lanes.has(lane), "the lane still exists")
+	menu.free()
+
+
+func _test_create_lane_for_opens_and_undoes() -> void:
+	var project: Object = _project_script.new()
+	var made: Dictionary = project.create_instrument_track("Create Track")
+	var track: Object = made.track
+	var view: Object = load("res://clip_editor/automation/ClipEditorLaneView.gd").new()
+	var actions: GDScript = load("res://history/AutomationLanePresetActions.gd")
+	var util: GDScript = load("res://history/HistoryUtil.gd")
+	var recorded: Array = []
+	util.test_recorder = func(cmd: Object) -> void: recorded.append(cmd)
+	var lane: Object = actions.create_lane_for(track, AutomationTarget.channel_pan(), view)
+	util.test_recorder = Callable()
+	_assert(lane != null and track.automation_lanes.has(lane), "create_lane_for attaches the lane")
+	_assert(lane.points.size() == 1, "the lane is seeded with one point")
+	_assert(view.is_shown(track, lane), "the clip editor view opens the created lane")
+	_assert(recorded.size() == 1, "one history entry (%d)" % recorded.size())
+	if not recorded.is_empty():
+		recorded[0].undo()
+	_assert(not track.automation_lanes.has(lane), "one undo removes the lane")
+	_assert(track.clip_editor_lanes.is_empty(), "and its open-lane entry")
+
+
+func _test_create_lane_for_redo_reopens() -> void:
+	var project: Object = _project_script.new()
+	var track: Object = project.create_instrument_track("Redo Track").track
+	var view: Object = load("res://clip_editor/automation/ClipEditorLaneView.gd").new()
+	var util: GDScript = load("res://history/HistoryUtil.gd")
+	var recorded: Array = []
+	util.test_recorder = func(cmd: Object) -> void: recorded.append(cmd)
+	var lane: Object = load("res://history/AutomationLanePresetActions.gd").create_lane_for(track, AutomationTarget.channel_pan(), view)
+	util.test_recorder = Callable()
+	if recorded.is_empty():
+		_assert(false, "create_lane_for records a step")
+		return
+	recorded[0].undo()
+	recorded[0].do()
+	_assert(track.automation_lanes.has(lane) and view.is_shown(track, lane), "redo re-attaches the lane and reopens it in the MIDI editor")
+
+
+# ---------------------------------------------------------------------------
+# presets section (spec 055 T-016)
+# ---------------------------------------------------------------------------
+
+func _preset_menu(track: Object, view: Object) -> Object:
+	var menu: Object = _menu_script.new()
+	menu.track = track
+	menu.view = view
+	menu._rebuild()
+	return menu
+
+
+func _test_presets_section() -> void:
+	var store: GDScript = load("res://data/AutomationLanePresets.gd")
+	for preset_name in store.names():
+		store.delete(preset_name)
+	var views := {
+		"arranger": load("res://arranger/tracklist/ArrangerLaneView.gd").new(),
+		"clip editor": load("res://clip_editor/automation/ClipEditorLaneView.gd").new(),
+	}
+	for kind in views:
+		var view: Object = views[kind]
+		var track := _make_menu_track()
+		var lane: Object = _lane_script.new("lane0", AutomationTarget.channel_volume())
+		track.add_automation_lane(lane)
+		view.apply_shown(track, [])
+		var menu := _preset_menu(track, view)
+		var save_id: int = menu.SAVE_PRESET_ID
+		_assert(menu.is_item_disabled(menu.get_item_index(save_id)), "%s: save is disabled with no shown lanes" % kind)
+		menu.free()
+		view.apply_shown(track, [lane])
+		store.delete("Strings")
+		store.save("Strings", [{"target": "channel/cc/1", "device_id": ""}])
+		menu = _preset_menu(track, view)
+		_assert(_texts(menu).has("Strings"), "%s: a stored preset is listed: %s" % [kind, str(_texts(menu))])
+		_assert(not menu.is_item_disabled(menu.get_item_index(save_id)), "%s: save is enabled with a shown lane" % kind)
+		_assert(_texts(menu).has("Delete preset"), "%s: a delete submenu is offered" % kind)
+		store.save("Late", [{"target": "channel/pan", "device_id": ""}])
+		menu._rebuild()
+		_assert(_texts(menu).has("Late"), "%s: the store is re-read on rebuild" % kind)
+		menu.free()
+		store.delete("Strings")
+		store.delete("Late")

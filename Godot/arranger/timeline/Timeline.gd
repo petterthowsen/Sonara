@@ -1303,11 +1303,7 @@ func _find_track_index_at_global_position(mouse_pos_global: Vector2) -> int:
 ## True when cut/copy/paste/duplicate should act on automation points rather than clips: the
 ## user last worked in a lane row. Any clip interaction calls `release()`, which ends this.
 func _automation_is_active() -> bool:
-	return automation_selection_manager != null and (
-		automation_selection_manager.focus_lane != null
-		or automation_selection_manager.has_selection()
-		or automation_selection_manager.get_full_range() != Vector2i.ZERO
-	)
+	return automation_selection_manager != null and automation_selection_manager.is_active()
 
 
 ## Copy the active point range/selection. Returns false when there was nothing to copy.
@@ -1316,75 +1312,24 @@ func _automation_copy() -> bool:
 
 
 func _automation_cut() -> void:
-	var operand := automation_selection_manager.get_operand()
-	if operand.is_empty() or operand["points"].is_empty():
-		logger.warn("Cut skipped - no automation points selected")
-		return
-	if not automation_selection_manager.copy():
-		return
-	AutomationActions.delete_points(operand["lane"], operand["points"])
-	automation_selection_manager.clear_selection()
-	logger.info("Cut %d automation point(s)" % operand["points"].size())
+	automation_selection_manager.cut_selection()
 
 
 ## Paste the point clipboard into the active lane at the anchor (range start, else last click,
 ## else the playhead), matching the clip paste anchor conventions.
 func _automation_paste() -> void:
-	if not automation_selection_manager.has_clipboard():
-		logger.warn("Paste skipped - automation clipboard empty")
-		return
-	var lane := automation_selection_manager.get_target_lane()
-	if lane == null:
-		logger.warn("Paste skipped - no automation lane is active")
-		return
 	var playhead_ticks: int = Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
-	var target_tick := automation_selection_manager.get_paste_tick(playhead_ticks)
-	var pasted := AutomationActions.paste_segment(lane, automation_selection_manager.clipboard_specs_at(target_tick))
-	_select_pasted_points(lane, pasted)
-	logger.info("Pasted %d automation point(s) at tick %d" % [pasted.size(), target_tick])
+	automation_selection_manager.paste_at(playhead_ticks)
 
 
 ## Duplicate the active range/selection immediately after itself, as clip duplicate does.
 func _automation_duplicate() -> void:
-	var operand := automation_selection_manager.get_operand()
-	if operand.is_empty() or operand["points"].is_empty():
-		return
-	var previous: Dictionary = automation_selection_manager.clipboard
-	if not automation_selection_manager.copy():
-		return
-	var lane: AutomationLane = operand["lane"]
-	var target_tick := automation_selection_manager.get_duplicate_tick(int(operand["origin"]) + int(operand["length"]))
-	var pasted := AutomationActions.paste_segment(
-		lane, automation_selection_manager.clipboard_specs_at(target_tick), "Duplicate Points"
-	)
-	# Duplicate is not a copy: leave whatever was on the clipboard before untouched.
-	automation_selection_manager.clipboard = previous
-	_select_pasted_points(lane, pasted)
-	logger.info("Duplicated %d automation point(s) at tick %d" % [pasted.size(), target_tick])
-
-
-## Leave the freshly pasted points selected so a following duplicate chains off them.
-func _select_pasted_points(lane: AutomationLane, pasted: Array) -> void:
-	if pasted.is_empty():
-		return
-	var ids: Array = []
-	for point in pasted:
-		ids.append(point.id)
-	automation_selection_manager.hide_range()
-	automation_selection_manager.select_ids(lane, ids)
+	automation_selection_manager.duplicate_selection()
 
 
 ## Delete the selected automation points (REQ-018). Returns false when there was no selection.
 func delete_automation_selection() -> bool:
-	if automation_selection_manager == null or not automation_selection_manager.has_selection():
-		return false
-	var lane := automation_selection_manager.lane
-	var points := automation_selection_manager.get_selected_points()
-	if points.is_empty():
-		return false
-	AutomationActions.delete_points(lane, points)
-	automation_selection_manager.clear_selection()
-	return true
+	return automation_selection_manager != null and automation_selection_manager.delete_selection()
 
 
 func copy_selection_to_clipboard() -> void:

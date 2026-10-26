@@ -13,6 +13,7 @@
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
 [ext_resource type="Texture2D" uid="uid://1sdwj750u4bc" path="res://assets/icons/headphones.svg" id="10_audit"]
 [ext_resource type="PackedScene" uid="uid://cu5kdhb7wxo8" path="res://clip_editor/value_lanes/NoteValuePane.tscn" id="14_wamqs"]
+[ext_resource type="PackedScene" path="res://clip_editor/automation/AutomationPane.tscn" id="automation_pane"]
 [ext_resource type="Texture2D" uid="uid://dycjjtqnsvlib" path="res://assets/icons/chevron-up.svg" id="16_y4ojr"]
 [ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="eye_icon"]
 [ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="layers_icon"]
@@ -309,7 +310,17 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("9_ytm0k")
 
-[node name="NoteValuePane" parent="HSplit/MainPanel/VBox/EditorSplit" unique_id=48912712 instance=ExtResource("14_wamqs")]
+[node name="LanePanes" type="VBoxContainer" parent="HSplit/MainPanel/VBox/EditorSplit"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="NoteValuePane" parent="HSplit/MainPanel/VBox/EditorSplit/LanePanes" unique_id=48912712 instance=ExtResource("14_wamqs")]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="AutomationPane" parent="HSplit/MainPanel/VBox/EditorSplit/LanePanes" instance=ExtResource("automation_pane")]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="BottomPanel" type="PanelContainer" parent="." unique_id=1605161909]
@@ -379,6 +390,14 @@ layout_mode = 2
 tooltip_text = "Show the velocity and release lanes below the notes"
 toggle_mode = true
 text = "Value Lanes"
+
+[node name="AutomationLanesToggle" type="Button" parent="BottomPanel/Toolbar/LanesGroup"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+tooltip_text = "Show the focus track's automation lanes below the notes"
+toggle_mode = true
+text = "Automation"
 
 [node name="NextValue" type="SpinBox" parent="BottomPanel/Toolbar/LanesGroup" unique_id=1540317795]
 layout_mode = 2

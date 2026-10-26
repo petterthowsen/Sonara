@@ -1,0 +1,56 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://clip_editor/automation/AutomationPane.gd" id="1_pane"]
+[ext_resource type="Texture2D" uid="uid://cbhc861t3h6le" path="res://assets/icons/plus.svg" id="2_plus"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pane"]
+bg_color = Color(0.16924512, 0.16924536, 0.16924521, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3019608, 0.3019608, 0.3019608, 1)
+corner_detail = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.16924512, 0.16924536, 0.16924521, 1)
+border_width_top = 2
+border_width_right = 2
+border_color = Color(0.3019608, 0.3019608, 0.3019608, 1)
+corner_detail = 1
+
+[node name="AutomationPane" type="PanelContainer"]
+theme_override_styles/panel = SubResource("StyleBoxFlat_pane")
+script = ExtResource("1_pane")
+
+[node name="HBox" type="HBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="HBox"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_header")
+
+[node name="VBox" type="VBoxContainer" parent="HBox/Header"]
+layout_mode = 2
+
+[node name="AddLaneButton" type="Button" parent="HBox/Header/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+tooltip_text = "Open an automation lane of this track here"
+icon = ExtResource("2_plus")
+icon_alignment = 1
+expand_icon = true
+
+[node name="Lanes" type="VBoxContainer" parent="HBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+alignment = 2

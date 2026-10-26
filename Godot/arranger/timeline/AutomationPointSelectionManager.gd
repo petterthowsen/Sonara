@@ -313,3 +313,86 @@ func clipboard_specs_at(target_tick: int) -> Array:
 ## How long the copied segment is, used to place a duplicate directly after it.
 func clipboard_length() -> int:
 	return int(clipboard.get("length_ticks", 0))
+
+
+# ============================================================================
+# CLIPBOARD OPERATIONS
+# ============================================================================
+# Shared by the Arranger's Timeline and the MIDI editor's automation pane.
+
+## True when cut/copy/paste/duplicate should act on automation points rather than something
+## else: the user last worked in a lane row. `release()` ends this.
+func is_active() -> bool:
+	return focus_lane != null or has_selection() or get_full_range() != Vector2i.ZERO
+
+
+func cut_selection() -> void:
+	var operand := get_operand()
+	if operand.is_empty() or operand["points"].is_empty():
+		logger.warn("Cut skipped - no automation points selected")
+		return
+	if not copy():
+		return
+	AutomationActions.delete_points(operand["lane"], operand["points"])
+	clear_selection()
+	logger.info("Cut %d automation point(s)" % operand["points"].size())
+
+
+## Paste the clipboard into the target lane at the range start, else the last click, else
+## `fallback_tick`. Returns the pasted points (empty when nothing was pasted).
+func paste_at(fallback_tick: int) -> Array:
+	if not has_clipboard():
+		logger.warn("Paste skipped - automation clipboard empty")
+		return []
+	var target_lane := get_target_lane()
+	if target_lane == null:
+		logger.warn("Paste skipped - no automation lane is active")
+		return []
+	var target_tick := get_paste_tick(fallback_tick)
+	var pasted := AutomationActions.paste_segment(target_lane, clipboard_specs_at(target_tick))
+	_select_pasted_points(target_lane, pasted)
+	logger.info("Pasted %d automation point(s) at tick %d" % [pasted.size(), target_tick])
+	return pasted
+
+
+## Duplicate the active range/selection immediately after itself. Returns the new points.
+func duplicate_selection() -> Array:
+	var operand := get_operand()
+	if operand.is_empty() or operand["points"].is_empty():
+		return []
+	var previous: Dictionary = clipboard
+	if not copy():
+		return []
+	var source_lane: AutomationLane = operand["lane"]
+	var target_tick := get_duplicate_tick(int(operand["origin"]) + int(operand["length"]))
+	var pasted := AutomationActions.paste_segment(
+		source_lane, clipboard_specs_at(target_tick), "Duplicate Points"
+	)
+	# Duplicate is not a copy: leave whatever was on the clipboard before untouched.
+	clipboard = previous
+	_select_pasted_points(source_lane, pasted)
+	logger.info("Duplicated %d automation point(s) at tick %d" % [pasted.size(), target_tick])
+	return pasted
+
+
+## Delete the selected points. Returns false when there was no selection.
+func delete_selection() -> bool:
+	if not has_selection():
+		return false
+	var points := get_selected_points()
+	if points.is_empty():
+		return false
+	AutomationActions.delete_points(lane, points)
+	clear_selection()
+	return true
+
+
+## Leave the freshly pasted points selected so a following duplicate chains off them.
+func _select_pasted_points(p_lane: AutomationLane, pasted: Array) -> void:
+	if pasted.is_empty():
+		return
+	var ids: Array = []
+	for point in pasted:
+		ids.append(point.id)
+	hide_range()
+	select_ids(p_lane, ids)
