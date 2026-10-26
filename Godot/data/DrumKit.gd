@@ -8,18 +8,18 @@
 class_name DrumKit extends RefCounted
 
 const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
-## Hat Decay (parameters.rs ID 11).
-const HAT_DECAY := 11
+## Hat Decay (hat.rs ID 1; ID 11 is Metal).
+const HAT_DECAY := 1
 
 ## One pad: `id` is the built-in device, `note` its GM note, `name` the pad's display name,
-## `choke` (optional) the names of the kit pads it chokes and `decay` (optional) the drum's own
-## Decay in seconds.
+## `choke` (optional) the names of the kit pads it chokes and `params` (optional) real values
+## (Hz, s, %, ...) keyed by the drum's parameter ID.
 const SYNTH_KIT: Array[Dictionary] = [
 	{"id": "sonara.builtin.kick", "note": 36, "name": "Kick"},
 	{"id": "sonara.builtin.snare", "note": 38, "name": "Snare"},
 	{"id": "sonara.builtin.clap", "note": 39, "name": "Clap"},
-	{"id": "sonara.builtin.hat", "note": 42, "name": "Closed Hat", "choke": ["Open Hat"], "decay": 0.06},
-	{"id": "sonara.builtin.hat", "note": 46, "name": "Open Hat", "choke": ["Closed Hat"], "decay": 0.6},
+	{"id": "sonara.builtin.hat", "note": 42, "name": "Closed Hat", "choke": ["Open Hat"], "params": {HAT_DECAY: 0.06}},
+	{"id": "sonara.builtin.hat", "note": 46, "name": "Open Hat", "choke": ["Closed Hat"], "params": {HAT_DECAY: 0.6}},
 ]
 
 
@@ -72,11 +72,11 @@ static func apply(
 
 	HistoryUtil.execute_many("Load Synth Kit", cmds)
 
-	# The pads exist now; set each drum's Decay (the open hat rings, the closed one doesn't).
+	# The pads exist now; set each drum's own parameters (the open hat rings, the closed one doesn't).
 	for i in range(pads.size()):
-		var decay: float = entries[i].get("decay", 0.0)
-		if decay > 0.0:
-			_set_real_param(pads[i], HAT_DECAY, decay)
+		var params: Dictionary = entries[i].get("params", {})
+		for id in params:
+			_set_real_param(pads[i], int(id), float(params[id]))
 	return pads
 
 

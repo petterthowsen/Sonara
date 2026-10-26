@@ -13,8 +13,8 @@ const KICK_ID := "sonara.builtin.kick"
 const SNARE_ID := "sonara.builtin.snare"
 const HAT_ID := "sonara.builtin.hat"
 const CLAP_ID := "sonara.builtin.clap"
-## Hat Decay parameter id (the same as the engine's table).
-const HAT_DECAY := 11
+## Hat Decay parameter id (the same as the engine's table; 11 is Metal).
+const HAT_DECAY := 1
 
 var _project_script: GDScript
 var _drum_kit: GDScript

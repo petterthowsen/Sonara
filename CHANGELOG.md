@@ -37,6 +37,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- The Synth Kit's open hat now rings: the kit set the hat's Metal control instead of its Decay, so both hats had the same short decay.
 - Clicking or dragging a note in the note editor now makes its length the length of new notes, not only resizing it.
 - Dragging a track or a device over a folder or group track in the arranger tracklist no longer makes the drop line jump before or after the whole folder when the pointer is near the left edge of a child track; the line stays in the gap under the pointer (#185).
 - Automation at a loop's start now applies when the loop wraps, not one audio buffer later: notes at the loop start no longer play with the loop end's value (for example a PolySynth cutoff ramp). PolySynth and CLAP plugins switch at the exact sample; other devices switch at the start of the buffer that contains the wrap.
