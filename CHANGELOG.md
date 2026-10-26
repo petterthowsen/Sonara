@@ -8,6 +8,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- New built-in drum instrument Shaker (spec 056): shaped, filtered noise for maracas and shakers, with Attack, Decay, Tone, Ring and a Grain control that adds a beads texture.
 - New built-in drum instrument Rimshot (spec 056): a tick rings two tuned resonators (the 808 pair) through a high-pass and drive for the snap; with high Ring and Tone it also makes claves.
 - New built-in drum instrument Cowbell (spec 056): the 808 recipe of two pulse oscillators through a resonant band-pass, with a Strike control that mixes a sharp attack into the tail.
 - New built-in drum instrument Cymbal (spec 056): an 808-style metal cymbal with separately decaying low, mid and high bands, Bloom, Trash, Diffusion and a Stick transient. The defaults make a crash; Grab chokes it on note-off, and Tune, Decay and Tone reach splash, ride and china.

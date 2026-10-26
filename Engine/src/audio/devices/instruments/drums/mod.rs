@@ -14,6 +14,7 @@ pub mod kick;
 pub mod layers;
 pub mod params;
 pub mod rimshot;
+pub mod shaker;
 pub mod snare;
 pub mod tom;
 
