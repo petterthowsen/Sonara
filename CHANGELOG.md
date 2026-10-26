@@ -10,10 +10,14 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 - Right-click a mixer meter (the big meter or the compact one) for its options: Centered Scale draws the dB scale between the left and right bars, Show Fader turns the meter's fader on or off, and Show Fader Handle Only on Hover hides the handle until the pointer is over the meter. Each kind of meter keeps its own options for all channels; they are also under Settings > Appearance > Mixer.
 - The fader inside a mixer meter is a darker shade of the accent color, so it stands apart from the meter bars; with Centered Scale it fills the scale column and the labels sit inside it.
+- The clip editor has a clip strip under the ruler (spec 054). In track mode it shows the focused track's clips with their names: drag a clip to move it, drag either end to trim or resize it, double-click empty space to add a clip, and click to select, Shift+click to select a range from the last clicked clip, Ctrl/Cmd+click to toggle. With the strip focused, Ctrl+C / Ctrl+V copy and paste the selected clips, Ctrl+D duplicates them right after themselves (overwriting what is there), and Ctrl/Cmd+drag drags copies while the originals stay. Right-click opens the arranger's clip menu, so every clip action works without going back to the arranger. In clip mode it shows the bound clip's played window (the loop region for a looped clip) and its right end can be dragged to change the length or the loop length. Drags snap to the grid (Shift for free), and each gesture is one undo step; moving a clip also moves the automation under it when "automation follows clips" is on.
+- A link icon marks a clip that has more than one instance, in the arranger's clip header and in the clip strip; it goes away after Make Unique.
+- Every action in the clip context menu has an icon now, and Make Unique and Make Unique Per Track use a broken link.
 - Dragging a device over a layer in a Layer's list for a second opens that layer, so you can drop the device inside it; the layer closes again if you let go elsewhere (#159).
 
 ### Changed
 
+- The clip editor's ruler no longer shades the clips; the clip strip below it shows them.
 - A new track or channel is selected as soon as it is created (#165).
 - Opening the clip editor with several clips selected shows the piano roll, unless the channel has drum rows (#150).
 - Compact devices in the mixer show their state in the card (#172), and the on/off light only when the device is at least 80 px wide: a disabled device is muted (background, title and border), an inactive one has a red border, and a failed or crashed plugin a red border too. The device context menu has Enabled and Active toggles.

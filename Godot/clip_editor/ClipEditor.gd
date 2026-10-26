@@ -23,6 +23,10 @@ signal track_mode_track_selected(track: Track)
 ## clip-content ticks in clip mode, song ticks in track mode (see _ruler_to_song_ticks).
 @onready var ruler: RulerStack = $HSplit/MainPanel/VBox/PanelContainer/VBox/Ruler
 
+## One row under the ruler that draws the bound clip (clip mode, in clip-content ticks) or the
+## focus track's clips (track mode, in song ticks) and edits them (spec 054).
+@onready var clip_strip: ClipStrip = $HSplit/MainPanel/VBox/PanelContainer/VBox/ClipStrip
+
 @onready var midi_editor: MidiEditor = $HSplit/MainPanel/VBox/EditorSplit/MidiEditor
 
 ## Velocity / release lanes under the note area (docs/specs/019-note-values).
@@ -69,6 +73,7 @@ var grid_helper: GridHelper:
 			grid_helper = gh
 			midi_editor.grid_helper = gh
 			ruler.set_grid_helper(gh)
+			clip_strip.grid_helper = gh
 
 # Local cursor position (in ticks) - separate from main playhead
 # Used for paste operations and other editing functions
@@ -123,7 +128,10 @@ func _ready():
 	ruler.start_position_requested.connect(_on_ruler_position_requested)
 	ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
 	ruler.box_select_started.connect(_on_ruler_box_select_started)
-	midi_editor.focus_track_changed.connect(_mark_ruler_context_dirty)
+	midi_editor.focus_track_changed.connect(_sync_clip_strip)
+	clip_strip.context_menu_requested.connect(_on_strip_context_menu_requested)
+	clip_strip.copy_requested.connect(_on_strip_copy_requested)
+	clip_strip.paste_requested.connect(_on_strip_paste_requested)
 	midi_editor.note_track_picked.connect(_on_note_track_picked)
 	track_toggles.changed.connect(_on_track_toggles_changed)
 	track_selector.track_selected.connect(_on_track_selector_track_selected)
@@ -182,7 +190,7 @@ func _on_project_closed() -> void:
 	midi_editor.unbind()
 	_update_mode_ui()
 	_refresh_all_toggles()
-	_mark_ruler_context_dirty()
+	_sync_clip_strip()
 
 
 func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
@@ -502,7 +510,7 @@ func _bind_track_mode(from_selection: bool = false):
 	_refresh_all_toggles()
 	log.info("  - Active track set to: '%s'" % [midi_editor.focus_track.name if midi_editor and midi_editor.focus_track else "null"])
 	call_deferred("_apply_drum_view_preference")
-	_mark_ruler_context_dirty()
+	_sync_clip_strip()
 
 
 ## The project the listed tracks come from.
@@ -576,7 +584,7 @@ func _apply_track_toggles(preferred: Track = null) -> void:
 	midi_editor.set_track_views(_visible_tracks(), selected_clips)
 	midi_editor.editable_tracks = editable
 	_ensure_valid_selection(preferred)
-	_mark_ruler_context_dirty()
+	_sync_clip_strip()
 
 
 ## Keeps the selected track effectively editable: the current one if it is, else `preferred`,
@@ -617,9 +625,10 @@ func _bind_clip_mode():
 		_apply_signature_context()
 		_refresh_scale_context()
 		_watch_bound_instance_position()
+		_watch_bound_instance_removal()
 		_update_clip_name()
 	call_deferred("_apply_drum_view_preference")
-	_mark_ruler_context_dirty()
+	_sync_clip_strip()
 
 
 # ============================================================================
@@ -1240,7 +1249,7 @@ func _on_grid_helper_changed():
 
 
 # ============================================================================
-# RULER: coordinates, start position, time range and context regions
+# RULER: coordinates, start position and time range
 # ============================================================================
 
 ## Ruler/editor ticks -> song ticks. Track mode is already song-relative; clip mode is
@@ -1301,12 +1310,6 @@ var _editor: Editor = null
 ## Range start set by a Ctrl/Cmd click, shown until a real range or a plain click replaces it.
 var _ruler_range_start := -1
 
-## Set when the clips or tracks the ruler regions come from changed.
-var _ruler_context_dirty := true
-## [signal, callable] pairs connected for region refreshes, so they can be undone.
-var _ruler_watch: Array = []
-
-
 func _process(_delta: float) -> void:
 	PerfRecorder.begin(&"ClipEditor._process")
 	_process_body()
@@ -1319,6 +1322,7 @@ func _process_body() -> void:
 	# Line the ruler up with the note grid whatever sits to its left: the offset is the
 	# distance from the ruler's left edge to the note area's.
 	ruler.offset_x = midi_editor.note_area.global_position.x - ruler.global_position.x
+	clip_strip.offset_x = midi_editor.note_area.global_position.x - clip_strip.global_position.x
 
 	var project: Project = _editor.project if _editor else null
 	var has_binding := track_mode or bound_clip_instance != null
@@ -1327,10 +1331,6 @@ func _process_body() -> void:
 		ruler.set_start_position(_song_to_ruler_ticks(project.start_position_ticks))
 
 	_sync_ruler_selection()
-
-	if _ruler_context_dirty:
-		_ruler_context_dirty = false
-		_rebuild_ruler_regions()
 
 
 ## Mirror the active note selection's range (or a pending range start) onto the ruler.
@@ -1346,72 +1346,85 @@ func _sync_ruler_selection() -> void:
 		ruler.set_selection_range(-1, -1)
 
 
-func _mark_ruler_context_dirty() -> void:
-	_ruler_context_dirty = true
-
-
-## Track-coloured spans behind the ruler: in clip mode the bound instance's played window
-## (with edges); in track mode every clip of the active track, over fainter clips of the
-## other tracks on screen. Gaps between clips stay plain.
-func _rebuild_ruler_regions() -> void:
-	_unwatch_ruler_context()
-	var regions: Array = []
+## Point the clip strip at what the editor shows: the focus track in track mode, the bound
+## instance in clip mode, else nothing.
+func _sync_clip_strip() -> void:
 	if track_mode:
-		var active_track: Track = midi_editor.focus_track
-		var others: Array = []
-		var mine: Array = []
-		for t in _visible_tracks():
-			if not is_instance_valid(t):
-				continue
-			_watch_ruler(t.color_changed, _mark_ruler_context_dirty.unbind(1))
-			_watch_ruler(t.clip_instance_added, _mark_ruler_context_dirty.unbind(1))
-			_watch_ruler(t.clip_instance_removed, _mark_ruler_context_dirty.unbind(1))
-			var is_active := t == active_track
-			for ci in t.clip_instances:
-				if not ci:
-					continue
-				_watch_ruler(ci.instance_modified, _mark_ruler_context_dirty)
-				var c := Utils.display_color(t.color)
-				c.a = 0.38 if is_active else 0.12
-				var region := {"start": ci.start_ticks, "end": ci.get_end_ticks(), "color": c, "edges": is_active}
-				(mine if is_active else others).append(region)
-		regions = others + mine
-	elif bound_clip_instance and is_instance_valid(bound_clip_instance):
-		var ci := bound_clip_instance
-		_watch_ruler(ci.instance_modified, _mark_ruler_context_dirty)
-		var c := Utils.display_color(ci.track.color) if ci.track else Color(0.4, 0.6, 0.9)
-		if ci.track:
-			_watch_ruler(ci.track.color_changed, _mark_ruler_context_dirty.unbind(1))
-		c.a = 0.38
-		if ci.loop_enabled:
-			# The content that repeats; whatever the first run plays before it is fainter.
-			var run := ci.first_run_range()
-			if run.x < ci.loop_start_ticks:
-				var lead := c
-				lead.a = 0.15
-				regions.append({"start": run.x, "end": ci.loop_start_ticks, "color": lead, "edges": false})
-			regions.append({"start": ci.loop_start_ticks, "end": ci.loop_start_ticks + ci.loop_length_ticks, "color": c, "edges": true})
-		else:
-			regions.append({"start": ci.clip_offset, "end": ci.clip_offset + ci.duration_ticks, "color": c, "edges": true})
-	ruler.set_regions(regions)
+		clip_strip.bind_track(midi_editor.focus_track)
+	elif bound_clip_instance != null and is_instance_valid(bound_clip_instance):
+		clip_strip.bind_clip(bound_clip_instance)
+	else:
+		clip_strip.unbind()
 
 
-func _watch_ruler(sig: Signal, cb: Callable) -> void:
-	sig.connect(cb)
-	_ruler_watch.append([sig, cb])
+## Right-click on a strip bar: the arranger's clip menu, docked to the bar. It keeps the arranger's
+## selection, because a changed selection would rebind this editor in the middle of the edit.
+func _on_strip_context_menu_requested(instances: Array[ClipInstance], split_tick: int, anchor_rect: Rect2, from_x: float) -> void:
+	var arranger_timeline: Timeline = _editor.arranger.timeline if _editor and _editor.arranger else null
+	if arranger_timeline:
+		arranger_timeline.open_clip_menu(instances, split_tick, anchor_rect, from_x, true)
 
 
-func _unwatch_ruler_context() -> void:
-	for pair in _ruler_watch:
-		var sig: Signal = pair[0]
-		if is_instance_valid(sig.get_object()) and sig.is_connected(pair[1]):
-			sig.disconnect(pair[1])
-	_ruler_watch.clear()
+## Ctrl+C in the strip: the arranger's clip clipboard, so a paste in the arranger works too.
+func _on_strip_copy_requested(instances: Array[ClipInstance]) -> void:
+	var arranger_timeline: Timeline = _editor.arranger.timeline if _editor and _editor.arranger else null
+	if arranger_timeline:
+		arranger_timeline.copy_instances_to_clipboard(instances)
 
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE:
-		_unwatch_ruler_context()
+## Ctrl+V in the strip: the arranger's paste rules (refused when the clips would overlap) with the
+## focus track as the target, without touching the arranger's selection.
+func _on_strip_paste_requested() -> void:
+	var arranger_timeline: Timeline = _editor.arranger.timeline if _editor and _editor.arranger else null
+	var track := midi_editor.focus_track
+	if arranger_timeline == null or track == null or arranger_timeline.clip_clipboard == null:
+		return
+	var note_range := midi_editor.note_selection
+	var tick := ClipStripActions.paste_tick(
+		note_range.range.x if note_range.has_range() else -1,
+		_ruler_range_start,
+		_editor.playhead_ticks if _editor else 0)
+	var created := arranger_timeline.paste_clipboard_at(tick, null, false, "Paste", track, false, arranger_timeline.automation_clipboard)
+	if not created.is_empty():
+		clip_strip.select_instances(created)
+
+
+## The track whose `clip_instance_removed` is watched for the bound instance (clip mode).
+var _removal_watched_track: Track = null
+
+
+func _watch_bound_instance_removal() -> void:
+	var track: Track = bound_clip_instance.track if bound_clip_instance else null
+	if track == _removal_watched_track:
+		return
+	if _removal_watched_track != null and is_instance_valid(_removal_watched_track) \
+			and _removal_watched_track.clip_instance_removed.is_connected(_on_bound_track_instance_removed):
+		_removal_watched_track.clip_instance_removed.disconnect(_on_bound_track_instance_removed)
+	_removal_watched_track = track
+	if track != null:
+		track.clip_instance_removed.connect(_on_bound_track_instance_removed)
+
+
+func _on_bound_track_instance_removed(instance: ClipInstance) -> void:
+	if track_mode or instance != bound_clip_instance:
+		return
+	# A move to another track removes and re-adds it in one go: look once that has settled.
+	_check_bound_instance_gone.call_deferred(instance)
+
+
+func _check_bound_instance_gone(instance: ClipInstance) -> void:
+	if track_mode or instance != bound_clip_instance:
+		return
+	if instance.track != null and instance.track.clip_instances.has(instance):
+		return
+	# Deleted: show nothing, as when the editor has no clip bound.
+	bound_clip_instance = null
+	selected_clips.clear()
+	_watch_bound_instance_position()
+	_watch_bound_instance_removal()
+	midi_editor.unbind()
+	_update_mode_ui()
+	_sync_clip_strip()
 
 
 func _on_editor_playhead_moved(global_playhead_ticks: int):

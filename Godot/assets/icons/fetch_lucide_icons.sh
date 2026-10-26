@@ -27,6 +27,9 @@ names=(
   pencil pencil-off layers
   # clip context menu
   scissors square-split-horizontal
+  # clip context menu: Make Unique, Make Unique Per Track, Merge, Scale half/double, Make Legato,
+  # Merge Same, Split to Tracks (octave down/up use chevrons-down/up, Mute uses volume-x)
+  unlink unlink-2 combine fold-horizontal unfold-horizontal arrow-right-to-line merge split
   # mixer toolbar toggles
   move-horizontal panel-right send cable chart-no-axes-column plug
   # mixer pan mode button (Stage)

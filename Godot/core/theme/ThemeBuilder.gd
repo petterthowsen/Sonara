@@ -491,6 +491,13 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 	sibling.a = 0.6
 	_set_colors(t, &"TimelineClip", {&"sibling_border": sibling})
 	t.set_stylebox(&"normal", &"Ruler", box(p, p.role(&"editor_bg"), -1.0))
+	# The clip editor's clip strip: bars are `bar` (rounded by the theme radius) tinted by the clip's colour.
+	t.set_stylebox(&"bar", &"ClipStrip", box(p, Color.WHITE))
+	t.set_constant(&"height", &"ClipStrip", 24)
+	_set_colors(t, &"ClipStrip", {
+		&"name": Color(1, 1, 1, 0.95),
+		&"link_icon": Color(1, 1, 1, 0.85),
+	})
 
 
 # ---------------------------------------------------------------------------

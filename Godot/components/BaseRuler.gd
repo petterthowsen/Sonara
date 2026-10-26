@@ -1,6 +1,6 @@
 # BaseRuler.gd
 # Shared chrome and interaction for timeline rulers, used by the arranger and the note editor:
-# background, colours, GridHelper binding, context regions, the selection band, the
+# background, colours, GridHelper binding, the selection band, the
 # start-position arrow, click-drag scrubbing and the Ctrl/Cmd time-range gestures.
 # Subclasses draw their own lines in _draw_ruler() and choose how a click snaps in
 # _snapped_ticks_from_local().
@@ -104,10 +104,6 @@ var show_start_position: bool = true:
 			show_start_position = value
 			queue_redraw()
 
-## Coloured background spans, e.g. the edited clip or the tracks' clips. Each entry is
-## {start: int, end: int, color: Color, edges: bool}; `edges` adds solid boundary lines.
-var regions: Array = []
-
 ## Time-range selection, drawn as a band. selection_start < 0 hides it; an end at or
 ## before the start draws only the start line.
 var selection_start: int = -1
@@ -157,13 +153,6 @@ func set_loop(enabled: bool, start: int, end: int) -> void:
 
 func _has_loop() -> bool:
 	return show_loop and loop_end_ticks > loop_start_ticks
-
-
-## Replace the background regions (see `regions`).
-func set_regions(new_regions: Array) -> void:
-	if regions != new_regions:
-		regions = new_regions
-		queue_redraw()
 
 
 ## Show a time-range band from start to end, or only a start line when end <= start.
@@ -222,7 +211,6 @@ func _draw() -> void:
 	draw_row_border(self)
 
 	if grid_helper:
-		_draw_regions()
 		_draw_selection()
 		_draw_ruler()
 		if show_start_position:
@@ -239,22 +227,6 @@ func _draw_ruler() -> void:
 ## Ruler-local X of a tick in the ruler's space.
 func _tick_to_local_x(ticks: int) -> float:
 	return grid_helper.ticks_to_pixels(ticks) - grid_helper.scroll_position + offset_x
-
-
-## Fill each region's visible span; clipped to the drawable area right of offset_x.
-func _draw_regions() -> void:
-	for r in regions:
-		var x0 := maxf(_tick_to_local_x(int(r.start)), maxf(offset_x, 0.0))
-		var x1 := minf(_tick_to_local_x(int(r.end)), size.x)
-		if x1 <= x0:
-			continue
-		var color: Color = r.color
-		draw_rect(Rect2(x0, 0.0, x1 - x0, size.y), color, true)
-		if r.get("edges", false):
-			var edge := Color(color.r, color.g, color.b, 1.0)
-			for ex in [_tick_to_local_x(int(r.start)), _tick_to_local_x(int(r.end))]:
-				if ex >= offset_x and ex <= size.x:
-					draw_rect(Rect2(roundf(ex) - 1.0, 0.0, 2.0, size.y), edge, true)
 
 
 func _draw_selection() -> void:

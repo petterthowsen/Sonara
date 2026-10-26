@@ -7,6 +7,17 @@
 [ext_resource type="Texture2D" uid="uid://uekq5j7whsde" path="res://assets/icons/copy.svg" id="5_copy"]
 [ext_resource type="Texture2D" uid="uid://cx78wuvo5ydf4" path="res://assets/icons/square-split-horizontal.svg" id="6_split"]
 [ext_resource type="Texture2D" uid="uid://sdwtbedbsin0" path="res://assets/icons/x.svg" id="7_x"]
+[ext_resource type="Texture2D" uid="uid://52fvbkf243w5" path="res://assets/icons/combine.svg" id="icon_merge"]
+[ext_resource type="Texture2D" uid="uid://b0eiu18rxw23" path="res://assets/icons/chevrons-down.svg" id="icon_octavedown"]
+[ext_resource type="Texture2D" uid="uid://ifolewy0c887" path="res://assets/icons/chevrons-up.svg" id="icon_octaveup"]
+[ext_resource type="Texture2D" uid="uid://doptgipfocrlc" path="res://assets/icons/fold-horizontal.svg" id="icon_scalehalf"]
+[ext_resource type="Texture2D" uid="uid://bn61ppqo6sskb" path="res://assets/icons/unfold-horizontal.svg" id="icon_scaledouble"]
+[ext_resource type="Texture2D" uid="uid://7jfsw2yp8lgu" path="res://assets/icons/arrow-right-to-line.svg" id="icon_makelegato"]
+[ext_resource type="Texture2D" uid="uid://kgtgui4qhpop" path="res://assets/icons/merge.svg" id="icon_mergesame"]
+[ext_resource type="Texture2D" uid="uid://brc8uf6oycpxi" path="res://assets/icons/split.svg" id="icon_splittotracks"]
+[ext_resource type="Texture2D" uid="uid://dta8x61oh6lge" path="res://assets/icons/unlink.svg" id="icon_makeunique"]
+[ext_resource type="Texture2D" uid="uid://450on84vw3q3" path="res://assets/icons/unlink-2.svg" id="icon_makeuniquepertrack"]
+[ext_resource type="Texture2D" uid="uid://cwlv0e8j2i413" path="res://assets/icons/volume-x.svg" id="icon_mutetoggle"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_mute"]
 bg_color = Color(0.8, 0.41333333, 0, 1)
@@ -80,7 +91,9 @@ focus_mode = 0
 theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
 theme_override_styles/pressed = SubResource("StyleBoxFlat_mute")
 toggle_mode = true
-text = "M"
+icon = ExtResource("icon_mutetoggle")
+icon_alignment = 1
+expand_icon = true
 
 [node name="HSeparator" type="HSeparator" parent="VBoxContainer" unique_id=296696983]
 layout_mode = 2
@@ -130,6 +143,8 @@ layout_mode = 2
 tooltip_text = "Merge the selected MIDI clips on each track into one clip. A single clip has its loop and trim baked in."
 focus_mode = 0
 text = "Merge"
+icon = ExtResource("icon_merge")
+expand_icon = true
 
 [node name="Transpose" type="HBoxContainer" parent="VBoxContainer"]
 layout_mode = 2
@@ -142,6 +157,8 @@ size_flags_horizontal = 3
 tooltip_text = "Transpose the clip's notes down one octave (12 semitones)"
 focus_mode = 0
 text = "-1 Oct"
+icon = ExtResource("icon_octavedown")
+expand_icon = true
 
 [node name="OctaveUp" type="Button" parent="VBoxContainer/Transpose"]
 custom_minimum_size = Vector2(0, 32)
@@ -150,6 +167,8 @@ size_flags_horizontal = 3
 tooltip_text = "Transpose the clip's notes up one octave (12 semitones)"
 focus_mode = 0
 text = "+1 Oct"
+icon = ExtResource("icon_octaveup")
+expand_icon = true
 
 [node name="TimeScale" type="HBoxContainer" parent="VBoxContainer"]
 layout_mode = 2
@@ -162,6 +181,8 @@ size_flags_horizontal = 3
 tooltip_text = "Halve the clip's length: notes play twice as fast. Applies to every instance of the clip."
 focus_mode = 0
 text = "Scale Half"
+icon = ExtResource("icon_scalehalf")
+expand_icon = true
 
 [node name="ScaleDouble" type="Button" parent="VBoxContainer/TimeScale"]
 custom_minimum_size = Vector2(0, 32)
@@ -170,6 +191,8 @@ size_flags_horizontal = 3
 tooltip_text = "Double the clip's length: notes play half as fast. Applies to every instance of the clip."
 focus_mode = 0
 text = "Scale Double"
+icon = ExtResource("icon_scaledouble")
+expand_icon = true
 
 [node name="Legato" type="HBoxContainer" parent="VBoxContainer"]
 layout_mode = 2
@@ -182,6 +205,8 @@ size_flags_horizontal = 3
 tooltip_text = "Extend every note to the start of the next one so no gaps are left. Applies to every instance of the clip."
 focus_mode = 0
 text = "Make Legato"
+icon = ExtResource("icon_makelegato")
+expand_icon = true
 
 [node name="MergeSame" type="Button" parent="VBoxContainer/Legato"]
 custom_minimum_size = Vector2(0, 32)
@@ -190,6 +215,8 @@ size_flags_horizontal = 3
 tooltip_text = "Join notes of the same pitch that touch into one longer note. Applies to every instance of the clip."
 focus_mode = 0
 text = "Merge Same"
+icon = ExtResource("icon_mergesame")
+expand_icon = true
 
 [node name="SplitToTracks" type="Button" parent="VBoxContainer"]
 custom_minimum_size = Vector2(0, 32)
@@ -197,17 +224,23 @@ layout_mode = 2
 tooltip_text = "Spread the voices of the clip's chords over the selected instrument tracks: the top voice to the first, and so on."
 focus_mode = 0
 text = "Split to Tracks"
+icon = ExtResource("icon_splittotracks")
+expand_icon = true
 
 [node name="MakeUnique" type="Button" parent="VBoxContainer" unique_id=1599534461]
 layout_mode = 2
 focus_mode = 0
 text = "Make Unique"
+icon = ExtResource("icon_makeunique")
+expand_icon = true
 
 [node name="MakeUniquePerTrack" type="Button" parent="VBoxContainer"]
 layout_mode = 2
 focus_mode = 0
 tooltip_text = "Give this track its own copy of the clip, shared by this track's instances"
 text = "Make Unique Per Track"
+icon = ExtResource("icon_makeuniquepertrack")
+expand_icon = true
 
 [node name="Delete" type="Button" parent="VBoxContainer" unique_id=749149364]
 custom_minimum_size = Vector2(0, 32)

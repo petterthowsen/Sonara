@@ -1,9 +1,8 @@
 # RulerStack.gd
 # The arranger's ruler rows as one component: a real-time (clock) ruler above a
-# bar/beat ruler, sharing a GridHelper, offset, start arrow, selection band and
-# context regions. Both rows carry BaseRuler's interaction (click-drag scrubs the
-# start position, Ctrl/Cmd click or drag sets a time range), and their signals are
-# forwarded from whichever row was used.
+# bar/beat ruler, sharing a GridHelper, offset, start arrow and selection band. Both rows
+# carry BaseRuler's interaction (click-drag scrubs the start position, Ctrl/Cmd click or drag
+# sets a time range), and their signals are forwarded from whichever row was used.
 @tool
 class_name RulerStack extends VBoxContainer
 
@@ -103,7 +102,3 @@ func set_selection_range(start: int, end: int) -> void:
 	for r in rulers():
 		r.set_selection_range(start, end)
 
-
-func set_regions(regions: Array) -> void:
-	for r in rulers():
-		r.set_regions(regions)

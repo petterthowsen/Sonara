@@ -200,6 +200,8 @@ var clip: Clip:
 var clip_instances: Array[ClipInstance] = []
 var track: Track = null  # Track that owns these clips
 var multi_clip_mode: bool = false
+## Clips whose note signals bind_to_clips connected (unbind disconnects exactly these).
+var _connected_clips: Array[Clip] = []
 
 # Container for notes
 # SINGLE-CLIP MODE: note_id -> VisualNote
@@ -439,9 +441,12 @@ func unbind():
 		_disconnect_clip_signals(clip)
 
 	# Disconnect from all clips (multi-clip mode)
+	# The clips connected at bind time: Make Unique may have retargeted an instance since.
+	for c in _connected_clips:
+		if is_instance_valid(c):
+			_disconnect_clip_signals(c)
+	_connected_clips.clear()
 	for ci in clip_instances:
-		if ci and ci.clip:
-			_disconnect_clip_signals(ci.clip)
 		if ci and ci.instance_modified.is_connected(_on_instance_modified):
 			ci.instance_modified.disconnect(_on_instance_modified)
 
@@ -514,6 +519,8 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 	for ci in clip_instances:
 		if ci and ci.clip:
 			_connect_clip_signals(ci.clip)
+			if not _connected_clips.has(ci.clip):
+				_connected_clips.append(ci.clip)
 		_watch_instance(ci)
 
 	_load_clip_notes()

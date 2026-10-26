@@ -30,6 +30,7 @@ func run_tests() -> void:
 	await _test_popup_opens_in_test_mode()
 	await _test_animated_paths()
 	await _test_arranger_add_menu()
+	await _test_clip_menu_icons()
 
 
 func _test_place_below_and_flip() -> void:
@@ -237,3 +238,24 @@ func _test_arranger_add_menu() -> void:
 	_assert(menu.position.x == int(arranger.add_track_button.get_global_rect().position.x), "the + menu is left-aligned with the button")
 	menu.hide()
 	root.queue_free()
+
+
+## Every action button of the clip context menu has an icon (spec 054 REQ-031). The Reverse
+## check button is a toggle row with its own check mark, not an action.
+func _test_clip_menu_icons() -> void:
+	var menu: Node = (load("res://arranger/timeline/ClipContextMenu.tscn") as PackedScene).instantiate()
+	root.add_child(menu)
+	await process_frame
+	var buttons := menu.find_children("*", "Button", true, false)
+	var missing: Array[String] = []
+	var checked := 0
+	for b in buttons:
+		if b is CheckButton or b is LineEdit:
+			continue
+		checked += 1
+		if (b as Button).icon == null:
+			missing.append(str(menu.get_path_to(b)))
+	_assert(checked >= 14, "the clip menu has its action buttons (%d)" % checked)
+	_assert(missing.is_empty(), "every action button has an icon (missing: %s)" % str(missing))
+	menu.queue_free()
+	await process_frame

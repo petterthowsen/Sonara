@@ -50,6 +50,10 @@ signal scale_changed(root: int, type_id: String)
 ## A clip_editor_view flag changed (see set_clip_editor_view).
 signal clip_editor_view_changed(key: String, value: bool)
 
+## The set of clips with more than one instance may have changed (an instance was added, removed
+## or retargeted). Emitted at most once per frame, so views redraw once after a batch edit.
+signal instance_counts_changed
+
 # ============================================================================
 # PROPERTIES
 # ============================================================================
@@ -147,6 +151,9 @@ var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
 var _request_clip_lookup: Dictionary = {}  # req_id -> clip_id
 var _placeholder_commands: Dictionary = {}  # clip_id -> Array[ClipInstanceCreateCommand] awaiting the decoded length
 var _request_device_lookup: Dictionary = {}  # req_id -> DeviceInstance
+var _instance_counts: Dictionary = {}  # clip_id -> number of instances across all tracks
+var _instance_counts_dirty: bool = true
+var _instance_counts_emit_queued: bool = false
 ## AudioFileService request id -> AudioSourceInfo for sources that no clip or device owns directly
 ## (Sampler multisample zones).
 var _request_source_lookup: Dictionary = {}
@@ -1075,6 +1082,7 @@ func add_track(track: Track) -> void:
 		track.name = final_name
 
 	tracks.append(track)
+	mark_instance_counts_dirty()
 	track_added.emit(track)
 
 	# Auto-connect if project is connected
@@ -1134,6 +1142,7 @@ func remove_track(track_id: int) -> bool:
 	var index = tracks.find(track)
 	if index >= 0:
 		tracks.remove_at(index)
+		mark_instance_counts_dirty()
 	
 	# Emit signal before cleanup
 	track_removed.emit(track)
@@ -1292,12 +1301,41 @@ func remove_clip(clip_id: String) -> bool:
 
 func get_clip_instance_count(clip_id: String) -> int:
 	"""Count how many instances reference this clip across all tracks."""
-	var count = 0
+	_refresh_instance_counts()
+	return _instance_counts.get(clip_id, 0)
+
+
+## True when `clip_id` has more than one instance in the project (a link shown on its clips).
+func is_clip_shared(clip_id: String) -> bool:
+	return get_clip_instance_count(clip_id) > 1
+
+
+## Call when an instance is added, removed or retargeted to another clip. The counts are rebuilt on
+## the next read, and `instance_counts_changed` is emitted once on the next frame.
+func mark_instance_counts_dirty() -> void:
+	_instance_counts_dirty = true
+	if _instance_counts_emit_queued:
+		return
+	var tree := _get_scene_tree()
+	if tree == null:
+		return
+	_instance_counts_emit_queued = true
+	tree.process_frame.connect(_emit_instance_counts_changed, CONNECT_ONE_SHOT)
+
+
+func _emit_instance_counts_changed() -> void:
+	_instance_counts_emit_queued = false
+	instance_counts_changed.emit()
+
+
+func _refresh_instance_counts() -> void:
+	if not _instance_counts_dirty:
+		return
+	_instance_counts.clear()
 	for track in tracks:
 		for instance in track.clip_instances:
-			if instance.clip_id == clip_id:
-				count += 1
-	return count
+			_instance_counts[instance.clip_id] = int(_instance_counts.get(instance.clip_id, 0)) + 1
+	_instance_counts_dirty = false
 
 
 # ============================================================================
@@ -2293,6 +2331,7 @@ static func from_json(data: Dictionary) -> Project:
 		# Append directly to avoid triggering track_added signal during load
 		# (signals will be connected when project is activated in Editor)
 		project.tracks.append(track)
+	project.mark_instance_counts_dirty()
 
 	# Stored IDs of tracks the file no longer has are dropped now that the tracks are loaded.
 	project.visibility_presets.prune(project._track_id_set())

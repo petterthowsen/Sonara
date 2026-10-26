@@ -613,6 +613,7 @@ func _bind_editor_to_track(editor: NoteEditor, track: Track, clips: Array[ClipIn
 	editor._sync_selected_look()
 	# Set color from track (and keep following it)
 	_bind_track_color(editor, track)
+	_follow_track_instances(track)
 
 
 func _set_edited_clips(editor: NoteEditor, track: Track, clips: Array[ClipInstance]) -> void:
@@ -669,6 +670,7 @@ func _sync_track_views() -> void:
 
 
 func _clear_color_bindings_for(editor: NoteEditor) -> void:
+	_unfollow_track_instances()
 	for i in range(_color_bindings.size() - 1, -1, -1):
 		var track: Track = _color_bindings[i][0]
 		var cb: Callable = _color_bindings[i][1]
@@ -677,6 +679,87 @@ func _clear_color_bindings_for(editor: NoteEditor) -> void:
 		if is_instance_valid(track) and track.color_changed.is_connected(cb):
 			track.color_changed.disconnect(cb)
 		_color_bindings.remove_at(i)
+
+
+## The focus track whose instances the focus note editor follows (it holds a copy of the list).
+var _followed_track: Track = null
+## The followed track's instances whose clip_changed is watched (Make Unique retargets one).
+var _followed_instances: Array[ClipInstance] = []
+var _rebind_queued := false
+
+
+## Rebind the focus editor when an instance is added to or removed from `track`, or retargeted to
+## another clip, so a clip created, deleted or made unique from the clip strip shows its notes
+## (spec 054).
+func _follow_track_instances(track: Track) -> void:
+	if _followed_track != track:
+		_unfollow_track_instances()
+		_followed_track = track
+		if track != null:
+			track.clip_instance_added.connect(_on_followed_instances_changed)
+			track.clip_instance_removed.connect(_on_followed_instances_changed)
+	_follow_instance_clips()
+
+
+## Watch clip_changed on exactly the followed track's current instances.
+func _follow_instance_clips() -> void:
+	_unfollow_instance_clips()
+	if _followed_track == null:
+		return
+	for ci in _followed_track.clip_instances:
+		if ci and not ci.clip_changed.is_connected(_on_followed_instance_retargeted):
+			ci.clip_changed.connect(_on_followed_instance_retargeted)
+			_followed_instances.append(ci)
+
+
+func _unfollow_instance_clips() -> void:
+	for ci in _followed_instances:
+		if is_instance_valid(ci) and ci.clip_changed.is_connected(_on_followed_instance_retargeted):
+			ci.clip_changed.disconnect(_on_followed_instance_retargeted)
+	_followed_instances.clear()
+
+
+func _unfollow_track_instances() -> void:
+	_unfollow_instance_clips()
+	if _followed_track != null and is_instance_valid(_followed_track):
+		if _followed_track.clip_instance_added.is_connected(_on_followed_instances_changed):
+			_followed_track.clip_instance_added.disconnect(_on_followed_instances_changed)
+		if _followed_track.clip_instance_removed.is_connected(_on_followed_instances_changed):
+			_followed_track.clip_instance_removed.disconnect(_on_followed_instances_changed)
+	_followed_track = null
+
+
+func _on_followed_instance_retargeted(_clip: Clip) -> void:
+	_on_followed_instances_changed(null)
+
+
+func _on_followed_instances_changed(_instance: ClipInstance) -> void:
+	if _rebind_queued:
+		return
+	_rebind_queued = true
+	_rebind_focus_editor.call_deferred()
+
+
+## Bind the focus editor to the followed track's current instances again. Waits while a note
+## gesture is running, which a rebind would drop.
+func _rebind_focus_editor() -> void:
+	var track := _followed_track
+	if not track_mode or track == null or note_editors.is_empty():
+		_rebind_queued = false
+		return
+	var editor := note_editors[0]
+	if editor.gestures.is_active() and is_inside_tree():
+		get_tree().process_frame.connect(_rebind_focus_editor, CONNECT_ONE_SHOT)
+		return
+	_rebind_queued = false
+	if _editor_track(editor) != track:
+		return
+	_clear_color_bindings_for(editor)
+	editor.unbind()
+	_bind_editor_to_track(editor, track, _edited_clips)
+	_drop_unavailable_selection()
+	queue_content_width_update()
+	queue_row_rebuild()
 
 
 func _bind_track_color(editor: NoteEditor, track: Track) -> void:
@@ -696,6 +779,7 @@ func _on_track_color_changed(new_color: Color, editor: NoteEditor) -> void:
 
 
 func _clear_color_bindings() -> void:
+	_unfollow_track_instances()
 	for binding in _color_bindings:
 		var track: Track = binding[0]
 		var cb: Callable = binding[1]

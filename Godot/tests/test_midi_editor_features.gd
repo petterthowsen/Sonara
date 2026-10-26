@@ -292,7 +292,8 @@ func _test_placement_range_setting() -> void:
 	settings.set_value(key, original)
 
 
-## Clip mode: the ruler is in clip-content ticks and shades the instance's played window.
+## Clip mode: the ruler is in clip-content ticks and draws no clip regions; the clip strip below
+## it shows the instance's played window.
 func _test_clip_editor_ruler_regions() -> void:
 	var scene: PackedScene = load("res://clip_editor/ClipEditor.tscn")
 	var editor: Control = scene.instantiate()
@@ -308,26 +309,28 @@ func _test_clip_editor_ruler_regions() -> void:
 
 	editor.bound_clip_instance = inst
 	editor.midi_editor.bind_to_clip_instance(inst)
-	editor._mark_ruler_context_dirty()
+	editor._sync_clip_strip()
 	await process_frame
 	await process_frame
 
 	var stack: Object = editor.ruler
 	_assert(stack.get_script() == load("res://components/RulerStack.gd"), "the clip editor uses the shared ruler stack")
-	var regions: Array = stack.beats_ruler.regions
-	_assert(regions.size() == 1, "one region for the bound instance: %d" % regions.size())
-	if regions.size() == 1:
-		_assert(regions[0].start == 960 and regions[0].end == 2880,
-			"it spans the played window in clip ticks: %d-%d" % [regions[0].start, regions[0].end])
+	_assert(not stack.beats_ruler.has_method("set_regions") and not "regions" in stack.beats_ruler,
+		"the ruler no longer shades clip regions")
+	var bars: Array = editor.clip_strip.bars()
+	_assert(bars.size() == 1, "one bar for the bound instance: %d" % bars.size())
+	if bars.size() == 1:
+		_assert(bars[0].start == 960 and bars[0].end == 2880,
+			"it spans the played window in clip ticks: %d-%d" % [bars[0].start, bars[0].end])
 	_assert(editor._ruler_to_song_ticks(960) == 3840, "ruler ticks convert to song ticks through the instance")
 	editor._on_editor_playhead_moved(3840)
 	_assert(editor.midi_editor.playhead_ticks == 960, "the playhead lands on the first played tick")
 
-	# Moving the instance refreshes the shading.
+	# Moving the instance moves the bar.
 	inst.set_clip_offset(0)
 	await process_frame
 	await process_frame
-	regions = stack.beats_ruler.regions
-	_assert(regions.size() == 1 and regions[0].start == 0, "regions follow instance edits")
+	bars = editor.clip_strip.bars()
+	_assert(bars.size() == 1 and bars[0].start == 0, "the strip follows instance edits")
 	editor.queue_free()
 	await process_frame

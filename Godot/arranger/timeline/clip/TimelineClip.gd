@@ -43,6 +43,10 @@ var track_color: Color = Color.WHITE:
 			_apply_note_color()
 			queue_redraw()
 
+const LINK_ICON: Texture2D = preload("res://assets/icons/link.svg")
+## The project whose `instance_counts_changed` redraws the link icon.
+var _bound_counts_project: Project = null
+
 # Selection and hover state
 var is_selected: bool = false
 ## How much darker the clip name is while the clip is not selected.
@@ -259,6 +263,7 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 	if clip_instance and not clip_instance.instance_modified.is_connected(_on_instance_modified):
 		clip_instance.instance_modified.connect(_on_instance_modified)
 	_bind_source_clip(clip_instance.clip if clip_instance else null)
+	_bind_counts_project()
 
 	# Update UI from clip instance data
 	if is_inside_tree():
@@ -443,41 +448,11 @@ func _unbind_source_clip() -> void:
 
 
 func _find_nearest_clip_left(reference_start: int = -1) -> int:
-	"""Find the end position of the nearest clip to the left of this clip.
-	Returns 0 if no clip is found.
-	If reference_start is provided, uses it instead of the current clip position."""
-	if not clip_instance or not clip_instance.track:
-		return 0
-	
-	var ref_pos = reference_start if reference_start >= 0 else clip_instance.start_ticks
-	var nearest_end = 0
-	for other_instance in clip_instance.track.clip_instances:
-		if other_instance == clip_instance:
-			continue
-		var other_end = other_instance.start_ticks + other_instance.duration_ticks
-		if other_end <= ref_pos and other_end > nearest_end:
-			nearest_end = other_end
-	
-	return nearest_end
+	return ClipEdgeEdits.neighbour_left(clip_instance, reference_start)
 
 
 func _find_nearest_clip_right(reference_end: int = -1) -> int:
-	"""Find the start position of the nearest clip to the right of this clip.
-	Returns a very large number if no clip is found.
-	If reference_end is provided, uses it instead of the current clip end position."""
-	if not clip_instance or not clip_instance.track:
-		return 999999999
-	
-	var ref_pos = reference_end if reference_end >= 0 else (clip_instance.start_ticks + clip_instance.duration_ticks)
-	var nearest_start = 999999999
-	for other_instance in clip_instance.track.clip_instances:
-		if other_instance == clip_instance:
-			continue
-		var other_start = other_instance.start_ticks
-		if other_start >= ref_pos and other_start < nearest_start:
-			nearest_start = other_start
-	
-	return nearest_start
+	return ClipEdgeEdits.neighbour_right(clip_instance, reference_end)
 
 
 ## Refresh label when the source clip is renamed or its notes change.
@@ -597,8 +572,12 @@ func _draw_body() -> void:
 	var margin_top := header_style.content_margin_top if header_style else 0.0
 	var width := size.x - margin_left - margin_right
 	var badge_text := _mode_badge_text()
+	var badge_width := 0.0
 	if not badge_text.is_empty():
-		width -= _draw_mode_badge(badge_text, margin_right)
+		badge_width = _draw_mode_badge(badge_text, margin_right)
+		width -= badge_width
+	if is_shared():
+		width -= _draw_link_icon(margin_right + badge_width)
 	if width <= 0.0:
 		return
 	_name_line.width = width
@@ -606,6 +585,45 @@ func _draw_body() -> void:
 	if not is_selected:
 		color = color.darkened(NAME_UNSELECTED_DARKEN)
 	_name_line.draw(get_canvas_item(), Vector2(margin_left, margin_top), color)
+
+
+## True when this clip's source clip has more than one instance in the project.
+func is_shared() -> bool:
+	var project := _counts_project()
+	return project != null and clip_instance != null and project.is_clip_shared(clip_instance.clip_id)
+
+
+func _counts_project() -> Project:
+	if clip_instance == null or clip_instance.track == null:
+		return null
+	return clip_instance.track.get_project_ref()
+
+
+## Follow the project's shared-clip state so the link icon appears and goes away.
+func _bind_counts_project() -> void:
+	var project := _counts_project()
+	if project == _bound_counts_project:
+		return
+	if _bound_counts_project != null and is_instance_valid(_bound_counts_project) \
+			and _bound_counts_project.instance_counts_changed.is_connected(queue_redraw):
+		_bound_counts_project.instance_counts_changed.disconnect(queue_redraw)
+	_bound_counts_project = project
+	if project != null:
+		project.instance_counts_changed.connect(queue_redraw)
+
+
+## Draw the shared-clip link icon in the header band, `inset_right` pixels from its right end.
+## Returns the width it took (with spacing), or 0 when the header is too narrow for it.
+func _draw_link_icon(inset_right: float) -> float:
+	var icon_size := clampf(header_height - 10.0, 8.0, 14.0)
+	if size.x < icon_size + 40.0:
+		return 0.0
+	var color := name_settings.font_color if name_settings else Color.WHITE
+	if not is_selected:
+		color = color.darkened(NAME_UNSELECTED_DARKEN)
+	var rect := Rect2(size.x - inset_right - icon_size, (minf(header_height, size.y) - icon_size) * 0.5, icon_size, icon_size)
+	draw_texture_rect(LINK_ICON, rect, false, color)
+	return icon_size + 4.0
 
 
 ## `P` / `S` for an audio clip that is not in Raw mode, else empty.
@@ -846,14 +864,7 @@ func _drag_loop_point(free_move: bool) -> void:
 	# Divider k sits k loop lengths after the loop start, minus the trim
 	var new_length := int(round(float(inst.clip_offset + local_tick - inst.loop_start_ticks) / float(_loop_drag_pass)))
 	new_length = maxi(1, new_length)
-	var clip := inst.clip
-	if clip and clip.type == Clip.ClipType.MIDI:
-		# Past the end of the notes the clip itself grows; pulling back gives the growth up again
-		clip.set_content_length(maxi(_loop_drag_start_content, inst.loop_start_ticks + new_length))
-	elif clip:
-		# Audio can't grow, so the loop stops at the end of the file
-		new_length = mini(new_length, maxi(1, inst.content_end_ticks() - inst.loop_start_ticks))
-	inst.set_loop(true, inst.loop_start_ticks, new_length)
+	ClipEdgeEdits.set_loop_length(inst, new_length, _loop_drag_start_content)
 	_update_waveform()
 	clip_renderer.queue_redraw()
 
@@ -918,68 +929,25 @@ func _snapped_resize_delta(tick_delta: int, free_move: bool) -> int:
 func _resize_by(delta: int, min_duration: int) -> void:
 	if not clip_instance:
 		return
+	var snap := _resize_snapshot()
 	if resize_edge == "left":
-		# Resize from left: adjust start_ticks, duration, and clip_offset
-		var new_start_ticks = max(0, resize_start_ticks + delta)
-
-		# Clamp to avoid collisions - find the nearest clip on the left
-		# Use the original resize start position as reference
-		var left_limit = _find_nearest_clip_left(resize_start_ticks)
-		new_start_ticks = max(left_limit, new_start_ticks)
-
-		# The original end point stays fixed
-		var original_end_ticks = resize_start_ticks + resize_start_duration
-		var new_duration = max(min_duration, original_end_ticks - new_start_ticks)
-
-		# Calculate how much we moved the left edge (accounting for any padding already added)
-		var left_edge_delta = new_start_ticks - resize_start_ticks
-
-		# Update clip_offset: skip the trimmed portion of the clip
-		# If we moved right (+delta), we need to increase the offset to skip that content
-		# Account for padding we've already added during this resize
-		var new_clip_offset = resize_start_offset + left_edge_delta + resize_padding_added
-
-		# Handle negative offset: add padding to the beginning of the clip
-		if new_clip_offset < 0:
-			var padding_needed = -new_clip_offset
-			_add_padding_to_clip(padding_needed)
-			resize_padding_added += padding_needed  # Track cumulative padding
-			new_clip_offset = 0  # Reset offset after adding padding
-
-		# Update clip instance (this will sync to engine via OSC)
-		clip_instance.set_clip_offset(new_clip_offset)
-		clip_instance.set_position(new_start_ticks)
-		clip_instance.set_duration(new_duration)
+		resize_padding_added += ClipEdgeEdits.resize_left(clip_instance, snap, delta, min_duration)
 		_update_from_clip_instance()
-
 	elif resize_edge == "right":
-		# Resize from right: adjust duration only
-		var new_duration = max(min_duration, resize_start_duration + delta)
-
-		# Clamp to avoid collisions - find the nearest clip on the right
-		# Use the original resize end position as reference
-		var original_end = resize_start_ticks + resize_start_duration
-		var right_limit = _find_nearest_clip_right(original_end)
-		var max_duration = right_limit - resize_start_ticks
-		new_duration = min(new_duration, max_duration)
-		new_duration = max(min_duration, new_duration)
-
-		# Update clip instance
-		clip_instance.set_duration(new_duration)
-		_extend_clip_to(new_duration, resize_start_content_length)
+		ClipEdgeEdits.resize_right(clip_instance, snap, delta, min_duration)
 		_update_from_clip_instance()
 
 
-## Grow a MIDI clip's length so the instance's end is inside it, never below `start_length`
-## (so dragging the edge back undoes the growth). Audio can't grow, and a looping instance
-## repeats its content rather than lengthening it.
-func _extend_clip_to(instance_end_ticks: int, start_length: int) -> void:
-	var clip := clip_instance.clip
-	if clip == null or clip.type != Clip.ClipType.MIDI or clip_instance.loop_enabled:
-		return
-	var wanted := maxi(start_length, clip_instance.clip_offset + instance_end_ticks)
-	if wanted != clip.content_length_ticks:
-		clip.set_content_length(wanted)
+## The gesture-start snapshot `ClipEdgeEdits` works from, rebuilt from the resize_start_* fields.
+func _resize_snapshot() -> Dictionary:
+	return {
+		"start": resize_start_ticks,
+		"duration": resize_start_duration,
+		"offset": resize_start_offset,
+		"loop": resize_start_loop,
+		"content": resize_start_content_length,
+		"padding": resize_padding_added,
+	}
 
 
 ## Record the group's resize as one undo step and clear the resize state.
@@ -990,22 +958,10 @@ func _finish_resize() -> void:
 			continue
 		var inst: ClipInstance = clip_ui.clip_instance
 		clip_ui.resize_edge = ""
-		if inst and (
-			inst.start_ticks != clip_ui.resize_start_ticks
-			or inst.duration_ticks != clip_ui.resize_start_duration
-			or inst.clip_offset != clip_ui.resize_start_offset
-			or inst.get_loop_state() != clip_ui.resize_start_loop
-			or (inst.clip and inst.clip.content_length_ticks != clip_ui.resize_start_content_length)
-		):
-			cmds.append(ClipInstanceTransformCommand.new(
-				"Resize Clip",
-				inst,
-				clip_ui.resize_start_ticks, clip_ui.resize_start_duration, clip_ui.resize_start_offset,
-				inst.start_ticks, inst.duration_ticks, inst.clip_offset,
-				clip_ui.resize_start_loop, inst.get_loop_state(),
-				clip_ui.resize_start_content_length,
-				inst.clip.content_length_ticks if inst.clip else -1
-			))
+		if inst:
+			var cmd := ClipEdgeEdits.transform_command("Resize Clip", inst, clip_ui._resize_snapshot())
+			if cmd:
+				cmds.append(cmd)
 	_resize_group.clear()
 	HistoryUtil.record_many("Resize Clips", cmds)
 
@@ -1021,38 +977,4 @@ func _on_mouse_exited() -> void:
 
 
 func _add_padding_to_clip(padding_ticks: int) -> void:
-	"""Add padding to the beginning of the clip by shifting all content forward.
-	The caller is responsible for moving the ClipInstance backward on the timeline
-	to keep the visual position of the content unchanged."""
-	if not clip_instance or not clip_instance.clip:
-		return
-	
-	var clip = clip_instance.clip
-	
-	if clip.type == Clip.ClipType.MIDI:
-		logger.debug("Before padding: %d notes in clip %s" % [clip.midi_notes.size(), clip.id])
-		for note in clip.midi_notes:
-			logger.debug("  Note %d: start=%d" % [note.id, note.start_tick])
-
-		# Shift all MIDI notes forward
-		for note in clip.midi_notes:
-			note.start_tick += padding_ticks
-
-		# Increase clip content length
-		clip.content_length_ticks += padding_ticks
-
-		# Notify the clip that it has been modified (triggers update_note OSC calls)
-		for note in clip.midi_notes:
-			clip.update_midi_note(note)
-
-		logger.debug("After padding: Added %d ticks to clip %s (new length: %d)" %
-			[padding_ticks, clip.id, clip.content_length_ticks])
-		for note in clip.midi_notes:
-			logger.debug("  Note %d: start=%d" % [note.id, note.start_tick])
-	
-	elif clip.type == Clip.ClipType.AUDIO:
-		# For audio clips, we'd need to prepend silence samples
-		# This is more complex and requires reprocessing waveforms
-		# For now, we'll just prevent negative offsets for audio clips
-		push_warning("[TimelineClip] Audio clip padding not yet implemented - clamping to 0")
-		# TODO: Implement audio padding by prepending silence samples
+	ClipEdgeEdits.pad_clip(clip_instance, padding_ticks)

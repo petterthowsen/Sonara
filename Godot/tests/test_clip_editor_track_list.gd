@@ -38,6 +38,8 @@ func run_tests() -> void:
 	await _test_selection_follows_editability()
 	await _test_header_clip_name()
 	await _test_global_toggles()
+	await _test_clip_strip_follows_mode()
+	await _test_focus_editor_follows_instances()
 
 
 func _tracks(n: int) -> Array:
@@ -717,4 +719,75 @@ func _test_global_toggles() -> void:
 		"the items live in a ScrollContainer")
 	_assert(ce.all_visible_toggle.icon == load("res://assets/icons/eye.svg"), "global eye shows eye when all are visible")
 	ce.queue_free()
+	await process_frame
+
+
+## The clip strip shows the bound instance in clip mode and the focus track's clips in track mode
+## (spec 054); the ruler holds no clip regions in either.
+func _test_clip_strip_follows_mode() -> void:
+	var setup := await _make_editor_setup(2)
+	var ce: Object = setup.editor
+	ce.pending_clips = _typed_instances([setup.cis[0]])
+	ce.pending_multi_track = false
+	ce._bind_pending_clips()
+	await process_frame
+	var bars: Array = ce.clip_strip.bars()
+	_assert(bars.size() == 1 and bars[0].instance == setup.cis[0], "clip mode: the strip shows the bound instance")
+	for row in ce.ruler.rulers():
+		_assert(not "regions" in row, "clip mode: the ruler draws no clip regions")
+
+	await _open_track_mode(setup, [0, 1])
+	bars = ce.clip_strip.bars()
+	_assert(bars.size() == 1 and bars[0].instance == setup.cis[0], "track mode: the strip shows the focus track's clips")
+	for row in ce.ruler.rulers():
+		_assert(not "regions" in row, "track mode: the ruler draws no clip regions")
+	setup.midi.focus_track = setup.tracks[1]
+	await process_frame
+	bars = ce.clip_strip.bars()
+	_assert(bars.size() == 1 and bars[0].instance == setup.cis[1], "changing the focus track swaps the strip's bars")
+	ce.queue_free()
+	await process_frame
+
+
+## An instance created on the focus track shows up in the focus note editor after a frame, and a
+## deleted one goes (spec 054 REQ-027: clips created or deleted from the clip strip).
+func _test_focus_editor_follows_instances() -> void:
+	var setup := await _make_editor_setup(2)
+	await _open_track_mode(setup, [0, 1])
+	var track: Object = setup.midi.focus_track
+	var editor: Object = setup.midi.note_editors[0]
+	var clip: Object = setup.project.create_clip("Late")
+	setup.project.add_clip(clip)
+	var created: Object = track.create_clip_instance(clip, 3840 * 2, 3840)
+	await process_frame
+	await process_frame
+	_assert(editor.clip_instances.has(created), "a new focus-track instance reaches the focus editor")
+	track.remove_clip_instance(created)
+	await process_frame
+	await process_frame
+	_assert(not editor.clip_instances.has(created), "a deleted focus-track instance leaves the focus editor")
+	# Make Unique retargets an instance: its notes become the copy's, not the shared clip's.
+	var shared: Object = setup.project.create_clip("Shared")
+	setup.project.add_clip(shared)
+	shared.add_midi_note(setup.project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 480)
+	track.create_clip_instance(shared, 3840 * 2, 3840)
+	var made_unique: Object = track.create_clip_instance(shared, 3840 * 3, 3840)
+	await process_frame
+	await process_frame
+	load("res://history/commands/MakeClipUniqueCommand.gd").new(setup.project, made_unique).do()
+	await process_frame
+	await process_frame
+	var shown_for_unique := 0
+	for vn in editor.get_all_visual_notes():
+		if vn.clip_instance == made_unique:
+			shown_for_unique += 1
+			_assert(made_unique.clip.midi_notes.has(vn.midi_note_data),
+				"a made-unique instance shows its own clip's notes, not the shared clip's")
+	_assert(shown_for_unique == 1, "a made-unique instance shows its note once (got %d)" % shown_for_unique)
+	setup.midi.focus_track = setup.tracks[1]
+	await process_frame
+	var other_created: Object = setup.tracks[0].create_clip_instance(clip, 3840 * 4, 3840)
+	await process_frame
+	_assert(not editor.clip_instances.has(other_created), "instances of a track that is no longer focused are not followed")
+	setup.editor.queue_free()
 	await process_frame

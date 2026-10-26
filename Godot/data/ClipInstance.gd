@@ -92,6 +92,9 @@ func set_clip(new_clip: Clip) -> void:
 		return
 	clip = new_clip
 	clip_id = new_clip.id if new_clip else ""
+	var project := track.get_project_ref() if track else null
+	if project:
+		project.mark_instance_counts_dirty()
 	clip_changed.emit(clip)
 	instance_modified.emit()
 

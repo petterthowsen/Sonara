@@ -64,6 +64,9 @@ var _grid_helper: GridHelper = null
 
 var clip_selection_manager: ClipSelectionManager = ClipSelectionManager.new()
 @onready var clip_ctx_menu = $ClipContextMenu
+## Set while the clip menu was opened by the clip editor's strip: its actions must not change the
+## arranger's selection (see `open_clip_menu`).
+var _clip_menu_keeps_selection: bool = false
 
 ## Automation point selection, the counterpart of `clip_selection_manager` (REQ-020, REQ-021).
 var automation_selection_manager: AutomationPointSelectionManager = AutomationPointSelectionManager.new()
@@ -994,34 +997,11 @@ func _clamp_instances_tick_delta(instances: Array[ClipInstance], requested_tick_
 		else:
 			inst_start = inst.start_ticks
 		
-		var inst_duration = inst.duration_ticks
-		
-		var inst_end = inst_start + inst_duration
-		
-		# Check each clip on the track to see if we would collide
-		for other_instance in check_track.clip_instances:
-			# Skip if it's the same instance or if it's one of the moving instances
-			if other_instance == inst or instances.has(other_instance):
-				continue
-			
-			var other_start = other_instance.start_ticks
-			var other_end = other_instance.start_ticks + other_instance.duration_ticks
-			
-			# Calculate the proposed position with the requested delta
-			var proposed_start = inst_start + requested_tick_delta
-			var proposed_end = proposed_start + inst_duration
-			
-			# Check if the proposed position would cause an overlap
-			if proposed_start < other_end and other_start < proposed_end:
-				# Would overlap - calculate the maximum delta that wouldn't overlap
-				if direction > 0:
-					# Moving right: stop just before this clip
-					var available_space = other_start - inst_end
-					max_delta = min(max_delta, available_space)
-				else:
-					# Moving left: stop just after this clip
-					var available_space = inst_start - other_end
-					max_delta = max(max_delta, -available_space)
+		var clamped := ClipEdgeEdits.clamp_move_on_track(inst_start, inst.duration_ticks, check_track, instances, requested_tick_delta, false)
+		if direction > 0:
+			max_delta = mini(max_delta, clamped)
+		else:
+			max_delta = maxi(max_delta, clamped)
 	
 	# Ensure we don't go below zero
 	for inst in instances:
@@ -1416,10 +1396,7 @@ func copy_selection_to_clipboard() -> void:
 		automation_clipboard = []
 		logger.warn("Copy skipped - no clips selected")
 		return
-	clip_clipboard = clip_selection_manager.selection.clone()
-	_apply_time_range_to_clipboard(clip_clipboard)
-	_snapshot_range_automation(clip_clipboard.start_tick, clip_clipboard.end_tick)
-	logger.info("Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
+	copy_instances_to_clipboard(clip_selection_manager.get_selected_instances())
 
 
 func cut_selection_to_clipboard() -> void:
@@ -1431,17 +1408,35 @@ func cut_selection_to_clipboard() -> void:
 		automation_clipboard = []
 		logger.warn("Cut skipped - no clips selected")
 		return
-	clip_clipboard = clip_selection_manager.selection.clone()
+	cut_instances_to_clipboard(clip_selection_manager.get_selected_instances())
+	clip_selection_manager.clear_selection()
+
+
+## Put `instances` (and the lane automation under them) on the clip clipboard without touching the
+## arranger's selection.
+func copy_instances_to_clipboard(instances: Array[ClipInstance]) -> void:
+	var board := ClipSelection.new()
+	board.set_from(instances)
+	clip_clipboard = board
 	_apply_time_range_to_clipboard(clip_clipboard)
 	_snapshot_range_automation(clip_clipboard.start_tick, clip_clipboard.end_tick)
-	var selected = clip_selection_manager.get_selected_instances()
+	logger.info("Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
+
+
+## Copy `instances` to the clipboard, then delete them as one undo step ("Cut Clips"). The
+## arranger's selection is left to the caller.
+func cut_instances_to_clipboard(instances: Array[ClipInstance]) -> void:
+	var board := ClipSelection.new()
+	board.set_from(instances)
+	clip_clipboard = board
+	_apply_time_range_to_clipboard(clip_clipboard)
+	_snapshot_range_automation(clip_clipboard.start_tick, clip_clipboard.end_tick)
 	var cmds: Array[Command] = []
-	for inst in selected:
+	for inst in instances:
 		if inst and inst.track:
 			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
 	HistoryUtil.execute_many("Cut Clips", cmds)
-	clip_selection_manager.clear_selection()
-	logger.info("Cut %d clips to clipboard" % selected.size())
+	logger.info("Cut %d clips to clipboard" % instances.size())
 
 
 ## Paste clipboard clips at the last clicked location (range start, clicked tick, or playhead)
@@ -1850,17 +1845,32 @@ func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Ve
 	var selection := get_selected_clip_instances()
 	if selection.is_empty() or not selection.has(clip_ui.clip_instance):
 		selection = [clip_ui.clip_instance]
-	clip_ctx_menu.bind_to_instances(selection)
 	# Split lands where the user clicked, snapped to the grid.
 	var local_x := (get_global_transform().affine_inverse() * mouse_pos_global).x
 	var click_ticks := pixels_to_ticks(local_x)
-	clip_ctx_menu.split_tick = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
+	var split_at: int = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
 	# Dock above or below the clip, inside the visible arranger area, so the clip stays visible.
 	var bounds := get_viewport_rect()
 	var scroll_parent := get_parent()
 	if scroll_parent is Control:
 		bounds = bounds.intersection(scroll_parent.get_global_rect())
-	clip_ctx_menu.popup_docked(clip_ui.get_global_rect(), bounds, mouse_pos_global.x)
+	open_clip_menu(selection, split_at, clip_ui.get_global_rect(), mouse_pos_global.x, false, bounds)
+
+
+## Open the clip context menu for `instances`, docked to `anchor_rect` (global) with the click at
+## global `from_x`. `split_tick` is where Split cuts, in song ticks. With `keep_selection` (the
+## clip editor's clip strip opens it), Cut, Copy and Merge leave the arranger's selection alone, so
+## the clip editor is not rebound by a selection change. `bounds` limits where the menu may sit (the
+## viewport by default).
+func open_clip_menu(instances: Array[ClipInstance], split_tick: int, anchor_rect: Rect2, from_x: float, keep_selection: bool = false, bounds: Rect2 = Rect2()) -> void:
+	if instances.is_empty() or not is_instance_valid(clip_ctx_menu):
+		return
+	_clip_menu_keeps_selection = keep_selection
+	clip_ctx_menu.bind_to_instances(instances)
+	clip_ctx_menu.split_tick = split_tick
+	if bounds.size == Vector2.ZERO:
+		bounds = get_viewport_rect()
+	clip_ctx_menu.popup_docked(anchor_rect, bounds, from_x)
 
 
 ## Split the clip bound to the context menu at the position that was clicked. One undo step.
@@ -1893,7 +1903,7 @@ func _on_clip_merge_requested(instances: Array[ClipInstance]) -> void:
 	var merged := ClipMergeActions.merge(Sonara.editor.project, instances)
 	if merged.is_empty():
 		return
-	if clip_selection_manager:
+	if clip_selection_manager and not _clip_menu_keeps_selection:
 		clip_selection_manager.select_instances(merged)
 		clip_selection_manager.refresh_after_modification()
 	_refresh_tracks_for_instances(merged)
@@ -1904,6 +1914,9 @@ func _on_clip_merge_requested(instances: Array[ClipInstance]) -> void:
 func _on_clip_cut_requested(instances: Array[ClipInstance]) -> void:
 	if not instances or instances.is_empty() or not clip_selection_manager:
 		return
+	if _clip_menu_keeps_selection:
+		cut_instances_to_clipboard(instances)
+		return
 	clip_selection_manager.select_instances(instances)
 	cut_selection_to_clipboard()
 
@@ -1911,6 +1924,9 @@ func _on_clip_cut_requested(instances: Array[ClipInstance]) -> void:
 ## Copy the instances bound to the context menu (may not match the live selection if the clicked clip was unselected).
 func _on_clip_copy_requested(instances: Array[ClipInstance]) -> void:
 	if not instances or instances.is_empty() or not clip_selection_manager:
+		return
+	if _clip_menu_keeps_selection:
+		copy_instances_to_clipboard(instances)
 		return
 	clip_selection_manager.select_instances(instances)
 	copy_selection_to_clipboard()

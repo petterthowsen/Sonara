@@ -682,12 +682,19 @@ func add_clip_instance(instance: ClipInstance) -> void:
 	instance.track = self
 	
 	clip_instances.append(instance)
+	_mark_instance_counts_dirty()
 
 	# Sync to engine if connected
 	if _is_connected:
 		_sync_clip_instance_to_engine(instance)
 
 	clip_instance_added.emit(instance)
+
+
+func _mark_instance_counts_dirty() -> void:
+	var project := get_project_ref()
+	if project:
+		project.mark_instance_counts_dirty()
 
 
 func create_clip_instance(clip: Clip, start_ticks: int, duration_ticks: int = -1) -> ClipInstance:
@@ -726,6 +733,7 @@ func remove_clip_instance(instance: ClipInstance) -> void:
 	var idx = clip_instances.find(instance)
 	if idx >= 0:
 		clip_instances.remove_at(idx)
+		_mark_instance_counts_dirty()
 
 		# Remove MIDI notes from engine
 		if _is_connected:
