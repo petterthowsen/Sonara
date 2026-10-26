@@ -296,16 +296,16 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
 
-[node name="ViewVBox" type="VBoxContainer" parent="VBox/HBox/Content/HBox/View"]
+[node name="ViewVBox" type="VBoxContainer" parent="VBox/HBox/Content/HBox/View" unique_id=372291932]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="FileRow" type="HBoxContainer" parent="VBox/HBox/Content/HBox/View/ViewVBox"]
+[node name="FileRow" type="HBoxContainer" parent="VBox/HBox/Content/HBox/View/ViewVBox" unique_id=1528615722]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="FileLabel" type="Label" parent="VBox/HBox/Content/HBox/View/ViewVBox/FileRow"]
+[node name="FileLabel" type="Label" parent="VBox/HBox/Content/HBox/View/ViewVBox/FileRow" unique_id=1883645762]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -313,11 +313,11 @@ text = "No File Loaded"
 vertical_alignment = 1
 text_overrun_behavior = 3
 
-[node name="LoadButton" type="Button" parent="VBox/HBox/Content/HBox/View/ViewVBox/FileRow"]
+[node name="LoadButton" type="Button" parent="VBox/HBox/Content/HBox/View/ViewVBox/FileRow" unique_id=1341656145]
 layout_mode = 2
 text = "Load File"
 
-[node name="ViewHost" type="MarginContainer" parent="VBox/HBox/Content/HBox/View/ViewVBox"]
+[node name="ViewHost" type="MarginContainer" parent="VBox/HBox/Content/HBox/View/ViewVBox" unique_id=1272239059]
 layout_mode = 2
 size_flags_vertical = 3
 
@@ -330,4 +330,3 @@ file_mode = 0
 display_mode = 1
 access = 2
 filters = PackedStringArray("*.sfz")
-

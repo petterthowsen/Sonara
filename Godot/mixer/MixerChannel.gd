@@ -5,8 +5,8 @@ var logger : Log = Log.make("MixerChannel")
 
 # UI References
 @onready var header: Panel = $HBox/VBox/Header
-@onready var title: SmartLineEdit = $HBox/VBox/Header/VBox/SmartLineEdit
-@onready var foldout_toggle: Button = $HBox/VBox/Header/VBox/FoldoutToggle
+@onready var title: SmartLineEdit = $HBox/VBox/Header/VBox/Control/SmartLineEdit
+@onready var foldout_toggle: Button = $HBox/VBox/Header/VBox/Control/FoldoutToggle
 
 @onready var children_clip: Control = $HBox/ChildrenClip # clips the fold-out while it slides
 @onready var children_slide = $HBox/ChildrenClip/Children # fold-out pane

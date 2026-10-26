@@ -440,8 +440,8 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"tick": _with_alpha(p.role(&"text"), 0.5),
 		&"tick_minor": _with_alpha(p.role(&"text"), 0.25),
 		&"zero_db": _with_alpha(p.role(&"text_bright"), 0.75),
-		# a dark primary sets the fader apart from the bars and keeps the centered scale readable
-		&"fader": accent.darkened(0.55),
+		# a dark secondary sets the fader apart from the bars and keeps the centered scale readable
+		&"fader": p.role(&"accent_secondary").darkened(0.55),
 		&"fader_bg": SLIDER_TROUGH,
 		&"fader_handle": handle,
 		&"fader_handle_hover": Color.WHITE,

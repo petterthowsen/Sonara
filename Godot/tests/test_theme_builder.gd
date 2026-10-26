@@ -171,5 +171,6 @@ func _test_component_types() -> void:
 	var q := ThemeBuilder.build(_palette({"accent_primary": "#ff0000"}))
 	for entry in [[&"Fader", &"fill"], [&"RotaryKnob", &"value_arc"], [&"EnvelopeControl", &"line"]]:
 		_assert(q.get_color(entry[1], entry[0]).is_equal_approx(Color("#ff0000")), "%s/%s follows the primary accent" % entry)
-	# The meter's fader is a dark primary, so it stands apart from the bars.
-	_assert(q.get_color(&"fader", &"Meter").is_equal_approx(Color("#ff0000").darkened(0.55)), "Meter/fader follows the primary accent, darkened")
+	# The meter's fader is a dark secondary, so it stands apart from the (primary) bars.
+	var s := ThemeBuilder.build(_palette({"accent_secondary": "#00ff00"}))
+	_assert(s.get_color(&"fader", &"Meter").is_equal_approx(Color("#00ff00").darkened(0.55)), "Meter/fader follows the secondary accent, darkened")

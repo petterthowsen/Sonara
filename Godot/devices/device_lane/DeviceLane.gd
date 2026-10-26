@@ -1,25 +1,22 @@
-class_name DeviceLane extends HBoxContainer
-
-## Gap between the parent header and the channel header, in pixels.
-const PARENT_HEADER_GAP := 4
+class_name DeviceLane extends PanelContainer
 
 var logger : Log = Log.make("DeviceLane")
 
-@onready var header: Panel = $Header
-@onready var header_label: VerticalLabel = $Header/Label
+@onready var header: Panel = $HBox/Header
+@onready var header_label: VerticalLabel = $HBox/Header/Label
+## Mixer parent of the bound channel, shown as a clickable header left of the channel header.
+@onready var _parent_header: Panel = $HBox/ParentHeader
+@onready var _parent_header_label: VerticalLabel = $HBox/ParentHeader/Label
+## Spacer between the parent header and the channel header; visible with the parent header.
+@onready var _parent_header_gap: Control = $HBox/ParentHeaderGap
 
 ## The channel's devices; open container slots sit beside their container (DeviceLaneItem).
-@onready var devices: DeviceRow = $Content/ScrollContainer/Trailing/Devices
+@onready var devices: DeviceRow = $HBox/Content/ScrollContainer/Trailing/Devices
 
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
 
 var channel : Channel
-## Mixer parent of the bound channel, shown as a clickable header left of the channel header.
 var _parent_channel: Channel = null
-var _parent_header: Panel = null
-var _parent_header_label: VerticalLabel = null
-## Spacer between the parent header and the channel header; visible with the parent header.
-var _parent_header_gap: Control = null
 ## Device row drop rules; DeviceDropTarget resolves drops for this lane and its open slots.
 var drop_host := DeviceChainDropHost.new()
 ## Glowing drop overlay (top-level, so it never takes layout space), created on first use.
@@ -45,7 +42,7 @@ func _ready():
 	drop_host.trailing_margin = DeviceRow.PANEL_MARGIN
 	add_to_group(DeviceDropTarget.ROOT_GROUP)
 	set_process(false)
-	_create_parent_header()
+	_parent_header.gui_input.connect(_on_parent_header_gui_input)
 	drop_host.attach(self, devices, false)
 	drop_host.trailing_margin = DeviceRow.PANEL_MARGIN
 	devices.selection_requested.connect(_on_panel_select_requested)
@@ -217,7 +214,7 @@ func reveal_device(device_instance: DeviceInstance, duration := 0.2) -> bool:
 	device_selection_changed.emit(selected_devices.duplicate())
 	panel.grab_focus()
 
-	var scroll: ScrollContainer = $Content/ScrollContainer
+	var scroll: ScrollContainer = $HBox/Content/ScrollContainer
 	var left := panel.global_position.x - devices.global_position.x
 	var right := left + panel.size.x
 	var target := scroll.scroll_horizontal
@@ -258,31 +255,6 @@ func _on_channel_color_changed(c : Color):
 # PARENT HEADER
 # ============================================================================
 
-## Build the parent header as a copy of the channel header, placed to its left.
-func _create_parent_header() -> void:
-	_parent_header = header.duplicate() as Panel
-	_parent_header.name = "ParentHeader"
-	_parent_header.custom_minimum_size.x = 32
-	_parent_header.add_theme_stylebox_override("panel", _get_header_stylebox().duplicate())
-	_parent_header.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_parent_header_label = _parent_header.get_node("Label") as VerticalLabel
-	_parent_header_label.font_size = 16
-	_parent_header_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_parent_header.gui_input.connect(_on_parent_header_gui_input)
-	_parent_header.visible = false
-	add_child(_parent_header)
-	move_child(_parent_header, header.get_index())
-
-	# Separate the two headers so the parent doesn't read as part of the channel header.
-	_parent_header_gap = Control.new()
-	_parent_header_gap.name = "ParentHeaderGap"
-	_parent_header_gap.custom_minimum_size.x = PARENT_HEADER_GAP
-	_parent_header_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_parent_header_gap.visible = false
-	add_child(_parent_header_gap)
-	move_child(_parent_header_gap, header.get_index())
-
-
 ## Show the bound channel's mixer parent, or hide the header for a top-level channel.
 func _refresh_parent_header() -> void:
 	var parent: Channel = null
@@ -295,15 +267,14 @@ func _refresh_parent_header() -> void:
 
 ## Point the parent header at `parent` (null hides it) and follow its name and color.
 func _bind_parent_header(parent: Channel) -> void:
-	if _parent_header == null or parent == _parent_channel:
+	if parent == _parent_channel:
 		return
 	if _parent_channel:
 		_parent_channel.name_changed.disconnect(_on_parent_name_changed)
 		_parent_channel.color_changed.disconnect(_on_parent_color_changed)
 	_parent_channel = parent
 	_parent_header.visible = parent != null
-	if _parent_header_gap:
-		_parent_header_gap.visible = parent != null
+	_parent_header_gap.visible = parent != null
 	if parent == null:
 		return
 	parent.name_changed.connect(_on_parent_name_changed)

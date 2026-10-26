@@ -144,8 +144,45 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="FoldoutToggle" type="Button" parent="HBox/VBox/Header/VBox" unique_id=630004199]
+[node name="Control" type="Control" parent="HBox/VBox/Header/VBox" unique_id=1787180758]
 layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 1
+
+[node name="SmartLineEdit" parent="HBox/VBox/Header/VBox/Control" unique_id=1058095684 instance=ExtResource("2_xa46q")]
+layout_mode = 1
+anchors_preset = 15
+anchor_top = 0.0
+anchor_bottom = 1.0
+size_flags_vertical = 3
+mouse_filter = 1
+value_type = 1
+display_format = "%s"
+
+[node name="Label" parent="HBox/VBox/Header/VBox/Control/SmartLineEdit" index="0" unique_id=448001948]
+label_settings = SubResource("LabelSettings_xv6e8")
+autowrap_mode = 3
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="LineEdit" parent="HBox/VBox/Header/VBox/Control/SmartLineEdit" index="1" unique_id=1087718571]
+anchors_preset = 14
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_top = -15.5
+offset_bottom = 15.5
+text = "Layer"
+expand_to_text_length = true
+flat = false
+
+[node name="FoldoutToggle" type="Button" parent="HBox/VBox/Header/VBox/Control" unique_id=630004199]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -26.0
+offset_bottom = 26.0
+grow_horizontal = 0
 theme_override_constants/h_separation = 0
 theme_override_constants/icon_max_width = 18
 theme_override_font_sizes/font_size = 24
@@ -157,29 +194,6 @@ vertical_icon_alignment = 0
 script = ExtResource("4_ghf7e")
 icon_default = ExtResource("3_ea3ft")
 icon_pressed = ExtResource("5_ghf7e")
-
-[node name="SmartLineEdit" parent="HBox/VBox/Header/VBox" unique_id=1058095684 instance=ExtResource("2_xa46q")]
-layout_mode = 2
-size_flags_vertical = 3
-mouse_filter = 1
-value_type = 1
-display_format = "%s"
-
-[node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
-label_settings = SubResource("LabelSettings_xv6e8")
-autowrap_mode = 3
-clip_text = true
-text_overrun_behavior = 3
-
-[node name="LineEdit" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="1" unique_id=1087718571]
-anchors_preset = 14
-anchor_top = 0.5
-anchor_bottom = 0.5
-offset_top = -15.5
-offset_bottom = 15.5
-text = "Layer"
-expand_to_text_length = true
-flat = false
 
 [node name="MainAndSideBox" type="HBoxContainer" parent="HBox/VBox" unique_id=1684471378]
 layout_mode = 2
@@ -444,7 +458,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 autowrap_mode = 1
 
-[editable path="HBox/VBox/Header/VBox/SmartLineEdit"]
+[editable path="HBox/VBox/Header/VBox/Control/SmartLineEdit"]
 [editable path="HBox/VBox/MainAndSideBox/MainPane/BigMeter"]
 [editable path="HBox/VBox/MainAndSideBox/MainPane/Volume/CompactMeter"]
 [editable path="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader/SmartLineEdit"]

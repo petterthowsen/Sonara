@@ -177,7 +177,7 @@ func update_drag(pos: Vector2) -> void:
 	elif current_mode == DragMode.RESIZE:
 		# One snapped delta from the grabbed note, applied to every selected note.
 		var anchor_start: int = resize_start_durations.get(grabbed.data, grabbed.data.duration_ticks)
-		var snapped_delta: int = editor._snapped_duration(anchor_start + delta_ticks) - anchor_start
+		var snapped_delta: int = editor._snapped_end_duration(grabbed.data.start_tick, anchor_start + delta_ticks) - anchor_start
 		for ref in refs:
 			var start_duration = resize_start_durations.get(ref.data)
 			if start_duration == null:
@@ -407,7 +407,7 @@ func update_resize(pos: Vector2) -> void:
 	if kind != Kind.RESIZE or grabbed == null:
 		return
 	var delta_ticks := editor.pixels_to_ticks(pos.x - resize_start_mouse_pos.x)
-	var new_duration: int = editor._snapped_duration(resize_start_duration + delta_ticks)
+	var new_duration: int = editor._snapped_end_duration(grabbed.data.start_tick, resize_start_duration + delta_ticks)
 	var same_length: bool = key_held.call(KEY_ALT if editor._alt_auto_mode() else KEY_CTRL)
 	# Same delta for every note, snapped once from the grabbed note
 	var snapped_delta := new_duration - resize_start_duration

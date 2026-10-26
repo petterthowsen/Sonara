@@ -602,6 +602,17 @@ func _snapped_duration(ticks: int) -> int:
 	return maxi(snap_interval, ticks)
 
 
+## Duration for a note starting at `start` whose end should land on the grid (not its length),
+## so notes starting off-grid still end on a grid line. Shift = free.
+func _snapped_end_duration(start: int, ticks: int) -> int:
+	if Input.is_key_pressed(KEY_SHIFT) or not grid_helper:
+		return maxi(1, ticks)
+	var end := grid_helper.snap_ticks(start + ticks)
+	if end <= start:
+		return get_snap_interval()
+	return end - start
+
+
 ## Grid-snapped `ticks`, or `ticks` untouched while Shift is held (free placement).
 func _snap_unless_shift(ticks: int) -> int:
 	if grid_helper and not Input.is_key_pressed(KEY_SHIFT):

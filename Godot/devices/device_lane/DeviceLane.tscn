@@ -6,27 +6,85 @@
 [ext_resource type="PackedScene" uid="uid://boiwqcg0flbqw" path="res://devices/DeviceContextMenu.tscn" id="3_oh1x1"]
 [ext_resource type="Script" uid="uid://5pl22hq43jly" path="res://devices/device_lane/DeviceRow.gd" id="4_row"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pomav"]
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+bg_color = Color(0.109607846, 0.109607846, 0.109607846, 1)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+corner_detail = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_parent"]
+resource_local_to_scene = true
+bg_color = Color(0.34023225, 0.68359375, 0.28038025, 1)
+corner_radius_top_left = 3
+corner_radius_bottom_left = 3
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ktvss"]
 bg_color = Color(0.34023225, 0.68359375, 0.28038025, 1)
 corner_radius_top_left = 3
 corner_radius_bottom_left = 3
 
-[node name="DeviceLane" type="HBoxContainer" unique_id=680950558]
+[sub_resource type="Gradient" id="Gradient_pomav"]
+offsets = PackedFloat32Array(0.97202796, 0.9825175)
+colors = PackedColorArray(0, 0, 0, 0, 0, 0, 0, 0.1254902)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_wr2ym"]
+gradient = SubResource("Gradient_pomav")
+height = 16
+fill = 2
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(1, 1)
+
+[node name="DeviceLane" type="PanelContainer" unique_id=1001825672]
 custom_minimum_size = Vector2(0, 76.585)
 anchors_preset = 10
 anchor_right = 1.0
-offset_bottom = 370.0
+offset_bottom = 372.0
 grow_horizontal = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 0
+theme_type_variation = &"Well"
+theme_override_styles/panel = SubResource("StyleBoxFlat_pomav")
 script = ExtResource("1_2f6nw")
 
-[node name="Header" type="Panel" parent="." unique_id=1475555900]
+[node name="HBox" type="HBoxContainer" parent="." unique_id=916633891]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="ParentHeader" type="Panel" parent="HBox" unique_id=1922658322]
+visible = false
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_parent")
+
+[node name="Label" type="Control" parent="HBox/ParentHeader" unique_id=268704851]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_oh1x1")
+text = "PARENT"
+
+[node name="ParentHeaderGap" type="Control" parent="HBox" unique_id=828773759]
+visible = false
+custom_minimum_size = Vector2(4, 0)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Header" type="Panel" parent="HBox" unique_id=1475555900]
 custom_minimum_size = Vector2(42, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ktvss")
 
-[node name="Label" type="Control" parent="Header" unique_id=1393463038]
+[node name="Label" type="Control" parent="HBox/Header" unique_id=1393463038]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -37,15 +95,15 @@ script = ExtResource("2_oh1x1")
 text = "LABEL"
 font_size = 20
 
-[node name="Content" type="MarginContainer" parent="." unique_id=824630520]
+[node name="Content" type="MarginContainer" parent="HBox" unique_id=824630520]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/margin_left = 12
-theme_override_constants/margin_top = 6
+theme_override_constants/margin_left = 0
+theme_override_constants/margin_top = 0
 theme_override_constants/margin_right = 0
 theme_override_constants/margin_bottom = 0
 
-[node name="ScrollContainer" type="ScrollContainer" parent="Content" unique_id=1650099144]
+[node name="ScrollContainer" type="ScrollContainer" parent="HBox/Content" unique_id=1650099144]
 layout_mode = 2
 theme_override_constants/scrollbar_h_separation = 6
 theme_override_constants/scrollbar_v_separation = 8
@@ -53,24 +111,33 @@ follow_focus = true
 horizontal_scroll_mode = 2
 vertical_scroll_mode = 0
 
-[node name="Trailing" type="MarginContainer" parent="Content/ScrollContainer"]
+[node name="Trailing" type="MarginContainer" parent="HBox/Content/ScrollContainer" unique_id=631287799]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 6
 theme_override_constants/margin_right = 240
 
-[node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer/Trailing" unique_id=195122867]
+[node name="Devices" type="HBoxContainer" parent="HBox/Content/ScrollContainer/Trailing" unique_id=195122867]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 24
 script = ExtResource("4_row")
 
-[node name="Device" parent="Content/ScrollContainer/Trailing/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
+[node name="Device" parent="HBox/Content/ScrollContainer/Trailing/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
 layout_mode = 2
 
-[node name="Device2" parent="Content/ScrollContainer/Trailing/Devices" unique_id=666575919 instance=ExtResource("3_m4540")]
+[node name="Device2" parent="HBox/Content/ScrollContainer/Trailing/Devices" unique_id=666575919 instance=ExtResource("3_m4540")]
 layout_mode = 2
+
+[node name="InsetShadow" type="TextureRect" parent="HBox/Content" unique_id=1616901557]
+layout_mode = 2
+mouse_filter = 2
+texture = SubResource("GradientTexture2D_wr2ym")
+expand_mode = 2
+stretch_mode = 6
 
 [node name="DeviceContextMenu" parent="." unique_id=1107586009 instance=ExtResource("3_oh1x1")]
 visible = false
