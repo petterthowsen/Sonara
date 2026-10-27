@@ -23,6 +23,7 @@ const P_SLOPE := 5
 const P_STEREO := 6
 const OUTPUT_GAIN := 80
 const LISTEN_BAND := 81
+const MIX := 82
 
 enum Type { BELL, LOW_SHELF, HIGH_SHELF, LOW_CUT, HIGH_CUT, NOTCH, BAND_PASS, TILT }
 const TYPE_NAMES: Array[String] = ["Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Band Pass", "Tilt"]

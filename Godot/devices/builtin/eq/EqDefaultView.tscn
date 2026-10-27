@@ -143,6 +143,14 @@ script = ExtResource("5_slider")
 layout_mode = 2
 size_flags_horizontal = 3
 
+[node name="MixKnob" type="VBoxContainer" parent="Root/Footer" unique_id=1091659747]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("6_knob")
+label_width = 40.0
+knob_size = Vector2(34, 34)
+text = "Mix"
+
 [node name="OutputKnob" type="VBoxContainer" parent="Root/Footer" unique_id=1091659746]
 unique_name_in_owner = true
 layout_mode = 2

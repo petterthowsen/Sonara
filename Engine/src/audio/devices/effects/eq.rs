@@ -46,9 +46,10 @@ pub const STEREO: ParamId = 6;
 
 pub const OUTPUT_GAIN: ParamId = 80;
 pub const LISTEN_BAND: ParamId = 81;
+pub const MIX: ParamId = 82;
 
-const ID_SPACE: usize = 82;
-const PARAM_COUNT: usize = BAND_COUNT * 7 + 2;
+const ID_SPACE: usize = 83;
+const PARAM_COUNT: usize = BAND_COUNT * 7 + 3;
 
 const TYPES: &[&str] = &[
     "Bell",
@@ -124,7 +125,7 @@ const BAND5: [ParamSpec; 7] = band_specs!(40, "Band 5", 0.0, 1_150.0);
 const BAND6: [ParamSpec; 7] = band_specs!(50, "Band 6", 0.0, 2_500.0);
 const BAND7: [ParamSpec; 7] = band_specs!(60, "Band 7", 0.0, 5_500.0);
 const BAND8: [ParamSpec; 7] = band_specs!(70, "Band 8", 4.0, 12_000.0);
-const OUTPUT_SPECS: [ParamSpec; 2] = [
+const OUTPUT_SPECS: [ParamSpec; 3] = [
     spec(
         OUTPUT_GAIN,
         "Gain",
@@ -144,6 +145,8 @@ const OUTPUT_SPECS: [ParamSpec; 2] = [
     )
     .hidden()
     .not_automatable(),
+    // Dry/wet of the whole EQ (bands and listen), before the output gain.
+    spec(MIX, "Mix", "Output", "%", linear(0.0, 100.0), 100.0),
 ];
 
 pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
@@ -444,6 +447,11 @@ pub struct EqDevice {
     out_start: f32,
     out_end: f32,
 
+    mix_target: f32,
+    mix: f32,
+    mix_start: f32,
+    mix_end: f32,
+
     listen: usize,
     listen_level: f32,
     listen_start: f32,
@@ -563,6 +571,10 @@ impl EqDevice {
             out_db: 0.0,
             out_start: 1.0,
             out_end: 1.0,
+            mix_target: 1.0,
+            mix: 1.0,
+            mix_start: 1.0,
+            mix_end: 1.0,
             listen: 0,
             listen_level: 0.0,
             listen_start: 0.0,
@@ -621,6 +633,9 @@ impl EqDevice {
         let gain = db_to_gain(self.out_db);
         self.out_start = gain;
         self.out_end = gain;
+        self.mix = self.mix_target;
+        self.mix_start = self.mix;
+        self.mix_end = self.mix;
         self.listen_level = if self.listen > 0 { 1.0 } else { 0.0 };
         self.listen_start = self.listen_level;
         self.listen_svf = [LinearSvf::new(); 2];
@@ -698,6 +713,16 @@ impl EqDevice {
             }
         }
         self.out_end = db_to_gain(self.out_db);
+
+        // Mix.
+        self.mix_start = self.mix_end;
+        if self.mix != self.mix_target {
+            self.mix += (self.mix_target - self.mix) * self.smooth;
+            if (self.mix_target - self.mix).abs() < 1e-4 {
+                self.mix = self.mix_target;
+            }
+        }
+        self.mix_end = self.mix;
 
         // Listen.
         self.listen_start = self.listen_level;
@@ -778,6 +803,11 @@ impl EqDevice {
             l += listen * (bl - l);
             r += listen * (br - r);
         }
+        if self.mix_start != 1.0 || self.mix_end != 1.0 {
+            let mix = self.mix_start + (self.mix_end - self.mix_start) * t;
+            l = in_l + mix * (l - in_l);
+            r = in_r + mix * (r - in_r);
+        }
         if self.out_start != 1.0 || self.out_end != 1.0 {
             let gain = self.out_start + (self.out_end - self.out_start) * t;
             l *= gain;
@@ -789,6 +819,8 @@ impl EqDevice {
     fn apply(&mut self, id: ParamId, real: f32) {
         if id == OUTPUT_GAIN {
             self.out_target_db = real;
+        } else if id == MIX {
+            self.mix_target = real / 100.0;
         } else if id == LISTEN_BAND {
             self.listen = real as usize;
         } else if (id as usize) < BAND_COUNT * 10 {
@@ -1093,7 +1125,7 @@ mod tests {
 
     #[test]
     fn table_has_the_documented_layout() {
-        assert_eq!(TABLE.len(), 58);
+        assert_eq!(TABLE.len(), 59);
         let d = device();
         let infos = d.parameters();
         let info = |id: ParamId| infos.iter().find(|p| p.id == id).unwrap();
@@ -1213,6 +1245,21 @@ mod tests {
         let tail = &out[SR as usize / 2..];
         let got = 20.0 * (tone_amplitude(tail, 440.0, SR) / 0.5).log10();
         assert!((got + 6.0).abs() < 0.01, "{got}");
+    }
+
+    #[test]
+    fn mix_blends_the_eq_with_the_dry_signal() {
+        let input = stereo(&sine(1_000.0, SR, SR as usize, 0.25));
+        let level = |mix: f32| {
+            let mut d = device();
+            configure(&mut d, 0, 0, 1_000.0, 12.0, 1.0, 1);
+            set(&mut d, MIX, mix);
+            let out = left(&render(&mut d, &input, &[512]));
+            tone_amplitude(&out[SR as usize / 2..], 1_000.0, SR) / 0.25
+        };
+        assert!((level(100.0) - 4.0).abs() < 0.02, "{}", level(100.0));
+        assert!((level(0.0) - 1.0).abs() < 0.01, "{}", level(0.0));
+        assert!((level(50.0) - 2.5).abs() < 0.02, "{}", level(50.0));
     }
 
     #[test]

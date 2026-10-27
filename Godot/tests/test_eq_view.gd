@@ -95,6 +95,11 @@ func _make_instance() -> Object:
 	out.max_value = 24.0
 	out.default_value = 0.0
 	device.add_parameter(out)
+	var mix := DeviceParameter.new(EqResponse.MIX, "Mix", "%")
+	mix.min_value = 0.0
+	mix.max_value = 100.0
+	mix.default_value = 100.0
+	device.add_parameter(mix)
 	var listen := DeviceParameter.new(EqResponse.LISTEN_BAND, "Listen Band")
 	listen.param_type = "enum"
 	listen.enum_values.assign(["Off", "1", "2", "3", "4", "5", "6", "7", "8"])

@@ -40,6 +40,7 @@ var save_config := Callable(self, "_save_app_config")
 @onready var _freq_slider: CompactSlider = %FreqSlider
 @onready var _gain_slider: CompactSlider = %GainSlider
 @onready var _q_slider: CompactSlider = %QSlider
+@onready var _mix_knob: LabeledKnob = %MixKnob
 @onready var _output_knob: LabeledKnob = %OutputKnob
 @onready var _root: VBoxContainer = %Root
 @onready var _footer: HBoxContainer = %Footer
@@ -86,6 +87,7 @@ func _ready() -> void:
 	_freq_slider.value_changed.connect(_on_band_knob_changed.bind(EqResponse.P_FREQ))
 	_gain_slider.value_changed.connect(_on_band_knob_changed.bind(EqResponse.P_GAIN))
 	_q_slider.value_changed.connect(_on_band_knob_changed.bind(EqResponse.P_Q))
+	_mix_knob.knob.value_changed.connect(_on_param_knob_changed.bind(EqResponse.MIX))
 	_output_knob.knob.value_changed.connect(_on_param_knob_changed.bind(EqResponse.OUTPUT_GAIN))
 
 	_apply_state(_read_state())
@@ -148,6 +150,7 @@ func _setup() -> void:
 	var audio_config := _autoload("AudioConfig")
 	if audio_config != null and audio_config.config.has("sample_rate"):
 		editor.sample_rate = float(audio_config.config["sample_rate"])
+	EqKnobs.configure(_mix_knob.knob, device, EqResponse.MIX, "%.0f", " %")
 	EqKnobs.configure(_output_knob.knob, device, EqResponse.OUTPUT_GAIN, "%+.1f", " dB")
 	# REQ-009: the footer always shows a band. Fall back to the first enabled one, else band 1,
 	# and let the editor follow so the two stay in sync from the start.
@@ -185,7 +188,7 @@ func _on_device_parameter_changed(param_id: int, _value: float) -> void:
 	if param_id < EqResponse.BAND_COUNT * EqResponse.BAND_STRIDE:
 		if param_id / EqResponse.BAND_STRIDE == _band:
 			_refresh_band_controls()
-	elif param_id == EqResponse.OUTPUT_GAIN:
+	elif param_id == EqResponse.OUTPUT_GAIN or param_id == EqResponse.MIX:
 		_refresh_output()
 	elif param_id == EqResponse.LISTEN_BAND:
 		_refresh_band_controls()
@@ -251,6 +254,7 @@ func _refresh_band_controls() -> void:
 
 func _refresh_output() -> void:
 	if device != null:
+		_mix_knob.knob.set_value_no_signal(device.get_parameter_real(EqResponse.MIX))
 		_output_knob.knob.set_value_no_signal(device.get_parameter_real(EqResponse.OUTPUT_GAIN))
 
 
