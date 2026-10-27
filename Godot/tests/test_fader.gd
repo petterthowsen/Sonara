@@ -15,6 +15,7 @@ func suite_name() -> String:
 
 func run_tests() -> void:
 	_test_taper_round_trip()
+	_test_inverted_live_value()
 	_test_scale_marks_layout()
 	_test_grab_does_not_jump()
 	_test_track_click_jumps()
@@ -85,6 +86,21 @@ func _test_taper_round_trip() -> void:
 	_assert(absf(g.value_to_position(632.455) - 0.5) < 0.01, "logarithmic puts the geometric mean halfway")
 	f.free()
 	g.free()
+
+
+func _test_inverted_live_value() -> void:
+	var f := _fader()
+	f.min_value = 1.0
+	f.max_value = 30.0
+	f.inverted = true
+	_assert(f.value_to_position(1.0) > 0.99 and f.value_to_position(30.0) < 0.01, "inverted puts the minimum at the top")
+	_assert(is_nan(f.live_value()), "no live value without modulation")
+	var changes := [0]
+	f.mod_live_changed.connect(func(): changes[0] += 1)
+	f.mod_live_values = PackedFloat32Array([0.25])
+	_assert(changes[0] == 1, "setting live values emits mod_live_changed")
+	_assert(absf(f.live_value() - (1.0 + 29.0 * 0.25)) < 0.001, "the live value reads in the fader's units (got %s)" % f.live_value())
+	f.free()
 
 
 func _test_scale_marks_layout() -> void:

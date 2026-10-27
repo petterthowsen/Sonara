@@ -111,7 +111,9 @@ func _build() -> void:
 func _add_fader(fader: Fader, value_label: Label, param_id: int, format: String) -> void:
 	fader.value_changed.connect(_on_fader_changed.bind(param_id))
 	fader.reset_requested.connect(_on_reset_requested.bind(param_id))
-	_faders.append({"fader": fader, "label": value_label, "id": param_id, "format": format})
+	var entry := {"fader": fader, "label": value_label, "id": param_id, "format": format}
+	fader.mod_live_changed.connect(_update_fader_label.bind(entry))
+	_faders.append(entry)
 
 
 func _add_slider(slider: HorSlider, value_label: Label, param_id: int, format: String) -> void:
@@ -176,10 +178,10 @@ func _configure_controls() -> void:
 		fader.min_value = param.min_value
 		fader.max_value = param.max_value
 		fader.value_default = param.default_value
-		if int(entry["id"]) == CompressorData.P_RATIO:
-			# Reversed: 1:1 at the top, ∞:1 at the bottom.
-			fader.to_position = func(v: float) -> float: return 1.0 - param.value_to_normalized(v)
-			fader.from_position = func(n: float) -> float: return param.normalized_to_value(1.0 - n)
+		fader.to_position = param.value_to_normalized
+		fader.from_position = param.normalized_to_value
+		# Ratio is reversed: 1:1 at the top, ∞:1 at the bottom.
+		fader.inverted = int(entry["id"]) == CompressorData.P_RATIO
 		fader.value_text_callback = _fader_text.bind(entry)
 		ModAssign.attach(fader, device, int(entry["id"]))
 	for entry in _knobs:
@@ -203,6 +205,24 @@ func _configure_controls() -> void:
 		if param != null:
 			(entry["slider"] as HorSlider).default_value = param.value_to_normalized(param.default_value)
 			ModAssign.attach(entry["slider"] as HorSlider, device, int(entry["id"]))
+
+
+## The value under a fader. While a modulator moves it, the label shows the live value in the
+## modulator's colour, so a modulated Threshold or Ratio can't pass for its set value.
+func _update_fader_label(entry: Dictionary) -> void:
+	var fader: Fader = entry["fader"]
+	var label: Label = entry["label"]
+	if fader == output_fader and auto_gain.button_pressed:
+		label.text = _fader_text(fader.value, entry) + " auto"
+		label.remove_theme_color_override(&"font_color")
+		return
+	var live := fader.live_value()
+	if is_nan(live) or fader.mod_ranges.is_empty():
+		label.text = _fader_text(fader.value, entry)
+		label.remove_theme_color_override(&"font_color")
+		return
+	label.text = _fader_text(live, entry)
+	label.add_theme_color_override(&"font_color", fader.mod_ranges[0]["color"])
 
 
 func _fader_text(value: float, entry: Dictionary) -> String:
@@ -231,7 +251,7 @@ func _refresh() -> void:
 			# Auto Gain replaces Makeup: show the gain it applies, read-only.
 			value = clampf(_auto_makeup_db(), fader.min_value, fader.max_value)
 		fader.set_value_no_signal(value)
-		(entry["label"] as Label).text = _fader_text(value, entry) + (" auto" if fader == output_fader and auto_gain.button_pressed else "")
+		_update_fader_label(entry)
 	for entry in _sliders:
 		var param := device.get_parameter(int(entry["id"]))
 		if param == null:

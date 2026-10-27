@@ -846,14 +846,18 @@ impl CompressorDevice {
         let mut wet_l = in_l * gain_l;
         let mut wet_r = in_r * gain_r;
 
-        // Punch's mild odd-harmonic saturation, driven by how hard it is working.
+        // Punch's mild odd-harmonic saturation, faded in and driven by how hard it is working,
+        // so with no gain reduction it is clean.
         if self.punch_active {
-            let punch_mix = self.punch_mix.at(t);
-            let drive = 1.0 + PUNCH_DRIVE * (self.gain[0].max(self.gain[1]) / 6.0).clamp(0.0, 1.0);
-            let sat_l = (drive * wet_l).tanh() / drive;
-            let sat_r = (drive * wet_r).tanh() / drive;
-            wet_l += punch_mix * (sat_l - wet_l);
-            wet_r += punch_mix * (sat_r - wet_r);
+            let work = (self.gain[0].max(self.gain[1]) / 6.0).clamp(0.0, 1.0);
+            let amount = self.punch_mix.at(t) * work;
+            if amount > 0.0 {
+                let drive = 1.0 + PUNCH_DRIVE * work;
+                let sat_l = (drive * wet_l).tanh() / drive;
+                let sat_r = (drive * wet_r).tanh() / drive;
+                wet_l += amount * (sat_l - wet_l);
+                wet_r += amount * (sat_r - wet_r);
+            }
         }
         self.prev_out = [wet_l, wet_r];
 
@@ -1299,6 +1303,23 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-6, "differs by {worst} (want below -120 dB)");
+    }
+
+    #[test]
+    fn punch_is_clean_without_gain_reduction() {
+        let mut d = device();
+        set(&mut d, STYLE, 2.0);
+        set(&mut d, THRESHOLD, 0.0);
+        set(&mut d, RATIO, 1.0);
+        render(&mut d, &vec![0.0; (SR as usize / 10) * 2], &[512]);
+        let input = stereo(&white_noise(SR as usize, 0.9, 7));
+        let out = render(&mut d, &input, &[512]);
+        let worst = out
+            .iter()
+            .zip(&input)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-6, "differs by {worst} at 1:1");
     }
 
     #[test]

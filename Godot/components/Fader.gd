@@ -12,13 +12,19 @@ class_name Fader extends Control
 signal value_changed(new_value: float)
 ## Emitted on every Ctrl/Cmd-click, even when the value is already the default.
 signal reset_requested
+## Emitted when `mod_live_values` changes, so an owner can show the modulated value.
+signal mod_live_changed
 ## Emitted while `mod_assign_active` and the user drags (or double-clicks, which asks for 0).
 signal mod_amount_changed(new_amount: float)
 
 enum ScaleSide { NONE, LEFT, RIGHT }
 enum TooltipSide { AUTO, LEFT, RIGHT }
 
-const MOD_BAR := 3.0
+const MOD_BAR := 4.0
+## Alpha of the fill between the set value and the live modulated value.
+const MOD_LIVE_FILL_ALPHA := 0.4
+## How far the live-value marker sticks out past the track, like the handle cap.
+const MOD_LIVE_OVERHANG := 3.0
 const SCALE_WIDTH := 28.0
 const HANDLE_GRAB_PAD := 4.0
 
@@ -49,6 +55,12 @@ var last_edit_kind := ValueEditKind.Kind.DRAG
 ## Optional skewed taper: Callable(value) -> 0..1 and Callable(0..1) -> value. Set both.
 var to_position: Callable
 var from_position: Callable
+## Puts the maximum at the bottom. The taper stays the parameter's normalization, so the
+## normalized modulation ranges and live values land in the right place.
+@export var inverted := false:
+	set(v):
+		inverted = v
+		queue_redraw()
 
 ## The fill grows from this value, up or down; NAN grows it from the bottom.
 @export var fill_origin := NAN:
@@ -165,11 +177,14 @@ var mod_assign_color := Color.WHITE:
 var mod_assign_amount := 0.0
 ## Optional Callable(amount: float) -> String for the assign tooltip.
 var mod_amount_text_callback: Callable
-## Live modulated positions (0..1) while playing, drawn as thin markers.
+## Live modulated values (normalized 0..1) while playing, drawn as markers.
 var mod_live_values := PackedFloat32Array():
 	set(v):
+		if v == mod_live_values:
+			return
 		mod_live_values = v
 		queue_redraw()
+		mod_live_changed.emit()
 
 var _value := 0.0
 var _dragging := false
@@ -215,17 +230,29 @@ func value_to_position(v: float) -> float:
 		n = 0.0 if v <= min_value else log(v / min_value) / log(max_value / min_value)
 	else:
 		n = (v - min_value) / (max_value - min_value)
-	return clampf(n, 0.0, 1.0)
+	return _flip(clampf(n, 0.0, 1.0))
 
 
 ## Inverse of `value_to_position`.
 func position_to_value(n: float) -> float:
-	n = clampf(n, 0.0, 1.0)
+	n = _flip(clampf(n, 0.0, 1.0))
 	if from_position.is_valid():
 		return clampf(float(from_position.call(n)), min_value, max_value)
 	if logarithmic and min_value > 0.0:
 		return min_value * pow(max_value / min_value, n)
 	return min_value + n * (max_value - min_value)
+
+
+## A normalized (taper) value as a position up the track, and back.
+func _flip(n: float) -> float:
+	return 1.0 - n if inverted else n
+
+
+## The newest live modulated value in the fader's units, NAN when nothing is modulating it.
+func live_value() -> float:
+	if mod_live_values.is_empty():
+		return NAN
+	return position_to_value(_flip(clampf(mod_live_values[mod_live_values.size() - 1], 0.0, 1.0)))
 
 
 func get_value_text() -> String:
@@ -299,19 +326,29 @@ func _draw() -> void:
 	draw_line(Vector2(cap.position.x + 2.0, value_y), Vector2(cap.end.x - 2.0, value_y), Color(0, 0, 0, 0.45), 1.0)
 
 
-## Route bars down the right edge of the track, and live markers.
+## Route bars down the right edge of the track, and live markers: a tinted fill from the set
+## value to where modulation has moved it, and a handle-wide bar at the live value, so a
+## modulated fader reads clearly different from its handle.
 func _draw_modulation(track: Rect2) -> void:
-	var base := value_to_position(_value)
+	var base := _flip(value_to_position(_value))
 	for i in mod_ranges.size():
 		var route := mod_ranges[i]
 		var band := ModDisplay.span(base, float(route["amount"]), bool(route.get("bipolar", false)))
 		if band.y - band.x < 0.002:
 			continue
-		draw_rect(Rect2(track.end.x - (i + 1) * MOD_BAR, position_y(band.y), MOD_BAR, (band.y - band.x) * track.size.y),
+		var top := maxf(_flip(band.x), _flip(band.y))
+		draw_rect(Rect2(track.end.x - (i + 1) * MOD_BAR, position_y(top), MOD_BAR, (band.y - band.x) * track.size.y),
 			route["color"], true)
+	var live_color: Color = mod_ranges[0]["color"] if not mod_ranges.is_empty() else ModDisplay.LIVE_MARKER_COLOR
+	var base_y := position_y(_flip(base))
 	for live in mod_live_values:
-		draw_rect(Rect2(track.position.x, position_y(clampf(live, 0.0, 1.0)) - 0.5, track.size.x, 1.5),
-			ModDisplay.LIVE_MARKER_COLOR, true)
+		var live_y := position_y(_flip(clampf(live, 0.0, 1.0)))
+		draw_rect(Rect2(track.position.x, minf(base_y, live_y), track.size.x, absf(live_y - base_y)),
+			Color(live_color, MOD_LIVE_FILL_ALPHA), true)
+		var marker := Rect2(track.position.x - MOD_LIVE_OVERHANG, live_y - 1.5,
+			track.size.x + 2.0 * MOD_LIVE_OVERHANG, 3.0)
+		draw_rect(marker.grow(1.0), Color(0, 0, 0, 0.6), true)
+		draw_rect(marker, live_color, true)
 	if mod_hint_active:
 		ModDisplay.draw_fill(self, track, mod_hint_color, ModDisplay.pulse_alpha())
 	elif mod_assign_active:
@@ -352,7 +389,7 @@ func _gui_input(event: InputEvent) -> void:
 			return
 		if mod_assign_active:
 			var scale := fine_drag_scale if motion.shift_pressed else 1.0
-			var amount := ModDisplay.step_amount(mod_assign_amount, -motion.relative.y / track.size.y * scale)
+			var amount := ModDisplay.step_amount(mod_assign_amount, -motion.relative.y / track.size.y * scale * (-1.0 if inverted else 1.0))
 			if not is_equal_approx(amount, mod_assign_amount):
 				mod_assign_amount = amount
 				mod_amount_changed.emit(amount)

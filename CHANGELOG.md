@@ -31,6 +31,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Changed
 
+- Vertical faders (e.g. the Compressor's Threshold, Ratio and Output) show modulation clearly: a coloured bar the width of the handle marks the live modulated value, the span between the set value and the live value is tinted in the modulator's colour, and the route bars are wider. While a modulator moves the Compressor's Threshold, Ratio or Output, the label under the fader shows the live value in the modulator's colour.
 - The clip editor's ruler no longer shades the clips; the clip strip below it shows them.
 - A new track or channel is selected as soon as it is created (#165).
 - Opening the clip editor with several clips selected shows the piano roll, unless the channel has drum rows (#150).
@@ -39,6 +40,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- The Compressor's Punch style no longer saturates when it isn't compressing; its saturation now fades in with the gain reduction, so at 1:1 it passes audio through untouched.
+- Modulation on the Compressor's Ratio fader (1:1 at the top) was drawn mirrored; the bars and live marker now sit where the engine's value is.
 - The Synth Kit's open hat now rings: the kit set the hat's Metal control instead of its Decay, so both hats had the same short decay.
 - Clicking or dragging a note in the note editor now makes its length the length of new notes, not only resizing it.
 - Dragging a track or a device over a folder or group track in the arranger tracklist no longer makes the drop line jump before or after the whole folder when the pointer is near the left edge of a child track; the line stays in the gap under the pointer (#185).
