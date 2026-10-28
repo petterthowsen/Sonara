@@ -51,28 +51,45 @@ var _built_height := -1.0
 ## Group id → `{rect, box}` on the current page: the group's saved cell rect and the cell rect
 ## its box is drawn over after growing into the free space to its right and below.
 var _group_fit := {}
+## True between show_view() and hide_view().
+var _shown := false
+## The device's parameter list changed while the view was hidden: reload when it shows.
+var _stale := false
+
+
 func _ready() -> void:
 	_grid.resized.connect(_on_grid_resized)
 
 
-## Load (or generate) the layout and build the current page.
+## Load (or generate) the layout and build the current page. Follows parameter list changes for
+## as long as it is bound, so a plugin/SFZ device that advertises its parameters after this view
+## was built gets its layout reconciled and redrawn.
 func _on_bind() -> void:
 	if not is_node_ready():
 		await ready
-	_reload()
-
-
-## Subscribe to parameter list changes so a plugin/SFZ device that advertises its parameters
-## after this view was built gets its layout reconciled and redrawn.
-func _on_view_shown() -> void:
-	if device and not device.parameters_updated.is_connected(_on_parameters_updated):
+	if device == null:
+		return
+	if not device.parameters_updated.is_connected(_on_parameters_updated):
 		device.parameters_updated.connect(_on_parameters_updated)
+	_stale = false
 	_reload()
+
+
+func _on_unbind() -> void:
+	if device.parameters_updated.is_connected(_on_parameters_updated):
+		device.parameters_updated.disconnect(_on_parameters_updated)
+
+
+## Showing again (e.g. a kept DeviceLane row) only rebuilds when the parameters changed meanwhile.
+func _on_view_shown() -> void:
+	_shown = true
+	if _stale:
+		_stale = false
+		_reload()
 
 
 func _on_view_hidden() -> void:
-	if device and device.parameters_updated.is_connected(_on_parameters_updated):
-		device.parameters_updated.disconnect(_on_parameters_updated)
+	_shown = false
 
 
 func _on_device_parameter_changed(param_id: int, _value: float) -> void:
@@ -83,7 +100,10 @@ func _on_device_parameter_changed(param_id: int, _value: float) -> void:
 
 
 func _on_parameters_updated() -> void:
-	_reload()
+	if _shown:
+		_reload()
+	else:
+		_stale = true
 
 
 ## Re-fetch the layout (which reconciles against the instance's current parameters, REQ-016)
@@ -135,15 +155,20 @@ func _build_page(index: int) -> void:
 	if layout == null or index < 0 or index >= layout.pages.size():
 		return
 	var page: Dictionary = layout.pages[index]
-	_built_height = _grid.size.y
-	_compute_row_y(page)
 	var page_columns := _page_columns(page)
-	_group_fit = fit_groups(page, page_columns, _used_rows(page))
 	# Only as wide as this page, so a sparse page doesn't leave a wide empty area (the devices
 	# beside this one move over when pages are switched). The view takes its minimum width from
 	# this, so the DevicePanel grows and shrinks to fit instead of scrolling; pages split content
 	# that doesn't fit. No minimum height: the panel's height is fixed, and rows shrink to fit it.
 	_grid.custom_minimum_size = Vector2(page_columns * cell_size.x, 0)
+	# Rows fit the grid's height, which the first layout pass gives it: placing controls before
+	# that would only build them twice (_on_grid_resized places the page).
+	if _grid.size.y <= 0.0:
+		_built_height = -1.0
+		return
+	_built_height = _grid.size.y
+	_compute_row_y(page)
+	_group_fit = fit_groups(page, page_columns, _used_rows(page))
 	for group in page.get("groups", []):
 		_add_group_box(group)
 	for control_data in page.get("controls", []):
