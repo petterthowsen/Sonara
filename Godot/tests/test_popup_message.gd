@@ -34,6 +34,8 @@ func _test_show_message() -> void:
 	_assert(_popup.last_title == "Plugin crashed: X", "last_title stored")
 	_assert(_popup.last_body == "line one\nline two", "last_body stored")
 
+	_assert(_popup.body.get_combined_minimum_size().y > 0.0, "body has a visible height (#189)")
+
 	var copy_text: String = _popup.get_copy_text()
 	_assert(copy_text.contains("Plugin crashed: X"), "copy text contains the title")
 	_assert(copy_text.contains("line one") and copy_text.contains("line two"), "copy text contains the body")

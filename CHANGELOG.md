@@ -41,6 +41,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Fixed
 
+- The error popup shows its message again; the body text had collapsed to zero height (#189).
 - The Compressor's Punch style no longer saturates when it isn't compressing; its saturation now fades in with the gain reduction, so at 1:1 it passes audio through untouched.
 - Modulation on the Compressor's Ratio fader (1:1 at the top) was drawn mirrored; the bars and live marker now sit where the engine's value is.
 - The Synth Kit's open hat now rings: the kit set the hat's Metal control instead of its Decay, so both hats had the same short decay.

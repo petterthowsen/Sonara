@@ -41,13 +41,14 @@ layout_mode = 2
 [node name="BodyScroll" type="ScrollContainer" parent="MarginContainer/VBoxContainer" unique_id=2000000106]
 layout_mode = 2
 size_flags_vertical = 3
+horizontal_scroll_mode = 0
 
 [node name="Body" type="RichTextLabel" parent="MarginContainer/VBoxContainer/BodyScroll" unique_id=2000000107]
 layout_mode = 2
 size_flags_horizontal = 3
 bbcode_enabled = false
 selection_enabled = true
-fit_content = false
+fit_content = true
 scroll_active = true
 autowrap_mode = 2
 
