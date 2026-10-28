@@ -1,0 +1,68 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://arranger/tracklist/AutomationParameterPicker.gd" id="1_picker"]
+
+[node name="AutomationParameterPicker" type="PopupPanel"]
+oversampling_override = 1.0
+size = Vector2i(320, 300)
+theme_type_variation = &"ContextMenu"
+script = ExtResource("1_picker")
+
+[node name="Margin" type="MarginContainer" parent="."]
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 316.0
+offset_bottom = 296.0
+theme_override_constants/margin_left = 4
+theme_override_constants/margin_top = 4
+theme_override_constants/margin_right = 4
+theme_override_constants/margin_bottom = 4
+
+[node name="Column" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Header" type="HBoxContainer" parent="Margin/Column"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="BackButton" type="Button" parent="Margin/Column/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+theme_type_variation = &"FlatButton"
+text = "‹ Back"
+
+[node name="PathLabel" type="Label" parent="Margin/Column/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text_overrun_behavior = 3
+
+[node name="SearchEdit" type="LineEdit" parent="Margin/Column"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Search parameters"
+clear_button_enabled = true
+
+[node name="Scroll" type="ScrollContainer" parent="Margin/Column"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 120)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+horizontal_scroll_mode = 0
+
+[node name="Rows" type="VBoxContainer" parent="Margin/Column/Scroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="EmptyLabel" type="Label" parent="Margin/Column"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "No matching parameters"
+horizontal_alignment = 1

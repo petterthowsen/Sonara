@@ -469,16 +469,6 @@ func _test_add_reveals_slot() -> void:
 	_assert(poly.open_slot_keys().is_empty(), "adding into a nested Chain leaves the slot as it was")
 
 
-func _texts_of_paths(picker: Object) -> Dictionary:
-	var out := {}
-	for submenu in picker._submenu_paths:
-		var texts: Array = []
-		for i in range(submenu.get_item_count()):
-			texts.append(submenu.get_item_text(i))
-		out[str(picker._submenu_paths[submenu])] = texts
-	return out
-
-
 func _test_automation_lists_slot_devices() -> void:
 	var made: Dictionary = _project_script.new().create_instrument_track("Auto")
 	var ch: Object = made.channel
@@ -490,14 +480,29 @@ func _test_automation_lists_slot_devices() -> void:
 	poly.device.add_parameter(load("res://data/DeviceParameter.gd").new(1, "Cutoff"))
 	var delay := _inst(DELAY_ID, ch)
 	_add_cmd.new(ch, delay, -1, poly.children[1]).do()
-	var picker: Object = load("res://arranger/tracklist/AutomationParameterPicker.gd").new()
-	picker.track = made.track
-	picker.channel = ch
-	picker._rebuild()
-	var by_path := _texts_of_paths(picker)
-	_assert(by_path.has("[0]") and by_path.has("[0, 1, 0]"), "the picker has submenus for the PolySynth and the Delay in its FX slot: %s" % str(by_path.keys()))
-	_assert(by_path.get("[0, 1, 0]", []).has("Mix"), "the slot device lists its parameters")
-	_assert(not by_path.has("[0, 1]"), "an empty-parameter slot chain adds no entry")
+	var tree: Object = load("res://arranger/tracklist/AutomationParameterTree.gd").build(made.track, ch, true)
+	var root_headers: Array = []
+	for row in tree.root.rows:
+		if row.kind == 0:
+			root_headers.append(row.label)
+	var fx: Object = null
+	for row in tree.root.rows:
+		if row.kind == 2 and row.label == poly.children[1].name:
+			fx = row.level
+	_assert(fx != null, "the PolySynth's FX slot opens as a submenu: %s" % str(root_headers))
+	_assert(fx != null and fx.trail == PackedStringArray([poly.name, poly.children[1].name]), "the slot level knows its path")
+	var in_fx: Array = []
+	if fx != null:
+		for row in fx.rows:
+			in_fx.append(row.label)
+	_assert(in_fx.has(delay.name) and in_fx.has("Mix"), "the Delay in the FX slot is a section listing its parameters: %s" % str(in_fx))
+	var hits: Array = tree.search(tree.root, "mix")
+	_assert(not hits.is_empty() and not hits[0].in_level and hits[0].path.size() == 3, "a search from the root finds it with its path: %s" % str(hits[0].path if not hits.is_empty() else []))
+	var flat: Object = load("res://arranger/tracklist/AutomationParameterTree.gd").build(made.track, ch, false)
+	var flat_headers: Array = []
+	for row in flat.root.rows:
+		if row.kind == 0:
+			flat_headers.append(row.label)
+	_assert(flat_headers.has(" › ".join(PackedStringArray([poly.name, poly.children[1].name, delay.name]))), "flat mode headers carry the full path: %s" % str(flat_headers))
 	var target := AutomationTarget.device_param([0, 1, 0], 7)
 	_assert(target != null, "an automation target can address a device in a slot")
-	picker.free()

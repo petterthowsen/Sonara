@@ -8,6 +8,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ### Added
 
+- Popups and context menus close themselves: they stay open for 2 s after opening (Settings > Behavior > Menus > Auto-Close Menus: 0.5 to 5 s, or Never), then close as soon as the pointer is outside them (open submenus, a held mouse button and a search or text field you are typing in keep them open). This now includes the automation parameter picker, the metronome popup and the dock panel menu.
+- The automation parameter picker is a searchable popup. Every category (Channel, Stage, Sends, each device, MIDI CC) has a labelled divider and devices follow their order in the chain. Typing searches at once (fuzzy, over all levels, with the path shown for deeper matches), the arrow keys move the selection, Enter picks and Escape closes. Devices inside a device's slots (a PolySynth's FX) open as submenus; Settings > Appearance > Automation Parameter List switches to a flat list.
 - The EQ has a Mix knob (dry/wet, 0–100 %) beside its output gain.
 - The Drum Machine's Synth Kit now has 13 pads on GM notes: Kick, Rimshot, Snare, Clap, Closed and Open Hat, Low/Mid/High Tom, Crash, Ride, Cowbell and Shaker (spec 056).
 - New built-in drum instrument Shaker (spec 056): shaped, filtered noise for maracas and shakers, with Attack, Decay, Tone, Ring and a Grain control that adds a beads texture.

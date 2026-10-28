@@ -88,8 +88,7 @@ func show_context_menu() -> void:
 	menu.id_pressed.connect(func(_id: int) -> void: close())
 	menu.popup_hide.connect(menu.queue_free)
 	add_child(menu)
-	menu.position = Vector2i(DisplayServer.mouse_get_position())
-	menu.popup()
+	ContextMenuPopup.popup_at_mouse(menu)
 
 
 func _on_title_gui_input(event: InputEvent) -> void:

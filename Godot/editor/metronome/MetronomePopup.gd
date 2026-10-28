@@ -107,8 +107,7 @@ func follow_playhead(project: Project, tick: int, playing: bool) -> void:
 
 ## Open below `anchor`, like the Load popup.
 func popup_below(anchor: Control) -> void:
-	var origin := Vector2i(anchor.get_screen_position() + Vector2(0, anchor.size.y))
-	popup(Rect2i(origin, Vector2i.ZERO))
+	ContextMenuPopup.popup_below_control(self, anchor)
 
 
 # ============================================================================

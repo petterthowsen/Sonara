@@ -40,6 +40,10 @@ func run_tests() -> void:
 	_test_cc_menu_sfz_labels_first_and_no_device_submenu()
 	_test_cc_menu_omits_laned_controller()
 	_test_device_submenu_skips_controller_params()
+	_test_picker_dividers_and_order()
+	_test_picker_flat_mode()
+	_test_picker_search_ranking()
+	_test_picker_scene_selection()
 	_test_menu_uses_clip_editor_view()
 	_test_create_lane_for_opens_and_undoes()
 	_test_create_lane_for_redo_reopens()
@@ -117,18 +121,8 @@ func _picker_track(synth: bool, sfz_specs: Array, existing_lanes: Array) -> Dict
 		ch.add_device(sfz)
 	for lane in existing_lanes:
 		made.track.add_automation_lane(lane)
-	var picker: Object = _picker_script.new()
-	picker.track = made.track
-	picker.channel = ch
-	picker._rebuild()
-	return {"picker": picker, "track": made.track}
-
-
-func _cc_submenu(picker: Object) -> Object:
-	for i in range(picker.get_item_count()):
-		if picker.get_item_text(i) == "MIDI CC":
-			return picker.get_node(picker.get_item_submenu(i))
-	return null
+	var tree: Object = load("res://arranger/tracklist/AutomationParameterTree.gd").build(made.track, ch, true)
+	return {"tree": tree, "track": made.track}
 
 
 func _texts(menu: Object) -> Array:
@@ -138,72 +132,162 @@ func _texts(menu: Object) -> Array:
 	return out
 
 
-func _item_texts_with_labels(picker: Object, substrings: Array) -> bool:
-	var texts: Array = _texts(_cc_submenu(picker))
-	for label in texts:
-		for s in substrings:
-			if label.begins_with(s):
-				return false
-	return true
+## Labels of a level's rows: items and submenus, or headers when `headers`.
+func _level_texts(level: Object, headers: bool = false) -> Array:
+	var out: Array = []
+	for row in level.rows:
+		if (row.kind == 0) == headers:
+			out.append(row.label)
+	return out
+
+
+func _submenu(level: Object, label: String) -> Object:
+	for row in level.rows:
+		if row.kind == 2 and row.label == label:
+			return row.level
+	return null
+
+
+func _cc_level(tree: Object) -> Object:
+	return _submenu(tree.root, "MIDI CC")
 
 
 func _test_cc_menu_generic_range() -> void:
-	var made := _picker_track(true, [], [])
-	var picker: Object = made["picker"]
-	var cc: Object = _cc_submenu(picker)
+	var made: Dictionary = _picker_track(true, [], [])
+	var tree: Object = made["tree"]
+	var cc: Object = _cc_level(tree)
 	_assert(cc != null, "the picker has a top-level MIDI CC submenu")
 	if cc == null:
-		picker.free()
 		return
-	_assert(cc.is_search_bar_enabled(), "the CC submenu is searchable")
-	var texts: Array = _texts(cc)
+	var texts: Array = _level_texts(cc)
 	_assert("CC11 Expression" in texts, "CC11 is offered: %s" % str(texts))
 	_assert("CC74 Cutoff" in texts, "CC74 is offered")
-	_assert(_item_texts_with_labels(picker, ["CC120", "CC121", "CC122", "CC123", "CC124", "CC125", "CC126", "CC127"]),
-		"channel-mode messages 120-127 are not offered")
-	# A built-in synth also contributes a device submenu with its own parameters.
-	_assert(_texts(picker).has("Synth"), "the built-in keeps its device submenu")
-	picker.free()
+	for label in texts:
+		for s in ["CC120", "CC121", "CC122", "CC123", "CC124", "CC125", "CC126", "CC127"]:
+			_assert(not label.begins_with(s), "channel-mode messages 120-127 are not offered")
+	# A built-in synth also contributes its own labelled section with its parameters.
+	_assert(_level_texts(tree.root, true).has("Synth") and _level_texts(tree.root).has("Tone"), "the built-in keeps its device section")
 
 
 func _test_cc_menu_sfz_labels_first_and_no_device_submenu() -> void:
-	var made := _picker_track(false, [[73, "Attack"], [72, "Release"], [1, "Dynamics"]], [])
-	var picker: Object = made["picker"]
-	var cc: Object = _cc_submenu(picker)
-	var texts: Array = _texts(cc)
+	var made: Dictionary = _picker_track(false, [[73, "Attack"], [72, "Release"], [1, "Dynamics"]], [])
+	var tree: Object = made["tree"]
+	var texts: Array = _level_texts(_cc_level(tree))
 	_assert(texts.size() >= 3, "labelled and generic entries both present: %d" % texts.size())
 	_assert(texts[0] == "CC1 Dynamics" and texts[1] == "CC72 Release" and texts[2] == "CC73 Attack", "instrument labels come first: %s" % str(texts.slice(0, 3)))
 	_assert(not ("CC1 Dynamics" in texts.slice(2)), "a labelled controller is not repeated in the generic list")
 	_assert("CC11 Expression" in texts and "CC74 Cutoff" in texts, "CC11 and CC74 are offered for an SFZ")
-	# The SFZ contributes no device submenu: every parameter it has is a controller.
-	var top: Array = _texts(picker)
-	_assert(not top.has("Sampler"), "the SFZ contributes no device submenu: %s" % str(top))
-	_assert(top.has("MIDI CC"), "the MIDI CC entry stays")
-	picker.free()
+	# The SFZ contributes no device section: every parameter it has is a controller.
+	_assert(not _level_texts(tree.root, true).has("Sampler"), "the SFZ contributes no device section: %s" % str(_level_texts(tree.root, true)))
+	_assert(_level_texts(tree.root).has("MIDI CC"), "the MIDI CC entry stays")
 
 
 func _test_cc_menu_omits_laned_controller() -> void:
 	var lane: Object = _lane_script.new("lane0", AutomationTarget.midi_cc(1))
-	var made := _picker_track(false, [[1, "Dynamics"]], [lane])
-	var picker: Object = made["picker"]
-	var texts: Array = _texts(_cc_submenu(picker))
+	var made: Dictionary = _picker_track(false, [[1, "Dynamics"]], [lane])
+	var texts: Array = _level_texts(_cc_level(made["tree"]))
 	_assert(not ("CC1 Dynamics" in texts), "a controller with a lane is not offered again")
 	_assert("CC11 Expression" in texts, "other controllers remain")
-	picker.free()
 
 
 func _test_device_submenu_skips_controller_params() -> void:
-	var made := _picker_track(false, [[73, "Attack"], [1, "Dynamics"]], [])
-	var picker: Object = made["picker"]
-	var top: Array = _texts(picker)
-	_assert(top.size() == 3, "volume, pan and MIDI CC only: %s" % str(top))
-	for i in range(picker.get_item_count()):
-		var sub: String = picker.get_item_submenu(i)
-		if sub != "":
-			var submenu: Object = picker.get_node(sub)
-			var texts: Array = _texts(submenu)
-			_assert(not texts.has("Dynamics"), "controller parameters are not listed under their device")
-	picker.free()
+	var made: Dictionary = _picker_track(false, [[73, "Attack"], [1, "Dynamics"]], [])
+	var top: Array = _level_texts(made["tree"].root)
+	_assert(top == ["Volume", "Pan", "MIDI CC"], "volume, pan and MIDI CC only: %s" % str(top))
+	_assert(not _level_texts(_cc_level(made["tree"])).has("Dynamics"), "controller parameters are not listed under their device")
+
+
+# ---------------------------------------------------------------------------
+# parameter picker: dividers, device order, flat mode, search
+# ---------------------------------------------------------------------------
+
+func _device_on(ch: Object, dev_id: String, dev_name: String, param_names: Array) -> Object:
+	var dev: Object = _register(_device_script.new(dev_id, dev_name, DawEnums.CATEGORY_EFFECT, DawEnums.DEVICE_BUILTIN))
+	for i in param_names.size():
+		dev.add_parameter(_param_script.new(i + 1, param_names[i]))
+	var inst: Object = _device_instance_script.new(dev, ch.id, ch.devices.size())
+	inst.name = dev_name
+	ch.add_device(inst)
+	return inst
+
+
+func _test_picker_dividers_and_order() -> void:
+	var project: Object = _project_script.new()
+	var made: Dictionary = project.create_instrument_track("Order")
+	var ch: Object = made.channel
+	_device_on(ch, "test.order_a", "Alpha", ["Level"])
+	_device_on(ch, "test.order_b", "Beta", ["Cutoff", "Reso"])
+	var tree: Object = load("res://arranger/tracklist/AutomationParameterTree.gd").build(made.track, ch, true)
+	var headers: Array = _level_texts(tree.root, true)
+	_assert(headers.slice(0, 1) == ["Channel"], "the first divider is Channel: %s" % str(headers))
+	_assert(headers.find("Alpha") >= 0 and headers.find("Alpha") < headers.find("Beta"), "device sections follow chain order: %s" % str(headers))
+	_assert(headers.back() == "MIDI", "MIDI CC has its own divider: %s" % str(headers))
+	var labels: Array = _level_texts(tree.root)
+	_assert(labels.find("Level") < labels.find("Cutoff") and labels.find("Cutoff") < labels.find("Reso"), "parameters sit under their device in order")
+
+
+func _test_picker_flat_mode() -> void:
+	var project: Object = _project_script.new()
+	var made: Dictionary = project.create_instrument_track("Flat")
+	var ch: Object = made.channel
+	_device_on(ch, "test.flat_a", "Alpha", ["Level"])
+	var tree: Object = load("res://arranger/tracklist/AutomationParameterTree.gd").build(made.track, ch, false)
+	for row in tree.root.rows:
+		_assert(row.kind != 2, "a flat list has no submenus")
+	_assert(_level_texts(tree.root).has("CC11 Expression"), "flat mode lists the MIDI CC entries directly")
+	_assert(_level_texts(tree.root, true).has("MIDI CC"), "flat mode keeps the MIDI CC divider")
+
+
+func _test_picker_search_ranking() -> void:
+	var project: Object = _project_script.new()
+	var made: Dictionary = project.create_instrument_track("Search")
+	var ch: Object = made.channel
+	_device_on(ch, "test.search_a", "Alpha", ["Cutoff", "Reso"])
+	var tree: Object = load("res://arranger/tracklist/AutomationParameterTree.gd").build(made.track, ch, true)
+	var results: Array = tree.search(tree.root, "cutoff")
+	_assert(not results.is_empty() and results[0].row.label == "Cutoff", "a device parameter is found by name")
+	_assert(results[0].in_level and results[0].path == PackedStringArray(["Alpha"]), "a match in the level carries its device as path")
+	var cc_results: Array = tree.search(tree.root, "expression")
+	_assert(not cc_results.is_empty() and cc_results[0].row.label == "CC11 Expression" and not cc_results[0].in_level, "a match inside a submenu is found, and is not in the level")
+	var mixed: Array = tree.search(tree.root, "cut")
+	var seen_deeper := false
+	var ordered := true
+	for r in mixed:
+		if not r.in_level:
+			seen_deeper = true
+		elif seen_deeper:
+			ordered = false
+	_assert(ordered, "matches in the level rank above deeper matches")
+	_assert(tree.search(tree.root, "qqqqzzzz").is_empty(), "an unrelated query matches nothing")
+	var cc: Object = _cc_level(tree)
+	var from_cc: Array = tree.search(cc, "expression")
+	_assert(not from_cc.is_empty() and from_cc[0].in_level and from_cc[0].path.is_empty(), "searching from a submenu ranks its own rows first, without a path")
+
+
+var _chosen: Array = []
+
+
+func _on_picked(_track, target) -> void:
+	_chosen.append(target)
+
+
+## The popup selects its first row, Down moves, Enter picks, and typing filters (no layout checks).
+func _test_picker_scene_selection() -> void:
+	var made: Dictionary = _picker_track(false, [], [])
+	var picker: Object = _picker_script.create()
+	root.add_child(picker)
+	picker.track = made["track"]
+	picker.tree = made["tree"]
+	picker.parameter_chosen.connect(_on_picked)
+	picker.show_level(picker.tree.root)
+	_assert(picker._selected == 0 and picker._entries[0]["row"].label == "Volume", "the first item is selected on open")
+	picker._move_selection(1)
+	picker._activate()
+	_assert(_chosen.size() == 1 and _chosen[0].kind == AutomationTarget.Kind.CHANNEL_PAN, "Down then Enter chooses the second item")
+	picker._search_edit.text = "volume"
+	picker._on_search_changed("volume")
+	_assert(picker._entries.size() >= 1 and picker._entries[0]["row"].label == "Volume" and picker._selected == 0, "typing filters and re-selects the first match")
+	picker.queue_free()
 
 
 # ---------------------------------------------------------------------------

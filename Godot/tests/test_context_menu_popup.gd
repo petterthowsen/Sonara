@@ -78,18 +78,42 @@ func _test_place_overlap_and_clamp() -> void:
 
 
 func _test_auto_close_timer() -> void:
+	_assert(ContextMenuPopup.AUTO_CLOSE_GRACE_SECONDS == 2.0, "default grace period is 2 seconds")
+	_assert(ContextMenuPopup.AUTO_CLOSE_LEAVE_SECONDS == 0.3, "leave debounce is 0.3 seconds")
+	var should_close := ContextMenuPopup.AutoClose.should_close
+	_assert(not should_close.call(1.0, 5.0, false, false), "never closes during the grace period, even outside")
+	_assert(should_close.call(3.0, 5.0, false, false), "outside at the end of the grace period closes")
+	_assert(not should_close.call(3.0, 5.0, true, false), "inside at the end of the grace period stays")
+	_assert(not should_close.call(10.0, 0.2, false, false), "a brief overshoot (under the debounce) stays")
+	_assert(should_close.call(10.0, 0.3, false, false), "outside for the debounce closes after the grace period")
+	_assert(not should_close.call(10.0, 9.0, false, true), "busy counts as inside")
+
+	var grace_for := ContextMenuPopup.grace_for_choice
+	_assert(grace_for.call("0.5 s") == 0.5 and grace_for.call("5 s") == 5.0, "choices map to seconds")
+	_assert(grace_for.call(ContextMenuPopup.GRACE_NEVER) < 0.0, "Never maps to a negative grace")
+	_assert(grace_for.call("bogus") == ContextMenuPopup.AUTO_CLOSE_GRACE_SECONDS, "an unknown value falls back to the default")
+
 	var auto := ContextMenuPopup.AutoClose.new()
-	_assert(ContextMenuPopup.AUTO_CLOSE_SECONDS == 2.0, "auto-close is 2 seconds")
-	_assert(not auto.tick(1.0, false), "1 s outside does not close")
-	_assert(not auto.tick(0.9, false), "1.9 s outside does not close")
-	_assert(auto.tick(0.2, false), "2.1 s outside closes")
+	_assert(not auto.tick(1.9, false), "outside during the grace period does not close")
+	_assert(auto.tick(0.2, false), "the pointer that left during the grace period closes right when it ends")
 	auto.reset()
-	auto.tick(1.5, false)
-	_assert(not auto.tick(0.1, true), "re-entering the popup does not close")
-	_assert(auto.outside_seconds == 0.0, "re-entering resets the timer")
-	_assert(not auto.tick(1.9, false), "the full timeout applies again after re-entering")
-	_assert(not auto.tick(5.0, false, true), "a busy popup (child popup, text edit) never closes")
-	_assert(auto.outside_seconds == 0.0, "busy resets the timer")
+	_assert(not auto.tick(3.5, true), "inside past the grace period stays")
+	_assert(not auto.tick(0.2, false), "just left: debounce not over")
+	_assert(not auto.tick(0.05, true), "back inside within the debounce stays")
+	_assert(auto.outside_seconds == 0.0, "re-entering resets the leave debounce")
+	_assert(not auto.tick(0.2, false), "the debounce starts over after re-entering")
+	_assert(auto.tick(0.2, false), "outside past the debounce closes")
+	auto.reset()
+	auto.tick(4.0, true)
+	_assert(not auto.tick(5.0, false, true), "a busy popup (child popup, text edit, held button) never closes")
+	_assert(auto.outside_seconds == 0.0, "busy resets the debounce")
+
+	var holds := ContextMenuPopup.AutoClose.field_holds_open
+	_assert(not holds.call(false, true, 0.0), "a field not being edited holds nothing")
+	_assert(holds.call(true, true, 100.0), "a field with text holds the popup open")
+	_assert(not holds.call(true, false, 100.0), "an empty, untouched search field does not")
+	_assert(holds.call(true, false, 1.0), "an empty field typed in a moment ago does")
+	_assert(not holds.call(true, false, ContextMenuPopup.TYPING_HOLD_SECONDS + 0.1), "typing hold runs out")
 
 
 func _test_track_create_items() -> void:
@@ -189,9 +213,10 @@ func _test_animated_paths() -> void:
 	ContextMenuPopup.popup_at_point(panel, Vector2(300, 300))
 	await create_timer(0.5).timeout
 	_assert(is_equal_approx(label.modulate.a, 1.0), "content fully visible once open")
-	# Auto-close with the pointer never over the popup (a short timeout stands in for 2 s).
-	(panel.get_node(NodePath(ContextMenuPopup.CONTROLLER_NAME)) as ContextMenuPopup.Controller)._auto.timeout = 0.3
-	(panel.get_node(NodePath(ContextMenuPopup.CONTROLLER_NAME)) as ContextMenuPopup.Controller)._pointer_inside = false
+	# Auto-close with the pointer never over the popup (a short grace stands in for the setting).
+	var outside_controller := panel.get_node(NodePath(ContextMenuPopup.CONTROLLER_NAME)) as ContextMenuPopup.Controller
+	outside_controller._auto.grace = 0.1
+	outside_controller.forced_inside = false
 	await create_timer(0.9).timeout
 	_assert(not panel.visible, "the popup closes by itself once the pointer stays outside")
 	_assert(is_equal_approx(label.modulate.a, 1.0), "content alpha is restored after closing")
@@ -199,8 +224,8 @@ func _test_animated_paths() -> void:
 	# A popup the pointer is inside does not auto-close.
 	ContextMenuPopup.popup_at_point(panel, Vector2(300, 300))
 	var inside_controller := panel.get_node(NodePath(ContextMenuPopup.CONTROLLER_NAME)) as ContextMenuPopup.Controller
-	inside_controller._auto.timeout = 0.3
-	inside_controller._set_inside(true)
+	inside_controller._auto.grace = 0.1
+	inside_controller.forced_inside = true
 	await create_timer(0.8).timeout
 	_assert(panel.visible, "stays open while the pointer is inside")
 	panel.hide()

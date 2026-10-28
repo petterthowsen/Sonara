@@ -200,7 +200,7 @@ func _on_add_lane_requested(track: Track) -> void:
 	if track == null:
 		return
 	if _picker == null:
-		_picker = AutomationParameterPicker.new()
+		_picker = AutomationParameterPicker.create()
 		add_child(_picker)
 		_picker.parameter_chosen.connect(_on_parameter_chosen)
 	_picker.open_for(track, get_global_mouse_position())

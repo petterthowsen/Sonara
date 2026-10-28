@@ -125,8 +125,8 @@ and closes every `Popup`: `popup_at_mouse(menu)` / `popup_at_point(menu, point)`
 menus, `popup_below_control(menu, button, prefer_up)` for menus hanging off a button, and
 `popup_anchored(menu, rect, prefer_up)` for the rest. It flips above/below, clamps into the window
 (or the screen for a `force_native` popup), slides and fades the menu in and out, and closes it
-after the pointer has stayed outside for 2 s (open child popups, a text field being edited and a
-held mouse button count as inside). Close a menu from its own buttons with
+by itself: never in the first 2 s (setting `behavior/context_menu_auto_close`: 0.5–5 s or Never), then 0.3 s after the pointer is outside it (open child popups, a
+held mouse button and a focused text field with text or recent typing count as inside). Close a menu from its own buttons with
 `ContextMenuPopup.close(self)` instead of `hide()` so it animates out. Everything is instant in
 test mode (`Utils.is_test_mode()`).
 

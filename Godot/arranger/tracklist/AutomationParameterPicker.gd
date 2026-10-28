@@ -1,39 +1,64 @@
 # AutomationParameterPicker.gd
-# The "what should this lane drive?" dropdown (REQ-015, REQ-016). Built from the track's linked
-# Channel: channel volume, pan, a top-level MIDI CC submenu (spec 030), one entry per send, then
-# one submenu per device in `channel.devices` order carrying that device's `"param"` group and,
-# per modulator (spec 018), its parameters, as separate groups.
+# The "what should this lane drive?" popup (REQ-015, REQ-016), a PopupPanel with a search field
+# above a scrolling list. What it lists comes from `AutomationParameterTree` (labelled dividers per
+# category, devices in chain order, slot children as submenus when the list is hierarchical - the
+# `appearance/automation_parameter_list` setting); this node only shows one level of it at a time.
 #
-# Two kinds of entry are left out: a parameter whose `is_automation_safe` is false (the device
-# says driving it from the audio thread is unsafe), and a parameter that already has a lane on
-# this track - one target, one lane.
-class_name AutomationParameterPicker extends PopupMenu
+# A submenu opens in place (a Back button and the level's path appear above the list) rather than
+# in a cascading popup, so the search box and the keyboard work the same on every level.
+# Searching is fuzzy over the current level and everything below it; matches listed in the level
+# itself rank first, deeper ones show their path ("PolySynth › FX › EQ › Band 1 Freq").
+#
+# Keyboard: the search field always has focus, so typing searches at once. Up/Down (and
+# PageUp/PageDown) move the selection, Enter chooses (or opens a submenu), Right opens a submenu,
+# Left or Backspace on an empty field goes back, Escape closes.
+class_name AutomationParameterPicker extends PopupPanel
 
 static var logger := Log.make("AutomationParameterPicker")
+
+const SCENE := preload("res://arranger/tracklist/AutomationParameterPicker.tscn")
+const MAX_LIST_HEIGHT := 360.0
+const MIN_LIST_HEIGHT := 120.0
+const PAGE_STEP := 8
 
 ## The chosen target. The caller creates the lane, so this stays free of history concerns.
 signal parameter_chosen(track: Track, target: AutomationTarget)
 
-## Item ids in the root menu. Device and modulator parameters live in submenus and carry their
-## own ids; their targets travel as item metadata.
-const ID_VOLUME := 0
-const ID_PAN := 1
-const ID_STAGE_BASE := 50  # + index into AutomationTarget.STAGE_PARAMS
-const ID_SEND_BASE := 100
-
 var track: Track = null
 var channel: Channel = null
+var tree: AutomationParameterTree = null
 
-## Submenu -> the device path its entries address, so one handler serves every device.
-var _submenu_paths: Dictionary = {}
-## Next unique id handed to a device/modulator parameter item in the submenus.
-var _next_item_id: int = 1000
+@onready var _header: Control = %Header
+@onready var _back_button: Button = %BackButton
+@onready var _path_label: Label = %PathLabel
+@onready var _search_edit: LineEdit = %SearchEdit
+@onready var _scroll: ScrollContainer = %Scroll
+@onready var _rows: VBoxContainer = %Rows
+@onready var _empty_label: Label = %EmptyLabel
+
+## Levels opened so far; the last one is shown.
+var _stack: Array[AutomationParameterTree.Level] = []
+## One entry per selectable row on screen: {button, row: Row}.
+var _entries: Array = []
+var _selected: int = -1
+
+
+## A picker ready to be added to the tree.
+static func create() -> AutomationParameterPicker:
+	return SCENE.instantiate() as AutomationParameterPicker
+
+
+func _enter_tree() -> void:
+	# The packed scene is visible for editor authoring; instances must start hidden.
+	if visible:
+		hide()
 
 
 func _ready() -> void:
-	theme_type_variation = &"ContextMenuList"
-	if not id_pressed.is_connected(_on_root_id_pressed):
-		id_pressed.connect(_on_root_id_pressed)
+	_back_button.pressed.connect(_go_back)
+	_search_edit.text_changed.connect(_on_search_changed)
+	_search_edit.gui_input.connect(_on_search_gui_input)
+	popup_hide.connect(_on_hidden)
 
 
 ## Rebuild for `p_track` and pop up at `global_position`. Does nothing when the track has no
@@ -45,197 +70,217 @@ func open_for(p_track: Track, global_position: Vector2) -> void:
 		logger.warn("No linked channel for track %s; nothing to automate" % (track.name if track else "<null>"))
 		return
 	_rebuild()
-	if get_item_count() == 0:
+	if tree.is_empty():
 		logger.info("Every automatable parameter on %s already has a lane" % track.name)
 		return
-	ContextMenuPopup.popup_at_point(self, global_position)
+	var anchor := Rect2(global_position - Vector2.ONE * ContextMenuPopup.MOUSE_OFFSET, Vector2.ONE * ContextMenuPopup.MOUSE_OFFSET * 2.0)
+	# Auto-closes like every menu. The search field is always focused, so ContextMenuPopup only
+	# treats it as "inside" while it has text or was typed in recently - a search in progress is
+	# not cut off, an untouched picker is.
+	ContextMenuPopup.popup_anchored(self, anchor, false, true)
+	_search_edit.grab_focus()
 
 
+## Build the tree for the current `track` / `channel` and show its root level.
 func _rebuild() -> void:
-	# free_submenus so a rebuild doesn't leak the previous run's submenu nodes.
-	clear(true)
-	_submenu_paths.clear()
-	_next_item_id = 1000
-
-	if not _has_lane(AutomationTarget.channel_volume()):
-		add_item("Volume", ID_VOLUME)
-	if not _has_lane(AutomationTarget.channel_pan()):
-		add_item("Pan", ID_PAN)
-
-	_add_stage_items()
-	_add_cc_menu()
-
-	var send_items := 0
-	for i in range(channel.send_channels.size()):
-		var target := AutomationTarget.send_amount(i)
-		if _has_lane(target):
-			continue
-		if send_items == 0:
-			add_separator("Sends")
-		send_items += 1
-		add_item(target.display_name(channel), ID_SEND_BASE + i)
-
-	for i in range(channel.devices.size()):
-		_add_device(channel.devices[i], [i])
+	tree = AutomationParameterTree.build(track, channel, Settings.get_value(AutomationParameterTree.SETTING_KEY) != AutomationParameterTree.MODE_FLAT)
+	show_level(tree.root)
 
 
-## Placement parameters of a stage source (spec 051); nothing for channels in another pan mode.
-func _add_stage_items() -> void:
-	if channel.pan_mode != Channel.PanMode.STAGE:
+## Show `level` as the root of a fresh navigation (also the entry point for tests).
+func show_level(level: AutomationParameterTree.Level) -> void:
+	if not is_node_ready():
+		# Not in the scene tree yet: the nodes below only exist after _ready.
 		return
-	var added := 0
-	for i in range(AutomationTarget.STAGE_PARAMS.size()):
-		var target := AutomationTarget.stage(AutomationTarget.STAGE_PARAMS[i])
-		if _has_lane(target):
-			continue
-		if added == 0:
-			add_separator("Stage")
-		added += 1
-		add_item(target.display_name(channel), ID_STAGE_BASE + i)
+	_stack.clear()
+	_stack.append(level)
+	_search_edit.text = ""
+	_refresh()
+	_scroll.custom_minimum_size.y = clampf(_rows.get_combined_minimum_size().y, MIN_LIST_HEIGHT, MAX_LIST_HEIGHT)
+	size = Vector2i(0, 0)
 
 
-## The top-level `MIDI CC` submenu (spec 030): instrument-labelled controllers first (an SFZ
-## sampler contributes labels through its controller parameters), then CC0-CC119 named by
-## `Midi.cc_display_name`. Searchable like the device submenus; controllers that already have a
-## lane on this track are omitted, and labelled ones don't repeat in the generic list.
-func _add_cc_menu() -> void:
-	var labelled: Array = []
-	var labelled_ids: Dictionary = {}
-	for instance in AutomationTarget._devices_recursive(channel.devices):
-		for param in instance.get_parameters():
-			if param.id < 0 or param.id > Midi.CC_LANE_MAX or not param.is_automation_safe:
-				continue
-			if not instance.is_controller_parameter(param) or param.name == "":
-				continue
-			if labelled_ids.has(param.id):
-				continue
-			var target := AutomationTarget.midi_cc(param.id)
-			if _has_lane(target):
-				continue
-			labelled.append({"cc": param.id, "label": Midi.cc_display_name(param.id, param.name), "target": target})
-			labelled_ids[param.id] = true
-	labelled.sort_custom(func(a, b): return a["cc"] < b["cc"])
+# ============================================================================
+# LIST
+# ============================================================================
 
-	var generic: Array = []
-	for cc in range(Midi.CC_LANE_MAX + 1):
-		if labelled_ids.has(cc) or _has_lane(AutomationTarget.midi_cc(cc)):
-			continue
-		generic.append({"cc": cc, "label": Midi.cc_display_name(cc), "target": AutomationTarget.midi_cc(cc)})
+func _current() -> AutomationParameterTree.Level:
+	return _stack.back()
 
-	var entries: int = labelled.size() + generic.size()
-	if entries == 0:
+
+## Redraw the list for the current level and query, selecting the first row.
+func _refresh() -> void:
+	for child in _rows.get_children():
+		_rows.remove_child(child)
+		child.queue_free()
+	_entries.clear()
+	_selected = -1
+
+	var level := _current()
+	var query := _search_edit.text.strip_edges()
+	_header.visible = _stack.size() > 1
+	_path_label.text = AutomationParameterTree.SEPARATOR.join(level.trail)
+	_search_edit.placeholder_text = "Search %s" % level.label if _stack.size() > 1 else "Search parameters"
+
+	if query.is_empty():
+		for row: AutomationParameterTree.Row in level.rows:
+			match row.kind:
+				AutomationParameterTree.Row.Kind.HEADER:
+					_add_header(row.label)
+				AutomationParameterTree.Row.Kind.ITEM:
+					_add_entry(row.label, row)
+				AutomationParameterTree.Row.Kind.SUBMENU:
+					_add_entry(row.label + "  ›", row)
+		_empty_label.visible = false
+	else:
+		var results := tree.search(level, query)
+		for result in results:
+			var text: String = result.row.label
+			if not result.path.is_empty():
+				text = AutomationParameterTree.SEPARATOR.join(result.path) + AutomationParameterTree.SEPARATOR + text
+			_add_entry(text, result.row)
+		_empty_label.visible = results.is_empty()
+	_select(0)
+
+
+func _add_header(text: String) -> void:
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 6)
+	var label := Label.new()
+	label.text = text
+	label.theme_type_variation = &"HeaderSmall"
+	label.modulate = Color(1, 1, 1, 0.6)
+	line.add_child(label)
+	var rule := HSeparator.new()
+	rule.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rule.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(rule)
+	if _rows.get_child_count() > 0:
+		var gap := Control.new()
+		gap.custom_minimum_size.y = 4
+		_rows.add_child(gap)
+	_rows.add_child(line)
+
+
+func _add_entry(text: String, row: AutomationParameterTree.Row) -> void:
+	var button := Button.new()
+	button.theme_type_variation = &"FlatButton"
+	button.text = text
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.toggle_mode = true
+	button.focus_mode = Control.FOCUS_NONE
+	button.clip_text = true
+	var index := _entries.size()
+	button.mouse_entered.connect(_select.bind(index, false))
+	button.pressed.connect(_activate.bind(index))
+	_rows.add_child(button)
+	_entries.append({"button": button, "row": row})
+
+
+## Highlight entry `index` (wrapping is the caller's business) and keep it in view.
+func _select(index: int, scroll: bool = true) -> void:
+	if _entries.is_empty():
+		_selected = -1
 		return
-	var submenu := PopupMenu.new()
-	submenu.theme_type_variation = &"ContextMenuList"
-	submenu.set_search_bar_enabled(true)
-	for entry in labelled:
-		_add_target_item(submenu, entry["label"], entry["target"])
-	if not labelled.is_empty() and not generic.is_empty():
-		submenu.add_separator()
-	for entry in generic:
-		_add_target_item(submenu, entry["label"], entry["target"])
-	submenu.id_pressed.connect(_on_device_id_pressed.bind(submenu))
-	add_submenu_node_item("MIDI CC", submenu)
+	index = clampi(index, 0, _entries.size() - 1)
+	if _selected >= 0 and _selected < _entries.size():
+		_entries[_selected]["button"].set_pressed_no_signal(false)
+	_selected = index
+	var button: Button = _entries[index]["button"]
+	button.set_pressed_no_signal(true)
+	if scroll and button.is_inside_tree():
+		_scroll.ensure_control_visible.call_deferred(button)
 
 
-## Add one submenu for `instance` (and, recursively, for its children so rack/drum-machine slots
-## are reachable). A device with nothing automatable left contributes no entry at all.
-func _add_device(instance: DeviceInstance, path: Array) -> void:
-	if instance == null:
+func _move_selection(delta: int) -> void:
+	if _entries.is_empty():
 		return
-
-	var submenu := PopupMenu.new()
-	submenu.theme_type_variation = &"ContextMenuList"
-	submenu.name = "Device%s" % "_".join(PackedStringArray(path.map(func(i): return str(i))))
-	# CLAP plugins can expose hundreds of parameters; let the user type to narrow them down.
-	submenu.set_search_bar_enabled(true)
-	var entries := 0
-
-	entries += _add_param_group(submenu, instance, path, "param", "")
-	for mod in instance.modulators:
-		entries += _add_modulator_group(submenu, instance, path, mod)
-
-	for child_index in range(instance.children.size()):
-		_add_device(instance.children[child_index], path + [child_index])
-
-	if entries == 0:
-		submenu.queue_free()
-		return
-
-	submenu.id_pressed.connect(_on_device_id_pressed.bind(submenu))
-	_submenu_paths[submenu] = path.duplicate()
-	add_submenu_node_item(instance.name, submenu)
+	_select(posmod(_selected + delta, _entries.size()))
 
 
-## Append `instance`'s parameters in `group` to `submenu`, skipping unsafe and already-automated
-## ones. Controller parameters never appear here: they live in the top-level MIDI CC submenu
-## (spec 030).
-func _add_param_group(submenu: PopupMenu, instance: DeviceInstance, path: Array,
-		group: String, separator_label: String) -> int:
-	var added := 0
-	for param in instance.get_parameters_in_group(group):
-		if not param.is_automation_safe or instance.is_controller_parameter(param):
-			continue
-		var target := AutomationTarget.device_param(path, param.id)
-		if _has_lane(target):
-			continue
-		if added == 0 and not separator_label.is_empty():
-			submenu.add_separator(separator_label)
-		_add_target_item(submenu, AutomationTarget.param_label(instance, param), target)
-		added += 1
-	return added
-
-
-## Append one modulator's parameters under its name (spec 018), skipping ones already automated.
-func _add_modulator_group(submenu: PopupMenu, instance: DeviceInstance, path: Array, mod: Modulator) -> int:
-	var added := 0
-	for param in mod.get_parameters():
-		if not param.is_automation_safe:
-			continue
-		var target := AutomationTarget.device_modulator_param(path, mod.mod_id, param.id)
-		if _has_lane(target):
-			continue
-		if added == 0:
-			submenu.add_separator(mod.name)
-		_add_target_item(submenu, param.name, target)
-		added += 1
-	return added
-
-
-## One item with a unique id and its `AutomationTarget` as metadata.
-func _add_target_item(submenu: PopupMenu, label: String, target: AutomationTarget) -> void:
-	submenu.add_item(label, _next_item_id)
-	submenu.set_item_metadata(submenu.get_item_count() - 1, target)
-	_next_item_id += 1
-
-
-## True when `track` already has a lane driving `target` (REQ-015).
-func _has_lane(target: AutomationTarget) -> bool:
-	return track != null and track.get_automation_lane_for(target) != null
-
-
-func _on_root_id_pressed(id: int) -> void:
-	var target: AutomationTarget = null
-	if id == ID_VOLUME:
-		target = AutomationTarget.channel_volume()
-	elif id == ID_PAN:
-		target = AutomationTarget.channel_pan()
-	elif id >= ID_STAGE_BASE and id < ID_STAGE_BASE + AutomationTarget.STAGE_PARAMS.size():
-		target = AutomationTarget.stage(AutomationTarget.STAGE_PARAMS[id - ID_STAGE_BASE])
-	elif id >= ID_SEND_BASE:
-		target = AutomationTarget.send_amount(id - ID_SEND_BASE)
-	if target:
-		_emit(target)
-
-
-func _on_device_id_pressed(id: int, submenu: PopupMenu) -> void:
-	var index := submenu.get_item_index(id)
+## Choose the selected row: automate its parameter, or open its submenu.
+func _activate(index: int = -1) -> void:
 	if index < 0:
+		index = _selected
+	if index < 0 or index >= _entries.size():
 		return
-	var target: AutomationTarget = submenu.get_item_metadata(index)
-	if target == null:
+	var row: AutomationParameterTree.Row = _entries[index]["row"]
+	if row.kind == AutomationParameterTree.Row.Kind.SUBMENU:
+		_open_level(row.level)
+	elif row.target != null:
+		_emit(row.target)
+
+
+func _open_level(level: AutomationParameterTree.Level) -> void:
+	_stack.append(level)
+	_search_edit.text = ""
+	_refresh()
+	_scroll.scroll_vertical = 0
+
+
+func _go_back() -> void:
+	if _stack.size() <= 1:
 		return
-	_emit(target)
+	_stack.pop_back()
+	_search_edit.text = ""
+	_refresh()
+	_scroll.scroll_vertical = 0
+	_search_edit.grab_focus()
+
+
+# ============================================================================
+# INPUT
+# ============================================================================
+
+func _on_search_changed(_text: String) -> void:
+	_refresh()
+	_scroll.scroll_vertical = 0
+
+
+func _on_search_gui_input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or not key.pressed:
+		return
+	var handled := true
+	match key.keycode:
+		KEY_DOWN:
+			_move_selection(1)
+		KEY_UP:
+			_move_selection(-1)
+		KEY_PAGEDOWN:
+			_select(mini(_selected + PAGE_STEP, _entries.size() - 1))
+		KEY_PAGEUP:
+			_select(maxi(_selected - PAGE_STEP, 0))
+		KEY_ENTER, KEY_KP_ENTER:
+			_activate()
+		KEY_ESCAPE:
+			ContextMenuPopup.close(self)
+		KEY_RIGHT:
+			handled = _selected_is_submenu() and _search_edit.caret_column >= _search_edit.text.length() \
+					and _search_edit.text.is_empty()
+			if handled:
+				_activate()
+		KEY_LEFT:
+			handled = _search_edit.text.is_empty() and _stack.size() > 1
+			if handled:
+				_go_back()
+		KEY_BACKSPACE:
+			handled = _search_edit.text.is_empty() and _stack.size() > 1
+			if handled:
+				_go_back()
+		_:
+			handled = false
+	if handled:
+		_search_edit.accept_event()
+
+
+func _selected_is_submenu() -> bool:
+	return _selected >= 0 and _selected < _entries.size() \
+			and _entries[_selected]["row"].kind == AutomationParameterTree.Row.Kind.SUBMENU
+
+
+func _on_hidden() -> void:
+	_search_edit.text = ""
 
 
 func _emit(target: AutomationTarget) -> void:

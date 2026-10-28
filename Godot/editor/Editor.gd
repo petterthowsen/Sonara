@@ -1391,7 +1391,7 @@ func _on_metronome_setting_changed(key: String, value) -> void:
 func _on_metronome_menu_pressed() -> void:
 	var just_closed := Time.get_ticks_msec() - _metronome_popup_hidden_msec < METRONOME_REOPEN_GUARD_MSEC
 	if metronome_popup.visible or just_closed:
-		metronome_popup.hide()
+		ContextMenuPopup.close(metronome_popup)
 		metronome_menu_button.set_pressed_no_signal(false)
 		return
 	_update_metronome_popup()

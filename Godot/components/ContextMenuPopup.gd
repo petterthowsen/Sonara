@@ -19,8 +19,15 @@
 ## `PopupMenu` (which draws itself) only slides. A `PopupMenu` is switched to
 ## `hide_on_item_selection = false` so a chosen item can close with the animation.
 ##
-## Auto-close: a popup whose pointer stays outside it for `AUTO_CLOSE_SECONDS` closes (animated).
-## Open child popups, a text field being edited and a held mouse button count as "inside".
+## Auto-close: for the grace period after opening (the `behavior/context_menu_auto_close` setting,
+## `AUTO_CLOSE_GRACE_SECONDS` by default, or never), a popup never closes by itself. Once
+## that has passed, it closes (animated) when the pointer is outside it, as soon as it has been
+## outside for `AUTO_CLOSE_LEAVE_SECONDS` (a short debounce, so briefly overshooting an edge does
+## not kill the menu). A pointer that left during the grace period therefore closes the popup the
+## moment the grace period ends. These count as "inside": an open child popup (a submenu), a held
+## mouse button, and a focused text field that is being edited while it has text or was typed in
+## within `TYPING_HOLD_SECONDS` (an always-focused, still empty search field does not hold the
+## popup open). See `AutoClose.should_close` for the rule as a pure function.
 ##
 ## In test mode (`Utils.is_test_mode()`) nothing animates and nothing auto-closes: `popup()` and
 ## `hide()` behave exactly as plain Godot ones, only the placement is shared.
@@ -30,8 +37,20 @@ class_name ContextMenuPopup extends RefCounted
 const SLIDE_PIXELS := 12.0
 const OPEN_SECONDS := 0.25
 const CLOSE_SECONDS := 0.15
-## The pointer may stay outside the popup this long before it closes.
-const AUTO_CLOSE_SECONDS := 2.0
+## Nothing auto-closes during this long after opening (the default of the setting below).
+const AUTO_CLOSE_GRACE_SECONDS := 2.0
+## Setting holding the grace period: a `GRACE_CHOICES` key.
+const AUTO_CLOSE_SETTING := "behavior/context_menu_auto_close"
+const GRACE_NEVER := "Never"
+## The setting's choices and their grace periods in seconds (negative: never auto-close).
+const GRACE_CHOICES := {
+	"0.5 s": 0.5, "1 s": 1.0, "1.5 s": 1.5, "2 s": 2.0, "3 s": 3.0, "4 s": 4.0, "5 s": 5.0,
+	GRACE_NEVER: -1.0,
+}
+## After the grace period, the pointer may be outside the popup this long before it closes.
+const AUTO_CLOSE_LEAVE_SECONDS := 0.3
+## A focused text field with no text holds the popup open this long after the last key press.
+const TYPING_HOLD_SECONDS := 5.0
 ## Offset from the pointer so a right-click menu opens under it with the pointer inside.
 const MOUSE_OFFSET := 10.0
 ## Space between a popup and the (non-overlapping) anchor it hangs off.
@@ -104,7 +123,7 @@ static func popup_below_control(popup: Popup, control: Control, prefer_up: bool 
 ## Open `popup` anchored to `anchor` (window coordinates of the popup's parent window).
 ## `overlap` starts it at the anchor's edge rather than beyond it. `bounds` overrides the area it
 ## must stay in (window coordinates; default is the whole window, or the screen for a native popup).
-## `auto_close` turns the pointer-outside timeout off for popups that should stay until dismissed.
+## `auto_close` turns the auto-close off for popups that should stay until dismissed.
 static func popup_anchored(popup: Popup, anchor: Rect2, prefer_up: bool = false,
 		overlap: bool = false, bounds: Rect2 = Rect2(), auto_close: bool = true) -> void:
 	var host := _host_of(popup)
@@ -152,6 +171,20 @@ static func close(popup: Popup) -> void:
 	controller.play_close()
 
 
+## The grace period for a setting choice, in seconds; negative means never auto-close.
+static func grace_for_choice(choice: Variant) -> float:
+	return GRACE_CHOICES.get(choice, AUTO_CLOSE_GRACE_SECONDS)
+
+
+## The grace period from the setting, in seconds (negative: never). The `Settings` autoload is
+## looked up as a node: naming it would stop this script compiling for test scripts.
+static func grace_setting() -> float:
+	var settings := (Engine.get_main_loop() as SceneTree).root.get_node_or_null("Settings")
+	if settings == null:
+		return AUTO_CLOSE_GRACE_SECONDS
+	return grace_for_choice(settings.get_value(AUTO_CLOSE_SETTING))
+
+
 ## Whether popups animate: always, except in test mode (unless `animate_in_tests`).
 static func _animates() -> bool:
 	return animate_in_tests or not Utils.is_test_mode()
@@ -192,23 +225,52 @@ static func _controller_for(popup: Popup) -> Controller:
 	return controller
 
 
-## Counts how long the pointer has been outside; the testable half of the auto-close.
+## Tracks the age of the popup and how long the pointer has been outside; the testable half of
+## the auto-close.
 class AutoClose extends RefCounted:
-	var timeout: float = ContextMenuPopup.AUTO_CLOSE_SECONDS
+	var grace: float = ContextMenuPopup.AUTO_CLOSE_GRACE_SECONDS
+	var leave_delay: float = ContextMenuPopup.AUTO_CLOSE_LEAVE_SECONDS
+	## Seconds since the popup opened.
+	var elapsed: float = 0.0
+	## Seconds the pointer has been continuously outside (and not busy).
 	var outside_seconds: float = 0.0
 
-	## Start counting again (on open, and whenever the pointer comes back).
+	## Start again (on open).
 	func reset() -> void:
+		elapsed = 0.0
 		outside_seconds = 0.0
 
+	## The decision: close only after the grace period, and only when the pointer has been outside
+	## (and nothing keeps the popup busy) for `leave_delay`.
+	static func should_close(p_elapsed: float, p_outside_seconds: float, pointer_inside: bool,
+			busy: bool, p_grace: float = ContextMenuPopup.AUTO_CLOSE_GRACE_SECONDS,
+			p_leave_delay: float = ContextMenuPopup.AUTO_CLOSE_LEAVE_SECONDS) -> bool:
+		if pointer_inside or busy:
+			return false
+		if p_elapsed < p_grace:
+			return false
+		return p_outside_seconds >= p_leave_delay
+
+	## Whether a focused text field keeps the popup open: only while it is being edited and has
+	## text or was typed in recently.
+	static func field_holds_open(editing: bool, has_text: bool, seconds_since_typed: float) -> bool:
+		if not editing:
+			return false
+		return has_text or seconds_since_typed < ContextMenuPopup.TYPING_HOLD_SECONDS
+
 	## Advance by `delta`. `busy` (child popup open, text being edited, button held) counts as
-	## inside. Returns true once the pointer has been outside for `timeout`.
+	## inside. Returns true when the popup should close now.
 	func tick(delta: float, pointer_inside: bool, busy: bool = false) -> bool:
+		elapsed += delta
 		if pointer_inside or busy:
 			outside_seconds = 0.0
-			return false
-		outside_seconds += delta
-		return outside_seconds >= timeout
+		else:
+			outside_seconds += delta
+		return AutoClose.should_close(elapsed, outside_seconds, pointer_inside, busy, grace, leave_delay)
+
+	## The pointer is inside again: the leave debounce starts over (the grace clock keeps running).
+	func pointer_entered() -> void:
+		outside_seconds = 0.0
 
 
 ## Lives under an animated popup: runs the open/close tweens and the auto-close timer.
@@ -225,14 +287,14 @@ class Controller extends Node:
 	var _serial := 0
 	var _menu_hooked := false
 	var _hide_on_checkable := true
-	var _host_probe: Node
+	var _last_typed_msec := -1000000
+	## Tests set this to stand in for the real pointer position (null = read the pointer).
+	var forced_inside: Variant = null
 
 
 	func _ready() -> void:
 		set_process(false)
 		popup.popup_hide.connect(_on_popup_hide)
-		popup.mouse_entered.connect(_set_inside.bind(true))
-		popup.mouse_exited.connect(_set_inside.bind(false))
 		_hook_menu()
 
 
@@ -248,10 +310,11 @@ class Controller extends Node:
 		_target = target
 		_up = up
 		_set_content_alpha(0.0)
-		_pointer_inside = _initial_inside(Rect2(Vector2(target), Vector2(popup.size)))
 		_auto.reset()
-		_attach_host_probe()
-		set_process(auto_close_enabled)
+		_auto.grace = ContextMenuPopup.grace_setting()
+		_pointer_inside = _pointer_over(Rect2(Vector2(target), Vector2(popup.size)))
+		_last_typed_msec = -1000000
+		set_process(auto_close_enabled and _auto.grace >= 0.0)
 		_kill_tween()
 		_tween = popup.create_tween().set_parallel(true)
 		_tween.tween_property(popup, "position:y", target.y, ContextMenuPopup.OPEN_SECONDS) \
@@ -279,15 +342,12 @@ class Controller extends Node:
 		if not popup.visible or _closing:
 			set_process(false)
 			return
+		var inside := _pointer_over(Rect2(Vector2(popup.position), Vector2(popup.size)))
+		if inside and not _pointer_inside:
+			_auto.pointer_entered()
+		_pointer_inside = inside
 		if _auto.tick(delta, _pointer_inside, _is_busy()):
 			play_close()
-
-
-	## The pointer moved into or out of the popup (fed by signals and the host probe).
-	func _set_inside(inside: bool) -> void:
-		_pointer_inside = inside
-		if inside:
-			_auto.reset()
 
 
 	## Anything that should keep the popup open even with the pointer away.
@@ -298,14 +358,23 @@ class Controller extends Node:
 			if (child as Window).visible:
 				return true
 		var focus := popup.gui_get_focus_owner()
-		if focus is LineEdit and (focus as LineEdit).is_editing():
-			return true
+		var since_typed := (Time.get_ticks_msec() - _last_typed_msec) / 1000.0
+		if focus is LineEdit:
+			var line := focus as LineEdit
+			return AutoClose.field_holds_open(line.is_editing(), not line.text.is_empty(), since_typed)
 		if focus is TextEdit:
-			return true
+			var edit := focus as TextEdit
+			return AutoClose.field_holds_open(edit.has_focus(), not edit.text.is_empty(), since_typed)
 		return false
 
 
-	func _initial_inside(rect: Rect2) -> bool:
+	## Whether the pointer is over `rect` (the popup's rect, in its host window's coordinates for an
+	## embedded popup, screen coordinates for a native one). Polled every frame: while an embedded
+	## popup is open, Godot hands it every mouse motion event, even ones outside it, so motion
+	## events and mouse_entered/exited cannot tell inside from outside.
+	func _pointer_over(rect: Rect2) -> bool:
+		if forced_inside != null:
+			return forced_inside
 		if popup.is_embedded():
 			return rect.has_point(ContextMenuPopup._host_of(popup).get_mouse_position())
 		return rect.has_point(Vector2(DisplayServer.mouse_get_position()))
@@ -316,9 +385,6 @@ class Controller extends Node:
 		_closing = false
 		set_process(false)
 		_set_content_alpha(1.0)
-		if is_instance_valid(_host_probe):
-			_host_probe.queue_free()
-			_host_probe = null
 
 
 	func _kill_tween() -> void:
@@ -366,33 +432,7 @@ class Controller extends Node:
 			play_close()
 
 
-	## While the pointer is over the host window (outside the popup), motion there means "outside".
-	## Embedded popups swallow the events over them, so the two sources never overlap.
-	func _attach_host_probe() -> void:
-		if is_instance_valid(_host_probe):
-			return
-		var host := ContextMenuPopup._host_of(popup)
-		_host_probe = HostProbe.new()
-		(_host_probe as HostProbe).controller = self
-		host.add_child(_host_probe, false, Node.INTERNAL_MODE_BACK)
-
-
-	## Pointer motion seen by the host window at `pos`: outside, unless it lands on the popup.
-	func _host_motion(pos: Vector2) -> void:
-		var over_popup := popup.is_embedded() and Rect2(Vector2(popup.position), Vector2(popup.size)).has_point(pos)
-		_set_inside(over_popup)
-
-
-	## Motion events seen by the popup itself mean "inside".
+	## Key presses in the popup count as typing (see `_is_busy`).
 	func _input(event: InputEvent) -> void:
-		if event is InputEventMouseMotion:
-			_set_inside(true)
-
-
-## Listens on the popup's host window for pointer motion outside the popup.
-class HostProbe extends Node:
-	var controller: Controller
-
-	func _input(event: InputEvent) -> void:
-		if event is InputEventMouseMotion and is_instance_valid(controller):
-			controller._host_motion((event as InputEventMouseMotion).position)
+		if event is InputEventKey and (event as InputEventKey).pressed:
+			_last_typed_msec = Time.get_ticks_msec()

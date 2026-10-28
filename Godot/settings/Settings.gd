@@ -437,6 +437,15 @@ func _register_all_settings() -> void:
 	)).sub("Track List")
 
 	_register(Setting.new(
+		ContextMenuPopup.AUTO_CLOSE_SETTING,
+		"Auto-Close Menus",
+		Type.CHOICE,
+		"2 s",
+		CATEGORY_BEHAVIOR,
+		"How long context menus and popup menus stay open before they can close by themselves. After this time a menu closes as soon as the pointer is outside it (an open submenu, a held mouse button or a field you are typing in keeps it open). Never: menus stay open until you click elsewhere or press Escape.",
+	)).choices(ContextMenuPopup.GRACE_CHOICES.keys()).sub("Menus")
+
+	_register(Setting.new(
 		"behavior/scroll_zoom_sensitivity",
 		"Scroll Zoom Sensitivity",
 		Type.CHOICE,
@@ -518,6 +527,14 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Row height, in pixels, for a newly created automation lane.",
 	)).sub("Arranger").range(20, 200, 1)
+	_register(Setting.new(
+		"appearance/automation_parameter_list",
+		"Automation Parameter List",
+		Type.CHOICE,
+		"Hierarchical",
+		CATEGORY_APPEARANCE,
+		"How the automation parameter picker lists device parameters. Hierarchical keeps each top-level device in the list and opens the devices inside a device's slots (a PolySynth's FX, a Layer's slots) as submenus. Flat lists every device, slot devices included, in one list. Search covers both.",
+	)).sub("Arranger").choices(["Hierarchical", "Flat"])
 	_register(Setting.new(
 		"appearance/grid_min_line_spacing",
 		"Minimum Grid Line Spacing",
