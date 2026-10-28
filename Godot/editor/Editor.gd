@@ -1220,6 +1220,9 @@ func open_device_lane(animate := true) -> void:
 	if _device_lane_open:
 		return
 	_device_lane_open = true
+	# The lane doesn't follow the focused channel while closed (DeviceLane._on_channel_focused).
+	if focused_channel:
+		device_lane.bind_to_channel(focused_channel)
 	device_lane.show()
 	_slide_device_lane(animate)
 

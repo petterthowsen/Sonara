@@ -424,7 +424,7 @@ func _on_double_clicked() -> void:
 	
 	# Show DeviceLane if hidden
 	if not Sonara.editor.is_device_lane_open():
-		# DeviceLane will auto-bind to the focused channel via channel_focused signal
+		# Opening binds the lane to the channel just focused above
 		Sonara.editor.open_device_lane()
 	
 	# Wait a frame for the DeviceLane to update with the new channel

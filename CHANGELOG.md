@@ -37,6 +37,7 @@ All notable user-visible changes to Sonara are listed here. The format follows
 - Opening the clip editor with several clips selected shows the piano roll, unless the channel has drum rows (#150).
 - Compact devices in the mixer show their state in the card (#172), and the on/off light only when the device is at least 80 px wide: a disabled device is muted (background, title and border), an inactive one has a red border, and a failed or crashed plugin a red border too. The device context menu has Enabled and Active toggles.
 - The mixer pan mode button shows a cuboid icon instead of the text "Stage" in Stage mode, so narrow channel strips can shrink further (#178).
+- Selecting tracks is much faster. A closed device lane no longer rebuilds its panels on every selection, and an open one keeps the panels of channels you've already viewed (with their scroll position), so switching back is instant. A disabled channel's panels are freed, and a closed lane's device views stop their live data feeds.
 
 ### Fixed
 

@@ -1,6 +1,6 @@
 # Owns every device frame (spec 022): floating FrameWindows and the one frame attached to the
-# Editor's Primary area. The DeviceLane rebuilds its panels whenever the track selection changes;
-# frames live here so they survive those rebuilds.
+# Editor's Primary area. The DeviceLane frees and rebuilds panels (channels removed or disabled,
+# devices moved); frames live here so they survive that.
 #
 # Grouping ("devices/window_grouping"): per channel, a channel's top-level chain devices share one
 # frame with a tab each; per device, every device gets its own frame. Nested devices (pads, layer

@@ -10,8 +10,11 @@ var logger : Log = Log.make("DeviceLane")
 ## Spacer between the parent header and the channel header; visible with the parent header.
 @onready var _parent_header_gap: Control = $HBox/ParentHeaderGap
 
-## The channel's devices; open container slots sit beside their container (DeviceLaneItem).
-@onready var devices: DeviceRow = $HBox/Content/ScrollContainer/Trailing/Devices
+## Row shown while no channel is bound (the scene's Devices node); never holds panels.
+@onready var _empty_row: DeviceRow = $HBox/Content/ScrollContainer/Trailing/Devices
+## The bound channel's devices; open container slots sit beside their container (DeviceLaneItem).
+@onready var devices: DeviceRow = _empty_row
+@onready var _scroll: ScrollContainer = $HBox/Content/ScrollContainer
 
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
 
@@ -32,22 +35,23 @@ var _selection_anchor: DeviceInstance = null
 ## Multi-selected device of the last press; on release without a drag the block collapses to it.
 var _pending_single: DeviceInstance = null
 var _scroll_tween: Tween = null
+## Rows of channels shown before (Channel -> DeviceRow), kept hidden and suspended while another
+## channel is shown, so switching back reuses their panels instead of rebuilding them. Rows of
+## disabled or removed channels are freed.
+var _rows := {}
+## Horizontal scroll of each kept row (Channel -> int).
+var _row_scroll := {}
 
 func _ready():
 	Hotkeys.set_context(self, "device_panel")
-	# Root panels start below the color strip of the slots beside them, so the two line up.
-	devices.panel_top_inset = DeviceSlotGroup.STRIP_HEIGHT
-	devices.context_menu_requested.connect(_on_device_context_menu_requested)
+	_empty_row.clear()  # drop the scene's placeholder panels
+	_setup_row(_empty_row)
 	drop_host.attach(self, devices, false)
 	drop_host.trailing_margin = DeviceRow.PANEL_MARGIN
 	add_to_group(DeviceDropTarget.ROOT_GROUP)
 	set_process(false)
 	_parent_header.gui_input.connect(_on_parent_header_gui_input)
-	drop_host.attach(self, devices, false)
-	drop_host.trailing_margin = DeviceRow.PANEL_MARGIN
-	devices.selection_requested.connect(_on_panel_select_requested)
-	devices.selection_released.connect(_on_panel_select_released)
-	
+
 	# No editor in headless tests: the lane is bound directly.
 	if Sonara.editor == null:
 		return
@@ -65,9 +69,10 @@ func _ready():
 		_connect_to_project(Sonara.editor.project)
 
 
+## Follow the focused channel only while the lane is open: a closed lane would rebuild its panels
+## on every selection for nothing. Editor.open_device_lane binds the focused channel on opening.
 func _on_channel_focused(focused_channel: Channel):
-	"""Called when a channel is focused in the mixer."""
-	if focused_channel:
+	if focused_channel and Sonara.editor.is_device_lane_open():
 		bind_to_channel(focused_channel)
 
 
@@ -79,31 +84,38 @@ func _on_project_opened(project: Project):
 func _connect_to_project(project: Project):
 	"""Connect to project's channel_removed signal."""
 	# Disconnect from previous project if any
-	if current_project:
-		if current_project.channel_removed.is_connected(_on_channel_removed):
-			current_project.channel_removed.disconnect(_on_channel_removed)
-	
+	_disconnect_project()
+
 	# Connect to new project
 	current_project = project
 	if project:
 		project.channel_removed.connect(_on_channel_removed)
+		project.item_visibility_changed.connect(_free_disabled_rows)
+
+
+func _disconnect_project() -> void:
+	if current_project == null:
+		return
+	if current_project.channel_removed.is_connected(_on_channel_removed):
+		current_project.channel_removed.disconnect(_on_channel_removed)
+	if current_project.item_visibility_changed.is_connected(_free_disabled_rows):
+		current_project.item_visibility_changed.disconnect(_free_disabled_rows)
 
 
 func _on_project_closed():
 	"""Called when a project is closed - clean up device lane."""
-	# Disconnect from project signals
-	if current_project:
-		if current_project.channel_removed.is_connected(_on_channel_removed):
-			current_project.channel_removed.disconnect(_on_channel_removed)
-		current_project = null
-	
+	_disconnect_project()
+	current_project = null
+
 	# Unbind from current channel if any
 	if channel:
 		unbind()
 		channel = null
-	
+
 	# Clear all device panels
 	clear()
+	for ch in _rows.keys():
+		_free_row(ch)
 
 
 func _on_channel_removed(removed_channel: Channel):
@@ -114,6 +126,7 @@ func _on_channel_removed(removed_channel: Channel):
 		unbind()
 		channel = null
 		clear()
+	_free_row(removed_channel)
 
 func _get_header_stylebox() -> StyleBoxFlat:
 	return header.get_theme_stylebox("panel")
@@ -129,6 +142,11 @@ func unbind():
 	channel.device_moved.disconnect(_on_channel_device_moved)
 	drop_host.bind(null)
 	_pad_lane.bind(null)
+	# Keep the row for a later return; a disabled channel's row is freed (disabling a track is
+	# meant to free its resources).
+	_row_scroll[channel] = _scroll.scroll_horizontal
+	if _is_disabled(channel):
+		_free_row(channel)
 
 
 func clear():
@@ -137,12 +155,83 @@ func clear():
 	_clear_devices()
 
 
-## Empty the lane, its panels and the device selection.
+## Show the empty row and drop the device selection. Kept rows stay as they are.
 func _clear_devices() -> void:
-	devices.clear()
+	_show_row(_empty_row)
 	selected_devices.clear()
 	_selection_anchor = null
 	_pending_single = null
+
+
+# ============================================================================
+# ROW CACHE
+# ============================================================================
+
+func _setup_row(row: DeviceRow) -> void:
+	# Root panels start below the color strip of the slots beside them, so the two line up.
+	row.panel_top_inset = DeviceSlotGroup.STRIP_HEIGHT
+	row.context_menu_requested.connect(_on_device_context_menu_requested)
+	row.selection_requested.connect(_on_panel_select_requested)
+	row.selection_released.connect(_on_panel_select_released)
+
+
+## The kept row of `ch`, created (empty) on first use.
+func _row_for(ch: Channel) -> DeviceRow:
+	var row: DeviceRow = _rows.get(ch)
+	if row:
+		return row
+	row = DeviceRow.new()
+	row.name = "Devices_%d" % ch.id
+	row.size_flags_horizontal = _empty_row.size_flags_horizontal
+	row.add_theme_constant_override("separation", _empty_row.get_theme_constant("separation"))
+	_setup_row(row)
+	row.hide()
+	_empty_row.add_sibling(row)
+	_rows[ch] = row
+	return row
+
+
+## Show `row` in place of the current one. The hidden row's views drop their subscriptions; the
+## shown one's follow the lane's visibility.
+func _show_row(row: DeviceRow) -> void:
+	if devices != row:
+		devices.set_suspended(true)
+		devices.hide()
+	devices = row
+	row.show()
+	row.set_suspended(not visible)
+	drop_host.attach(self, row, false)
+
+
+## Free the kept row of `ch`, if any.
+func _free_row(ch: Channel) -> void:
+	var row: DeviceRow = _rows.get(ch)
+	_rows.erase(ch)
+	_row_scroll.erase(ch)
+	if row == null:
+		return
+	if devices == row:
+		_show_row(_empty_row)
+	row.get_parent().remove_child(row)
+	row.queue_free()
+
+
+## A channel was enabled or disabled somewhere: free the hidden rows of disabled channels. The
+## bound channel's row goes when the lane switches away from it.
+func _free_disabled_rows() -> void:
+	for ch in _rows.keys():
+		if ch != channel and _is_disabled(ch):
+			_free_row(ch)
+
+
+## Disabled itself or through a mixer parent or routing (see ItemVisibility).
+func _is_disabled(ch: Channel) -> bool:
+	return current_project != null and ItemVisibility.channel_disabled(current_project, ch)
+
+
+func _restore_scroll(ch: Channel) -> void:
+	if channel == ch:
+		_scroll.scroll_horizontal = _row_scroll.get(ch, 0)
 
 
 ## Show the channel's devices (a pad return's pad lane) in order, keeping panels that stay.
@@ -161,14 +250,14 @@ func bind_to_channel(channel : Channel):
 	# already bound to this channel?
 	if self.channel == channel:
 		return
-	
+
 	# unbind to previously shown channel
 	if self.channel:
 		unbind()
-	
+
 	# clear any device controls
 	clear()
-	
+
 	# bind to new channel
 	self.channel = channel
 	drop_host.bind(channel)
@@ -179,9 +268,12 @@ func bind_to_channel(channel : Channel):
 	var sb := _get_header_stylebox()
 	sb.bg_color = channel.color
 	
-	# set up all devices
+	# set up all devices: a kept row only syncs the changes made while it was hidden
+	_show_row(_row_for(channel))
 	_sync_devices()
-	
+	# After the row's layout, which sets the scroll range.
+	_restore_scroll.call_deferred(channel)
+
 	# connect to channel events
 	channel.hierarchy_changed.connect(_refresh_parent_header)
 	_refresh_parent_header()
@@ -438,6 +530,9 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_DRAG_END:
 		set_process(false)
 		DropIndicator.hide_indicator(_drop_indicator)
+	elif what == NOTIFICATION_VISIBILITY_CHANGED and devices:
+		# A closed lane's views stop their data subscriptions too.
+		devices.set_suspended(not visible)
 
 
 ## Drops anywhere on the lane resolve from the pointer (insert between panels, or onto a device).
