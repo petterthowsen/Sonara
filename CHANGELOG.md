@@ -6,6 +6,8 @@ All notable user-visible changes to Sonara are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0-beta.1] - 2026-10-28
+
 ### Added
 
 - Popups and context menus close themselves: they stay open for 2 s after opening (Settings > Behavior > Menus > Auto-Close Menus: 0.5 to 5 s, or Never), then close as soon as the pointer is outside them (open submenus, a held mouse button and a search or text field you are typing in keep them open). This now includes the automation parameter picker, the metronome popup and the dock panel menu.
